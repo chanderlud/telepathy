@@ -1274,14 +1274,14 @@ impl Telepathy {
             result = read_message::<Message, _>(transport) => {
                 let mut other_ringtone = None;
                 let remote_audio_header;
-                let remote_in_room;
+                // let remote_in_room;
 
                 info!("received {:?} from {}", result, contact.nickname);
 
                 match result? {
-                    Message::Hello { ringtone, audio_header, room } => {
+                    Message::Hello { ringtone, audio_header, .. } => {
                         remote_audio_header = audio_header;
-                        remote_in_room = room;
+                        // remote_in_room = room;
                         if self.play_custom_ringtones.load(Relaxed) {
                             other_ringtone = ringtone;
                         }
@@ -1382,7 +1382,7 @@ impl Telepathy {
                 // initialize call state
                 let mut call_state = self.setup_call(contact.peer_id).await?;
                 // when custom ringtone is used wait longer for a response to account for extra data being sent in Hello
-                let hello_timeout = HELLO_TIMEOUT + other_ringtone.is_some().then_some(Duration::from_secs(10)).unwrap_or_default();
+                let hello_timeout = HELLO_TIMEOUT + if other_ringtone.is_some() { Duration::from_secs(10) } else { Default::default() };
                 // queries the other client for a call
                 write_message(transport, &Message::Hello { ringtone: other_ringtone, audio_header: call_state.local_configuration.clone(), room: is_in_room }).await?;
 
