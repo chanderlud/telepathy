@@ -21,7 +21,7 @@ jobs:
 
       matrix:
         info:
-          - image: windows-2019
+          - image: windows-2022
             target: x86_64-pc-windows-msvc
           - image: macos-13
             target: aarch64-apple-darwin
@@ -96,7 +96,7 @@ jobs:
 
       matrix:
         info:
-          - image: windows-2019
+          - image: windows-2022
             target: windows
           # - image: macos-13
           #   target: macos
@@ -104,7 +104,7 @@ jobs:
             target: linux
           - image: ubuntu-22.04
             target: linux
-          - image: windows-2019
+          - image: windows-2022
             target: apk
           - image: macos-13
             target: ios
