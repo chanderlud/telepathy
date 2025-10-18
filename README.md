@@ -25,6 +25,16 @@
 - Moved to the current Rust audio processing stack with improved stability
 - Upgraded from custom networking and cryptography stack to libp2p for improved security, p2p networking without port forwarding, and p2p networking in web browsers
 
-##
+## UI Screenshots
 ![screenshot of telepathy main user interface](https://chanchan.dev/static/images/telepathy.png)
 ![screenshot of telepathy settings user interface](https://chanchan.dev/static/images/telepathy-settings.png)
+
+## Architecture
+
+### Audio Processing Stack
+- Denoising runs on the sending side, each participant in a call decides if they want to use their compute resources to denoise their audio input
+- Every participant in a call must agree on the same audio codec options for sending & receiving
+- If a frame's RMS is below the input sensitivity threshold, it becomes a single byte silent frame to save resources
+- In a classic two-way call, each client runs a sending stack and a receiving stack
+- In a Telepathy room, certain parts of each stack are duplicated to support more participants
+![a diagram describing the telepathy audio processing stack](assets/diagrams/audio-processing-stack.svg)
