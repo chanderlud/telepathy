@@ -476,7 +476,7 @@ fn processor(
             let processed = resampler.process_into_buffer(&pre_buf, &mut post_buf, None)?;
             (&mut post_buf, processed.1)
         } else {
-            (&mut pre_buf, FRAME_SIZE)
+            (&mut pre_buf, FRAME_SIZE / spec.channels as usize)
         };
 
         for i in 0..len {
