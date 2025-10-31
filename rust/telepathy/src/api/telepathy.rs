@@ -869,7 +869,9 @@ impl Telepathy {
                         // ignore the relay connection
                         continue;
                     } else if self.session_states.read().await.contains_key(&peer_id) {
+                        // TODO does this case ever hit in normal operation or does it only occur when the session is invalidated by a crash or other failure?
                         // ignore connections with peers who have a session
+                        warn!("ignored connection from {}", peer_id);
                         continue;
                     }
 
