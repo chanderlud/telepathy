@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/material.dart' hide Overlay;
 
 import 'package:telepathy/settings/view.dart';
 import 'package:telepathy/src/rust/api/telepathy.dart';
@@ -12,7 +13,6 @@ import 'package:telepathy/src/rust/api/overlay/overlay.dart';
 import 'package:telepathy/src/rust/frb_generated.dart';
 import 'package:telepathy/settings/controller.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:flutter/material.dart' hide Overlay;
 import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_svg/svg.dart';
@@ -293,7 +293,7 @@ class TelepathyApp extends StatelessWidget {
                 surfaceTintColor: Color(0xFF27292A),
               ),
               sliderTheme: SliderThemeData(
-                showValueIndicator: ShowValueIndicator.always,
+                showValueIndicator: ShowValueIndicator.onDrag,
                 overlayColor: Colors.transparent,
                 trackShape: CustomTrackShape(),
                 inactiveTrackColor: const Color(0xFF121212),
