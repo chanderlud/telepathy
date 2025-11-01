@@ -118,7 +118,7 @@ jobs:
         uses: flutter-actions/setup-flutter@v4
         with:
           channel: stable
-          version: 3.29.0
+          version: 3.35.7
 
       - name: Set up Java 17
         if: matrix.info.target == 'apk'
