@@ -4,7 +4,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart' show kIsWeb;
 
 import 'package:telepathy/settings/controller.dart';
-import 'package:telepathy/src/rust/api/player.dart';
+import 'package:telepathy/src/rust/api/audio/player.dart';
 import 'package:collection/collection.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart' hide Overlay;

@@ -1,7 +1,7 @@
 #[cfg(windows)]
 use std::fmt::Display;
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicUsize};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicUsize};
 
 #[cfg(windows)]
 extern crate windows as other_windows;

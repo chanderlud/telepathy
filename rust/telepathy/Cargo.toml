@@ -1,7 +1,7 @@
 [package]
 name = "telepathy"
 version = "2.4.4"
-edition = "2021"
+edition = "2024"
 build = "build.rs"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -13,16 +13,16 @@ crate-type = ["cdylib", "staticlib"]
 messages = { path = "../messages" }
 sea-codec = { path = "../sea_codec" }
 tokio-util = { version = "0.7", features = ["codec", "compat"] }
-cpal = { version = "0.15", features = ["wasm-bindgen"] }
+cpal = { version = "0.16", features = ["wasm-bindgen"] }
 log = "0.4"
 kanal = "0.1.1"
 rubato = "0.16"
 nnnoiseless = { version = "0.5", default-features = false }
 atomic_float = "1"
-flutter_rust_bridge = "=2.10.0"
+flutter_rust_bridge = "=2.11.1"
 parking_lot = "0.12"
 lazy_static = "1"
-libp2p-stream = { version = "0.3.0-alpha" }
+libp2p-stream = { version = "0.4.0-alpha" }
 chrono = "*"
 regex = "1"
 serde = { version = "1", features = ["derive"] }
@@ -35,7 +35,7 @@ jni = "0.21"
 ndk-context = "0.1"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.61", features = ["Win32_Graphics", "Win32_Graphics_GdiPlus", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi", "Win32_System_LibraryLoader"] }
+windows = { version = "0.62", features = ["Win32_Graphics", "Win32_Graphics_GdiPlus", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi", "Win32_System_LibraryLoader"] }
 widestring = "1.1"
 
 [target.'cfg(target_os = "ios")'.dependencies]
@@ -46,7 +46,7 @@ objc2-foundation = "*"
 uuid = { version = "1", features = ["v4", "js"] }
 getrandom = { version = "0.3", features = ["wasm_js"] }
 tokio = { version = "1", features = ["time", "io-util", "macros", "rt"] }
-libp2p = { version = "0.55", features = ["quic", "ping", "dcutr", "identify", "macros", "noise", "yamux", "autonat", "relay", "wasm-bindgen"] }
+libp2p = { version = "0.56", features = ["quic", "ping", "dcutr", "identify", "macros", "noise", "yamux", "autonat", "relay", "wasm-bindgen"] }
 libp2p-webtransport-websys = "0.5"
 wasm-logger = "0.2.0"
 wasmtimer = "0.4"
@@ -78,12 +78,12 @@ wasm_sync = "0.1"
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 uuid = { version = "1", features = ["v4"] }
 tokio = { version = "1", features = ["time", "io-util", "macros", "process", "net", "rt-multi-thread", "fs"] }
-libp2p = { version = "0.55", features = ["tokio", "quic", "tcp", "ping", "dcutr", "identify", "macros", "noise", "yamux", "autonat", "relay"] }
-simple-logging = "2"
+libp2p = { version = "0.56", features = ["tokio", "quic", "tcp", "ping", "dcutr", "identify", "macros", "noise", "yamux", "autonat", "relay"] }
+fast_log = "1.7"
 
 [dev-dependencies]
 rand = "0.8"
-criterion = "0.6.0"
+criterion = "0.7"
 
 [[bench]]
 name = "bench"

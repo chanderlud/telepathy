@@ -1,5 +1,5 @@
 use crate::utils::*;
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use rand::Rng;
 
 #[path = "../src/api/utils.rs"]

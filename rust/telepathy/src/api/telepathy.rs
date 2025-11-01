@@ -6,39 +6,39 @@ use std::mem;
 use std::net::Ipv4Addr;
 pub use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
+use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize};
-use std::sync::Arc;
 use std::time::Duration;
 
-use crate::api::codec::{decoder, encoder};
+use crate::api::audio::codec::{decoder, encoder};
+#[cfg(target_os = "ios")]
+use crate::api::audio::ios::{configure_audio_session, deactivate_audio_session};
+#[cfg(target_family = "wasm")]
+use crate::api::audio::web_audio::{WebAudioWrapper, WebInput};
 use crate::api::contact::Contact;
 use crate::api::error::{DartError, Error, ErrorKind};
-#[cfg(target_os = "ios")]
-use crate::api::ios::{configure_audio_session, deactivate_audio_session};
 use crate::api::overlay::overlay::Overlay;
 use crate::api::overlay::{CONNECTED, LATENCY, LOSS};
 use crate::api::screenshare;
 use crate::api::screenshare::{Decoder, Encoder};
 use crate::api::utils::*;
-#[cfg(target_family = "wasm")]
-use crate::api::web_audio::{WebAudioWrapper, WebInput};
 use crate::frb_generated::FLUTTER_RUST_BRIDGE_HANDLER;
 use crate::{Behaviour, BehaviourEvent};
 use atomic_float::AtomicF32;
 use chrono::{DateTime, Local};
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 #[cfg(not(target_family = "wasm"))]
 use cpal::Device;
 pub use cpal::Host;
 use cpal::SupportedStreamConfig;
-use flutter_rust_bridge::for_generated::futures::stream::{SplitSink, SplitStream};
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use flutter_rust_bridge::for_generated::futures::SinkExt;
-use flutter_rust_bridge::{frb, spawn, spawn_blocking_with, DartFnFuture};
+use flutter_rust_bridge::for_generated::futures::stream::{SplitSink, SplitStream};
+use flutter_rust_bridge::{DartFnFuture, frb, spawn, spawn_blocking_with};
+pub use kanal::AsyncReceiver;
 #[cfg(not(target_family = "wasm"))]
 use kanal::bounded;
-pub use kanal::AsyncReceiver;
-use kanal::{bounded_async, unbounded_async, AsyncSender, Receiver, Sender};
+use kanal::{AsyncSender, Receiver, Sender, bounded_async, unbounded_async};
 use libp2p::futures::StreamExt;
 use libp2p::identity::Keypair;
 use libp2p::multiaddr::Protocol;
@@ -46,12 +46,12 @@ use libp2p::swarm::{ConnectionId, SwarmEvent};
 #[cfg(not(target_family = "wasm"))]
 use libp2p::tcp;
 use libp2p::{
-    autonat, dcutr, identify, noise, ping, yamux, Multiaddr, PeerId, Stream, StreamProtocol,
+    Multiaddr, PeerId, Stream, StreamProtocol, autonat, dcutr, identify, noise, ping, yamux,
 };
 use libp2p_stream::Control;
 use log::{debug, error, info, warn};
 use messages::{Attachment, AudioHeader, Message};
-use nnnoiseless::{DenoiseState, RnnModel, FRAME_SIZE};
+use nnnoiseless::{DenoiseState, FRAME_SIZE, RnnModel};
 use rubato::Resampler;
 use sea_codec::ProcessorMessage;
 use serde::{Deserialize, Serialize};
@@ -62,7 +62,7 @@ use tokio::net::lookup_host;
 use tokio::select;
 use tokio::sync::{Mutex, Notify, RwLock};
 #[cfg(not(target_family = "wasm"))]
-use tokio::time::{interval, sleep_until, timeout, Instant, Interval};
+use tokio::time::{Instant, Interval, interval, sleep_until, timeout};
 use tokio_util::bytes::Bytes;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 use tokio_util::compat::{Compat, FuturesAsyncReadCompatExt};
@@ -70,7 +70,7 @@ use uuid::Uuid;
 #[cfg(target_family = "wasm")]
 use wasmtimer::std::Instant;
 #[cfg(target_family = "wasm")]
-use wasmtimer::tokio::{interval, sleep_until, timeout, Interval};
+use wasmtimer::tokio::{Interval, interval, sleep_until, timeout};
 
 type Result<T> = std::result::Result<T, Error>;
 pub(crate) type DeviceName = Arc<Mutex<Option<String>>>;
@@ -790,7 +790,7 @@ impl Telepathy {
                     } else if swarm.is_connected(&peer_id) {
                         // TODO is it possible that this check can result in invalid states where two peers cannot get into a session?
                         // prevents dialing a peer who is already connected
-                        warn!("{} is already connected", peer_id);
+                        warn!("{} is already connected (EDGE CASE DETECTED)", peer_id);
                         continue;
                     }
 
@@ -871,7 +871,7 @@ impl Telepathy {
                     } else if self.session_states.read().await.contains_key(&peer_id) {
                         // TODO does this case ever hit in normal operation or does it only occur when the session is invalidated by a crash or other failure?
                         // ignore connections with peers who have a session
-                        warn!("ignored connection from {}", peer_id);
+                        warn!("ignored connection from {} (EDGE CASE DETECTED)", peer_id);
                         continue;
                     }
 
@@ -989,11 +989,17 @@ impl Telepathy {
 
                         if peer_state.latencies_missing() {
                             // only start a session if all connections have latency
-                            debug!("not trying to establish a session with {} because not all connections have latency", event.peer);
+                            debug!(
+                                "not trying to establish a session with {} because not all connections have latency",
+                                event.peer
+                            );
                             continue;
                         } else if peer_state.relayed_only() {
                             // only start a session if there is a non-relayed connection
-                            debug!("not trying to establish a session with {} because all connections are relayed", event.peer);
+                            debug!(
+                                "not trying to establish a session with {} because all connections are relayed",
+                                event.peer
+                            );
                             continue;
                         }
 
@@ -1069,13 +1075,14 @@ impl Telepathy {
                 })) => {
                     debug!("ductr event with {}: {:?}", remote_peer_id, result);
 
-                    if let Some(peer_state) = peer_states.get(&remote_peer_id) {
-                        if peer_state.relayed_only() && result.is_err() {
-                            info!("ductr failed while relayed_only, falling back to relay");
-                            let control = swarm.behaviour().stream.new_control();
-                            self.open_stream(remote_peer_id, control, &mut peer_states)
-                                .await;
-                        }
+                    if let Some(peer_state) = peer_states.get(&remote_peer_id)
+                        && peer_state.relayed_only()
+                        && result.is_err()
+                    {
+                        info!("ductr failed while relayed_only, falling back to relay");
+                        let control = swarm.behaviour().stream.new_control();
+                        self.open_stream(remote_peer_id, control, &mut peer_states)
+                            .await;
                     }
                 }
                 event => {
@@ -1101,7 +1108,10 @@ impl Telepathy {
 
                         continue;
                     } else {
-                        warn!("received a stream while {} did not want sub-stream, starting new session", peer);
+                        warn!(
+                            "received a stream while {} did not want sub-stream, starting new session",
+                            peer
+                        );
                     }
                 } else {
                     info!("stream accepted for new session with {}", peer);
@@ -1509,7 +1519,7 @@ impl Telepathy {
         }
     }
 
-    /// The bulk of the call logic
+    /// The bulk of the normal call logic
     async fn call(
         &self,
         stop_io: &Arc<Notify>,
@@ -1825,10 +1835,11 @@ impl Telepathy {
         let transport = stream_to_audio_transport(stream);
         self.room_control_sender
             .send((transport, call_state))
-            .await?;
-        Ok(())
+            .await
+            .map_err(Error::from)
     }
 
+    /// controller for rooms
     async fn room_controller(
         &self,
         call_state: EarlyCallState,
@@ -1838,7 +1849,6 @@ impl Telepathy {
         #[cfg(target_os = "ios")]
         configure_audio_session();
 
-        // the two clients agree on these codec options
         let (socket_sender, socket_receiver) = unbounded_async();
         let upload_bandwidth: Arc<AtomicUsize> = Default::default();
         let download_bandwidth: Arc<AtomicUsize> = Default::default();
@@ -1847,7 +1857,7 @@ impl Telepathy {
         let (input_receiver, input_sender) = self
             .setup_input(
                 call_state.local_configuration.sample_rate as f64,
-                (true, true, 5_f32),
+                (true, true, 5_f32), // hard coded room codec options
                 None,
             )
             .await?;
@@ -2611,11 +2621,11 @@ impl ScreenshareConfig {
             height,
         };
 
-        if let Ok(status) = recording_config.test_config().await {
-            if status.success() {
-                *self.recording_config.write().await = Some(recording_config);
-                return Ok(());
-            }
+        if let Ok(status) = recording_config.test_config().await
+            && status.success()
+        {
+            *self.recording_config.write().await = Some(recording_config);
+            return Ok(());
         }
 
         Err("Invalid configuration".to_string().into())
@@ -3306,8 +3316,8 @@ pub(crate) mod tests {
     use super::*;
     use kanal::unbounded;
     use log::LevelFilter;
-    use rand::prelude::SliceRandom;
     use rand::Rng;
+    use rand::prelude::SliceRandom;
     use std::fs::read;
     use std::thread::spawn;
 

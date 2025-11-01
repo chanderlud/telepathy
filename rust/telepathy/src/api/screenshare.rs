@@ -5,19 +5,19 @@ use std::process::Stdio;
 use std::process::{ExitStatus, Output};
 use std::str::FromStr;
 #[cfg(not(target_family = "wasm"))]
+use std::sync::Arc;
+#[cfg(not(target_family = "wasm"))]
 use std::sync::atomic::AtomicUsize;
 #[cfg(not(target_family = "wasm"))]
 use std::sync::atomic::Ordering::Relaxed;
-#[cfg(not(target_family = "wasm"))]
-use std::sync::Arc;
 
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 use crate::api::telepathy::Capabilities;
 use crate::api::telepathy::RecordingConfig;
 #[cfg(not(target_family = "wasm"))]
-use libp2p::futures::{AsyncReadExt as ReadExt, AsyncWriteExt as WriteExt};
-#[cfg(not(target_family = "wasm"))]
 use libp2p::Stream;
+#[cfg(not(target_family = "wasm"))]
+use libp2p::futures::{AsyncReadExt as ReadExt, AsyncWriteExt as WriteExt};
 #[cfg(not(target_family = "wasm"))]
 use log::{error, info, warn};
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]

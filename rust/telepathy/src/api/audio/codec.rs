@@ -1,8 +1,8 @@
 use kanal::{Receiver, Sender};
 use log::{info, warn};
+use sea_codec::ProcessorMessage;
 use sea_codec::decoder::SeaDecoder;
 use sea_codec::encoder::{EncoderSettings, SeaEncoder};
-use sea_codec::ProcessorMessage;
 
 pub(crate) fn encoder(
     receiver: Receiver<ProcessorMessage>,

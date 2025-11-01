@@ -3,13 +3,13 @@ use std::time::Duration;
 use std::{error::Error, path::Path};
 
 use futures::stream::StreamExt;
+use libp2p::Transport;
 use libp2p::core::muxing::StreamMuxerBox;
 use libp2p::relay::Config;
-use libp2p::Transport;
 use libp2p::{
     autonat,
-    core::multiaddr::Protocol,
     core::Multiaddr,
+    core::multiaddr::Protocol,
     identify, identity, noise, ping, relay,
     swarm::{NetworkBehaviour, SwarmEvent},
     tcp, yamux,

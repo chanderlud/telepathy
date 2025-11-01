@@ -1,7 +1,7 @@
 use crate::api::error::{Error, ErrorKind};
 use crate::api::telepathy::{DeviceName, Transport};
 use bincode::config::standard;
-use bincode::{decode_from_slice, encode_to_vec, Decode, Encode};
+use bincode::{Decode, Encode, decode_from_slice, encode_to_vec};
 use cpal::traits::{DeviceTrait, HostTrait};
 use cpal::{Device, Host, Stream};
 use flutter_rust_bridge::for_generated::futures::{Sink, SinkExt};
@@ -12,9 +12,9 @@ use rubato::{SincFixedIn, SincInterpolationParameters, SincInterpolationType, Wi
 use serde::Deserialize;
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
+use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
-use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 type Result<T> = std::result::Result<T, Error>;
@@ -53,23 +53,26 @@ pub(crate) fn mul(frame: &mut [f32], factor: f32) {
     }
 }
 
+// TODO attempt to optimize mul for avx512
 /// optimized mul for avx2
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
-unsafe fn mul_simd_avx2(frame: &mut [f32], factor: f32) {
-    let len = frame.len();
-    let mut i = 0;
+fn mul_simd_avx2(frame: &mut [f32], factor: f32) {
+    unsafe {
+        let len = frame.len();
+        let mut i = 0;
 
-    let factor_vec = _mm256_set1_ps(factor);
-    let min_vec = _mm256_set1_ps(-1_f32);
-    let max_vec = _mm256_set1_ps(1_f32);
+        let factor_vec = _mm256_set1_ps(factor);
+        let min_vec = _mm256_set1_ps(-1_f32);
+        let max_vec = _mm256_set1_ps(1_f32);
 
-    while i + 8 <= len {
-        let mut chunk = _mm256_loadu_ps(frame.as_ptr().add(i)); // load
-        chunk = _mm256_mul_ps(chunk, factor_vec); // multiply
-        chunk = _mm256_max_ps(min_vec, _mm256_min_ps(max_vec, chunk)); // clamp
-        _mm256_storeu_ps(frame.as_mut_ptr().add(i), chunk); // write
-        i += 8;
+        while i + 8 <= len {
+            let mut chunk = _mm256_loadu_ps(frame.as_ptr().add(i)); // load
+            chunk = _mm256_mul_ps(chunk, factor_vec); // multiply
+            chunk = _mm256_max_ps(min_vec, _mm256_min_ps(max_vec, chunk)); // clamp
+            _mm256_storeu_ps(frame.as_mut_ptr().add(i), chunk); // write
+            i += 8;
+        }
     }
 }
 
@@ -164,11 +167,7 @@ pub(crate) async fn level_from_window(receiver: &AsyncReceiver<f32>, max: &mut f
         }
     };
 
-    if level < 0.01 {
-        0_f32
-    } else {
-        level
-    }
+    if level < 0.01 { 0_f32 } else { level }
 }
 
 /// Writes a bincode message to the stream

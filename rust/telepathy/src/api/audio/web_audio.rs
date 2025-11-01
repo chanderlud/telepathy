@@ -1,9 +1,9 @@
 use crate::api::telepathy::CHANNEL_SIZE;
 use log::error;
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Relaxed;
-use std::sync::Arc;
-use wasm_bindgen::{prelude::Closure, JsCast, JsValue};
+use wasm_bindgen::{JsCast, JsValue, prelude::Closure};
 use wasm_bindgen_futures::JsFuture;
 use wasm_sync::{Condvar, Mutex};
 use web_sys::BlobPropertyBag;

@@ -1,12 +1,12 @@
 // The following is a modified version of the code found at
 // https://github.com/fzyzcjy/flutter_rust_bridge/issues/486
 
-use std::sync::Once;
-
+use fast_log::Config;
 use flutter_rust_bridge::frb;
 use lazy_static::lazy_static;
-use log::{info, warn, LevelFilter};
+use log::{LevelFilter, info, warn};
 use parking_lot::RwLock;
+use std::sync::Once;
 
 use crate::frb_generated::StreamSink;
 
@@ -38,7 +38,7 @@ pub fn init_logger() {
         // TODO reintegrate logging with dart
 
         #[cfg(not(target_family = "wasm"))]
-        simple_logging::log_to_file("telepathy.log", level).unwrap();
+        fast_log::init(Config::new().file("telepathy.log").chan_len(Some(1000))).unwrap();
 
         #[cfg(target_family = "wasm")]
         wasm_logger::init(wasm_logger::Config::default());

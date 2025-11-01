@@ -3,11 +3,11 @@ extern crate windows as other_windows;
 
 #[cfg(windows)]
 use std::mem;
+use std::sync::Arc;
 #[cfg(windows)]
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32};
-use std::sync::Arc;
 #[cfg(windows)]
 use std::time::Duration;
 
@@ -23,12 +23,12 @@ use log::error;
 use other_windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 #[cfg(windows)]
 use other_windows::Win32::Graphics::Gdi::{
-    GetMonitorInfoA, InvalidateRect, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    GetMonitorInfoA, InvalidateRect, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
 };
 #[cfg(windows)]
 use other_windows::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, GetMessageW, MoveWindow, SendMessageA, ShowWindow, TranslateMessage, SW_HIDE,
-    SW_SHOW, WM_CLOSE,
+    DispatchMessageW, GetMessageW, MoveWindow, SW_HIDE, SW_SHOW, SendMessageA, ShowWindow,
+    TranslateMessage, WM_CLOSE,
 };
 #[cfg(windows)]
 use tokio::select;

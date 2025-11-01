@@ -4,18 +4,18 @@ use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{Host, SampleFormat};
 use flutter_rust_bridge::spawn;
 use flutter_rust_bridge::{frb, spawn_blocking_with};
+use kanal::{Receiver, unbounded};
 #[cfg(not(target_family = "wasm"))]
-use kanal::{bounded, Sender};
-use kanal::{unbounded, Receiver};
+use kanal::{Sender, bounded};
 use log::error;
 use nnnoiseless::FRAME_SIZE;
 use rubato::Resampler;
 use std::mem;
 use std::path::Path;
+use std::sync::Arc;
 #[cfg(target_family = "wasm")]
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Relaxed;
-use std::sync::Arc;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::select;
@@ -31,12 +31,12 @@ use wasmtimer::tokio::sleep;
 
 use crate::api::error::{DartError, Error, ErrorKind};
 use crate::api::telepathy::DeviceName;
-use crate::api::utils::{db_to_multiplier, get_output_device, mul, resampler_factory, SendStream};
+use crate::api::utils::{SendStream, db_to_multiplier, get_output_device, mul, resampler_factory};
 use crate::frb_generated::FLUTTER_RUST_BRIDGE_HANDLER;
 use messages::AudioHeader;
+use sea_codec::ProcessorMessage;
 use sea_codec::decoder::SeaDecoder;
 use sea_codec::encoder::{EncoderSettings, SeaEncoder};
-use sea_codec::ProcessorMessage;
 
 type DecodedReceiver = (Receiver<ProcessorMessage>, usize);
 
@@ -630,8 +630,8 @@ async fn wav_to_sea(bytes: &[u8], residual_bits: f32) -> Result<Vec<u8>, Error> 
 
 #[cfg(test)]
 mod tests {
-    use crate::api::player::wav_to_sea;
-    use log::{info, LevelFilter};
+    use crate::api::audio::player::wav_to_sea;
+    use log::{LevelFilter, info};
     use std::time::Instant;
     use tokio::fs::File;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
