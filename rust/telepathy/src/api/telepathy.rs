@@ -3315,11 +3315,12 @@ fn stream_to_audio_transport(stream: Stream) -> Transport<TransportStream> {
 pub(crate) mod tests {
     use super::*;
     use kanal::unbounded;
-    use log::LevelFilter;
     use rand::Rng;
     use rand::prelude::SliceRandom;
     use std::fs::read;
     use std::thread::spawn;
+    use fast_log::Config;
+    use log::LevelFilter::Trace;
 
     struct BenchmarkResult {
         average: Duration,
@@ -3331,7 +3332,7 @@ pub(crate) mod tests {
     #[ignore]
     #[test]
     fn benchmark() {
-        simple_logging::log_to_file("bench.log", LevelFilter::Trace).unwrap();
+        fast_log::init(Config::new().file("bench.log").level(Trace)).unwrap();
 
         let sample_rate = 44_100;
 

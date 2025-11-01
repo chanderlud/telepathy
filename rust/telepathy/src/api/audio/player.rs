@@ -479,6 +479,8 @@ fn processor(
             (&mut pre_buf, FRAME_SIZE / spec.channels as usize)
         };
 
+        // im not sure how to refactor this loop to pass the needless range test
+        #[allow(clippy::needless_range_loop)]
         for i in 0..len {
             let multiplier = if position < audio_len {
                 let delta = audio_len - position;
@@ -631,15 +633,17 @@ async fn wav_to_sea(bytes: &[u8], residual_bits: f32) -> Result<Vec<u8>, Error> 
 #[cfg(test)]
 mod tests {
     use crate::api::audio::player::wav_to_sea;
-    use log::{LevelFilter, info};
+    use log::info;
     use std::time::Instant;
+    use fast_log::Config;
+    use log::LevelFilter::Debug;
     use tokio::fs::File;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::time::sleep;
 
     #[tokio::test]
     async fn test_player() {
-        simple_logging::log_to_file("tests.log", LevelFilter::Debug).unwrap();
+        _ = fast_log::init(Config::new().file("tests-player.log").level(Debug));
 
         let mut wav_bytes = Vec::new();
         let mut wav_file = File::open("../../assets/wav-sounds/incoming.wav")
@@ -663,7 +667,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_wav_to_sea() {
-        simple_logging::log_to_file("tests.log", LevelFilter::Debug).unwrap();
+        _ = fast_log::init(Config::new().file("tests-wav-sea.log").level(Debug));
 
         let wav_files = vec![
             "../../assets/wav-sounds/call_ended.wav",

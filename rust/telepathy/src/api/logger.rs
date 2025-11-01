@@ -38,7 +38,7 @@ pub fn init_logger() {
         // TODO reintegrate logging with dart
 
         #[cfg(not(target_family = "wasm"))]
-        fast_log::init(Config::new().file("telepathy.log").chan_len(Some(1000))).unwrap();
+        fast_log::init(Config::new().file("telepathy.log").level(level)).unwrap();
 
         #[cfg(target_family = "wasm")]
         wasm_logger::init(wasm_logger::Config::default());
