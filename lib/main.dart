@@ -315,7 +315,7 @@ class TelepathyApp extends StatelessWidget {
                 trackOutlineColor: WidgetStateProperty.all(Colors.transparent),
                 overlayColor: WidgetStateProperty.all(Colors.transparent),
                 thumbColor:
-                    WidgetStateProperty.all(Theme.of(context).indicatorColor),
+                    WidgetStateProperty.all(Theme.of(context).tabBarTheme.indicatorColor),
               ),
               dropdownMenuTheme: DropdownMenuThemeData(
                 menuStyle: MenuStyle(
