@@ -3314,13 +3314,13 @@ fn stream_to_audio_transport(stream: Stream) -> Transport<TransportStream> {
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod tests {
     use super::*;
+    use fast_log::Config;
     use kanal::unbounded;
+    use log::LevelFilter::Trace;
     use rand::Rng;
     use rand::prelude::SliceRandom;
     use std::fs::read;
     use std::thread::spawn;
-    use fast_log::Config;
-    use log::LevelFilter::Trace;
 
     struct BenchmarkResult {
         average: Duration,

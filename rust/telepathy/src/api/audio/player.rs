@@ -633,10 +633,10 @@ async fn wav_to_sea(bytes: &[u8], residual_bits: f32) -> Result<Vec<u8>, Error> 
 #[cfg(test)]
 mod tests {
     use crate::api::audio::player::wav_to_sea;
-    use log::info;
-    use std::time::Instant;
     use fast_log::Config;
     use log::LevelFilter::Debug;
+    use log::info;
+    use std::time::Instant;
     use tokio::fs::File;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::time::sleep;
