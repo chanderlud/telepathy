@@ -26,7 +26,7 @@
 // Section: imports
 
 use crate::api::audio::player::*;
-use crate::api::contact::*;
+use crate::api::flutter::*;
 use crate::api::overlay::overlay::*;
 use crate::api::telepathy::*;
 use flutter_rust_bridge::for_generated::byteorder::{NativeEndian, ReadBytesExt, WriteBytesExt};
@@ -41,7 +41,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.11.1";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1284200818;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1023685256;
 
 // Section: executor
 
@@ -49,7 +49,7 @@ flutter_rust_bridge::frb_generated_default_handler!();
 
 // Section: wire_funcs
 
-fn wire__crate__api__telepathy__Capabilities_default_impl(
+fn wire__crate__api__flutter__Capabilities_default_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -75,14 +75,14 @@ fn wire__crate__api__telepathy__Capabilities_default_impl(
             move |context| {
                 transform_result_sse::<_, ()>((move || {
                     let output_ok =
-                        Result::<_, ()>::Ok(crate::api::telepathy::Capabilities::default())?;
+                        Result::<_, ()>::Ok(crate::api::flutter::Capabilities::default())?;
                     Ok(output_ok)
                 })())
             }
         },
     )
 }
-fn wire__crate__api__telepathy__Capabilities_devices_impl(
+fn wire__crate__api__flutter__Capabilities_devices_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -122,7 +122,7 @@ fn wire__crate__api__telepathy__Capabilities_devices_impl(
                     }
                 }
                 let api_that_guard = api_that_guard.unwrap();
-                let output_ok = Result::<_, ()>::Ok(crate::api::telepathy::Capabilities::devices(
+                let output_ok = Result::<_, ()>::Ok(crate::api::flutter::Capabilities::devices(
                     &*api_that_guard,
                 ))?;
                 Ok(output_ok)
@@ -130,7 +130,7 @@ fn wire__crate__api__telepathy__Capabilities_devices_impl(
         },
     )
 }
-fn wire__crate__api__telepathy__Capabilities_encoders_impl(
+fn wire__crate__api__flutter__Capabilities_encoders_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -170,15 +170,15 @@ fn wire__crate__api__telepathy__Capabilities_encoders_impl(
                     }
                 }
                 let api_that_guard = api_that_guard.unwrap();
-                let output_ok = Result::<_, ()>::Ok(
-                    crate::api::telepathy::Capabilities::encoders(&*api_that_guard),
-                )?;
+                let output_ok = Result::<_, ()>::Ok(crate::api::flutter::Capabilities::encoders(
+                    &*api_that_guard,
+                ))?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__api__telepathy__ChatMessage_attachments_impl(
+fn wire__crate__api__flutter__ChatMessage_attachments_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -219,14 +219,14 @@ fn wire__crate__api__telepathy__ChatMessage_attachments_impl(
                 }
                 let api_that_guard = api_that_guard.unwrap();
                 let output_ok = Result::<_, ()>::Ok(
-                    crate::api::telepathy::ChatMessage::attachments(&*api_that_guard),
+                    crate::api::flutter::ChatMessage::attachments(&*api_that_guard),
                 )?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__api__telepathy__ChatMessage_auto_accessor_get_text_impl(
+fn wire__crate__api__flutter__ChatMessage_auto_accessor_get_text_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -272,7 +272,7 @@ fn wire__crate__api__telepathy__ChatMessage_auto_accessor_get_text_impl(
         },
     )
 }
-fn wire__crate__api__telepathy__ChatMessage_auto_accessor_set_text_impl(
+fn wire__crate__api__flutter__ChatMessage_auto_accessor_set_text_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -323,7 +323,7 @@ fn wire__crate__api__telepathy__ChatMessage_auto_accessor_set_text_impl(
         },
     )
 }
-fn wire__crate__api__telepathy__ChatMessage_clear_attachments_impl(
+fn wire__crate__api__flutter__ChatMessage_clear_attachments_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -364,14 +364,14 @@ fn wire__crate__api__telepathy__ChatMessage_clear_attachments_impl(
                 }
                 let mut api_that_guard = api_that_guard.unwrap();
                 let output_ok = Result::<_, ()>::Ok({
-                    crate::api::telepathy::ChatMessage::clear_attachments(&mut *api_that_guard);
+                    crate::api::flutter::ChatMessage::clear_attachments(&mut *api_that_guard);
                 })?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__api__telepathy__ChatMessage_is_sender_impl(
+fn wire__crate__api__flutter__ChatMessage_is_sender_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -412,15 +412,16 @@ fn wire__crate__api__telepathy__ChatMessage_is_sender_impl(
                     }
                 }
                 let api_that_guard = api_that_guard.unwrap();
-                let output_ok = Result::<_, ()>::Ok(
-                    crate::api::telepathy::ChatMessage::is_sender(&*api_that_guard, api_identity),
-                )?;
+                let output_ok = Result::<_, ()>::Ok(crate::api::flutter::ChatMessage::is_sender(
+                    &*api_that_guard,
+                    api_identity,
+                ))?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__api__telepathy__ChatMessage_time_impl(
+fn wire__crate__api__flutter__ChatMessage_time_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -460,15 +461,14 @@ fn wire__crate__api__telepathy__ChatMessage_time_impl(
                     }
                 }
                 let api_that_guard = api_that_guard.unwrap();
-                let output_ok = Result::<_, ()>::Ok(crate::api::telepathy::ChatMessage::time(
-                    &*api_that_guard,
-                ))?;
+                let output_ok =
+                    Result::<_, ()>::Ok(crate::api::flutter::ChatMessage::time(&*api_that_guard))?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__api__telepathy__CodecConfig_new_impl(
+fn wire__crate__api__flutter__CodecConfig_new_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -494,7 +494,7 @@ fn wire__crate__api__telepathy__CodecConfig_new_impl(
             let api_residual_bits = <f32>::sse_decode(&mut deserializer);
             deserializer.end();
             transform_result_sse::<_, ()>((move || {
-                let output_ok = Result::<_, ()>::Ok(crate::api::telepathy::CodecConfig::new(
+                let output_ok = Result::<_, ()>::Ok(crate::api::flutter::CodecConfig::new(
                     api_enabled,
                     api_vbr,
                     api_residual_bits,
@@ -504,7 +504,7 @@ fn wire__crate__api__telepathy__CodecConfig_new_impl(
         },
     )
 }
-fn wire__crate__api__telepathy__CodecConfig_set_enabled_impl(
+fn wire__crate__api__flutter__CodecConfig_set_enabled_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -546,14 +546,14 @@ fn wire__crate__api__telepathy__CodecConfig_set_enabled_impl(
                 }
                 let api_that_guard = api_that_guard.unwrap();
                 let output_ok = Result::<_, ()>::Ok({
-                    crate::api::telepathy::CodecConfig::set_enabled(&*api_that_guard, api_enabled);
+                    crate::api::flutter::CodecConfig::set_enabled(&*api_that_guard, api_enabled);
                 })?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__api__telepathy__CodecConfig_set_residual_bits_impl(
+fn wire__crate__api__flutter__CodecConfig_set_residual_bits_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -595,7 +595,7 @@ fn wire__crate__api__telepathy__CodecConfig_set_residual_bits_impl(
                 }
                 let api_that_guard = api_that_guard.unwrap();
                 let output_ok = Result::<_, ()>::Ok({
-                    crate::api::telepathy::CodecConfig::set_residual_bits(
+                    crate::api::flutter::CodecConfig::set_residual_bits(
                         &*api_that_guard,
                         api_residual_bits,
                     );
@@ -605,7 +605,7 @@ fn wire__crate__api__telepathy__CodecConfig_set_residual_bits_impl(
         },
     )
 }
-fn wire__crate__api__telepathy__CodecConfig_set_vbr_impl(
+fn wire__crate__api__flutter__CodecConfig_set_vbr_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -647,14 +647,14 @@ fn wire__crate__api__telepathy__CodecConfig_set_vbr_impl(
                 }
                 let api_that_guard = api_that_guard.unwrap();
                 let output_ok = Result::<_, ()>::Ok({
-                    crate::api::telepathy::CodecConfig::set_vbr(&*api_that_guard, api_vbr);
+                    crate::api::flutter::CodecConfig::set_vbr(&*api_that_guard, api_vbr);
                 })?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__api__telepathy__CodecConfig_to_values_impl(
+fn wire__crate__api__flutter__CodecConfig_to_values_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -694,15 +694,15 @@ fn wire__crate__api__telepathy__CodecConfig_to_values_impl(
                     }
                 }
                 let api_that_guard = api_that_guard.unwrap();
-                let output_ok = Result::<_, ()>::Ok(
-                    crate::api::telepathy::CodecConfig::to_values(&*api_that_guard),
-                )?;
+                let output_ok = Result::<_, ()>::Ok(crate::api::flutter::CodecConfig::to_values(
+                    &*api_that_guard,
+                ))?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__api__contact__Contact_from_parts_impl(
+fn wire__crate__api__flutter__Contact_from_parts_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -729,13 +729,13 @@ fn wire__crate__api__contact__Contact_from_parts_impl(
             deserializer.end();
             transform_result_sse::<_, crate::api::error::DartError>((move || {
                 let output_ok =
-                    crate::api::contact::Contact::from_parts(api_id, api_nickname, api_peer_id)?;
+                    crate::api::flutter::Contact::from_parts(api_id, api_nickname, api_peer_id)?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__api__contact__Contact_id_impl(
+fn wire__crate__api__flutter__Contact_id_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -776,13 +776,13 @@ fn wire__crate__api__contact__Contact_id_impl(
                 }
                 let api_that_guard = api_that_guard.unwrap();
                 let output_ok =
-                    Result::<_, ()>::Ok(crate::api::contact::Contact::id(&*api_that_guard))?;
+                    Result::<_, ()>::Ok(crate::api::flutter::Contact::id(&*api_that_guard))?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__api__contact__Contact_id_eq_impl(
+fn wire__crate__api__flutter__Contact_id_eq_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -823,7 +823,7 @@ fn wire__crate__api__contact__Contact_id_eq_impl(
                     }
                 }
                 let api_that_guard = api_that_guard.unwrap();
-                let output_ok = Result::<_, ()>::Ok(crate::api::contact::Contact::id_eq(
+                let output_ok = Result::<_, ()>::Ok(crate::api::flutter::Contact::id_eq(
                     &*api_that_guard,
                     api_id,
                 ))?;
@@ -832,7 +832,7 @@ fn wire__crate__api__contact__Contact_id_eq_impl(
         },
     )
 }
-fn wire__crate__api__contact__Contact_new_impl(
+fn wire__crate__api__flutter__Contact_new_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -857,13 +857,13 @@ fn wire__crate__api__contact__Contact_new_impl(
             let api_peer_id = <String>::sse_decode(&mut deserializer);
             deserializer.end();
             transform_result_sse::<_, crate::api::error::DartError>((move || {
-                let output_ok = crate::api::contact::Contact::new(api_nickname, api_peer_id)?;
+                let output_ok = crate::api::flutter::Contact::new(api_nickname, api_peer_id)?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__api__contact__Contact_nickname_impl(
+fn wire__crate__api__flutter__Contact_nickname_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -904,13 +904,13 @@ fn wire__crate__api__contact__Contact_nickname_impl(
                 }
                 let api_that_guard = api_that_guard.unwrap();
                 let output_ok =
-                    Result::<_, ()>::Ok(crate::api::contact::Contact::nickname(&*api_that_guard))?;
+                    Result::<_, ()>::Ok(crate::api::flutter::Contact::nickname(&*api_that_guard))?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__api__contact__Contact_peer_id_impl(
+fn wire__crate__api__flutter__Contact_peer_id_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -951,13 +951,13 @@ fn wire__crate__api__contact__Contact_peer_id_impl(
                 }
                 let api_that_guard = api_that_guard.unwrap();
                 let output_ok =
-                    Result::<_, ()>::Ok(crate::api::contact::Contact::peer_id(&*api_that_guard))?;
+                    Result::<_, ()>::Ok(crate::api::flutter::Contact::peer_id(&*api_that_guard))?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__api__contact__Contact_pub_clone_impl(
+fn wire__crate__api__flutter__Contact_pub_clone_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -998,13 +998,13 @@ fn wire__crate__api__contact__Contact_pub_clone_impl(
                 }
                 let api_that_guard = api_that_guard.unwrap();
                 let output_ok =
-                    Result::<_, ()>::Ok(crate::api::contact::Contact::pub_clone(&*api_that_guard))?;
+                    Result::<_, ()>::Ok(crate::api::flutter::Contact::pub_clone(&*api_that_guard))?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__api__contact__Contact_set_nickname_impl(
+fn wire__crate__api__flutter__Contact_set_nickname_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -1046,14 +1046,14 @@ fn wire__crate__api__contact__Contact_set_nickname_impl(
                 }
                 let mut api_that_guard = api_that_guard.unwrap();
                 let output_ok = Result::<_, ()>::Ok({
-                    crate::api::contact::Contact::set_nickname(&mut *api_that_guard, api_nickname);
+                    crate::api::flutter::Contact::set_nickname(&mut *api_that_guard, api_nickname);
                 })?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__api__telepathy__DartNotify_notified_impl(
+fn wire__crate__api__flutter__DartNotify_notified_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -1100,7 +1100,7 @@ fn wire__crate__api__telepathy__DartNotify_notified_impl(
                         }
                         let api_that_guard = api_that_guard.unwrap();
                         let output_ok = Result::<_, ()>::Ok({
-                            crate::api::telepathy::DartNotify::notified(&*api_that_guard).await;
+                            crate::api::flutter::DartNotify::notified(&*api_that_guard).await;
                         })?;
                         Ok(output_ok)
                     })()
@@ -1110,7 +1110,7 @@ fn wire__crate__api__telepathy__DartNotify_notified_impl(
         },
     )
 }
-fn wire__crate__api__telepathy__DartNotify_notify_impl(
+fn wire__crate__api__flutter__DartNotify_notify_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -1151,14 +1151,14 @@ fn wire__crate__api__telepathy__DartNotify_notify_impl(
                 }
                 let api_that_guard = api_that_guard.unwrap();
                 let output_ok = Result::<_, ()>::Ok({
-                    crate::api::telepathy::DartNotify::notify(&*api_that_guard);
+                    crate::api::flutter::DartNotify::notify(&*api_that_guard);
                 })?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__api__telepathy__NetworkConfig_get_relay_address_impl(
+fn wire__crate__api__flutter__NetworkConfig_get_relay_address_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -1205,10 +1205,8 @@ fn wire__crate__api__telepathy__NetworkConfig_get_relay_address_impl(
                         }
                         let api_that_guard = api_that_guard.unwrap();
                         let output_ok = Result::<_, ()>::Ok(
-                            crate::api::telepathy::NetworkConfig::get_relay_address(
-                                &*api_that_guard,
-                            )
-                            .await,
+                            crate::api::flutter::NetworkConfig::get_relay_address(&*api_that_guard)
+                                .await,
                         )?;
                         Ok(output_ok)
                     })()
@@ -1218,7 +1216,7 @@ fn wire__crate__api__telepathy__NetworkConfig_get_relay_address_impl(
         },
     )
 }
-fn wire__crate__api__telepathy__NetworkConfig_get_relay_id_impl(
+fn wire__crate__api__flutter__NetworkConfig_get_relay_id_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -1265,7 +1263,7 @@ fn wire__crate__api__telepathy__NetworkConfig_get_relay_id_impl(
                         }
                         let api_that_guard = api_that_guard.unwrap();
                         let output_ok = Result::<_, ()>::Ok(
-                            crate::api::telepathy::NetworkConfig::get_relay_id(&*api_that_guard)
+                            crate::api::flutter::NetworkConfig::get_relay_id(&*api_that_guard)
                                 .await,
                         )?;
                         Ok(output_ok)
@@ -1276,7 +1274,7 @@ fn wire__crate__api__telepathy__NetworkConfig_get_relay_id_impl(
         },
     )
 }
-fn wire__crate__api__telepathy__NetworkConfig_new_impl(
+fn wire__crate__api__flutter__NetworkConfig_new_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -1302,13 +1300,13 @@ fn wire__crate__api__telepathy__NetworkConfig_new_impl(
             deserializer.end();
             transform_result_sse::<_, crate::api::error::DartError>((move || {
                 let output_ok =
-                    crate::api::telepathy::NetworkConfig::new(api_relay_address, api_relay_id)?;
+                    crate::api::flutter::NetworkConfig::new(api_relay_address, api_relay_id)?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__api__telepathy__NetworkConfig_set_relay_address_impl(
+fn wire__crate__api__flutter__NetworkConfig_set_relay_address_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -1355,7 +1353,7 @@ fn wire__crate__api__telepathy__NetworkConfig_set_relay_address_impl(
                             }
                         }
                         let api_that_guard = api_that_guard.unwrap();
-                        let output_ok = crate::api::telepathy::NetworkConfig::set_relay_address(
+                        let output_ok = crate::api::flutter::NetworkConfig::set_relay_address(
                             &*api_that_guard,
                             api_relay_address,
                         )
@@ -1368,7 +1366,7 @@ fn wire__crate__api__telepathy__NetworkConfig_set_relay_address_impl(
         },
     )
 }
-fn wire__crate__api__telepathy__NetworkConfig_set_relay_id_impl(
+fn wire__crate__api__flutter__NetworkConfig_set_relay_id_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -1415,7 +1413,7 @@ fn wire__crate__api__telepathy__NetworkConfig_set_relay_id_impl(
                             }
                         }
                         let api_that_guard = api_that_guard.unwrap();
-                        let output_ok = crate::api::telepathy::NetworkConfig::set_relay_id(
+                        let output_ok = crate::api::flutter::NetworkConfig::set_relay_id(
                             &*api_that_guard,
                             api_relay_id,
                         )
@@ -1967,7 +1965,7 @@ fn wire__crate__api__overlay__overlay__Overlay_show_impl(
         },
     )
 }
-fn wire__crate__api__telepathy__RecordingConfig_bitrate_impl(
+fn wire__crate__api__flutter__RecordingConfig_bitrate_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -2008,14 +2006,14 @@ fn wire__crate__api__telepathy__RecordingConfig_bitrate_impl(
                 }
                 let api_that_guard = api_that_guard.unwrap();
                 let output_ok = Result::<_, ()>::Ok(
-                    crate::api::telepathy::RecordingConfig::bitrate(&*api_that_guard),
+                    crate::api::flutter::RecordingConfig::bitrate(&*api_that_guard),
                 )?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__api__telepathy__RecordingConfig_device_impl(
+fn wire__crate__api__flutter__RecordingConfig_device_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -2055,15 +2053,15 @@ fn wire__crate__api__telepathy__RecordingConfig_device_impl(
                     }
                 }
                 let api_that_guard = api_that_guard.unwrap();
-                let output_ok = Result::<_, ()>::Ok(
-                    crate::api::telepathy::RecordingConfig::device(&*api_that_guard),
-                )?;
+                let output_ok = Result::<_, ()>::Ok(crate::api::flutter::RecordingConfig::device(
+                    &*api_that_guard,
+                ))?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__api__telepathy__RecordingConfig_encoder_impl(
+fn wire__crate__api__flutter__RecordingConfig_encoder_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -2104,14 +2102,14 @@ fn wire__crate__api__telepathy__RecordingConfig_encoder_impl(
                 }
                 let api_that_guard = api_that_guard.unwrap();
                 let output_ok = Result::<_, ()>::Ok(
-                    crate::api::telepathy::RecordingConfig::encoder(&*api_that_guard),
+                    crate::api::flutter::RecordingConfig::encoder(&*api_that_guard),
                 )?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__api__telepathy__RecordingConfig_framerate_impl(
+fn wire__crate__api__flutter__RecordingConfig_framerate_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -2152,14 +2150,14 @@ fn wire__crate__api__telepathy__RecordingConfig_framerate_impl(
                 }
                 let api_that_guard = api_that_guard.unwrap();
                 let output_ok = Result::<_, ()>::Ok(
-                    crate::api::telepathy::RecordingConfig::framerate(&*api_that_guard),
+                    crate::api::flutter::RecordingConfig::framerate(&*api_that_guard),
                 )?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__api__telepathy__RecordingConfig_height_impl(
+fn wire__crate__api__flutter__RecordingConfig_height_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -2199,15 +2197,15 @@ fn wire__crate__api__telepathy__RecordingConfig_height_impl(
                     }
                 }
                 let api_that_guard = api_that_guard.unwrap();
-                let output_ok = Result::<_, ()>::Ok(
-                    crate::api::telepathy::RecordingConfig::height(&*api_that_guard),
-                )?;
+                let output_ok = Result::<_, ()>::Ok(crate::api::flutter::RecordingConfig::height(
+                    &*api_that_guard,
+                ))?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__api__telepathy__ScreenshareConfig_capabilities_impl(
+fn wire__crate__api__flutter__ScreenshareConfig_capabilities_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -2254,10 +2252,8 @@ fn wire__crate__api__telepathy__ScreenshareConfig_capabilities_impl(
                         }
                         let api_that_guard = api_that_guard.unwrap();
                         let output_ok = Result::<_, ()>::Ok(
-                            crate::api::telepathy::ScreenshareConfig::capabilities(
-                                &*api_that_guard,
-                            )
-                            .await,
+                            crate::api::flutter::ScreenshareConfig::capabilities(&*api_that_guard)
+                                .await,
                         )?;
                         Ok(output_ok)
                     })()
@@ -2267,7 +2263,7 @@ fn wire__crate__api__telepathy__ScreenshareConfig_capabilities_impl(
         },
     )
 }
-fn wire__crate__api__telepathy__ScreenshareConfig_default_impl(
+fn wire__crate__api__flutter__ScreenshareConfig_default_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -2293,14 +2289,14 @@ fn wire__crate__api__telepathy__ScreenshareConfig_default_impl(
             move |context| {
                 transform_result_sse::<_, ()>((move || {
                     let output_ok =
-                        Result::<_, ()>::Ok(crate::api::telepathy::ScreenshareConfig::default())?;
+                        Result::<_, ()>::Ok(crate::api::flutter::ScreenshareConfig::default())?;
                     Ok(output_ok)
                 })())
             }
         },
     )
 }
-fn wire__crate__api__telepathy__ScreenshareConfig_new_impl(
+fn wire__crate__api__flutter__ScreenshareConfig_new_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -2328,7 +2324,7 @@ fn wire__crate__api__telepathy__ScreenshareConfig_new_impl(
                 transform_result_sse::<_, ()>(
                     (move || async move {
                         let output_ok = Result::<_, ()>::Ok(
-                            crate::api::telepathy::ScreenshareConfig::new(api_config_str).await,
+                            crate::api::flutter::ScreenshareConfig::new(api_config_str).await,
                         )?;
                         Ok(output_ok)
                     })()
@@ -2338,7 +2334,7 @@ fn wire__crate__api__telepathy__ScreenshareConfig_new_impl(
         },
     )
 }
-fn wire__crate__api__telepathy__ScreenshareConfig_recording_config_impl(
+fn wire__crate__api__flutter__ScreenshareConfig_recording_config_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -2385,7 +2381,7 @@ fn wire__crate__api__telepathy__ScreenshareConfig_recording_config_impl(
                         }
                         let api_that_guard = api_that_guard.unwrap();
                         let output_ok = Result::<_, ()>::Ok(
-                            crate::api::telepathy::ScreenshareConfig::recording_config(
+                            crate::api::flutter::ScreenshareConfig::recording_config(
                                 &*api_that_guard,
                             )
                             .await,
@@ -2398,7 +2394,7 @@ fn wire__crate__api__telepathy__ScreenshareConfig_recording_config_impl(
         },
     )
 }
-fn wire__crate__api__telepathy__ScreenshareConfig_to_string_impl(
+fn wire__crate__api__flutter__ScreenshareConfig_to_string_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -2439,14 +2435,14 @@ fn wire__crate__api__telepathy__ScreenshareConfig_to_string_impl(
                 }
                 let api_that_guard = api_that_guard.unwrap();
                 let output_ok = Result::<_, ()>::Ok(
-                    crate::api::telepathy::ScreenshareConfig::to_string(&*api_that_guard),
+                    crate::api::flutter::ScreenshareConfig::to_string(&*api_that_guard),
                 )?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__api__telepathy__ScreenshareConfig_update_recording_config_impl(
+fn wire__crate__api__flutter__ScreenshareConfig_update_recording_config_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -2498,7 +2494,7 @@ fn wire__crate__api__telepathy__ScreenshareConfig_update_recording_config_impl(
                         }
                         let api_that_guard = api_that_guard.unwrap();
                         let output_ok =
-                            crate::api::telepathy::ScreenshareConfig::update_recording_config(
+                            crate::api::flutter::ScreenshareConfig::update_recording_config(
                                 &*api_that_guard,
                                 api_encoder,
                                 api_device,
@@ -4284,7 +4280,7 @@ fn wire__crate__api__telepathy__Telepathy_stop_session_impl(
         },
     )
 }
-fn wire__crate__api__logger__create_log_stream_impl(
+fn wire__crate__api__flutter__create_log_stream_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -4312,14 +4308,14 @@ fn wire__crate__api__logger__create_log_stream_impl(
             deserializer.end();
             transform_result_sse::<_, ()>((move || {
                 let output_ok = Result::<_, ()>::Ok({
-                    crate::api::logger::create_log_stream(api_s);
+                    crate::api::flutter::create_log_stream(api_s);
                 })?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__api__crypto__generate_keys_impl(
+fn wire__crate__api__flutter__generate_keys_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -4342,43 +4338,9 @@ fn wire__crate__api__crypto__generate_keys_impl(
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             deserializer.end();
             transform_result_sse::<_, crate::api::error::DartError>((move || {
-                let output_ok = crate::api::crypto::generate_keys()?;
+                let output_ok = crate::api::flutter::generate_keys()?;
                 Ok(output_ok)
             })())
-        },
-    )
-}
-fn wire__crate__api__logger__init_logger_impl(
-    port_: flutter_rust_bridge::for_generated::MessagePort,
-    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
-    rust_vec_len_: i32,
-    data_len_: i32,
-) {
-    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
-        flutter_rust_bridge::for_generated::TaskInfo {
-            debug_name: "init_logger",
-            port: Some(port_),
-            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
-        },
-        move || {
-            let message = unsafe {
-                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
-                    ptr_,
-                    rust_vec_len_,
-                    data_len_,
-                )
-            };
-            let mut deserializer =
-                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
-            deserializer.end();
-            move |context| {
-                transform_result_sse::<_, ()>((move || {
-                    let output_ok = Result::<_, ()>::Ok({
-                        crate::api::logger::init_logger();
-                    })?;
-                    Ok(output_ok)
-                })())
-            }
         },
     )
 }
@@ -4418,7 +4380,7 @@ fn wire__crate__api__audio__player__load_ringtone_impl(
         },
     )
 }
-fn wire__crate__api__logger__rust_set_up_impl(
+fn wire__crate__api__flutter__rust_set_up_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -4442,14 +4404,14 @@ fn wire__crate__api__logger__rust_set_up_impl(
             deserializer.end();
             transform_result_sse::<_, ()>((move || {
                 let output_ok = Result::<_, ()>::Ok({
-                    crate::api::logger::rust_set_up();
+                    crate::api::flutter::rust_set_up();
                 })?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__api__logger__send_to_dart_logger_set_stream_sink_impl(
+fn wire__crate__api__flutter__send_to_dart_logger_set_stream_sink_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -4479,7 +4441,7 @@ fn wire__crate__api__logger__send_to_dart_logger_set_stream_sink_impl(
             move |context| {
                 transform_result_sse::<_, ()>((move || {
                     let output_ok = Result::<_, ()>::Ok({
-                        crate::api::logger::SendToDartLogger::set_stream_sink(api_stream_sink);
+                        crate::api::flutter::SendToDartLogger::set_stream_sink(api_stream_sink);
                     })?;
                     Ok(output_ok)
                 })())
@@ -4487,7 +4449,7 @@ fn wire__crate__api__logger__send_to_dart_logger_set_stream_sink_impl(
         },
     )
 }
-fn wire__crate__api__telepathy__statistics_default_impl(
+fn wire__crate__api__flutter__statistics_default_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -4513,7 +4475,7 @@ fn wire__crate__api__telepathy__statistics_default_impl(
             move |context| {
                 transform_result_sse::<_, ()>((move || {
                     let output_ok =
-                        Result::<_, ()>::Ok(crate::api::telepathy::Statistics::default())?;
+                        Result::<_, ()>::Ok(crate::api::flutter::Statistics::default())?;
                     Ok(output_ok)
                 })())
             }
@@ -4844,12 +4806,12 @@ fn decode_DartFn_Inputs_list_prim_u_8_strict_Output_opt_box_autoadd_Auto_Owned_R
 }
 fn decode_DartFn_Inputs_statistics_Output_unit_AnyhowException(
     dart_opaque: flutter_rust_bridge::DartOpaque,
-) -> impl Fn(crate::api::telepathy::Statistics) -> flutter_rust_bridge::DartFnFuture<()> {
+) -> impl Fn(crate::api::flutter::Statistics) -> flutter_rust_bridge::DartFnFuture<()> {
     use flutter_rust_bridge::IntoDart;
 
     async fn body(
         dart_opaque: flutter_rust_bridge::DartOpaque,
-        arg0: crate::api::telepathy::Statistics,
+        arg0: crate::api::flutter::Statistics,
     ) -> () {
         let args = vec![arg0.into_into_dart().into_dart()];
         let message = FLUTTER_RUST_BRIDGE_HANDLER
@@ -4870,7 +4832,7 @@ fn decode_DartFn_Inputs_statistics_Output_unit_AnyhowException(
         ans
     }
 
-    move |arg0: crate::api::telepathy::Statistics| {
+    move |arg0: crate::api::flutter::Statistics| {
         flutter_rust_bridge::for_generated::convert_into_dart_fn_future(body(
             dart_opaque.clone(),
             arg0,
@@ -5380,14 +5342,14 @@ impl SseDecode for (String, Vec<u8>) {
     }
 }
 
-impl SseDecode for crate::api::logger::SendToDartLogger {
+impl SseDecode for crate::api::flutter::SendToDartLogger {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
-        return crate::api::logger::SendToDartLogger {};
+        return crate::api::flutter::SendToDartLogger {};
     }
 }
 
-impl SseDecode for crate::api::telepathy::Statistics {
+impl SseDecode for crate::api::flutter::Statistics {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_inputLevel = <f32>::sse_decode(deserializer);
@@ -5396,7 +5358,7 @@ impl SseDecode for crate::api::telepathy::Statistics {
         let mut var_uploadBandwidth = <usize>::sse_decode(deserializer);
         let mut var_downloadBandwidth = <usize>::sse_decode(deserializer);
         let mut var_loss = <f64>::sse_decode(deserializer);
-        return crate::api::telepathy::Statistics {
+        return crate::api::flutter::Statistics {
             input_level: var_inputLevel,
             output_level: var_outputLevel,
             latency: var_latency,
@@ -5442,34 +5404,31 @@ fn pde_ffi_dispatcher_primary_impl(
 ) {
     // Codec=Pde (Serialization + dispatch), see doc to use other codecs
     match func_id {
-        1 => wire__crate__api__telepathy__Capabilities_default_impl(
-            port,
-            ptr,
-            rust_vec_len,
-            data_len,
-        ),
-        23 => {
-            wire__crate__api__telepathy__DartNotify_notified_impl(port, ptr, rust_vec_len, data_len)
+        1 => {
+            wire__crate__api__flutter__Capabilities_default_impl(port, ptr, rust_vec_len, data_len)
         }
-        25 => wire__crate__api__telepathy__NetworkConfig_get_relay_address_impl(
+        23 => {
+            wire__crate__api__flutter__DartNotify_notified_impl(port, ptr, rust_vec_len, data_len)
+        }
+        25 => wire__crate__api__flutter__NetworkConfig_get_relay_address_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        26 => wire__crate__api__telepathy__NetworkConfig_get_relay_id_impl(
+        26 => wire__crate__api__flutter__NetworkConfig_get_relay_id_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        28 => wire__crate__api__telepathy__NetworkConfig_set_relay_address_impl(
+        28 => wire__crate__api__flutter__NetworkConfig_set_relay_address_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        29 => wire__crate__api__telepathy__NetworkConfig_set_relay_id_impl(
+        29 => wire__crate__api__flutter__NetworkConfig_set_relay_id_impl(
             port,
             ptr,
             rust_vec_len,
@@ -5520,31 +5479,28 @@ fn pde_ffi_dispatcher_primary_impl(
         39 => {
             wire__crate__api__overlay__overlay__Overlay_show_impl(port, ptr, rust_vec_len, data_len)
         }
-        45 => wire__crate__api__telepathy__ScreenshareConfig_capabilities_impl(
+        45 => wire__crate__api__flutter__ScreenshareConfig_capabilities_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        46 => wire__crate__api__telepathy__ScreenshareConfig_default_impl(
+        46 => wire__crate__api__flutter__ScreenshareConfig_default_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        47 => wire__crate__api__telepathy__ScreenshareConfig_new_impl(
+        47 => {
+            wire__crate__api__flutter__ScreenshareConfig_new_impl(port, ptr, rust_vec_len, data_len)
+        }
+        48 => wire__crate__api__flutter__ScreenshareConfig_recording_config_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        48 => wire__crate__api__telepathy__ScreenshareConfig_recording_config_impl(
-            port,
-            ptr,
-            rust_vec_len,
-            data_len,
-        ),
-        50 => wire__crate__api__telepathy__ScreenshareConfig_update_recording_config_impl(
+        50 => wire__crate__api__flutter__ScreenshareConfig_update_recording_config_impl(
             port,
             ptr,
             rust_vec_len,
@@ -5632,19 +5588,16 @@ fn pde_ffi_dispatcher_primary_impl(
             rust_vec_len,
             data_len,
         ),
-        84 => wire__crate__api__logger__init_logger_impl(port, ptr, rust_vec_len, data_len),
-        85 => {
+        84 => {
             wire__crate__api__audio__player__load_ringtone_impl(port, ptr, rust_vec_len, data_len)
         }
-        87 => wire__crate__api__logger__send_to_dart_logger_set_stream_sink_impl(
+        86 => wire__crate__api__flutter__send_to_dart_logger_set_stream_sink_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        88 => {
-            wire__crate__api__telepathy__statistics_default_impl(port, ptr, rust_vec_len, data_len)
-        }
+        87 => wire__crate__api__flutter__statistics_default_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -5657,68 +5610,60 @@ fn pde_ffi_dispatcher_sync_impl(
 ) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
     // Codec=Pde (Serialization + dispatch), see doc to use other codecs
     match func_id {
-        2 => wire__crate__api__telepathy__Capabilities_devices_impl(ptr, rust_vec_len, data_len),
-        3 => wire__crate__api__telepathy__Capabilities_encoders_impl(ptr, rust_vec_len, data_len),
-        4 => wire__crate__api__telepathy__ChatMessage_attachments_impl(ptr, rust_vec_len, data_len),
-        5 => wire__crate__api__telepathy__ChatMessage_auto_accessor_get_text_impl(
+        2 => wire__crate__api__flutter__Capabilities_devices_impl(ptr, rust_vec_len, data_len),
+        3 => wire__crate__api__flutter__Capabilities_encoders_impl(ptr, rust_vec_len, data_len),
+        4 => wire__crate__api__flutter__ChatMessage_attachments_impl(ptr, rust_vec_len, data_len),
+        5 => wire__crate__api__flutter__ChatMessage_auto_accessor_get_text_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        6 => wire__crate__api__telepathy__ChatMessage_auto_accessor_set_text_impl(
+        6 => wire__crate__api__flutter__ChatMessage_auto_accessor_set_text_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        7 => wire__crate__api__telepathy__ChatMessage_clear_attachments_impl(
+        7 => wire__crate__api__flutter__ChatMessage_clear_attachments_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        8 => wire__crate__api__telepathy__ChatMessage_is_sender_impl(ptr, rust_vec_len, data_len),
-        9 => wire__crate__api__telepathy__ChatMessage_time_impl(ptr, rust_vec_len, data_len),
-        10 => wire__crate__api__telepathy__CodecConfig_new_impl(ptr, rust_vec_len, data_len),
-        11 => {
-            wire__crate__api__telepathy__CodecConfig_set_enabled_impl(ptr, rust_vec_len, data_len)
-        }
-        12 => wire__crate__api__telepathy__CodecConfig_set_residual_bits_impl(
+        8 => wire__crate__api__flutter__ChatMessage_is_sender_impl(ptr, rust_vec_len, data_len),
+        9 => wire__crate__api__flutter__ChatMessage_time_impl(ptr, rust_vec_len, data_len),
+        10 => wire__crate__api__flutter__CodecConfig_new_impl(ptr, rust_vec_len, data_len),
+        11 => wire__crate__api__flutter__CodecConfig_set_enabled_impl(ptr, rust_vec_len, data_len),
+        12 => wire__crate__api__flutter__CodecConfig_set_residual_bits_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        13 => wire__crate__api__telepathy__CodecConfig_set_vbr_impl(ptr, rust_vec_len, data_len),
-        14 => wire__crate__api__telepathy__CodecConfig_to_values_impl(ptr, rust_vec_len, data_len),
-        15 => wire__crate__api__contact__Contact_from_parts_impl(ptr, rust_vec_len, data_len),
-        16 => wire__crate__api__contact__Contact_id_impl(ptr, rust_vec_len, data_len),
-        17 => wire__crate__api__contact__Contact_id_eq_impl(ptr, rust_vec_len, data_len),
-        18 => wire__crate__api__contact__Contact_new_impl(ptr, rust_vec_len, data_len),
-        19 => wire__crate__api__contact__Contact_nickname_impl(ptr, rust_vec_len, data_len),
-        20 => wire__crate__api__contact__Contact_peer_id_impl(ptr, rust_vec_len, data_len),
-        21 => wire__crate__api__contact__Contact_pub_clone_impl(ptr, rust_vec_len, data_len),
-        22 => wire__crate__api__contact__Contact_set_nickname_impl(ptr, rust_vec_len, data_len),
-        24 => wire__crate__api__telepathy__DartNotify_notify_impl(ptr, rust_vec_len, data_len),
-        27 => wire__crate__api__telepathy__NetworkConfig_new_impl(ptr, rust_vec_len, data_len),
+        13 => wire__crate__api__flutter__CodecConfig_set_vbr_impl(ptr, rust_vec_len, data_len),
+        14 => wire__crate__api__flutter__CodecConfig_to_values_impl(ptr, rust_vec_len, data_len),
+        15 => wire__crate__api__flutter__Contact_from_parts_impl(ptr, rust_vec_len, data_len),
+        16 => wire__crate__api__flutter__Contact_id_impl(ptr, rust_vec_len, data_len),
+        17 => wire__crate__api__flutter__Contact_id_eq_impl(ptr, rust_vec_len, data_len),
+        18 => wire__crate__api__flutter__Contact_new_impl(ptr, rust_vec_len, data_len),
+        19 => wire__crate__api__flutter__Contact_nickname_impl(ptr, rust_vec_len, data_len),
+        20 => wire__crate__api__flutter__Contact_peer_id_impl(ptr, rust_vec_len, data_len),
+        21 => wire__crate__api__flutter__Contact_pub_clone_impl(ptr, rust_vec_len, data_len),
+        22 => wire__crate__api__flutter__Contact_set_nickname_impl(ptr, rust_vec_len, data_len),
+        24 => wire__crate__api__flutter__DartNotify_notify_impl(ptr, rust_vec_len, data_len),
+        27 => wire__crate__api__flutter__NetworkConfig_new_impl(ptr, rust_vec_len, data_len),
         35 => wire__crate__api__overlay__overlay__Overlay_screen_resolution_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        40 => {
-            wire__crate__api__telepathy__RecordingConfig_bitrate_impl(ptr, rust_vec_len, data_len)
-        }
-        41 => wire__crate__api__telepathy__RecordingConfig_device_impl(ptr, rust_vec_len, data_len),
-        42 => {
-            wire__crate__api__telepathy__RecordingConfig_encoder_impl(ptr, rust_vec_len, data_len)
-        }
+        40 => wire__crate__api__flutter__RecordingConfig_bitrate_impl(ptr, rust_vec_len, data_len),
+        41 => wire__crate__api__flutter__RecordingConfig_device_impl(ptr, rust_vec_len, data_len),
+        42 => wire__crate__api__flutter__RecordingConfig_encoder_impl(ptr, rust_vec_len, data_len),
         43 => {
-            wire__crate__api__telepathy__RecordingConfig_framerate_impl(ptr, rust_vec_len, data_len)
+            wire__crate__api__flutter__RecordingConfig_framerate_impl(ptr, rust_vec_len, data_len)
         }
-        44 => wire__crate__api__telepathy__RecordingConfig_height_impl(ptr, rust_vec_len, data_len),
-        49 => wire__crate__api__telepathy__ScreenshareConfig_to_string_impl(
-            ptr,
-            rust_vec_len,
-            data_len,
-        ),
+        44 => wire__crate__api__flutter__RecordingConfig_height_impl(ptr, rust_vec_len, data_len),
+        49 => {
+            wire__crate__api__flutter__ScreenshareConfig_to_string_impl(ptr, rust_vec_len, data_len)
+        }
         51 => wire__crate__api__audio__player__SoundHandle_cancel_impl(ptr, rust_vec_len, data_len),
         52 => wire__crate__api__audio__player__SoundPlayer_host_impl(ptr, rust_vec_len, data_len),
         53 => wire__crate__api__audio__player__SoundPlayer_new_impl(ptr, rust_vec_len, data_len),
@@ -5762,9 +5707,9 @@ fn pde_ffi_dispatcher_sync_impl(
             rust_vec_len,
             data_len,
         ),
-        82 => wire__crate__api__logger__create_log_stream_impl(ptr, rust_vec_len, data_len),
-        83 => wire__crate__api__crypto__generate_keys_impl(ptr, rust_vec_len, data_len),
-        86 => wire__crate__api__logger__rust_set_up_impl(ptr, rust_vec_len, data_len),
+        82 => wire__crate__api__flutter__create_log_stream_impl(ptr, rust_vec_len, data_len),
+        83 => wire__crate__api__flutter__generate_keys_impl(ptr, rust_vec_len, data_len),
+        85 => wire__crate__api__flutter__rust_set_up_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -5981,24 +5926,24 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::error::DartError>
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
-impl flutter_rust_bridge::IntoDart for crate::api::logger::SendToDartLogger {
+impl flutter_rust_bridge::IntoDart for crate::api::flutter::SendToDartLogger {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         Vec::<u8>::new().into_dart()
     }
 }
 impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
-    for crate::api::logger::SendToDartLogger
+    for crate::api::flutter::SendToDartLogger
 {
 }
-impl flutter_rust_bridge::IntoIntoDart<crate::api::logger::SendToDartLogger>
-    for crate::api::logger::SendToDartLogger
+impl flutter_rust_bridge::IntoIntoDart<crate::api::flutter::SendToDartLogger>
+    for crate::api::flutter::SendToDartLogger
 {
-    fn into_into_dart(self) -> crate::api::logger::SendToDartLogger {
+    fn into_into_dart(self) -> crate::api::flutter::SendToDartLogger {
         self
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
-impl flutter_rust_bridge::IntoDart for crate::api::telepathy::Statistics {
+impl flutter_rust_bridge::IntoDart for crate::api::flutter::Statistics {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
             self.input_level.into_into_dart().into_dart(),
@@ -6012,13 +5957,13 @@ impl flutter_rust_bridge::IntoDart for crate::api::telepathy::Statistics {
     }
 }
 impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
-    for crate::api::telepathy::Statistics
+    for crate::api::flutter::Statistics
 {
 }
-impl flutter_rust_bridge::IntoIntoDart<crate::api::telepathy::Statistics>
-    for crate::api::telepathy::Statistics
+impl flutter_rust_bridge::IntoIntoDart<crate::api::flutter::Statistics>
+    for crate::api::flutter::Statistics
 {
-    fn into_into_dart(self) -> crate::api::telepathy::Statistics {
+    fn into_into_dart(self) -> crate::api::flutter::Statistics {
         self
     }
 }
@@ -6439,12 +6384,12 @@ impl SseEncode for (String, Vec<u8>) {
     }
 }
 
-impl SseEncode for crate::api::logger::SendToDartLogger {
+impl SseEncode for crate::api::flutter::SendToDartLogger {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {}
 }
 
-impl SseEncode for crate::api::telepathy::Statistics {
+impl SseEncode for crate::api::flutter::Statistics {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <f32>::sse_encode(self.input_level, serializer);
@@ -6494,7 +6439,7 @@ mod io {
 
     use super::*;
     use crate::api::audio::player::*;
-    use crate::api::contact::*;
+    use crate::api::flutter::*;
     use crate::api::overlay::overlay::*;
     use crate::api::telepathy::*;
     use flutter_rust_bridge::for_generated::byteorder::{
@@ -6702,7 +6647,7 @@ mod web {
 
     use super::*;
     use crate::api::audio::player::*;
-    use crate::api::contact::*;
+    use crate::api::flutter::*;
     use crate::api::overlay::overlay::*;
     use crate::api::telepathy::*;
     use flutter_rust_bridge::for_generated::byteorder::{

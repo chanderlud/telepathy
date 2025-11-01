@@ -5,9 +5,8 @@ import 'package:flutter/material.dart' hide Overlay;
 
 import 'package:telepathy/settings/view.dart';
 import 'package:telepathy/src/rust/api/telepathy.dart';
-import 'package:telepathy/src/rust/api/contact.dart';
+import 'package:telepathy/src/rust/api/flutter.dart';
 import 'package:telepathy/src/rust/api/error.dart';
-import 'package:telepathy/src/rust/api/logger.dart';
 import 'package:telepathy/src/rust/api/audio/player.dart';
 import 'package:telepathy/src/rust/api/overlay/overlay.dart';
 import 'package:telepathy/src/rust/frb_generated.dart';

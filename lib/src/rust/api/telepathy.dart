@@ -5,120 +5,14 @@
 
 import '../frb_generated.dart';
 import 'audio/player.dart';
-import 'contact.dart';
 import 'error.dart';
+import 'flutter.dart';
 import 'overlay/overlay.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `_start_session`, `audio_input`, `audio_output`, `call_controller`, `call_handshake`, `call`, `codec_config`, `efficiency_channel`, `get_input_device`, `incoming_stream_handler`, `input_processor`, `is_in_room`, `latencies_missing`, `load_ringtone`, `loopback`, `new`, `new`, `new`, `open_stream`, `open_stream`, `output_processor`, `relayed_only`, `room_controller`, `room_handshake`, `session_manager`, `session`, `setup_call`, `setup_input_stream`, `setup_input`, `setup_output`, `statistics_collector`, `stream_to_audio_transport`
+// These functions are ignored because they are not marked as `pub`: `_start_session`, `audio_input`, `audio_output`, `call_controller`, `call_handshake`, `call`, `codec_config`, `efficiency_channel`, `get_input_device`, `incoming_stream_handler`, `is_in_room`, `latencies_missing`, `load_ringtone`, `loopback`, `new`, `new`, `new`, `open_stream`, `open_stream`, `relayed_only`, `room_controller`, `room_handshake`, `session_manager`, `session`, `setup_call`, `setup_input_stream`, `setup_input`, `setup_output`, `statistics_collector`, `stream_to_audio_transport`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `ConnectionState`, `EarlyCallState`, `PeerState`, `SessionState`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`
-
-// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Capabilities>>
-abstract class Capabilities implements RustOpaqueInterface {
-  static Future<Capabilities> default_() =>
-      RustLib.instance.api.crateApiTelepathyCapabilitiesDefault();
-
-  List<String> devices();
-
-  List<String> encoders();
-}
-
-// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<ChatMessage>>
-abstract class ChatMessage implements RustOpaqueInterface {
-  List<(String, Uint8List)> attachments();
-
-  String get text;
-
-  set text(String text);
-
-  void clearAttachments();
-
-  bool isSender({required String identity});
-
-  String time();
-}
-
-// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<CodecConfig>>
-abstract class CodecConfig implements RustOpaqueInterface {
-  factory CodecConfig(
-          {required bool enabled,
-          required bool vbr,
-          required double residualBits}) =>
-      RustLib.instance.api.crateApiTelepathyCodecConfigNew(
-          enabled: enabled, vbr: vbr, residualBits: residualBits);
-
-  void setEnabled({required bool enabled});
-
-  void setResidualBits({required double residualBits});
-
-  void setVbr({required bool vbr});
-
-  (bool, bool, double) toValues();
-}
-
-// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<DartNotify>>
-abstract class DartNotify implements RustOpaqueInterface {
-  /// public notified function for dart
-  Future<void> notified();
-
-  /// notifies one waiter
-  void notify();
-}
-
-// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<NetworkConfig>>
-abstract class NetworkConfig implements RustOpaqueInterface {
-  Future<String> getRelayAddress();
-
-  Future<String> getRelayId();
-
-  factory NetworkConfig(
-          {required String relayAddress, required String relayId}) =>
-      RustLib.instance.api.crateApiTelepathyNetworkConfigNew(
-          relayAddress: relayAddress, relayId: relayId);
-
-  Future<void> setRelayAddress({required String relayAddress});
-
-  Future<void> setRelayId({required String relayId});
-}
-
-// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<RecordingConfig>>
-abstract class RecordingConfig implements RustOpaqueInterface {
-  int bitrate();
-
-  String device();
-
-  String encoder();
-
-  int framerate();
-
-  int? height();
-}
-
-// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<ScreenshareConfig>>
-abstract class ScreenshareConfig implements RustOpaqueInterface {
-  Future<Capabilities> capabilities();
-
-  static Future<ScreenshareConfig> default_() =>
-      RustLib.instance.api.crateApiTelepathyScreenshareConfigDefault();
-
-  // HINT: Make it `#[frb(sync)]` to let it become the default constructor of Dart class.
-  static Future<ScreenshareConfig> newInstance({required String configStr}) =>
-      RustLib.instance.api
-          .crateApiTelepathyScreenshareConfigNew(configStr: configStr);
-
-  Future<RecordingConfig?> recordingConfig();
-
-  @override
-  String toString();
-
-  Future<void> updateRecordingConfig(
-      {required String encoder,
-      required String device,
-      required int bitrate,
-      required int framerate,
-      int? height});
-}
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `fmt`, `fmt`
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Telepathy>>
 abstract class Telepathy implements RustOpaqueInterface {
@@ -220,58 +114,4 @@ abstract class Telepathy implements RustOpaqueInterface {
 
   /// Stops a specific session (called when a contact is deleted)
   Future<void> stopSession({required Contact contact});
-}
-
-/// processed statistics for the frontend
-class Statistics {
-  /// a percentage of the max input volume in the window
-  final double inputLevel;
-
-  /// a percentage of the max output volume in the window
-  final double outputLevel;
-
-  /// the current call latency
-  final BigInt latency;
-
-  /// the approximate upload bandwidth used by the current call
-  final BigInt uploadBandwidth;
-
-  /// the approximate download bandwidth used by the current call
-  final BigInt downloadBandwidth;
-
-  /// a value between 0 and 1 representing the percent of audio lost in a sliding window
-  final double loss;
-
-  const Statistics({
-    required this.inputLevel,
-    required this.outputLevel,
-    required this.latency,
-    required this.uploadBandwidth,
-    required this.downloadBandwidth,
-    required this.loss,
-  });
-
-  static Future<Statistics> default_() =>
-      RustLib.instance.api.crateApiTelepathyStatisticsDefault();
-
-  @override
-  int get hashCode =>
-      inputLevel.hashCode ^
-      outputLevel.hashCode ^
-      latency.hashCode ^
-      uploadBandwidth.hashCode ^
-      downloadBandwidth.hashCode ^
-      loss.hashCode;
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is Statistics &&
-          runtimeType == other.runtimeType &&
-          inputLevel == other.inputLevel &&
-          outputLevel == other.outputLevel &&
-          latency == other.latency &&
-          uploadBandwidth == other.uploadBandwidth &&
-          downloadBandwidth == other.downloadBandwidth &&
-          loss == other.loss;
 }

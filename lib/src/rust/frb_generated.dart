@@ -4,10 +4,8 @@
 // ignore_for_file: unused_import, unused_element, unnecessary_import, duplicate_ignore, invalid_use_of_internal_member, annotate_overrides, non_constant_identifier_names, curly_braces_in_flow_control_structures, prefer_const_literals_to_create_immutables, unused_field
 
 import 'api/audio/player.dart';
-import 'api/contact.dart';
-import 'api/crypto.dart';
 import 'api/error.dart';
-import 'api/logger.dart';
+import 'api/flutter.dart';
 import 'api/overlay/overlay.dart';
 import 'api/telepathy.dart';
 import 'dart:async';
@@ -74,7 +72,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.11.1';
 
   @override
-  int get rustContentHash => -1284200818;
+  int get rustContentHash => -1023685256;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -85,83 +83,81 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
 }
 
 abstract class RustLibApi extends BaseApi {
-  Future<Capabilities> crateApiTelepathyCapabilitiesDefault();
+  Future<Capabilities> crateApiFlutterCapabilitiesDefault();
 
-  List<String> crateApiTelepathyCapabilitiesDevices(
+  List<String> crateApiFlutterCapabilitiesDevices({required Capabilities that});
+
+  List<String> crateApiFlutterCapabilitiesEncoders(
       {required Capabilities that});
 
-  List<String> crateApiTelepathyCapabilitiesEncoders(
-      {required Capabilities that});
-
-  List<(String, Uint8List)> crateApiTelepathyChatMessageAttachments(
+  List<(String, Uint8List)> crateApiFlutterChatMessageAttachments(
       {required ChatMessage that});
 
-  String crateApiTelepathyChatMessageAutoAccessorGetText(
+  String crateApiFlutterChatMessageAutoAccessorGetText(
       {required ChatMessage that});
 
-  void crateApiTelepathyChatMessageAutoAccessorSetText(
+  void crateApiFlutterChatMessageAutoAccessorSetText(
       {required ChatMessage that, required String text});
 
-  void crateApiTelepathyChatMessageClearAttachments(
-      {required ChatMessage that});
+  void crateApiFlutterChatMessageClearAttachments({required ChatMessage that});
 
-  bool crateApiTelepathyChatMessageIsSender(
+  bool crateApiFlutterChatMessageIsSender(
       {required ChatMessage that, required String identity});
 
-  String crateApiTelepathyChatMessageTime({required ChatMessage that});
+  String crateApiFlutterChatMessageTime({required ChatMessage that});
 
-  CodecConfig crateApiTelepathyCodecConfigNew(
+  CodecConfig crateApiFlutterCodecConfigNew(
       {required bool enabled, required bool vbr, required double residualBits});
 
-  void crateApiTelepathyCodecConfigSetEnabled(
+  void crateApiFlutterCodecConfigSetEnabled(
       {required CodecConfig that, required bool enabled});
 
-  void crateApiTelepathyCodecConfigSetResidualBits(
+  void crateApiFlutterCodecConfigSetResidualBits(
       {required CodecConfig that, required double residualBits});
 
-  void crateApiTelepathyCodecConfigSetVbr(
+  void crateApiFlutterCodecConfigSetVbr(
       {required CodecConfig that, required bool vbr});
 
-  (bool, bool, double) crateApiTelepathyCodecConfigToValues(
+  (bool, bool, double) crateApiFlutterCodecConfigToValues(
       {required CodecConfig that});
 
-  Contact crateApiContactContactFromParts(
+  Contact crateApiFlutterContactFromParts(
       {required String id, required String nickname, required String peerId});
 
-  String crateApiContactContactId({required Contact that});
+  String crateApiFlutterContactId({required Contact that});
 
-  bool crateApiContactContactIdEq(
+  bool crateApiFlutterContactIdEq(
       {required Contact that, required List<int> id});
 
-  Contact crateApiContactContactNew(
+  Contact crateApiFlutterContactNew(
       {required String nickname, required String peerId});
 
-  String crateApiContactContactNickname({required Contact that});
+  String crateApiFlutterContactNickname({required Contact that});
 
-  String crateApiContactContactPeerId({required Contact that});
+  String crateApiFlutterContactPeerId({required Contact that});
 
-  Contact crateApiContactContactPubClone({required Contact that});
+  Contact crateApiFlutterContactPubClone({required Contact that});
 
-  void crateApiContactContactSetNickname(
+  void crateApiFlutterContactSetNickname(
       {required Contact that, required String nickname});
 
-  Future<void> crateApiTelepathyDartNotifyNotified({required DartNotify that});
+  Future<void> crateApiFlutterDartNotifyNotified({required DartNotify that});
 
-  void crateApiTelepathyDartNotifyNotify({required DartNotify that});
+  void crateApiFlutterDartNotifyNotify({required DartNotify that});
 
-  Future<String> crateApiTelepathyNetworkConfigGetRelayAddress(
+  Future<String> crateApiFlutterNetworkConfigGetRelayAddress(
       {required NetworkConfig that});
 
-  Future<String> crateApiTelepathyNetworkConfigGetRelayId(
+  Future<String> crateApiFlutterNetworkConfigGetRelayId(
       {required NetworkConfig that});
 
-  NetworkConfig crateApiTelepathyNetworkConfigNew(
+  NetworkConfig crateApiFlutterNetworkConfigNew(
       {required String relayAddress, required String relayId});
 
-  Future<void> crateApiTelepathyNetworkConfigSetRelayAddress(
+  Future<void> crateApiFlutterNetworkConfigSetRelayAddress(
       {required NetworkConfig that, required String relayAddress});
 
-  Future<void> crateApiTelepathyNetworkConfigSetRelayId(
+  Future<void> crateApiFlutterNetworkConfigSetRelayId(
       {required NetworkConfig that, required String relayId});
 
   Future<void> crateApiOverlayOverlayOverlayDisable({required Overlay that});
@@ -201,34 +197,31 @@ abstract class RustLibApi extends BaseApi {
 
   Future<void> crateApiOverlayOverlayOverlayShow({required Overlay that});
 
-  int crateApiTelepathyRecordingConfigBitrate({required RecordingConfig that});
+  int crateApiFlutterRecordingConfigBitrate({required RecordingConfig that});
 
-  String crateApiTelepathyRecordingConfigDevice(
-      {required RecordingConfig that});
+  String crateApiFlutterRecordingConfigDevice({required RecordingConfig that});
 
-  String crateApiTelepathyRecordingConfigEncoder(
-      {required RecordingConfig that});
+  String crateApiFlutterRecordingConfigEncoder({required RecordingConfig that});
 
-  int crateApiTelepathyRecordingConfigFramerate(
-      {required RecordingConfig that});
+  int crateApiFlutterRecordingConfigFramerate({required RecordingConfig that});
 
-  int? crateApiTelepathyRecordingConfigHeight({required RecordingConfig that});
+  int? crateApiFlutterRecordingConfigHeight({required RecordingConfig that});
 
-  Future<Capabilities> crateApiTelepathyScreenshareConfigCapabilities(
+  Future<Capabilities> crateApiFlutterScreenshareConfigCapabilities(
       {required ScreenshareConfig that});
 
-  Future<ScreenshareConfig> crateApiTelepathyScreenshareConfigDefault();
+  Future<ScreenshareConfig> crateApiFlutterScreenshareConfigDefault();
 
-  Future<ScreenshareConfig> crateApiTelepathyScreenshareConfigNew(
+  Future<ScreenshareConfig> crateApiFlutterScreenshareConfigNew(
       {required String configStr});
 
-  Future<RecordingConfig?> crateApiTelepathyScreenshareConfigRecordingConfig(
+  Future<RecordingConfig?> crateApiFlutterScreenshareConfigRecordingConfig(
       {required ScreenshareConfig that});
 
-  String crateApiTelepathyScreenshareConfigToString(
+  String crateApiFlutterScreenshareConfigToString(
       {required ScreenshareConfig that});
 
-  Future<void> crateApiTelepathyScreenshareConfigUpdateRecordingConfig(
+  Future<void> crateApiFlutterScreenshareConfigUpdateRecordingConfig(
       {required ScreenshareConfig that,
       required String encoder,
       required String device,
@@ -343,19 +336,17 @@ abstract class RustLibApi extends BaseApi {
   Future<void> crateApiTelepathyTelepathyStopSession(
       {required Telepathy that, required Contact contact});
 
-  Stream<String> crateApiLoggerCreateLogStream();
+  Stream<String> crateApiFlutterCreateLogStream();
 
-  (String, Uint8List) crateApiCryptoGenerateKeys();
-
-  Future<void> crateApiLoggerInitLogger();
+  (String, Uint8List) crateApiFlutterGenerateKeys();
 
   Future<void> crateApiAudioPlayerLoadRingtone({required String path});
 
-  void crateApiLoggerRustSetUp();
+  void crateApiFlutterRustSetUp();
 
-  Stream<String> crateApiLoggerSendToDartLoggerSetStreamSink();
+  Stream<String> crateApiFlutterSendToDartLoggerSetStreamSink();
 
-  Future<Statistics> crateApiTelepathyStatisticsDefault();
+  Future<Statistics> crateApiFlutterStatisticsDefault();
 
   RustArcIncrementStrongCountFnType get rust_arc_increment_strong_count_ArcHost;
 
@@ -468,7 +459,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   });
 
   @override
-  Future<Capabilities> crateApiTelepathyCapabilitiesDefault() {
+  Future<Capabilities> crateApiFlutterCapabilitiesDefault() {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -480,20 +471,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCapabilities,
         decodeErrorData: null,
       ),
-      constMeta: kCrateApiTelepathyCapabilitiesDefaultConstMeta,
+      constMeta: kCrateApiFlutterCapabilitiesDefaultConstMeta,
       argValues: [],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateApiTelepathyCapabilitiesDefaultConstMeta =>
+  TaskConstMeta get kCrateApiFlutterCapabilitiesDefaultConstMeta =>
       const TaskConstMeta(
         debugName: "Capabilities_default",
         argNames: [],
       );
 
   @override
-  List<String> crateApiTelepathyCapabilitiesDevices(
+  List<String> crateApiFlutterCapabilitiesDevices(
       {required Capabilities that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
@@ -506,20 +497,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_list_String,
         decodeErrorData: null,
       ),
-      constMeta: kCrateApiTelepathyCapabilitiesDevicesConstMeta,
+      constMeta: kCrateApiFlutterCapabilitiesDevicesConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateApiTelepathyCapabilitiesDevicesConstMeta =>
+  TaskConstMeta get kCrateApiFlutterCapabilitiesDevicesConstMeta =>
       const TaskConstMeta(
         debugName: "Capabilities_devices",
         argNames: ["that"],
       );
 
   @override
-  List<String> crateApiTelepathyCapabilitiesEncoders(
+  List<String> crateApiFlutterCapabilitiesEncoders(
       {required Capabilities that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
@@ -532,20 +523,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_list_String,
         decodeErrorData: null,
       ),
-      constMeta: kCrateApiTelepathyCapabilitiesEncodersConstMeta,
+      constMeta: kCrateApiFlutterCapabilitiesEncodersConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateApiTelepathyCapabilitiesEncodersConstMeta =>
+  TaskConstMeta get kCrateApiFlutterCapabilitiesEncodersConstMeta =>
       const TaskConstMeta(
         debugName: "Capabilities_encoders",
         argNames: ["that"],
       );
 
   @override
-  List<(String, Uint8List)> crateApiTelepathyChatMessageAttachments(
+  List<(String, Uint8List)> crateApiFlutterChatMessageAttachments(
       {required ChatMessage that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
@@ -558,20 +549,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_list_record_string_list_prim_u_8_strict,
         decodeErrorData: null,
       ),
-      constMeta: kCrateApiTelepathyChatMessageAttachmentsConstMeta,
+      constMeta: kCrateApiFlutterChatMessageAttachmentsConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateApiTelepathyChatMessageAttachmentsConstMeta =>
+  TaskConstMeta get kCrateApiFlutterChatMessageAttachmentsConstMeta =>
       const TaskConstMeta(
         debugName: "ChatMessage_attachments",
         argNames: ["that"],
       );
 
   @override
-  String crateApiTelepathyChatMessageAutoAccessorGetText(
+  String crateApiFlutterChatMessageAutoAccessorGetText(
       {required ChatMessage that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
@@ -584,20 +575,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_String,
         decodeErrorData: null,
       ),
-      constMeta: kCrateApiTelepathyChatMessageAutoAccessorGetTextConstMeta,
+      constMeta: kCrateApiFlutterChatMessageAutoAccessorGetTextConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateApiTelepathyChatMessageAutoAccessorGetTextConstMeta =>
+  TaskConstMeta get kCrateApiFlutterChatMessageAutoAccessorGetTextConstMeta =>
       const TaskConstMeta(
         debugName: "ChatMessage_auto_accessor_get_text",
         argNames: ["that"],
       );
 
   @override
-  void crateApiTelepathyChatMessageAutoAccessorSetText(
+  void crateApiFlutterChatMessageAutoAccessorSetText(
       {required ChatMessage that, required String text}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
@@ -611,21 +602,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateApiTelepathyChatMessageAutoAccessorSetTextConstMeta,
+      constMeta: kCrateApiFlutterChatMessageAutoAccessorSetTextConstMeta,
       argValues: [that, text],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateApiTelepathyChatMessageAutoAccessorSetTextConstMeta =>
+  TaskConstMeta get kCrateApiFlutterChatMessageAutoAccessorSetTextConstMeta =>
       const TaskConstMeta(
         debugName: "ChatMessage_auto_accessor_set_text",
         argNames: ["that", "text"],
       );
 
   @override
-  void crateApiTelepathyChatMessageClearAttachments(
-      {required ChatMessage that}) {
+  void crateApiFlutterChatMessageClearAttachments({required ChatMessage that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -637,20 +627,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateApiTelepathyChatMessageClearAttachmentsConstMeta,
+      constMeta: kCrateApiFlutterChatMessageClearAttachmentsConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateApiTelepathyChatMessageClearAttachmentsConstMeta =>
+  TaskConstMeta get kCrateApiFlutterChatMessageClearAttachmentsConstMeta =>
       const TaskConstMeta(
         debugName: "ChatMessage_clear_attachments",
         argNames: ["that"],
       );
 
   @override
-  bool crateApiTelepathyChatMessageIsSender(
+  bool crateApiFlutterChatMessageIsSender(
       {required ChatMessage that, required String identity}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
@@ -664,20 +654,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_bool,
         decodeErrorData: null,
       ),
-      constMeta: kCrateApiTelepathyChatMessageIsSenderConstMeta,
+      constMeta: kCrateApiFlutterChatMessageIsSenderConstMeta,
       argValues: [that, identity],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateApiTelepathyChatMessageIsSenderConstMeta =>
+  TaskConstMeta get kCrateApiFlutterChatMessageIsSenderConstMeta =>
       const TaskConstMeta(
         debugName: "ChatMessage_is_sender",
         argNames: ["that", "identity"],
       );
 
   @override
-  String crateApiTelepathyChatMessageTime({required ChatMessage that}) {
+  String crateApiFlutterChatMessageTime({required ChatMessage that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -689,20 +679,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_String,
         decodeErrorData: null,
       ),
-      constMeta: kCrateApiTelepathyChatMessageTimeConstMeta,
+      constMeta: kCrateApiFlutterChatMessageTimeConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateApiTelepathyChatMessageTimeConstMeta =>
+  TaskConstMeta get kCrateApiFlutterChatMessageTimeConstMeta =>
       const TaskConstMeta(
         debugName: "ChatMessage_time",
         argNames: ["that"],
       );
 
   @override
-  CodecConfig crateApiTelepathyCodecConfigNew(
+  CodecConfig crateApiFlutterCodecConfigNew(
       {required bool enabled,
       required bool vbr,
       required double residualBits}) {
@@ -719,20 +709,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCodecConfig,
         decodeErrorData: null,
       ),
-      constMeta: kCrateApiTelepathyCodecConfigNewConstMeta,
+      constMeta: kCrateApiFlutterCodecConfigNewConstMeta,
       argValues: [enabled, vbr, residualBits],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateApiTelepathyCodecConfigNewConstMeta =>
+  TaskConstMeta get kCrateApiFlutterCodecConfigNewConstMeta =>
       const TaskConstMeta(
         debugName: "CodecConfig_new",
         argNames: ["enabled", "vbr", "residualBits"],
       );
 
   @override
-  void crateApiTelepathyCodecConfigSetEnabled(
+  void crateApiFlutterCodecConfigSetEnabled(
       {required CodecConfig that, required bool enabled}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
@@ -746,20 +736,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateApiTelepathyCodecConfigSetEnabledConstMeta,
+      constMeta: kCrateApiFlutterCodecConfigSetEnabledConstMeta,
       argValues: [that, enabled],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateApiTelepathyCodecConfigSetEnabledConstMeta =>
+  TaskConstMeta get kCrateApiFlutterCodecConfigSetEnabledConstMeta =>
       const TaskConstMeta(
         debugName: "CodecConfig_set_enabled",
         argNames: ["that", "enabled"],
       );
 
   @override
-  void crateApiTelepathyCodecConfigSetResidualBits(
+  void crateApiFlutterCodecConfigSetResidualBits(
       {required CodecConfig that, required double residualBits}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
@@ -773,20 +763,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateApiTelepathyCodecConfigSetResidualBitsConstMeta,
+      constMeta: kCrateApiFlutterCodecConfigSetResidualBitsConstMeta,
       argValues: [that, residualBits],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateApiTelepathyCodecConfigSetResidualBitsConstMeta =>
+  TaskConstMeta get kCrateApiFlutterCodecConfigSetResidualBitsConstMeta =>
       const TaskConstMeta(
         debugName: "CodecConfig_set_residual_bits",
         argNames: ["that", "residualBits"],
       );
 
   @override
-  void crateApiTelepathyCodecConfigSetVbr(
+  void crateApiFlutterCodecConfigSetVbr(
       {required CodecConfig that, required bool vbr}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
@@ -800,20 +790,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateApiTelepathyCodecConfigSetVbrConstMeta,
+      constMeta: kCrateApiFlutterCodecConfigSetVbrConstMeta,
       argValues: [that, vbr],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateApiTelepathyCodecConfigSetVbrConstMeta =>
+  TaskConstMeta get kCrateApiFlutterCodecConfigSetVbrConstMeta =>
       const TaskConstMeta(
         debugName: "CodecConfig_set_vbr",
         argNames: ["that", "vbr"],
       );
 
   @override
-  (bool, bool, double) crateApiTelepathyCodecConfigToValues(
+  (bool, bool, double) crateApiFlutterCodecConfigToValues(
       {required CodecConfig that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
@@ -826,20 +816,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_record_bool_bool_f_32,
         decodeErrorData: null,
       ),
-      constMeta: kCrateApiTelepathyCodecConfigToValuesConstMeta,
+      constMeta: kCrateApiFlutterCodecConfigToValuesConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateApiTelepathyCodecConfigToValuesConstMeta =>
+  TaskConstMeta get kCrateApiFlutterCodecConfigToValuesConstMeta =>
       const TaskConstMeta(
         debugName: "CodecConfig_to_values",
         argNames: ["that"],
       );
 
   @override
-  Contact crateApiContactContactFromParts(
+  Contact crateApiFlutterContactFromParts(
       {required String id, required String nickname, required String peerId}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
@@ -854,20 +844,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerContact,
         decodeErrorData: sse_decode_dart_error,
       ),
-      constMeta: kCrateApiContactContactFromPartsConstMeta,
+      constMeta: kCrateApiFlutterContactFromPartsConstMeta,
       argValues: [id, nickname, peerId],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateApiContactContactFromPartsConstMeta =>
+  TaskConstMeta get kCrateApiFlutterContactFromPartsConstMeta =>
       const TaskConstMeta(
         debugName: "Contact_from_parts",
         argNames: ["id", "nickname", "peerId"],
       );
 
   @override
-  String crateApiContactContactId({required Contact that}) {
+  String crateApiFlutterContactId({required Contact that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -879,19 +869,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_String,
         decodeErrorData: null,
       ),
-      constMeta: kCrateApiContactContactIdConstMeta,
+      constMeta: kCrateApiFlutterContactIdConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateApiContactContactIdConstMeta => const TaskConstMeta(
+  TaskConstMeta get kCrateApiFlutterContactIdConstMeta => const TaskConstMeta(
         debugName: "Contact_id",
         argNames: ["that"],
       );
 
   @override
-  bool crateApiContactContactIdEq(
+  bool crateApiFlutterContactIdEq(
       {required Contact that, required List<int> id}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
@@ -905,19 +895,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_bool,
         decodeErrorData: null,
       ),
-      constMeta: kCrateApiContactContactIdEqConstMeta,
+      constMeta: kCrateApiFlutterContactIdEqConstMeta,
       argValues: [that, id],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateApiContactContactIdEqConstMeta => const TaskConstMeta(
+  TaskConstMeta get kCrateApiFlutterContactIdEqConstMeta => const TaskConstMeta(
         debugName: "Contact_id_eq",
         argNames: ["that", "id"],
       );
 
   @override
-  Contact crateApiContactContactNew(
+  Contact crateApiFlutterContactNew(
       {required String nickname, required String peerId}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
@@ -931,19 +921,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerContact,
         decodeErrorData: sse_decode_dart_error,
       ),
-      constMeta: kCrateApiContactContactNewConstMeta,
+      constMeta: kCrateApiFlutterContactNewConstMeta,
       argValues: [nickname, peerId],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateApiContactContactNewConstMeta => const TaskConstMeta(
+  TaskConstMeta get kCrateApiFlutterContactNewConstMeta => const TaskConstMeta(
         debugName: "Contact_new",
         argNames: ["nickname", "peerId"],
       );
 
   @override
-  String crateApiContactContactNickname({required Contact that}) {
+  String crateApiFlutterContactNickname({required Contact that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -955,20 +945,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_String,
         decodeErrorData: null,
       ),
-      constMeta: kCrateApiContactContactNicknameConstMeta,
+      constMeta: kCrateApiFlutterContactNicknameConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateApiContactContactNicknameConstMeta =>
+  TaskConstMeta get kCrateApiFlutterContactNicknameConstMeta =>
       const TaskConstMeta(
         debugName: "Contact_nickname",
         argNames: ["that"],
       );
 
   @override
-  String crateApiContactContactPeerId({required Contact that}) {
+  String crateApiFlutterContactPeerId({required Contact that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -980,20 +970,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_String,
         decodeErrorData: null,
       ),
-      constMeta: kCrateApiContactContactPeerIdConstMeta,
+      constMeta: kCrateApiFlutterContactPeerIdConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateApiContactContactPeerIdConstMeta =>
+  TaskConstMeta get kCrateApiFlutterContactPeerIdConstMeta =>
       const TaskConstMeta(
         debugName: "Contact_peer_id",
         argNames: ["that"],
       );
 
   @override
-  Contact crateApiContactContactPubClone({required Contact that}) {
+  Contact crateApiFlutterContactPubClone({required Contact that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -1006,20 +996,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerContact,
         decodeErrorData: null,
       ),
-      constMeta: kCrateApiContactContactPubCloneConstMeta,
+      constMeta: kCrateApiFlutterContactPubCloneConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateApiContactContactPubCloneConstMeta =>
+  TaskConstMeta get kCrateApiFlutterContactPubCloneConstMeta =>
       const TaskConstMeta(
         debugName: "Contact_pub_clone",
         argNames: ["that"],
       );
 
   @override
-  void crateApiContactContactSetNickname(
+  void crateApiFlutterContactSetNickname(
       {required Contact that, required String nickname}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
@@ -1033,20 +1023,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateApiContactContactSetNicknameConstMeta,
+      constMeta: kCrateApiFlutterContactSetNicknameConstMeta,
       argValues: [that, nickname],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateApiContactContactSetNicknameConstMeta =>
+  TaskConstMeta get kCrateApiFlutterContactSetNicknameConstMeta =>
       const TaskConstMeta(
         debugName: "Contact_set_nickname",
         argNames: ["that", "nickname"],
       );
 
   @override
-  Future<void> crateApiTelepathyDartNotifyNotified({required DartNotify that}) {
+  Future<void> crateApiFlutterDartNotifyNotified({required DartNotify that}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -1059,20 +1049,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateApiTelepathyDartNotifyNotifiedConstMeta,
+      constMeta: kCrateApiFlutterDartNotifyNotifiedConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateApiTelepathyDartNotifyNotifiedConstMeta =>
+  TaskConstMeta get kCrateApiFlutterDartNotifyNotifiedConstMeta =>
       const TaskConstMeta(
         debugName: "DartNotify_notified",
         argNames: ["that"],
       );
 
   @override
-  void crateApiTelepathyDartNotifyNotify({required DartNotify that}) {
+  void crateApiFlutterDartNotifyNotify({required DartNotify that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -1084,20 +1074,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateApiTelepathyDartNotifyNotifyConstMeta,
+      constMeta: kCrateApiFlutterDartNotifyNotifyConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateApiTelepathyDartNotifyNotifyConstMeta =>
+  TaskConstMeta get kCrateApiFlutterDartNotifyNotifyConstMeta =>
       const TaskConstMeta(
         debugName: "DartNotify_notify",
         argNames: ["that"],
       );
 
   @override
-  Future<String> crateApiTelepathyNetworkConfigGetRelayAddress(
+  Future<String> crateApiFlutterNetworkConfigGetRelayAddress(
       {required NetworkConfig that}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
@@ -1111,20 +1101,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_String,
         decodeErrorData: null,
       ),
-      constMeta: kCrateApiTelepathyNetworkConfigGetRelayAddressConstMeta,
+      constMeta: kCrateApiFlutterNetworkConfigGetRelayAddressConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateApiTelepathyNetworkConfigGetRelayAddressConstMeta =>
+  TaskConstMeta get kCrateApiFlutterNetworkConfigGetRelayAddressConstMeta =>
       const TaskConstMeta(
         debugName: "NetworkConfig_get_relay_address",
         argNames: ["that"],
       );
 
   @override
-  Future<String> crateApiTelepathyNetworkConfigGetRelayId(
+  Future<String> crateApiFlutterNetworkConfigGetRelayId(
       {required NetworkConfig that}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
@@ -1138,20 +1128,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_String,
         decodeErrorData: null,
       ),
-      constMeta: kCrateApiTelepathyNetworkConfigGetRelayIdConstMeta,
+      constMeta: kCrateApiFlutterNetworkConfigGetRelayIdConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateApiTelepathyNetworkConfigGetRelayIdConstMeta =>
+  TaskConstMeta get kCrateApiFlutterNetworkConfigGetRelayIdConstMeta =>
       const TaskConstMeta(
         debugName: "NetworkConfig_get_relay_id",
         argNames: ["that"],
       );
 
   @override
-  NetworkConfig crateApiTelepathyNetworkConfigNew(
+  NetworkConfig crateApiFlutterNetworkConfigNew(
       {required String relayAddress, required String relayId}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
@@ -1165,20 +1155,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerNetworkConfig,
         decodeErrorData: sse_decode_dart_error,
       ),
-      constMeta: kCrateApiTelepathyNetworkConfigNewConstMeta,
+      constMeta: kCrateApiFlutterNetworkConfigNewConstMeta,
       argValues: [relayAddress, relayId],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateApiTelepathyNetworkConfigNewConstMeta =>
+  TaskConstMeta get kCrateApiFlutterNetworkConfigNewConstMeta =>
       const TaskConstMeta(
         debugName: "NetworkConfig_new",
         argNames: ["relayAddress", "relayId"],
       );
 
   @override
-  Future<void> crateApiTelepathyNetworkConfigSetRelayAddress(
+  Future<void> crateApiFlutterNetworkConfigSetRelayAddress(
       {required NetworkConfig that, required String relayAddress}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
@@ -1193,20 +1183,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: sse_decode_dart_error,
       ),
-      constMeta: kCrateApiTelepathyNetworkConfigSetRelayAddressConstMeta,
+      constMeta: kCrateApiFlutterNetworkConfigSetRelayAddressConstMeta,
       argValues: [that, relayAddress],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateApiTelepathyNetworkConfigSetRelayAddressConstMeta =>
+  TaskConstMeta get kCrateApiFlutterNetworkConfigSetRelayAddressConstMeta =>
       const TaskConstMeta(
         debugName: "NetworkConfig_set_relay_address",
         argNames: ["that", "relayAddress"],
       );
 
   @override
-  Future<void> crateApiTelepathyNetworkConfigSetRelayId(
+  Future<void> crateApiFlutterNetworkConfigSetRelayId(
       {required NetworkConfig that, required String relayId}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
@@ -1221,13 +1211,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: sse_decode_dart_error,
       ),
-      constMeta: kCrateApiTelepathyNetworkConfigSetRelayIdConstMeta,
+      constMeta: kCrateApiFlutterNetworkConfigSetRelayIdConstMeta,
       argValues: [that, relayId],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateApiTelepathyNetworkConfigSetRelayIdConstMeta =>
+  TaskConstMeta get kCrateApiFlutterNetworkConfigSetRelayIdConstMeta =>
       const TaskConstMeta(
         debugName: "NetworkConfig_set_relay_id",
         argNames: ["that", "relayId"],
@@ -1542,7 +1532,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  int crateApiTelepathyRecordingConfigBitrate({required RecordingConfig that}) {
+  int crateApiFlutterRecordingConfigBitrate({required RecordingConfig that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -1554,21 +1544,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_u_32,
         decodeErrorData: null,
       ),
-      constMeta: kCrateApiTelepathyRecordingConfigBitrateConstMeta,
+      constMeta: kCrateApiFlutterRecordingConfigBitrateConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateApiTelepathyRecordingConfigBitrateConstMeta =>
+  TaskConstMeta get kCrateApiFlutterRecordingConfigBitrateConstMeta =>
       const TaskConstMeta(
         debugName: "RecordingConfig_bitrate",
         argNames: ["that"],
       );
 
   @override
-  String crateApiTelepathyRecordingConfigDevice(
-      {required RecordingConfig that}) {
+  String crateApiFlutterRecordingConfigDevice({required RecordingConfig that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -1580,20 +1569,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_String,
         decodeErrorData: null,
       ),
-      constMeta: kCrateApiTelepathyRecordingConfigDeviceConstMeta,
+      constMeta: kCrateApiFlutterRecordingConfigDeviceConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateApiTelepathyRecordingConfigDeviceConstMeta =>
+  TaskConstMeta get kCrateApiFlutterRecordingConfigDeviceConstMeta =>
       const TaskConstMeta(
         debugName: "RecordingConfig_device",
         argNames: ["that"],
       );
 
   @override
-  String crateApiTelepathyRecordingConfigEncoder(
+  String crateApiFlutterRecordingConfigEncoder(
       {required RecordingConfig that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
@@ -1606,21 +1595,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_String,
         decodeErrorData: null,
       ),
-      constMeta: kCrateApiTelepathyRecordingConfigEncoderConstMeta,
+      constMeta: kCrateApiFlutterRecordingConfigEncoderConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateApiTelepathyRecordingConfigEncoderConstMeta =>
+  TaskConstMeta get kCrateApiFlutterRecordingConfigEncoderConstMeta =>
       const TaskConstMeta(
         debugName: "RecordingConfig_encoder",
         argNames: ["that"],
       );
 
   @override
-  int crateApiTelepathyRecordingConfigFramerate(
-      {required RecordingConfig that}) {
+  int crateApiFlutterRecordingConfigFramerate({required RecordingConfig that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -1632,20 +1620,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_u_32,
         decodeErrorData: null,
       ),
-      constMeta: kCrateApiTelepathyRecordingConfigFramerateConstMeta,
+      constMeta: kCrateApiFlutterRecordingConfigFramerateConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateApiTelepathyRecordingConfigFramerateConstMeta =>
+  TaskConstMeta get kCrateApiFlutterRecordingConfigFramerateConstMeta =>
       const TaskConstMeta(
         debugName: "RecordingConfig_framerate",
         argNames: ["that"],
       );
 
   @override
-  int? crateApiTelepathyRecordingConfigHeight({required RecordingConfig that}) {
+  int? crateApiFlutterRecordingConfigHeight({required RecordingConfig that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -1657,20 +1645,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_opt_box_autoadd_u_32,
         decodeErrorData: null,
       ),
-      constMeta: kCrateApiTelepathyRecordingConfigHeightConstMeta,
+      constMeta: kCrateApiFlutterRecordingConfigHeightConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateApiTelepathyRecordingConfigHeightConstMeta =>
+  TaskConstMeta get kCrateApiFlutterRecordingConfigHeightConstMeta =>
       const TaskConstMeta(
         debugName: "RecordingConfig_height",
         argNames: ["that"],
       );
 
   @override
-  Future<Capabilities> crateApiTelepathyScreenshareConfigCapabilities(
+  Future<Capabilities> crateApiFlutterScreenshareConfigCapabilities(
       {required ScreenshareConfig that}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
@@ -1685,20 +1673,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCapabilities,
         decodeErrorData: null,
       ),
-      constMeta: kCrateApiTelepathyScreenshareConfigCapabilitiesConstMeta,
+      constMeta: kCrateApiFlutterScreenshareConfigCapabilitiesConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateApiTelepathyScreenshareConfigCapabilitiesConstMeta =>
+  TaskConstMeta get kCrateApiFlutterScreenshareConfigCapabilitiesConstMeta =>
       const TaskConstMeta(
         debugName: "ScreenshareConfig_capabilities",
         argNames: ["that"],
       );
 
   @override
-  Future<ScreenshareConfig> crateApiTelepathyScreenshareConfigDefault() {
+  Future<ScreenshareConfig> crateApiFlutterScreenshareConfigDefault() {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -1710,20 +1698,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerScreenshareConfig,
         decodeErrorData: null,
       ),
-      constMeta: kCrateApiTelepathyScreenshareConfigDefaultConstMeta,
+      constMeta: kCrateApiFlutterScreenshareConfigDefaultConstMeta,
       argValues: [],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateApiTelepathyScreenshareConfigDefaultConstMeta =>
+  TaskConstMeta get kCrateApiFlutterScreenshareConfigDefaultConstMeta =>
       const TaskConstMeta(
         debugName: "ScreenshareConfig_default",
         argNames: [],
       );
 
   @override
-  Future<ScreenshareConfig> crateApiTelepathyScreenshareConfigNew(
+  Future<ScreenshareConfig> crateApiFlutterScreenshareConfigNew(
       {required String configStr}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
@@ -1737,20 +1725,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerScreenshareConfig,
         decodeErrorData: null,
       ),
-      constMeta: kCrateApiTelepathyScreenshareConfigNewConstMeta,
+      constMeta: kCrateApiFlutterScreenshareConfigNewConstMeta,
       argValues: [configStr],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateApiTelepathyScreenshareConfigNewConstMeta =>
+  TaskConstMeta get kCrateApiFlutterScreenshareConfigNewConstMeta =>
       const TaskConstMeta(
         debugName: "ScreenshareConfig_new",
         argNames: ["configStr"],
       );
 
   @override
-  Future<RecordingConfig?> crateApiTelepathyScreenshareConfigRecordingConfig(
+  Future<RecordingConfig?> crateApiFlutterScreenshareConfigRecordingConfig(
       {required ScreenshareConfig that}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
@@ -1765,21 +1753,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             sse_decode_opt_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRecordingConfig,
         decodeErrorData: null,
       ),
-      constMeta: kCrateApiTelepathyScreenshareConfigRecordingConfigConstMeta,
+      constMeta: kCrateApiFlutterScreenshareConfigRecordingConfigConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta
-      get kCrateApiTelepathyScreenshareConfigRecordingConfigConstMeta =>
-          const TaskConstMeta(
-            debugName: "ScreenshareConfig_recording_config",
-            argNames: ["that"],
-          );
+  TaskConstMeta get kCrateApiFlutterScreenshareConfigRecordingConfigConstMeta =>
+      const TaskConstMeta(
+        debugName: "ScreenshareConfig_recording_config",
+        argNames: ["that"],
+      );
 
   @override
-  String crateApiTelepathyScreenshareConfigToString(
+  String crateApiFlutterScreenshareConfigToString(
       {required ScreenshareConfig that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
@@ -1792,20 +1779,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_String,
         decodeErrorData: null,
       ),
-      constMeta: kCrateApiTelepathyScreenshareConfigToStringConstMeta,
+      constMeta: kCrateApiFlutterScreenshareConfigToStringConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateApiTelepathyScreenshareConfigToStringConstMeta =>
+  TaskConstMeta get kCrateApiFlutterScreenshareConfigToStringConstMeta =>
       const TaskConstMeta(
         debugName: "ScreenshareConfig_to_string",
         argNames: ["that"],
       );
 
   @override
-  Future<void> crateApiTelepathyScreenshareConfigUpdateRecordingConfig(
+  Future<void> crateApiFlutterScreenshareConfigUpdateRecordingConfig(
       {required ScreenshareConfig that,
       required String encoder,
       required String device,
@@ -1830,14 +1817,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeErrorData: sse_decode_dart_error,
       ),
       constMeta:
-          kCrateApiTelepathyScreenshareConfigUpdateRecordingConfigConstMeta,
+          kCrateApiFlutterScreenshareConfigUpdateRecordingConfigConstMeta,
       argValues: [that, encoder, device, bitrate, framerate, height],
       apiImpl: this,
     ));
   }
 
   TaskConstMeta
-      get kCrateApiTelepathyScreenshareConfigUpdateRecordingConfigConstMeta =>
+      get kCrateApiFlutterScreenshareConfigUpdateRecordingConfigConstMeta =>
           const TaskConstMeta(
             debugName: "ScreenshareConfig_update_recording_config",
             argNames: [
@@ -2790,7 +2777,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Stream<String> crateApiLoggerCreateLogStream() {
+  Stream<String> crateApiFlutterCreateLogStream() {
     final s = RustStreamSink<String>();
     handler.executeSync(SyncTask(
       callFfi: () {
@@ -2802,21 +2789,21 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateApiLoggerCreateLogStreamConstMeta,
+      constMeta: kCrateApiFlutterCreateLogStreamConstMeta,
       argValues: [s],
       apiImpl: this,
     ));
     return s.stream;
   }
 
-  TaskConstMeta get kCrateApiLoggerCreateLogStreamConstMeta =>
+  TaskConstMeta get kCrateApiFlutterCreateLogStreamConstMeta =>
       const TaskConstMeta(
         debugName: "create_log_stream",
         argNames: ["s"],
       );
 
   @override
-  (String, Uint8List) crateApiCryptoGenerateKeys() {
+  (String, Uint8List) crateApiFlutterGenerateKeys() {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -2826,37 +2813,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_record_string_list_prim_u_8_strict,
         decodeErrorData: sse_decode_dart_error,
       ),
-      constMeta: kCrateApiCryptoGenerateKeysConstMeta,
+      constMeta: kCrateApiFlutterGenerateKeysConstMeta,
       argValues: [],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateApiCryptoGenerateKeysConstMeta => const TaskConstMeta(
+  TaskConstMeta get kCrateApiFlutterGenerateKeysConstMeta =>
+      const TaskConstMeta(
         debugName: "generate_keys",
-        argNames: [],
-      );
-
-  @override
-  Future<void> crateApiLoggerInitLogger() {
-    return handler.executeNormal(NormalTask(
-      callFfi: (port_) {
-        final serializer = SseSerializer(generalizedFrbRustBinding);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 84, port: port_);
-      },
-      codec: SseCodec(
-        decodeSuccessData: sse_decode_unit,
-        decodeErrorData: null,
-      ),
-      constMeta: kCrateApiLoggerInitLoggerConstMeta,
-      argValues: [],
-      apiImpl: this,
-    ));
-  }
-
-  TaskConstMeta get kCrateApiLoggerInitLoggerConstMeta => const TaskConstMeta(
-        debugName: "init_logger",
         argNames: [],
       );
 
@@ -2867,7 +2832,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_String(path, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 85, port: port_);
+            funcId: 84, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -2886,73 +2851,73 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  void crateApiLoggerRustSetUp() {
+  void crateApiFlutterRustSetUp() {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 86)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 85)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateApiLoggerRustSetUpConstMeta,
+      constMeta: kCrateApiFlutterRustSetUpConstMeta,
       argValues: [],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateApiLoggerRustSetUpConstMeta => const TaskConstMeta(
+  TaskConstMeta get kCrateApiFlutterRustSetUpConstMeta => const TaskConstMeta(
         debugName: "rust_set_up",
         argNames: [],
       );
 
   @override
-  Stream<String> crateApiLoggerSendToDartLoggerSetStreamSink() {
+  Stream<String> crateApiFlutterSendToDartLoggerSetStreamSink() {
     final streamSink = RustStreamSink<String>();
     unawaited(handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_StreamSink_String_Sse(streamSink, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 87, port: port_);
+            funcId: 86, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateApiLoggerSendToDartLoggerSetStreamSinkConstMeta,
+      constMeta: kCrateApiFlutterSendToDartLoggerSetStreamSinkConstMeta,
       argValues: [streamSink],
       apiImpl: this,
     )));
     return streamSink.stream;
   }
 
-  TaskConstMeta get kCrateApiLoggerSendToDartLoggerSetStreamSinkConstMeta =>
+  TaskConstMeta get kCrateApiFlutterSendToDartLoggerSetStreamSinkConstMeta =>
       const TaskConstMeta(
         debugName: "send_to_dart_logger_set_stream_sink",
         argNames: ["streamSink"],
       );
 
   @override
-  Future<Statistics> crateApiTelepathyStatisticsDefault() {
+  Future<Statistics> crateApiFlutterStatisticsDefault() {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 88, port: port_);
+            funcId: 87, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_statistics,
         decodeErrorData: null,
       ),
-      constMeta: kCrateApiTelepathyStatisticsDefaultConstMeta,
+      constMeta: kCrateApiFlutterStatisticsDefaultConstMeta,
       argValues: [],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateApiTelepathyStatisticsDefaultConstMeta =>
+  TaskConstMeta get kCrateApiFlutterStatisticsDefaultConstMeta =>
       const TaskConstMeta(
         debugName: "statistics_default",
         argNames: [],
@@ -5480,12 +5445,12 @@ class CapabilitiesImpl extends RustOpaque implements Capabilities {
   );
 
   List<String> devices() =>
-      RustLib.instance.api.crateApiTelepathyCapabilitiesDevices(
+      RustLib.instance.api.crateApiFlutterCapabilitiesDevices(
         that: this,
       );
 
   List<String> encoders() =>
-      RustLib.instance.api.crateApiTelepathyCapabilitiesEncoders(
+      RustLib.instance.api.crateApiFlutterCapabilitiesEncoders(
         that: this,
       );
 }
@@ -5510,27 +5475,27 @@ class ChatMessageImpl extends RustOpaque implements ChatMessage {
   );
 
   List<(String, Uint8List)> attachments() =>
-      RustLib.instance.api.crateApiTelepathyChatMessageAttachments(
+      RustLib.instance.api.crateApiFlutterChatMessageAttachments(
         that: this,
       );
 
   String get text =>
-      RustLib.instance.api.crateApiTelepathyChatMessageAutoAccessorGetText(
+      RustLib.instance.api.crateApiFlutterChatMessageAutoAccessorGetText(
         that: this,
       );
 
   set text(String text) => RustLib.instance.api
-      .crateApiTelepathyChatMessageAutoAccessorSetText(that: this, text: text);
+      .crateApiFlutterChatMessageAutoAccessorSetText(that: this, text: text);
 
   void clearAttachments() =>
-      RustLib.instance.api.crateApiTelepathyChatMessageClearAttachments(
+      RustLib.instance.api.crateApiFlutterChatMessageClearAttachments(
         that: this,
       );
 
   bool isSender({required String identity}) => RustLib.instance.api
-      .crateApiTelepathyChatMessageIsSender(that: this, identity: identity);
+      .crateApiFlutterChatMessageIsSender(that: this, identity: identity);
 
-  String time() => RustLib.instance.api.crateApiTelepathyChatMessageTime(
+  String time() => RustLib.instance.api.crateApiFlutterChatMessageTime(
         that: this,
       );
 }
@@ -5555,17 +5520,17 @@ class CodecConfigImpl extends RustOpaque implements CodecConfig {
   );
 
   void setEnabled({required bool enabled}) => RustLib.instance.api
-      .crateApiTelepathyCodecConfigSetEnabled(that: this, enabled: enabled);
+      .crateApiFlutterCodecConfigSetEnabled(that: this, enabled: enabled);
 
   void setResidualBits({required double residualBits}) =>
-      RustLib.instance.api.crateApiTelepathyCodecConfigSetResidualBits(
+      RustLib.instance.api.crateApiFlutterCodecConfigSetResidualBits(
           that: this, residualBits: residualBits);
 
   void setVbr({required bool vbr}) => RustLib.instance.api
-      .crateApiTelepathyCodecConfigSetVbr(that: this, vbr: vbr);
+      .crateApiFlutterCodecConfigSetVbr(that: this, vbr: vbr);
 
   (bool, bool, double) toValues() =>
-      RustLib.instance.api.crateApiTelepathyCodecConfigToValues(
+      RustLib.instance.api.crateApiFlutterCodecConfigToValues(
         that: this,
       );
 }
@@ -5589,27 +5554,27 @@ class ContactImpl extends RustOpaque implements Contact {
         RustLib.instance.api.rust_arc_decrement_strong_count_ContactPtr,
   );
 
-  String id() => RustLib.instance.api.crateApiContactContactId(
+  String id() => RustLib.instance.api.crateApiFlutterContactId(
         that: this,
       );
 
   bool idEq({required List<int> id}) =>
-      RustLib.instance.api.crateApiContactContactIdEq(that: this, id: id);
+      RustLib.instance.api.crateApiFlutterContactIdEq(that: this, id: id);
 
-  String nickname() => RustLib.instance.api.crateApiContactContactNickname(
+  String nickname() => RustLib.instance.api.crateApiFlutterContactNickname(
         that: this,
       );
 
-  String peerId() => RustLib.instance.api.crateApiContactContactPeerId(
+  String peerId() => RustLib.instance.api.crateApiFlutterContactPeerId(
         that: this,
       );
 
-  Contact pubClone() => RustLib.instance.api.crateApiContactContactPubClone(
+  Contact pubClone() => RustLib.instance.api.crateApiFlutterContactPubClone(
         that: this,
       );
 
   void setNickname({required String nickname}) => RustLib.instance.api
-      .crateApiContactContactSetNickname(that: this, nickname: nickname);
+      .crateApiFlutterContactSetNickname(that: this, nickname: nickname);
 }
 
 @sealed
@@ -5633,12 +5598,12 @@ class DartNotifyImpl extends RustOpaque implements DartNotify {
 
   /// public notified function for dart
   Future<void> notified() =>
-      RustLib.instance.api.crateApiTelepathyDartNotifyNotified(
+      RustLib.instance.api.crateApiFlutterDartNotifyNotified(
         that: this,
       );
 
   /// notifies one waiter
-  void notify() => RustLib.instance.api.crateApiTelepathyDartNotifyNotify(
+  void notify() => RustLib.instance.api.crateApiFlutterDartNotifyNotify(
         that: this,
       );
 }
@@ -5663,21 +5628,21 @@ class NetworkConfigImpl extends RustOpaque implements NetworkConfig {
   );
 
   Future<String> getRelayAddress() =>
-      RustLib.instance.api.crateApiTelepathyNetworkConfigGetRelayAddress(
+      RustLib.instance.api.crateApiFlutterNetworkConfigGetRelayAddress(
         that: this,
       );
 
   Future<String> getRelayId() =>
-      RustLib.instance.api.crateApiTelepathyNetworkConfigGetRelayId(
+      RustLib.instance.api.crateApiFlutterNetworkConfigGetRelayId(
         that: this,
       );
 
   Future<void> setRelayAddress({required String relayAddress}) =>
-      RustLib.instance.api.crateApiTelepathyNetworkConfigSetRelayAddress(
+      RustLib.instance.api.crateApiFlutterNetworkConfigSetRelayAddress(
           that: this, relayAddress: relayAddress);
 
   Future<void> setRelayId({required String relayId}) => RustLib.instance.api
-      .crateApiTelepathyNetworkConfigSetRelayId(that: this, relayId: relayId);
+      .crateApiFlutterNetworkConfigSetRelayId(that: this, relayId: relayId);
 }
 
 @sealed
@@ -5772,26 +5737,25 @@ class RecordingConfigImpl extends RustOpaque implements RecordingConfig {
         RustLib.instance.api.rust_arc_decrement_strong_count_RecordingConfigPtr,
   );
 
-  int bitrate() => RustLib.instance.api.crateApiTelepathyRecordingConfigBitrate(
+  int bitrate() => RustLib.instance.api.crateApiFlutterRecordingConfigBitrate(
         that: this,
       );
 
-  String device() =>
-      RustLib.instance.api.crateApiTelepathyRecordingConfigDevice(
+  String device() => RustLib.instance.api.crateApiFlutterRecordingConfigDevice(
         that: this,
       );
 
   String encoder() =>
-      RustLib.instance.api.crateApiTelepathyRecordingConfigEncoder(
+      RustLib.instance.api.crateApiFlutterRecordingConfigEncoder(
         that: this,
       );
 
   int framerate() =>
-      RustLib.instance.api.crateApiTelepathyRecordingConfigFramerate(
+      RustLib.instance.api.crateApiFlutterRecordingConfigFramerate(
         that: this,
       );
 
-  int? height() => RustLib.instance.api.crateApiTelepathyRecordingConfigHeight(
+  int? height() => RustLib.instance.api.crateApiFlutterRecordingConfigHeight(
         that: this,
       );
 }
@@ -5817,17 +5781,17 @@ class ScreenshareConfigImpl extends RustOpaque implements ScreenshareConfig {
   );
 
   Future<Capabilities> capabilities() =>
-      RustLib.instance.api.crateApiTelepathyScreenshareConfigCapabilities(
+      RustLib.instance.api.crateApiFlutterScreenshareConfigCapabilities(
         that: this,
       );
 
   Future<RecordingConfig?> recordingConfig() =>
-      RustLib.instance.api.crateApiTelepathyScreenshareConfigRecordingConfig(
+      RustLib.instance.api.crateApiFlutterScreenshareConfigRecordingConfig(
         that: this,
       );
 
   String toString() =>
-      RustLib.instance.api.crateApiTelepathyScreenshareConfigToString(
+      RustLib.instance.api.crateApiFlutterScreenshareConfigToString(
         that: this,
       );
 
@@ -5838,7 +5802,7 @@ class ScreenshareConfigImpl extends RustOpaque implements ScreenshareConfig {
           required int framerate,
           int? height}) =>
       RustLib.instance.api
-          .crateApiTelepathyScreenshareConfigUpdateRecordingConfig(
+          .crateApiFlutterScreenshareConfigUpdateRecordingConfig(
               that: this,
               encoder: encoder,
               device: device,

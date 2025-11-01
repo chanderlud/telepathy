@@ -12,8 +12,8 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
 
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-use crate::api::telepathy::Capabilities;
-use crate::api::telepathy::RecordingConfig;
+use crate::api::flutter::Capabilities;
+use crate::api::flutter::RecordingConfig;
 #[cfg(not(target_family = "wasm"))]
 use libp2p::Stream;
 #[cfg(not(target_family = "wasm"))]

@@ -1,8 +1,6 @@
 pub mod audio;
-pub mod contact;
-pub mod crypto;
 pub mod error;
-pub mod logger;
+pub mod flutter;
 pub mod overlay;
 /// flutter_rust_bridge:ignore
 mod screenshare;

@@ -7,10 +7,8 @@
 // ignore_for_file: argument_type_not_assignable
 
 import 'api/audio/player.dart';
-import 'api/contact.dart';
-import 'api/crypto.dart';
 import 'api/error.dart';
-import 'api/logger.dart';
+import 'api/flutter.dart';
 import 'api/overlay/overlay.dart';
 import 'api/telepathy.dart';
 import 'dart:async';

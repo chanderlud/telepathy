@@ -227,7 +227,7 @@ pub(crate) mod rwlock_option_recording_config {
     use std::sync::Arc;
     use tokio::sync::RwLock;
 
-    use crate::api::telepathy::RecordingConfig;
+    use crate::api::flutter::RecordingConfig;
 
     pub fn serialize<S>(
         value: &Arc<RwLock<Option<RecordingConfig>>>,

@@ -16,6 +16,7 @@ import '../audio_level.dart';
 import '../console.dart';
 import '../main.dart';
 import '../src/rust/api/telepathy.dart';
+import '../src/rust/api/flutter.dart';
 import '../src/rust/api/error.dart';
 import '../src/rust/api/overlay/overlay.dart';
 

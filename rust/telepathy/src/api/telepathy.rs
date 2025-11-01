@@ -5,10 +5,9 @@ use std::mem;
 #[cfg(not(target_family = "wasm"))]
 use std::net::Ipv4Addr;
 pub use std::net::{IpAddr, SocketAddr};
-use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize};
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::time::Duration;
 
 use crate::api::audio::codec::{decoder, encoder};
@@ -16,17 +15,19 @@ use crate::api::audio::codec::{decoder, encoder};
 use crate::api::audio::ios::{configure_audio_session, deactivate_audio_session};
 #[cfg(target_family = "wasm")]
 use crate::api::audio::web_audio::{WebAudioWrapper, WebInput};
-use crate::api::contact::Contact;
+use crate::api::audio::{input_processor, output_processor};
 use crate::api::error::{DartError, Error, ErrorKind};
+use crate::api::flutter::{
+    ChatMessage, CodecConfig, Contact, DartNotify, NetworkConfig, ScreenshareConfig, Statistics,
+};
 use crate::api::overlay::overlay::Overlay;
 use crate::api::overlay::{CONNECTED, LATENCY, LOSS};
 use crate::api::screenshare;
-use crate::api::screenshare::{Decoder, Encoder};
 use crate::api::utils::*;
 use crate::frb_generated::FLUTTER_RUST_BRIDGE_HANDLER;
 use crate::{Behaviour, BehaviourEvent};
 use atomic_float::AtomicF32;
-use chrono::{DateTime, Local};
+use chrono::Local;
 #[cfg(not(target_family = "wasm"))]
 use cpal::Device;
 pub use cpal::Host;
@@ -38,7 +39,7 @@ use flutter_rust_bridge::{DartFnFuture, frb, spawn, spawn_blocking_with};
 pub use kanal::AsyncReceiver;
 #[cfg(not(target_family = "wasm"))]
 use kanal::bounded;
-use kanal::{AsyncSender, Receiver, Sender, bounded_async, unbounded_async};
+use kanal::{AsyncSender, Sender, bounded_async, unbounded_async};
 use libp2p::futures::StreamExt;
 use libp2p::identity::Keypair;
 use libp2p::multiaddr::Protocol;
@@ -52,13 +53,9 @@ use libp2p_stream::Control;
 use log::{debug, error, info, warn};
 use messages::{Attachment, AudioHeader, Message};
 use nnnoiseless::{DenoiseState, FRAME_SIZE, RnnModel};
-use rubato::Resampler;
 use sea_codec::ProcessorMessage;
-use serde::{Deserialize, Serialize};
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
-#[cfg(not(target_family = "wasm"))]
-use tokio::net::lookup_host;
 use tokio::select;
 use tokio::sync::{Mutex, Notify, RwLock};
 #[cfg(not(target_family = "wasm"))]
@@ -86,7 +83,7 @@ const TRANSFER_BUFFER_SIZE: usize = FRAME_SIZE * size_of::<i16>();
 const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 /// A timeout used to detect temporary network issues
 const TIMEOUT_DURATION: Duration = Duration::from_millis(100);
-/// the number of frames to hold in a channel
+/// the number of samples to hold in a channel
 pub(crate) const CHANNEL_SIZE: usize = 2_400;
 /// the protocol identifier for Telepathy
 const CHAT_PROTOCOL: StreamProtocol = StreamProtocol::new("/telepathy/0.0.1");
@@ -325,7 +322,10 @@ impl Telepathy {
 
     /// Attempts to start a call through an existing session
     pub async fn start_call(&self, contact: &Contact) -> std::result::Result<(), DartError> {
-        if self.in_call.load(Relaxed) || self.in_room.read().await.is_some() {
+        let in_call = self.in_call.load(Relaxed);
+        let in_room = self.in_room.read().await.is_some();
+        if in_call || in_room {
+            warn!("start_call called with in_call={in_call} and in_room={in_room}");
             return Ok(());
         }
 
@@ -352,7 +352,10 @@ impl Telepathy {
         &self,
         member_strings: Vec<String>,
     ) -> std::result::Result<(), DartError> {
-        if self.in_call.load(Relaxed) || self.in_room.read().await.is_some() {
+        let in_call = self.in_call.load(Relaxed);
+        let in_room = self.in_room.read().await.is_some();
+        if in_call || in_room {
+            warn!("join_room called with in_call={in_call} and in_room={in_room}");
             return Ok(());
         }
 
@@ -426,8 +429,6 @@ impl Telepathy {
 
     /// Blocks while an audio test is running
     pub async fn audio_test(&self) -> std::result::Result<(), DartError> {
-        self.in_call.store(true, Relaxed);
-
         let stop_io = Arc::new(Notify::new());
 
         #[cfg(target_family = "wasm")]
@@ -438,14 +439,13 @@ impl Telepathy {
         let mut audio_config = self.setup_call(PeerId::random()).await?;
         audio_config.remote_configuration = audio_config.local_configuration.clone();
 
+        self.in_call.store(true, Relaxed);
         let result = self
             .call(&stop_io, audio_config, None, None, None, None)
             .await
             .map_err(Into::into);
-
         stop_io.notify_waiters();
         self.in_call.store(false, Relaxed);
-
         result
     }
 
@@ -1600,14 +1600,14 @@ impl Telepathy {
                 let (write, read) = audio_transport.split();
                 socket_sender.send(write).await?;
 
-                spawn(audio_input(
+                let input_handle = spawn(audio_input(
                     input_receiver,
                     socket_receiver,
                     Arc::clone(stop_io),
                     upload_bandwidth,
                 ));
 
-                spawn(audio_output(
+                let output_handle = spawn(audio_output(
                     output_sender,
                     read,
                     Arc::clone(stop_io),
@@ -1634,7 +1634,29 @@ impl Telepathy {
                     },
                 }
 
+                info!("call controller done, notifying stop_io");
                 stop_io.notify_waiters();
+
+                match input_handle.await {
+                    Ok(Ok(())) => info!("input handle joined"),
+                    Ok(Err(error)) => {
+                        error!("audio_input failed: {}", error);
+                    }
+                    Err(error) => {
+                        error!("audio_input failed: {}", error);
+                    }
+                }
+
+                match output_handle.await {
+                    Ok(Ok(())) => info!("output handle joined"),
+                    Ok(Err(error)) => {
+                        error!("audio_output failed: {}", error);
+                    }
+                    Err(error) => {
+                        error!("audio_output failed: {}", error);
+                    }
+                }
+
                 info!("call controller returned and was handled, call returning");
             }
             _ => {
@@ -1970,14 +1992,11 @@ impl Telepathy {
 
         // if using codec, spawn extra encoder thread
         if codec_enabled {
-            let encoder_receiver = processed_input_receiver.clone_sync();
-            let encoder_sender = encoded_input_sender.clone_sync();
-
             spawn_blocking_with(
                 move || {
                     encoder(
-                        encoder_receiver,
-                        encoder_sender,
+                        processed_input_receiver.to_sync(),
+                        encoded_input_sender.to_sync(),
                         if denoise { 48_000 } else { sample_rate as u32 },
                         vbr,
                         residual_bits,
@@ -1985,16 +2004,11 @@ impl Telepathy {
                 },
                 FLUTTER_RUST_BRIDGE_HANDLER.thread_pool(),
             );
-        }
 
-        Ok((
-            if codec_enabled {
-                encoded_input_receiver
-            } else {
-                processed_input_receiver
-            },
-            input_sender,
-        ))
+            Ok((encoded_input_receiver, input_sender))
+        } else {
+            Ok((processed_input_receiver, input_sender))
+        }
     }
 
     /// helper method to set up audio output stack above network layer
@@ -2033,9 +2047,19 @@ impl Telepathy {
         let output_volume = Arc::clone(&self.output_volume);
         // do this outside the output processor thread
         let output_processor_receiver = if codec_enabled {
+            spawn_blocking_with(
+                move || {
+                    decoder(
+                        network_output_receiver.to_sync(),
+                        decoded_output_sender.to_sync(),
+                    );
+                },
+                FLUTTER_RUST_BRIDGE_HANDLER.thread_pool(),
+            );
+
             decoded_output_receiver.to_sync()
         } else {
-            network_output_receiver.clone_sync()
+            network_output_receiver.to_sync()
         };
 
         // spawn the output processor thread
@@ -2051,18 +2075,6 @@ impl Telepathy {
             },
             FLUTTER_RUST_BRIDGE_HANDLER.thread_pool(),
         );
-
-        if codec_enabled {
-            let decoder_receiver = network_output_receiver.to_sync();
-            let decoder_sender = decoded_output_sender.clone_sync();
-
-            spawn_blocking_with(
-                move || {
-                    decoder(decoder_receiver, decoder_sender);
-                },
-                FLUTTER_RUST_BRIDGE_HANDLER.thread_pool(),
-            );
-        }
 
         // get the output channels for chunking the output
         let output_channels = output_config.channels() as usize;
@@ -2446,382 +2458,6 @@ impl SessionState {
     }
 }
 
-/// processed statistics for the frontend
-#[derive(Default)]
-pub struct Statistics {
-    /// a percentage of the max input volume in the window
-    pub input_level: f32,
-
-    /// a percentage of the max output volume in the window
-    pub output_level: f32,
-
-    /// the current call latency
-    pub latency: usize,
-
-    /// the approximate upload bandwidth used by the current call
-    pub upload_bandwidth: usize,
-
-    /// the approximate download bandwidth used by the current call
-    pub download_bandwidth: usize,
-
-    /// a value between 0 and 1 representing the percent of audio lost in a sliding window
-    pub loss: f64,
-}
-
-#[frb(opaque)]
-#[derive(Clone)]
-pub struct NetworkConfig {
-    /// the relay server's address
-    relay_address: Arc<RwLock<SocketAddr>>,
-
-    /// the relay server's peer id
-    relay_id: Arc<RwLock<PeerId>>,
-
-    /// the libp2p port for the swarm
-    listen_port: Arc<RwLock<u16>>,
-}
-
-impl NetworkConfig {
-    #[frb(sync)]
-    pub fn new(relay_address: String, relay_id: String) -> std::result::Result<Self, DartError> {
-        Ok(Self {
-            relay_address: Arc::new(RwLock::new(relay_address.parse().map_err(Error::from)?)),
-            relay_id: Arc::new(RwLock::new(
-                PeerId::from_str(&relay_id).map_err(Error::from)?,
-            )),
-            listen_port: Arc::new(RwLock::new(0)),
-        })
-    }
-
-    #[cfg(not(target_family = "wasm"))]
-    pub async fn set_relay_address(
-        &self,
-        relay_address: String,
-    ) -> std::result::Result<(), DartError> {
-        if let Some(address) = lookup_host(&relay_address)
-            .await
-            .map_err(Error::from)?
-            .next()
-        {
-            *self.relay_address.write().await = address;
-            Ok(())
-        } else {
-            Err("Failed to resolve address".to_string().into())
-        }
-    }
-
-    #[cfg(target_family = "wasm")]
-    pub async fn set_relay_address(
-        &self,
-        relay_address: String,
-    ) -> std::result::Result<(), DartError> {
-        *self.relay_address.write().await = SocketAddr::from_str(&relay_address)
-            .map_err(|error| DartError::from(error.to_string()))?;
-        Ok(())
-    }
-
-    pub async fn get_relay_address(&self) -> String {
-        self.relay_address.read().await.to_string()
-    }
-
-    pub async fn set_relay_id(&self, relay_id: String) -> std::result::Result<(), DartError> {
-        *self.relay_id.write().await = PeerId::from_str(&relay_id).map_err(Error::from)?;
-        Ok(())
-    }
-
-    pub async fn get_relay_id(&self) -> String {
-        self.relay_id.read().await.to_string()
-    }
-}
-
-#[frb(opaque)]
-#[derive(Clone, Serialize, Deserialize)]
-pub struct ScreenshareConfig {
-    /// the screenshare capabilities. default until loaded
-    #[serde(skip)]
-    capabilities: Arc<RwLock<Capabilities>>,
-
-    /// a validated recording configuration
-    #[serde(with = "rwlock_option_recording_config")]
-    recording_config: Arc<RwLock<Option<RecordingConfig>>>,
-
-    /// the default width of the playback window
-    #[serde(
-        serialize_with = "atomic_u32_serialize",
-        deserialize_with = "atomic_u32_deserialize"
-    )]
-    width: Arc<AtomicU32>,
-
-    /// the default height of the playback window
-    #[serde(
-        serialize_with = "atomic_u32_serialize",
-        deserialize_with = "atomic_u32_deserialize"
-    )]
-    height: Arc<AtomicU32>,
-}
-
-impl Default for ScreenshareConfig {
-    fn default() -> Self {
-        Self {
-            capabilities: Default::default(),
-            recording_config: Default::default(),
-            width: Arc::new(AtomicU32::new(1280)),
-            height: Arc::new(AtomicU32::new(720)),
-        }
-    }
-}
-
-impl ScreenshareConfig {
-    // this function must be async to use spawn
-    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-    pub async fn new(config_str: String) -> Self {
-        let config: ScreenshareConfig = serde_json::from_str(&config_str).unwrap_or_default();
-
-        let capabilities_clone = Arc::clone(&config.capabilities);
-        spawn(async move {
-            let now = Instant::now();
-            let c = Capabilities::new().await;
-            *capabilities_clone.write().await = c;
-            info!("Capabilities loaded in {:?}", now.elapsed());
-        });
-
-        config
-    }
-
-    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-    pub async fn new(_config_str: String) -> Self {
-        Self::default()
-    }
-
-    pub async fn capabilities(&self) -> Capabilities {
-        self.capabilities.read().await.clone()
-    }
-
-    pub async fn recording_config(&self) -> Option<RecordingConfig> {
-        self.recording_config.read().await.clone()
-    }
-
-    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-    pub async fn update_recording_config(
-        &self,
-        encoder: String,
-        device: String,
-        bitrate: u32,
-        framerate: u32,
-        height: Option<u32>,
-    ) -> std::result::Result<(), DartError> {
-        let encoder = Encoder::from_str(&encoder).map_err(|_| ErrorKind::InvalidEncoder)?;
-
-        let recording_config = RecordingConfig {
-            encoder,
-            device: screenshare::Device::from_str(&device)
-                .map_err(|_| "Invalid device".to_string())?,
-            bitrate,
-            framerate,
-            height,
-        };
-
-        if let Ok(status) = recording_config.test_config().await
-            && status.success()
-        {
-            *self.recording_config.write().await = Some(recording_config);
-            return Ok(());
-        }
-
-        Err("Invalid configuration".to_string().into())
-    }
-
-    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-    pub async fn update_recording_config(
-        &self,
-        _encoder: String,
-        _device: String,
-        _bitrate: u32,
-        _framerate: u32,
-        _height: Option<u32>,
-    ) -> std::result::Result<(), DartError> {
-        Ok(())
-    }
-
-    #[frb(sync)]
-    pub fn to_string(&self) -> String {
-        serde_json::to_string(self).unwrap()
-    }
-}
-
-/// capabilities for ffmpeg and ffplay supported by this client
-#[derive(Default, Debug, Clone)]
-#[frb(opaque)]
-pub struct Capabilities {
-    pub(crate) _available: bool,
-
-    pub(crate) encoders: Vec<Encoder>,
-
-    pub(crate) _decoders: Vec<Decoder>,
-
-    pub(crate) devices: Vec<screenshare::Device>,
-}
-
-impl Capabilities {
-    #[frb(sync)]
-    pub fn encoders(&self) -> Vec<String> {
-        self.encoders.iter().map(|e| e.to_string()).collect()
-    }
-
-    #[frb(sync)]
-    pub fn devices(&self) -> Vec<String> {
-        self.devices.iter().map(|d| d.to_string()).collect()
-    }
-}
-
-/// recording config for screenshare
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[frb(opaque)]
-pub struct RecordingConfig {
-    pub(crate) encoder: Encoder,
-
-    pub(crate) device: screenshare::Device,
-
-    pub(crate) bitrate: u32,
-
-    pub(crate) framerate: u32,
-
-    /// the height for the video output
-    pub(crate) height: Option<u32>,
-}
-
-impl RecordingConfig {
-    #[frb(sync)]
-    pub fn encoder(&self) -> String {
-        let encoder_str: &str = self.encoder.into();
-        encoder_str.to_string()
-    }
-
-    #[frb(sync)]
-    pub fn device(&self) -> String {
-        self.device.to_string()
-    }
-
-    #[frb(sync)]
-    pub fn bitrate(&self) -> u32 {
-        self.bitrate
-    }
-
-    #[frb(sync)]
-    pub fn framerate(&self) -> u32 {
-        self.framerate
-    }
-
-    #[frb(sync)]
-    pub fn height(&self) -> Option<u32> {
-        self.height
-    }
-}
-
-#[frb(opaque)]
-#[derive(Clone)]
-pub struct CodecConfig {
-    /// whether to use the codec
-    enabled: Arc<AtomicBool>,
-
-    /// whether to use variable bitrate
-    vbr: Arc<AtomicBool>,
-
-    /// the compression level
-    residual_bits: Arc<AtomicF32>,
-}
-
-impl CodecConfig {
-    #[frb(sync)]
-    pub fn new(enabled: bool, vbr: bool, residual_bits: f32) -> Self {
-        Self {
-            enabled: Arc::new(AtomicBool::new(enabled)),
-            vbr: Arc::new(AtomicBool::new(vbr)),
-            residual_bits: Arc::new(AtomicF32::new(residual_bits)),
-        }
-    }
-
-    #[frb(sync)]
-    pub fn set_enabled(&self, enabled: bool) {
-        self.enabled.store(enabled, Relaxed);
-    }
-
-    #[frb(sync)]
-    pub fn set_vbr(&self, vbr: bool) {
-        self.vbr.store(vbr, Relaxed);
-    }
-
-    #[frb(sync)]
-    pub fn set_residual_bits(&self, residual_bits: f32) {
-        self.residual_bits.store(residual_bits, Relaxed);
-    }
-
-    #[frb(sync)]
-    pub fn to_values(&self) -> (bool, bool, f32) {
-        (
-            self.enabled.load(Relaxed),
-            self.vbr.load(Relaxed),
-            self.residual_bits.load(Relaxed),
-        )
-    }
-}
-
-/// a shared notifier that can be passed to dart code
-#[frb(opaque)]
-pub struct DartNotify {
-    inner: Arc<Notify>,
-}
-
-impl DartNotify {
-    /// public notified function for dart
-    pub async fn notified(&self) {
-        self.inner.notified().await;
-    }
-
-    /// notifies one waiter
-    #[frb(sync)]
-    pub fn notify(&self) {
-        self.inner.notify_waiters();
-    }
-}
-
-pub struct ChatMessage {
-    pub text: String,
-
-    receiver: PeerId,
-
-    timestamp: DateTime<Local>,
-
-    pub(crate) attachments: Vec<Attachment>,
-}
-
-impl ChatMessage {
-    #[frb(sync)]
-    pub fn is_sender(&self, identity: String) -> bool {
-        self.receiver.to_string() != identity
-    }
-
-    #[frb(sync)]
-    pub fn time(&self) -> String {
-        self.timestamp.format("%l:%M %p").to_string()
-    }
-
-    #[frb(sync)]
-    pub fn attachments(&self) -> Vec<(String, Vec<u8>)> {
-        self.attachments
-            .iter()
-            .map(|a| (a.name.clone(), a.data.clone()))
-            .collect()
-    }
-
-    #[frb(sync)]
-    pub fn clear_attachments(&mut self) {
-        for attachment in self.attachments.iter_mut() {
-            attachment.data.truncate(0);
-        }
-    }
-}
-
 /// Receives frames of audio data from the input processor and sends them to the socket
 async fn audio_input(
     input_receiver: AsyncReceiver<ProcessorMessage>,
@@ -3025,284 +2661,6 @@ async fn statistics_collector(
     Ok(())
 }
 
-/// Processes the audio input and sends it to the sending socket
-#[allow(clippy::too_many_arguments)]
-fn input_processor(
-    #[cfg(not(target_family = "wasm"))] receiver: Receiver<f32>,
-    #[cfg(target_family = "wasm")] web_input: WebInput,
-    sender: Sender<ProcessorMessage>,
-    sample_rate: f64,
-    input_factor: Arc<AtomicF32>,
-    rms_threshold: Arc<AtomicF32>,
-    muted: Arc<AtomicBool>,
-    mut denoiser: Option<Box<DenoiseState>>,
-    rms_sender: Option<Sender<f32>>,
-    codec_enabled: bool,
-) -> Result<()> {
-    // the maximum and minimum values for i16 as f32
-    let max_i16_f32 = i16::MAX as f32;
-    let min_i16_f32 = i16::MIN as f32;
-    let i16_size = size_of::<i16>();
-
-    let ratio = if denoiser.is_some() {
-        // rnnoise requires a 48kHz sample rate
-        48_000_f64 / sample_rate
-    } else {
-        // do not resample if not using rnnoise
-        1_f64
-    };
-
-    // rubato requires 10 extra spaces in the output buffer as a safety margin
-    let post_len = (FRAME_SIZE as f64 + 10_f64) as usize;
-    let in_len = (FRAME_SIZE as f64 / ratio).ceil() as usize;
-
-    let mut resampler = resampler_factory(ratio, 1, in_len)?;
-
-    // the input for the resampler
-    let mut pre_buf = [vec![0_f32; in_len]];
-    // the output for the resampler
-    let mut post_buf = [vec![0_f32; post_len]];
-    // the output for rnnoise
-    let mut out_buf = [0_f32; FRAME_SIZE];
-
-    // output for 16 bit samples. the compiler does not recognize that it is used
-    #[allow(unused_assignments)]
-    let mut int_buffer = [0; FRAME_SIZE];
-
-    // the position in pre_buf
-    let mut position = 0;
-    // a counter user for short silence detection
-    let mut silence_length = 0_u8;
-
-    loop {
-        #[cfg(not(target_family = "wasm"))]
-        {
-            if let Ok(sample) = receiver.recv() {
-                pre_buf[0][position] = sample;
-                position += 1;
-            } else {
-                break;
-            }
-        }
-
-        #[cfg(target_family = "wasm")]
-        {
-            if web_input.finished.load(Relaxed) {
-                break;
-            }
-
-            if let Ok(mut data) = web_input.pair.0.lock() {
-                if data.is_empty() {
-                    let c = |i: &mut Vec<f32>| i.is_empty() && !web_input.finished.load(Relaxed);
-
-                    if let Ok(d) = web_input.pair.1.wait_while(data, c) {
-                        data = d;
-                    } else {
-                        break;
-                    }
-                }
-
-                let data_len = data.len();
-                for sample in data.drain(..(in_len - position).min(data_len)) {
-                    pre_buf[0][position] = sample;
-                    position += 1;
-                }
-            } else {
-                break;
-            }
-        }
-
-        if position < in_len {
-            continue;
-        }
-
-        position = 0;
-
-        // sends a silence signal if the input is muted
-        if muted.load(Relaxed) {
-            sender.try_send(ProcessorMessage::silence())?;
-            continue;
-        }
-
-        let (target_buffer, len) = if let Some(resampler) = &mut resampler {
-            // resample the data
-            let processed = resampler.process_into_buffer(&pre_buf, &mut post_buf, None)?;
-            (&mut post_buf[0], processed.1)
-        } else {
-            (&mut pre_buf[0], FRAME_SIZE)
-        };
-
-        // the first frame may be smaller than FRAME_SIZE
-        if len != FRAME_SIZE {
-            warn!("input_processor: len != FRAME_SIZE: {}", len);
-            continue;
-        }
-
-        // apply the input volume & scale the samples to -32768.0 to 32767.0
-        let factor = max_i16_f32 * input_factor.load(Relaxed);
-
-        // rescale the samples to -32768.0 to 32767.0 for rnnoise
-        target_buffer.iter_mut().for_each(|x| {
-            *x *= factor;
-            *x = x.trunc().clamp(min_i16_f32, max_i16_f32);
-        });
-
-        if let Some(ref mut denoiser) = denoiser {
-            // denoise the frame
-            denoiser.process_frame(&mut out_buf, &target_buffer[..len]);
-        } else {
-            out_buf = target_buffer[..len].try_into()?;
-        };
-
-        // calculate the rms
-        let rms = calculate_rms(&out_buf);
-        // send the rms to the statistics collector
-        rms_sender.as_ref().map(|s| s.send(rms));
-
-        // check if the frame is below the rms threshold
-        if rms < rms_threshold.load(Relaxed) {
-            if silence_length < 80 {
-                silence_length += 1; // short silences are ignored
-            } else {
-                sender.try_send(ProcessorMessage::silence())?;
-                continue;
-            }
-        } else {
-            silence_length = 0;
-        }
-
-        // cast the f32 samples to i16
-        int_buffer = out_buf.map(|x| x as i16);
-
-        if codec_enabled {
-            sender.send(ProcessorMessage::samples(int_buffer))?;
-        } else {
-            // convert the i16 samples to bytes
-            let bytes = unsafe {
-                std::slice::from_raw_parts(
-                    int_buffer.as_ptr() as *const u8,
-                    int_buffer.len() * i16_size,
-                )
-            };
-
-            sender.send(ProcessorMessage::slice(bytes))?;
-        }
-    }
-
-    debug!("Input processor ended");
-    Ok(())
-}
-
-/// Processes the audio data and sends it to the output stream
-fn output_processor(
-    receiver: Receiver<ProcessorMessage>,
-    #[cfg(target_family = "wasm")] web_output: Arc<wasm_sync::Mutex<Vec<f32>>>,
-    #[cfg(not(target_family = "wasm"))] sender: Sender<f32>,
-    ratio: f64,
-    output_volume: Arc<AtomicF32>,
-    rms_sender: Option<Sender<f32>>,
-) -> Result<()> {
-    let scale = 1_f32 / i16::MAX as f32;
-    let i16_size = size_of::<i16>();
-
-    let mut resampler = resampler_factory(ratio, 1, FRAME_SIZE)?;
-
-    // rubato requires 10 extra spaces in the output buffer as a safety margin
-    let post_len = (FRAME_SIZE as f64 * ratio + 10_f64) as usize;
-
-    // the input for the resampler
-    let pre_buf = [&mut [0_f32; FRAME_SIZE]];
-    // the output for the resampler
-    let mut post_buf = [vec![0_f32; post_len]];
-
-    while let Ok(message) = receiver.recv() {
-        match message {
-            ProcessorMessage::Silence => {
-                #[cfg(not(target_family = "wasm"))]
-                for _ in 0..FRAME_SIZE {
-                    sender.try_send(0_f32)?;
-                }
-
-                #[cfg(target_family = "wasm")]
-                web_output
-                    .lock()
-                    .map(|mut data| {
-                        if data.len() < CHANNEL_SIZE {
-                            data.extend(SILENCE)
-                        }
-                    })
-                    .unwrap();
-
-                continue;
-            }
-            ProcessorMessage::Data(bytes) => {
-                // convert the bytes to 16-bit integers
-                let ints = unsafe {
-                    std::slice::from_raw_parts(bytes.as_ptr() as *const i16, bytes.len() / i16_size)
-                };
-
-                // convert the frame to f32s
-                for (out, &x) in pre_buf[0].iter_mut().zip(ints.iter()) {
-                    *out = x as f32 * scale;
-                }
-            }
-            ProcessorMessage::Samples(samples) => {
-                // convert the frame to f32s
-                for (out, &x) in pre_buf[0].iter_mut().zip(samples.iter()) {
-                    *out = x as f32 * scale;
-                }
-            }
-        }
-
-        // apply the output volume
-        mul(pre_buf[0], output_volume.load(Relaxed));
-
-        rms_sender
-            .as_ref()
-            .map(|s| s.send(calculate_rms(pre_buf[0])));
-
-        if let Some(resampler) = &mut resampler {
-            // resample the data
-            let processed = resampler.process_into_buffer(&pre_buf, &mut post_buf, None)?;
-
-            // send the resampled data to the output stream
-            #[cfg(not(target_family = "wasm"))]
-            for sample in &post_buf[0][..processed.1] {
-                sender.try_send(*sample)?;
-            }
-
-            #[cfg(target_family = "wasm")]
-            web_output
-                .lock()
-                .map(|mut data| {
-                    if data.len() < CHANNEL_SIZE {
-                        data.extend(&post_buf[0][..processed.1])
-                    }
-                })
-                .unwrap();
-        } else {
-            // if no resampling is needed, send the data to the output stream
-            #[cfg(not(target_family = "wasm"))]
-            for sample in *pre_buf[0] {
-                sender.try_send(sample)?;
-            }
-
-            #[cfg(target_family = "wasm")]
-            web_output
-                .lock()
-                .map(|mut data| {
-                    if data.len() < CHANNEL_SIZE {
-                        data.extend(*pre_buf[0])
-                    }
-                })
-                .unwrap();
-        }
-    }
-
-    debug!("Output processor ended");
-    Ok(())
-}
-
 fn stream_to_audio_transport(stream: Stream) -> Transport<TransportStream> {
     LengthDelimitedCodec::builder()
         .max_frame_length(TRANSFER_BUFFER_SIZE)
@@ -3314,13 +2672,15 @@ fn stream_to_audio_transport(stream: Stream) -> Transport<TransportStream> {
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod tests {
     use super::*;
+    use crate::api::audio::input_processor;
     use fast_log::Config;
-    use kanal::unbounded;
+    use kanal::{ReceiveErrorTimeout, unbounded};
     use log::LevelFilter::Trace;
     use rand::Rng;
     use rand::prelude::SliceRandom;
     use std::fs::read;
-    use std::thread::spawn;
+    use std::io::Write;
+    use std::thread::{sleep, spawn};
 
     struct BenchmarkResult {
         average: Duration,
@@ -3346,7 +2706,7 @@ pub(crate) mod tests {
 
         // warmup
         for _ in 0..5 {
-            benchmark_input_stack(false, false, sample_rate, &samples, 2400);
+            simulate_input_stack(false, false, sample_rate, &samples, 2400);
         }
 
         let num_iterations = 10;
@@ -3357,8 +2717,8 @@ pub(crate) mod tests {
             cases.shuffle(&mut rand::thread_rng()); // Shuffle for each iteration
 
             for (denoise, codec_enabled) in cases {
-                let (durations, end) =
-                    benchmark_input_stack(denoise, codec_enabled, sample_rate, &samples, 2400);
+                let (durations, end, _) =
+                    simulate_input_stack(denoise, codec_enabled, sample_rate, &samples, 2400);
 
                 // Update the results in a cumulative way
                 results
@@ -3379,13 +2739,64 @@ pub(crate) mod tests {
         compare_runs(results);
     }
 
-    fn benchmark_input_stack(
+    #[test]
+    fn packet_burst_simulation() {
+        fast_log::init(Config::new().file("burst_simulation.log").level(Trace)).unwrap();
+
+        let sample_rate = 44_100;
+        let codec_enabled = true;
+
+        let mut samples = Vec::new();
+        let bytes = read("../bench.raw").unwrap();
+
+        let mut duration = 0.0;
+        let length = 1_f64 / sample_rate as f64;
+        for chunk in bytes.chunks(4) {
+            let sample = f32::from_ne_bytes(chunk.try_into().unwrap());
+            samples.push(sample);
+            duration += length;
+        }
+        let audio_duration = Duration::from_secs_f64(duration);
+        info!(
+            "loaded audio with length {:?} samples_len={}",
+            audio_duration,
+            samples.len()
+        );
+
+        let now = Instant::now();
+        // use the input stack simulator to construct realistic stream of ProcessorMessage
+        let (_, _, messages) =
+            simulate_input_stack(false, codec_enabled, sample_rate, &samples, CHANNEL_SIZE);
+        info!(
+            "processed {} messages in {:?}",
+            messages.len(),
+            now.elapsed()
+        );
+
+        let now = Instant::now();
+        // use the output stack simulator to process the messages in a burst situation
+        let received_samples =
+            simulate_output_stack(messages, CHANNEL_SIZE, codec_enabled, sample_rate as f64);
+        info!(
+            "received {} samples in {:?}",
+            received_samples.len(),
+            now.elapsed()
+        );
+
+        // save processed samples to output file
+        let mut output = std::fs::File::create("../bench-out.raw").unwrap();
+        for sample in received_samples {
+            output.write(sample.to_ne_bytes().as_slice()).unwrap();
+        }
+    }
+
+    fn simulate_input_stack(
         denoise: bool,
         codec_enabled: bool,
         sample_rate: u32,
         samples: &[f32],
         channel_size: usize,
-    ) -> (Vec<Duration>, Duration) {
+    ) -> (Vec<Duration>, Duration, Vec<ProcessorMessage>) {
         // input stream -> input processor
         let (input_sender, input_receiver) = bounded(channel_size);
 
@@ -3400,7 +2811,7 @@ pub(crate) mod tests {
         let denoiser = denoise.then_some(DenoiseState::from_model(model));
 
         spawn(move || {
-            input_processor(
+            let result = input_processor(
                 input_receiver,
                 processed_input_sender,
                 sample_rate as f64,
@@ -3410,7 +2821,11 @@ pub(crate) mod tests {
                 denoiser,
                 None,
                 codec_enabled,
-            )
+            );
+
+            if let Err(error) = result {
+                error!("{}", error);
+            }
         });
 
         let output_receiver = if codec_enabled {
@@ -3429,24 +2844,104 @@ pub(crate) mod tests {
             processed_input_receiver
         };
 
-        let samples = samples.to_vec();
+        let handle = spawn(move || {
+            let start = Instant::now();
+            let mut now = Instant::now();
+            let mut durations = Vec::new();
+            let mut messages = Vec::new();
+
+            while let Ok(message) = output_receiver.recv() {
+                durations.push(now.elapsed());
+                now = Instant::now();
+                messages.push(message);
+            }
+
+            let end = start.elapsed();
+            (durations, end, messages)
+        });
+
+        for sample in samples {
+            input_sender.send(*sample).unwrap();
+        }
+        _ = input_sender.close();
+        handle.join().unwrap()
+    }
+
+    fn simulate_output_stack(
+        input: Vec<ProcessorMessage>,
+        channel_size: usize,
+        codec_enabled: bool,
+        sample_rate: f64,
+    ) -> Vec<f32> {
+        // receiving socket -> output processor or decoder
+        let (network_output_sender, network_output_receiver) =
+            unbounded_async::<ProcessorMessage>();
+
+        // decoder -> output processor
+        let (decoded_output_sender, decoded_output_receiver) =
+            unbounded_async::<ProcessorMessage>();
+
+        // output processor -> dummy output stream
+        let (output_sender, output_receiver) = bounded::<f32>(channel_size);
+
+        let output_processor_receiver = if codec_enabled {
+            spawn(move || {
+                decoder(
+                    network_output_receiver.to_sync(),
+                    decoded_output_sender.to_sync(),
+                );
+            });
+
+            decoded_output_receiver.to_sync()
+        } else {
+            network_output_receiver.to_sync()
+        };
+
         spawn(move || {
-            for sample in samples {
-                input_sender.send(sample).unwrap();
+            output_processor(
+                output_processor_receiver,
+                output_sender,
+                1_f64,
+                Arc::new(AtomicF32::new(1_f32)),
+                None,
+            )
+        });
+
+        // simulate network dumping burst of packets into sender
+        let sender = network_output_sender.to_sync();
+        spawn(move || {
+            let interval = Duration::from_millis(1);
+            let mut c = 0;
+
+            for i in input {
+                _ = sender.send(i);
+                c += 1;
+                // info!("{}", c);
+
+                // big ol lag spike + packet dump
+                if c < 500 || c > 700 {
+                    sleep(interval);
+                } else if c == 500 {
+                    sleep(Duration::from_secs(2))
+                }
             }
         });
 
-        let start = Instant::now();
-        let mut now = Instant::now();
-        let mut durations = Vec::new();
+        // TODO compare length of playback to "real" length of input to see how much compaction is needed
+        let mut result = Vec::new();
 
-        while let Ok(_) = output_receiver.recv() {
-            durations.push(now.elapsed());
-            now = Instant::now();
+        let interval = Duration::from_secs_f64(1_f64 / sample_rate);
+        loop {
+            match output_receiver.recv_timeout(interval) {
+                Ok(sample) => result.push(sample),
+                Err(error) => match error {
+                    ReceiveErrorTimeout::Timeout => result.push(0_f32),
+                    _ => break,
+                },
+            }
         }
 
-        let end = start.elapsed();
-        (durations, end)
+        result
     }
 
     fn compute_statistics(durations: &[Duration]) -> (Duration, Duration, Duration) {
