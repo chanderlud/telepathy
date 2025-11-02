@@ -39,7 +39,7 @@ use flutter_rust_bridge::{DartFnFuture, frb, spawn, spawn_blocking_with};
 pub use kanal::AsyncReceiver;
 #[cfg(not(target_family = "wasm"))]
 use kanal::bounded;
-use kanal::{AsyncSender, Sender, bounded_async, unbounded_async};
+use kanal::{AsyncSender, Sender, unbounded_async};
 use libp2p::futures::StreamExt;
 use libp2p::identity::Keypair;
 use libp2p::multiaddr::Protocol;
@@ -2020,7 +2020,7 @@ impl Telepathy {
     ) -> Result<(AsyncSender<ProcessorMessage>, SendStream)> {
         // receiving socket -> output processor or decoder
         let (network_output_sender, network_output_receiver) =
-            bounded_async::<ProcessorMessage>(CHANNEL_SIZE / FRAME_SIZE);
+            unbounded_async::<ProcessorMessage>();
 
         // decoder -> output processor
         let (decoded_output_sender, decoded_output_receiver) =
@@ -2028,7 +2028,7 @@ impl Telepathy {
 
         // output processor -> output stream
         #[cfg(not(target_family = "wasm"))]
-        let (output_sender, output_receiver) = bounded::<f32>(CHANNEL_SIZE);
+        let (output_sender, output_receiver) = bounded::<f32>(CHANNEL_SIZE * 2);
 
         // output processor -> output stream
         #[cfg(target_family = "wasm")]
@@ -2766,7 +2766,7 @@ pub(crate) mod tests {
         let now = Instant::now();
         // use the input stack simulator to construct realistic stream of ProcessorMessage
         let (_, _, messages) =
-            simulate_input_stack(false, codec_enabled, sample_rate, &samples, CHANNEL_SIZE);
+            simulate_input_stack(true, codec_enabled, sample_rate, &samples, CHANNEL_SIZE);
         info!(
             "processed {} messages in {:?}",
             messages.len(),
@@ -2775,12 +2775,18 @@ pub(crate) mod tests {
 
         let now = Instant::now();
         // use the output stack simulator to process the messages in a burst situation
-        let received_samples =
-            simulate_output_stack(messages, CHANNEL_SIZE, codec_enabled, sample_rate as f64);
+        let received_samples = simulate_output_stack(
+            messages,
+            CHANNEL_SIZE,
+            codec_enabled,
+            sample_rate as f64,
+            sample_rate as f64 / 48_000_f64,
+        );
         info!(
-            "received {} samples in {:?}",
+            "received {} samples in {:?} aprox {}",
             received_samples.len(),
-            now.elapsed()
+            now.elapsed(),
+            received_samples.len() as f64 / sample_rate as f64
         );
 
         // save processed samples to output file
@@ -2816,7 +2822,7 @@ pub(crate) mod tests {
                 processed_input_sender,
                 sample_rate as f64,
                 Arc::new(AtomicF32::new(1_f32)),
-                Arc::new(AtomicF32::new(15_f32)),
+                Arc::new(AtomicF32::new(45_f32)),
                 Arc::new(AtomicBool::new(false)),
                 denoiser,
                 None,
@@ -2872,6 +2878,7 @@ pub(crate) mod tests {
         channel_size: usize,
         codec_enabled: bool,
         sample_rate: f64,
+        ratio: f64,
     ) -> Vec<f32> {
         // receiving socket -> output processor or decoder
         let (network_output_sender, network_output_receiver) =
@@ -2882,7 +2889,7 @@ pub(crate) mod tests {
             unbounded_async::<ProcessorMessage>();
 
         // output processor -> dummy output stream
-        let (output_sender, output_receiver) = bounded::<f32>(channel_size);
+        let (output_sender, output_receiver) = bounded::<f32>(channel_size * 2);
 
         let output_processor_receiver = if codec_enabled {
             spawn(move || {
@@ -2901,7 +2908,7 @@ pub(crate) mod tests {
             output_processor(
                 output_processor_receiver,
                 output_sender,
-                1_f64,
+                ratio,
                 Arc::new(AtomicF32::new(1_f32)),
                 None,
             )
@@ -2919,10 +2926,10 @@ pub(crate) mod tests {
                 // info!("{}", c);
 
                 // big ol lag spike + packet dump
-                if c < 500 || c > 700 {
+                if c < 500 || c > 900 {
                     sleep(interval);
                 } else if c == 500 {
-                    sleep(Duration::from_secs(2))
+                    sleep(Duration::from_secs(4))
                 }
             }
         });

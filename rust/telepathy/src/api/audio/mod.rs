@@ -20,6 +20,7 @@ pub mod player;
 pub(crate) mod web_audio;
 
 use crate::api::error::Error;
+use crate::api::telepathy::CHANNEL_SIZE;
 
 /// Processes the audio input and sends it to the sending socket
 #[allow(clippy::too_many_arguments)]
@@ -201,7 +202,7 @@ pub(crate) fn output_processor(
     let scale = 1_f32 / i16::MAX as f32;
     let i16_size = size_of::<i16>();
 
-    let mut resampler = resampler_factory(ratio, 1, FRAME_SIZE)?;
+    let mut primary_resampler = resampler_factory(ratio, 1, FRAME_SIZE)?;
 
     // rubato requires 10 extra spaces in the output buffer as a safety margin
     let post_len = (FRAME_SIZE as f64 * ratio + 10_f64) as usize;
@@ -211,9 +212,23 @@ pub(crate) fn output_processor(
     // the output for the resampler
     let mut post_buf = [vec![0_f32; post_len]];
 
+    let burst_thresh = CHANNEL_SIZE / 8;
+
     while let Ok(message) = receiver.recv() {
+        // no reason to process the frame
+        if sender.is_full() {
+            continue;
+        }
+
+        let queue_length = sender.len();
+        let burst_detected = queue_length > burst_thresh;
+
         match message {
             ProcessorMessage::Silence => {
+                if burst_detected {
+                    continue; // skip silences during burst
+                }
+
                 #[cfg(not(target_family = "wasm"))]
                 for _ in 0..FRAME_SIZE {
                     sender.try_send(0_f32)?;
@@ -257,7 +272,7 @@ pub(crate) fn output_processor(
             .as_ref()
             .map(|s| s.send(calculate_rms(pre_buf[0])));
 
-        if let Some(resampler) = &mut resampler {
+        if let Some(resampler) = &mut primary_resampler {
             // resample the data
             let processed = resampler.process_into_buffer(&pre_buf, &mut post_buf, None)?;
 
