@@ -22,8 +22,10 @@ use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicU32};
 use std::sync::{Arc, Once};
 use tokio::net::lookup_host;
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 use tokio::spawn;
 use tokio::sync::{Notify, RwLock};
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 use tokio::time::Instant;
 use uuid::Uuid;
 
