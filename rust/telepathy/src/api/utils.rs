@@ -39,33 +39,40 @@ unsafe impl Send for SendStream {}
 /// multiplies each element in the slice by the factor, clamping result between -1 and 1
 pub(crate) fn mul(frame: &mut [f32], factor: f32) {
     #[cfg(target_arch = "x86_64")]
-    if is_x86_feature_detected!("avx2") {
-        unsafe {
-            mul_simd_avx2(frame, factor);
+    {
+        if is_x86_feature_detected!("avx512f") {
+            unsafe { mul_simd_avx512(frame, factor) }
+            return;
         }
-
-        return;
+        if is_x86_feature_detected!("avx2") {
+            unsafe { mul_simd_avx2(frame, factor) }
+            return;
+        }
     }
 
+    scalar_mul(frame, factor);
+}
+
+#[inline]
+fn scalar_mul(frame: &mut [f32], factor: f32) {
     for p in frame.iter_mut() {
         *p *= factor;
         *p = p.clamp(-1_f32, 1_f32);
     }
 }
 
-// TODO attempt to optimize mul for avx512
 /// optimized mul for avx2
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 fn mul_simd_avx2(frame: &mut [f32], factor: f32) {
+    let len = frame.len();
+    let mut i = 0;
+
+    let factor_vec = _mm256_set1_ps(factor);
+    let min_vec = _mm256_set1_ps(-1_f32);
+    let max_vec = _mm256_set1_ps(1_f32);
+
     unsafe {
-        let len = frame.len();
-        let mut i = 0;
-
-        let factor_vec = _mm256_set1_ps(factor);
-        let min_vec = _mm256_set1_ps(-1_f32);
-        let max_vec = _mm256_set1_ps(1_f32);
-
         while i + 8 <= len {
             let mut chunk = _mm256_loadu_ps(frame.as_ptr().add(i)); // load
             chunk = _mm256_mul_ps(chunk, factor_vec); // multiply
@@ -73,6 +80,39 @@ fn mul_simd_avx2(frame: &mut [f32], factor: f32) {
             _mm256_storeu_ps(frame.as_mut_ptr().add(i), chunk); // write
             i += 8;
         }
+    }
+
+    for j in i..len {
+        frame[j] *= factor;
+        frame[j] = frame[j].clamp(-1_f32, 1_f32);
+    }
+}
+
+/// optimized mul for avx512f
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f")]
+fn mul_simd_avx512(frame: &mut [f32], factor: f32) {
+    let len = frame.len();
+    let mut i = 0;
+
+    let factor_vec = _mm512_set1_ps(factor);
+    let min_vec = _mm512_set1_ps(-1_f32);
+    let max_vec = _mm512_set1_ps(1_f32);
+
+    unsafe {
+        // process 16 floats per iteration
+        while i + 16 <= len {
+            let mut chunk = _mm512_loadu_ps(frame.as_ptr().add(i));
+            chunk = _mm512_mul_ps(chunk, factor_vec);
+            chunk = _mm512_min_ps(max_vec, _mm512_max_ps(min_vec, chunk));
+            _mm512_storeu_ps(frame.as_mut_ptr().add(i), chunk);
+            i += 16;
+        }
+    }
+
+    for j in i..len {
+        frame[j] *= factor;
+        frame[j] = frame[j].clamp(-1_f32, 1_f32);
     }
 }
 
@@ -259,12 +299,18 @@ mod tests {
         let frame = crate::api::telepathy::tests::dummy_frame();
         let mut scalar_frame = frame.clone();
         let mut simd_avx2_frame = frame.clone();
+        // let mut simd_avx512_frame = frame.clone();
 
-        super::mul(&mut scalar_frame, 2_f32);
+        super::scalar_mul(&mut scalar_frame, 200_f32);
         unsafe {
-            super::mul_simd_avx2(&mut simd_avx2_frame, 2_f32);
+            super::mul_simd_avx2(&mut simd_avx2_frame, 200_f32);
         }
 
+        // unsafe {
+        //     super::mul_simd_avx512(&mut simd_avx512_frame, 2_f32);
+        // }
+
         assert_eq!(scalar_frame, simd_avx2_frame);
+        // assert_eq!(simd_avx512_frame, simd_avx2_frame);
     }
 }

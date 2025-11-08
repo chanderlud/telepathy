@@ -2028,7 +2028,7 @@ impl Telepathy {
 
         // output processor -> output stream
         #[cfg(not(target_family = "wasm"))]
-        let (output_sender, output_receiver) = bounded::<f32>(CHANNEL_SIZE * 2);
+        let (output_sender, output_receiver) = bounded::<f32>(CHANNEL_SIZE * 4);
 
         // output processor -> output stream
         #[cfg(target_family = "wasm")]
@@ -2674,13 +2674,15 @@ pub(crate) mod tests {
     use super::*;
     use crate::api::audio::input_processor;
     use fast_log::Config;
-    use kanal::{ReceiveErrorTimeout, unbounded};
+    use kanal::unbounded;
     use log::LevelFilter::Trace;
     use rand::Rng;
     use rand::prelude::SliceRandom;
     use std::fs::read;
     use std::io::Write;
     use std::thread::{sleep, spawn};
+
+    const HOGWASH_BYTES: &[u8] = include_bytes!("../../../../assets/models/hogwash.rnn");
 
     struct BenchmarkResult {
         average: Duration,
@@ -2773,6 +2775,18 @@ pub(crate) mod tests {
             now.elapsed()
         );
 
+        let silence_count = messages
+            .iter()
+            .filter(|m| {
+                if let ProcessorMessage::Silence = m {
+                    true
+                } else {
+                    false
+                }
+            })
+            .count();
+        info!("silence count: {}", silence_count);
+
         let now = Instant::now();
         // use the output stack simulator to process the messages in a burst situation
         let received_samples = simulate_output_stack(
@@ -2812,8 +2826,7 @@ pub(crate) mod tests {
         // encoder -> dummy
         let (encoded_input_sender, encoded_input_receiver) = unbounded::<ProcessorMessage>();
 
-        let model = RnnModel::default();
-
+        let model = RnnModel::from_bytes(HOGWASH_BYTES).unwrap();
         let denoiser = denoise.then_some(DenoiseState::from_model(model));
 
         spawn(move || {
@@ -2822,7 +2835,7 @@ pub(crate) mod tests {
                 processed_input_sender,
                 sample_rate as f64,
                 Arc::new(AtomicF32::new(1_f32)),
-                Arc::new(AtomicF32::new(45_f32)),
+                Arc::new(AtomicF32::new(db_to_multiplier(50_f32))),
                 Arc::new(AtomicBool::new(false)),
                 denoiser,
                 None,
@@ -2889,7 +2902,7 @@ pub(crate) mod tests {
             unbounded_async::<ProcessorMessage>();
 
         // output processor -> dummy output stream
-        let (output_sender, output_receiver) = bounded::<f32>(channel_size * 2);
+        let (output_sender, output_receiver) = bounded::<f32>(channel_size * 4);
 
         let output_processor_receiver = if codec_enabled {
             spawn(move || {
@@ -2917,35 +2930,36 @@ pub(crate) mod tests {
         // simulate network dumping burst of packets into sender
         let sender = network_output_sender.to_sync();
         spawn(move || {
-            let interval = Duration::from_millis(1);
+            let interval = Duration::from_secs_f64(FRAME_SIZE as f64 / sample_rate);
             let mut c = 0;
 
             for i in input {
                 _ = sender.send(i);
                 c += 1;
-                // info!("{}", c);
 
                 // big ol lag spike + packet dump
-                if c < 500 || c > 900 {
+                if c < 525 || c > 550 {
                     sleep(interval);
                 } else if c == 500 {
-                    sleep(Duration::from_secs(4))
+                    sleep(Duration::from_millis(250));
                 }
             }
         });
 
-        // TODO compare length of playback to "real" length of input to see how much compaction is needed
         let mut result = Vec::new();
 
-        let interval = Duration::from_secs_f64(1_f64 / sample_rate);
-        loop {
-            match output_receiver.recv_timeout(interval) {
-                Ok(sample) => result.push(sample),
-                Err(error) => match error {
-                    ReceiveErrorTimeout::Timeout => result.push(0_f32),
-                    _ => break,
-                },
+        // mildly accurate simulation of an output stream reading at sample_rate
+        let interval = Duration::from_secs_f64(2048_f64 / sample_rate);
+        'outer: loop {
+            for _ in 0..2048 {
+                if let Ok(sample) = output_receiver.recv() {
+                    result.push(sample);
+                } else {
+                    break 'outer;
+                }
             }
+
+            sleep(interval);
         }
 
         result
@@ -2991,14 +3005,13 @@ pub(crate) mod tests {
     }
 
     /// returns a frame of random samples
-    pub(crate) fn dummy_frame() -> [f32; 4096] {
-        let mut frame = [0_f32; 4096];
+    pub(crate) fn dummy_frame() -> [f32; 235] {
+        let mut frame = [0_f32; 235];
         let mut rng = rand::thread_rng();
         rng.fill(&mut frame[..]);
 
         for x in &mut frame {
             *x /= i16::MAX as f32;
-            *x = x.trunc().clamp(i16::MIN as f32, i16::MAX as f32);
         }
 
         frame

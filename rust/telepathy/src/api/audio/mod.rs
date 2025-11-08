@@ -22,6 +22,9 @@ pub(crate) mod web_audio;
 use crate::api::error::Error;
 use crate::api::telepathy::CHANNEL_SIZE;
 
+/// silences of less than this many frames aren't silence
+const MINIMUM_SILENCE_LENGTH: u8 = 40;
+
 /// Processes the audio input and sends it to the sending socket
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn input_processor(
@@ -158,7 +161,7 @@ pub(crate) fn input_processor(
 
         // check if the frame is below the rms threshold
         if rms < rms_threshold.load(Relaxed) {
-            if silence_length < 80 {
+            if silence_length < MINIMUM_SILENCE_LENGTH {
                 silence_length += 1; // short silences are ignored
             } else {
                 sender.send(ProcessorMessage::silence())?;
