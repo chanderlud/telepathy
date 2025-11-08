@@ -1,4 +1,6 @@
-use crate::api::utils::{calculate_rms, mul, resampler_factory};
+#[cfg(target_arch = "x86_64")]
+use crate::api::utils::i16_to_f32_avx2;
+use crate::api::utils::{calculate_rms, i16_to_f32_scalar, resampler_factory, wide_mul};
 use atomic_float::AtomicF32;
 use kanal::{Receiver, Sender};
 use log::{debug, warn};
@@ -226,7 +228,7 @@ pub(crate) fn output_processor(
         let queue_length = sender.len();
         let burst_detected = queue_length > burst_thresh;
 
-        match message {
+        let samples: &[i16] = match &message {
             ProcessorMessage::Silence => {
                 if burst_detected {
                     continue; // skip silences during burst
@@ -251,25 +253,30 @@ pub(crate) fn output_processor(
             }
             ProcessorMessage::Data(bytes) => {
                 // convert the bytes to 16-bit integers
-                let ints = unsafe {
+                unsafe {
                     std::slice::from_raw_parts(bytes.as_ptr() as *const i16, bytes.len() / i16_size)
-                };
-
-                // convert the frame to f32s
-                for (out, &x) in pre_buf[0].iter_mut().zip(ints.iter()) {
-                    *out = x as f32 * scale;
                 }
             }
-            ProcessorMessage::Samples(samples) => {
-                // convert the frame to f32s
-                for (out, &x) in pre_buf[0].iter_mut().zip(samples.iter()) {
-                    *out = x as f32 * scale;
-                }
+            ProcessorMessage::Samples(samples) => samples.as_ref(),
+        };
+
+        // TODO implement avx512
+        #[cfg(target_arch = "x86_64")]
+        {
+            if is_x86_feature_detected!("avx2") {
+                unsafe { i16_to_f32_avx2(samples, pre_buf[0], scale) }
+            } else {
+                i16_to_f32_scalar(samples, pre_buf[0], scale)
             }
         }
 
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            i16_to_f32_scalar(samples, pre_buf[0], scale)
+        }
+
         // apply the output volume
-        mul(pre_buf[0], output_volume.load(Relaxed));
+        wide_mul(pre_buf[0], output_volume.load(Relaxed));
 
         rms_sender
             .as_ref()

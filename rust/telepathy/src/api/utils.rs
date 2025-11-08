@@ -36,15 +36,15 @@ pub(crate) struct SendStream {
 /// Safety: SendStream must not be used across awaits
 unsafe impl Send for SendStream {}
 
-/// multiplies each element in the slice by the factor, clamping result between -1 and 1
-pub(crate) fn mul(frame: &mut [f32], factor: f32) {
+/// mul with internal selection of optimal implementation
+pub(crate) fn wide_mul(frame: &mut [f32], factor: f32) {
     #[cfg(target_arch = "x86_64")]
     {
-        if is_x86_feature_detected!("avx512f") {
+        if is_x86_feature_detected!("avx512f") && frame.len().is_multiple_of(16) {
             unsafe { mul_simd_avx512(frame, factor) }
             return;
         }
-        if is_x86_feature_detected!("avx2") {
+        if is_x86_feature_detected!("avx2") && frame.len().is_multiple_of(8) {
             unsafe { mul_simd_avx2(frame, factor) }
             return;
         }
@@ -53,7 +53,7 @@ pub(crate) fn mul(frame: &mut [f32], factor: f32) {
     scalar_mul(frame, factor);
 }
 
-#[inline]
+/// mul for any length input
 fn scalar_mul(frame: &mut [f32], factor: f32) {
     for p in frame.iter_mut() {
         *p *= factor;
@@ -61,10 +61,11 @@ fn scalar_mul(frame: &mut [f32], factor: f32) {
     }
 }
 
-/// optimized mul for avx2
+/// optimized mul for avx2 with 8|frame.len==true
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
-fn mul_simd_avx2(frame: &mut [f32], factor: f32) {
+#[allow(unsafe_op_in_unsafe_fn)]
+unsafe fn mul_simd_avx2(frame: &mut [f32], factor: f32) {
     let len = frame.len();
     let mut i = 0;
 
@@ -72,26 +73,20 @@ fn mul_simd_avx2(frame: &mut [f32], factor: f32) {
     let min_vec = _mm256_set1_ps(-1_f32);
     let max_vec = _mm256_set1_ps(1_f32);
 
-    unsafe {
-        while i + 8 <= len {
-            let mut chunk = _mm256_loadu_ps(frame.as_ptr().add(i)); // load
-            chunk = _mm256_mul_ps(chunk, factor_vec); // multiply
-            chunk = _mm256_max_ps(min_vec, _mm256_min_ps(max_vec, chunk)); // clamp
-            _mm256_storeu_ps(frame.as_mut_ptr().add(i), chunk); // write
-            i += 8;
-        }
-    }
-
-    for j in i..len {
-        frame[j] *= factor;
-        frame[j] = frame[j].clamp(-1_f32, 1_f32);
+    while i + 8 <= len {
+        let mut chunk = _mm256_loadu_ps(frame.as_ptr().add(i)); // load
+        chunk = _mm256_mul_ps(chunk, factor_vec); // multiply
+        chunk = _mm256_max_ps(min_vec, _mm256_min_ps(max_vec, chunk)); // clamp
+        _mm256_storeu_ps(frame.as_mut_ptr().add(i), chunk); // write
+        i += 8;
     }
 }
 
-/// optimized mul for avx512f
+/// optimized mul for avx512f with 16|frame.len==true
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f")]
-fn mul_simd_avx512(frame: &mut [f32], factor: f32) {
+#[allow(unsafe_op_in_unsafe_fn)]
+unsafe fn mul_simd_avx512(frame: &mut [f32], factor: f32) {
     let len = frame.len();
     let mut i = 0;
 
@@ -99,20 +94,52 @@ fn mul_simd_avx512(frame: &mut [f32], factor: f32) {
     let min_vec = _mm512_set1_ps(-1_f32);
     let max_vec = _mm512_set1_ps(1_f32);
 
-    unsafe {
-        // process 16 floats per iteration
-        while i + 16 <= len {
-            let mut chunk = _mm512_loadu_ps(frame.as_ptr().add(i));
-            chunk = _mm512_mul_ps(chunk, factor_vec);
-            chunk = _mm512_min_ps(max_vec, _mm512_max_ps(min_vec, chunk));
-            _mm512_storeu_ps(frame.as_mut_ptr().add(i), chunk);
-            i += 16;
-        }
+    // process 16 floats per iteration
+    while i + 16 <= len {
+        let mut chunk = _mm512_loadu_ps(frame.as_ptr().add(i)); // load
+        chunk = _mm512_mul_ps(chunk, factor_vec); // multiply
+        chunk = _mm512_min_ps(max_vec, _mm512_max_ps(min_vec, chunk)); // clamp
+        _mm512_storeu_ps(frame.as_mut_ptr().add(i), chunk); // write
+        i += 16;
     }
+}
 
-    for j in i..len {
-        frame[j] *= factor;
-        frame[j] = frame[j].clamp(-1_f32, 1_f32);
+pub(crate) fn i16_to_f32_scalar(ints: &[i16], out: &mut [f32], scale: f32) {
+    for (out, &x) in out.iter_mut().zip(ints.iter()) {
+        *out = x as f32 * scale;
+    }
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[target_feature(enable = "avx2")]
+#[allow(unsafe_op_in_unsafe_fn)]
+pub(crate) unsafe fn i16_to_f32_avx2(ints: &[i16], out: &mut [f32], scale: f32) {
+    use core::arch::x86_64::*;
+    let n = ints.len();
+    let mut i = 0;
+
+    let scale_ps = _mm256_set1_ps(scale);
+
+    // process 16 i16 -> 16 f32 per loop
+    while i + 16 <= n {
+        // load 16 i16
+        let v16 = _mm256_loadu_si256(ints.as_ptr().add(i) as *const __m256i);
+
+        // lower 8 i16 -> 8 i32 -> 8 f32
+        let lo16 = _mm256_castsi256_si128(v16);
+        let lo32 = _mm256_cvtepi16_epi32(lo16);
+        let lo_ps = _mm256_mul_ps(_mm256_cvtepi32_ps(lo32), scale_ps);
+
+        // upper 8 i16 -> 8 i32 -> 8 f32
+        let hi16 = _mm256_extracti128_si256::<1>(v16);
+        let hi32 = _mm256_cvtepi16_epi32(hi16);
+        let hi_ps = _mm256_mul_ps(_mm256_cvtepi32_ps(hi32), scale_ps);
+
+        // store 16 f32
+        _mm256_storeu_ps(out.as_mut_ptr().add(i), lo_ps);
+        _mm256_storeu_ps(out.as_mut_ptr().add(i + 8), hi_ps);
+
+        i += 16;
     }
 }
 
@@ -293,24 +320,48 @@ pub(crate) mod rwlock_option_recording_config {
 
 #[cfg(test)]
 mod tests {
+    use crate::api::utils::i16_to_f32_scalar;
+    use nnnoiseless::FRAME_SIZE;
+
     #[test]
     #[cfg(target_arch = "x86_64")]
-    fn test_mul() {
+    fn mul_normal_frame_equal_outputs() {
         let frame = crate::api::telepathy::tests::dummy_frame();
         let mut scalar_frame = frame.clone();
         let mut simd_avx2_frame = frame.clone();
+        let mut wide_frame = frame.clone();
         // let mut simd_avx512_frame = frame.clone();
 
         super::scalar_mul(&mut scalar_frame, 200_f32);
         unsafe {
             super::mul_simd_avx2(&mut simd_avx2_frame, 200_f32);
         }
+        super::wide_mul(&mut wide_frame, 200_f32);
 
         // unsafe {
         //     super::mul_simd_avx512(&mut simd_avx512_frame, 2_f32);
         // }
 
         assert_eq!(scalar_frame, simd_avx2_frame);
-        // assert_eq!(simd_avx512_frame, simd_avx2_frame);
+        assert_eq!(wide_frame, simd_avx2_frame);
+    }
+
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn int_conversion_equal_outputs() {
+        let frame = crate::api::telepathy::tests::dummy_int_frame();
+        let mut scalar_frame = [0_f32; FRAME_SIZE];
+        let mut simd_avx2_frame = [0_f32; FRAME_SIZE];
+        let scale = 1_f32 / i16::MAX as f32;
+
+        unsafe { super::i16_to_f32_avx2(&frame, &mut simd_avx2_frame, scale) };
+
+        i16_to_f32_scalar(&frame, &mut scalar_frame, scale);
+
+        println!("{:?}", scalar_frame);
+        println!("{:?}", simd_avx2_frame);
+        println!("{:?}", frame);
+
+        assert_eq!(scalar_frame, simd_avx2_frame);
     }
 }

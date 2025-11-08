@@ -3005,15 +3005,23 @@ pub(crate) mod tests {
     }
 
     /// returns a frame of random samples
-    pub(crate) fn dummy_frame() -> [f32; 235] {
-        let mut frame = [0_f32; 235];
+    pub(crate) fn dummy_frame() -> [f32; FRAME_SIZE] {
+        let mut frame = [0_f32; FRAME_SIZE];
         let mut rng = rand::thread_rng();
         rng.fill(&mut frame[..]);
 
         for x in &mut frame {
+            *x = x.clamp(i16::MIN as f32, i16::MAX as f32);
             *x /= i16::MAX as f32;
         }
 
+        frame
+    }
+
+    pub(crate) fn dummy_int_frame() -> [i16; FRAME_SIZE] {
+        let mut frame = [0_i16; FRAME_SIZE];
+        let mut rng = rand::thread_rng();
+        rng.fill(&mut frame[..]);
         frame
     }
 }

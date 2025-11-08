@@ -31,7 +31,9 @@ use wasmtimer::tokio::sleep;
 
 use crate::api::error::{DartError, Error, ErrorKind};
 use crate::api::telepathy::DeviceName;
-use crate::api::utils::{SendStream, db_to_multiplier, get_output_device, mul, resampler_factory};
+use crate::api::utils::{
+    SendStream, db_to_multiplier, get_output_device, resampler_factory, wide_mul,
+};
 use crate::frb_generated::FLUTTER_RUST_BRIDGE_HANDLER;
 use messages::AudioHeader;
 use sea_codec::ProcessorMessage;
@@ -469,7 +471,7 @@ fn processor(
         }
 
         for channel in pre_buf.iter_mut() {
-            mul(channel, output_volume);
+            wide_mul(channel, output_volume);
         }
 
         let (target_buffer, len) = if let Some(resampler) = &mut resampler {
