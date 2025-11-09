@@ -1,6 +1,6 @@
-#[cfg(target_arch = "x86_64")]
-use crate::api::utils::i16_to_f32_avx2;
-use crate::api::utils::{calculate_rms, i16_to_f32_scalar, resampler_factory, wide_mul};
+use crate::api::utils::{
+    calculate_rms, resampler_factory, wide_float_scaler, wide_i16_to_f32, wide_mul,
+};
 use atomic_float::AtomicF32;
 use kanal::{Receiver, Sender};
 use log::{debug, warn};
@@ -141,13 +141,12 @@ pub(crate) fn input_processor(
         }
 
         // apply the input volume & scale the samples to -32768.0 to 32767.0
-        let factor = max_i16_f32 * input_factor.load(Relaxed);
-
-        // rescale the samples to -32768.0 to 32767.0 for rnnoise
-        target_buffer.iter_mut().for_each(|x| {
-            *x *= factor;
-            *x = x.trunc().clamp(min_i16_f32, max_i16_f32);
-        });
+        wide_float_scaler(
+            &mut target_buffer[..len],
+            max_i16_f32 * input_factor.load(Relaxed),
+            min_i16_f32,
+            max_i16_f32,
+        );
 
         if let Some(ref mut denoiser) = denoiser {
             // denoise the frame
@@ -217,6 +216,7 @@ pub(crate) fn output_processor(
     // the output for the resampler
     let mut post_buf = [vec![0_f32; post_len]];
 
+    // the number of samples that must be buffered before burst handling
     let burst_thresh = CHANNEL_SIZE / 8;
 
     while let Ok(message) = receiver.recv() {
@@ -225,12 +225,9 @@ pub(crate) fn output_processor(
             continue;
         }
 
-        let queue_length = sender.len();
-        let burst_detected = queue_length > burst_thresh;
-
         let samples: &[i16] = match &message {
             ProcessorMessage::Silence => {
-                if burst_detected {
+                if sender.len() > burst_thresh {
                     continue; // skip silences during burst
                 }
 
@@ -260,21 +257,16 @@ pub(crate) fn output_processor(
             ProcessorMessage::Samples(samples) => samples.as_ref(),
         };
 
-        // TODO implement avx512
-        #[cfg(target_arch = "x86_64")]
-        {
-            if is_x86_feature_detected!("avx2") {
-                unsafe { i16_to_f32_avx2(samples, pre_buf[0], scale) }
-            } else {
-                i16_to_f32_scalar(samples, pre_buf[0], scale)
-            }
+        if samples.len() != FRAME_SIZE {
+            warn!(
+                "output_processor: samples.len() != FRAME_SIZE: {}",
+                samples.len()
+            );
+            continue;
         }
 
-        #[cfg(not(target_arch = "x86_64"))]
-        {
-            i16_to_f32_scalar(samples, pre_buf[0], scale)
-        }
-
+        // convert the i16 samples to f32
+        wide_i16_to_f32(samples, pre_buf[0], scale);
         // apply the output volume
         wide_mul(pre_buf[0], output_volume.load(Relaxed));
 

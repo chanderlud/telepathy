@@ -8,6 +8,7 @@ use flutter_rust_bridge::for_generated::futures::{Sink, SinkExt};
 use kanal::AsyncReceiver;
 use libp2p::bytes::Bytes;
 use libp2p::futures::StreamExt;
+use nnnoiseless::FRAME_SIZE;
 use rubato::{SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction};
 use serde::Deserialize;
 #[cfg(target_arch = "x86_64")]
@@ -104,16 +105,32 @@ unsafe fn mul_simd_avx512(frame: &mut [f32], factor: f32) {
     }
 }
 
-pub(crate) fn i16_to_f32_scalar(ints: &[i16], out: &mut [f32], scale: f32) {
+// TODO implement avx512
+/// Safety: input length must be a multiple of 16
+pub(crate) fn wide_i16_to_f32(ints: &[i16], out: &mut [f32; FRAME_SIZE], scale: f32) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx2") {
+            unsafe { i16_to_f32_avx2(ints, out, scale) }
+            return;
+        }
+    }
+
+    i16_to_f32_scalar(ints, out, scale);
+}
+
+/// scalar implementation of i16 to f32 conversion with scaling
+fn i16_to_f32_scalar(ints: &[i16], out: &mut [f32], scale: f32) {
     for (out, &x) in out.iter_mut().zip(ints.iter()) {
         *out = x as f32 * scale;
     }
 }
 
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+/// avx2 implementation of i16 to f32 conversion with scaling
+#[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 #[allow(unsafe_op_in_unsafe_fn)]
-pub(crate) unsafe fn i16_to_f32_avx2(ints: &[i16], out: &mut [f32], scale: f32) {
+unsafe fn i16_to_f32_avx2(ints: &[i16], out: &mut [f32], scale: f32) {
     use core::arch::x86_64::*;
     let n = ints.len();
     let mut i = 0;
@@ -140,6 +157,53 @@ pub(crate) unsafe fn i16_to_f32_avx2(ints: &[i16], out: &mut [f32], scale: f32) 
         _mm256_storeu_ps(out.as_mut_ptr().add(i + 8), hi_ps);
 
         i += 16;
+    }
+}
+
+// TODO implement avx512
+/// Safety: input length must be a multiple of 8
+pub(crate) fn wide_float_scaler(floats: &mut [f32], scale: f32, min: f32, max: f32) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx") {
+            unsafe { float_to_int_avx(floats, scale, min, max) }
+            return;
+        }
+    }
+
+    float_to_int_scalar(floats, scale, min, max);
+}
+
+fn float_to_int_scalar(floats: &mut [f32], scale: f32, min: f32, max: f32) {
+    for x in floats.iter_mut() {
+        *x *= scale;
+        *x = x.trunc().clamp(min, max);
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx")]
+#[allow(unsafe_op_in_unsafe_fn)]
+unsafe fn float_to_int_avx(floats: &mut [f32], scale: f32, min: f32, max: f32) {
+    use core::arch::x86_64::*;
+    let n = floats.len();
+    let mut i = 0;
+
+    let scale_v = _mm256_set1_ps(scale);
+    let min_v = _mm256_set1_ps(min);
+    let max_v = _mm256_set1_ps(max);
+
+    // flags: truncate toward zero, avoid changing MXCSR exceptions
+    const TOWARD_ZERO_NO_EXC: i32 = _MM_FROUND_TO_ZERO | _MM_FROUND_NO_EXC;
+
+    while i + 8 <= n {
+        let mut v = _mm256_loadu_ps(floats.as_ptr().add(i));
+        v = _mm256_mul_ps(v, scale_v);
+        v = _mm256_round_ps(v, TOWARD_ZERO_NO_EXC);
+        v = _mm256_max_ps(v, min_v);
+        v = _mm256_min_ps(v, max_v);
+        _mm256_storeu_ps(floats.as_mut_ptr().add(i), v);
+        i += 8;
     }
 }
 
