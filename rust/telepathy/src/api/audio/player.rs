@@ -29,11 +29,11 @@ use wasm_sync::{Condvar, Mutex};
 #[cfg(target_family = "wasm")]
 use wasmtimer::tokio::sleep;
 
+use crate::api::audio::processing::wide_mul;
+use crate::api::audio::resampler_factory;
 use crate::api::error::{DartError, Error, ErrorKind};
 use crate::api::telepathy::DeviceName;
-use crate::api::utils::{
-    SendStream, db_to_multiplier, get_output_device, resampler_factory, wide_mul,
-};
+use crate::api::utils::{SendStream, db_to_multiplier, get_output_device};
 use crate::frb_generated::FLUTTER_RUST_BRIDGE_HANDLER;
 use messages::AudioHeader;
 use sea_codec::ProcessorMessage;

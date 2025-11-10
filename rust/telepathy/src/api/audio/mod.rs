@@ -1,15 +1,24 @@
-use crate::api::utils::{
-    calculate_rms, resampler_factory, wide_float_scaler, wide_i16_to_f32, wide_mul,
-};
+use crate::api::audio::processing::*;
 use atomic_float::AtomicF32;
 use kanal::{Receiver, Sender};
 use log::{debug, warn};
 use nnnoiseless::{DenoiseState, FRAME_SIZE};
-use rubato::Resampler;
+use rubato::{
+    Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
+};
 use sea_codec::ProcessorMessage;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Relaxed;
+
+/// Parameters used for resampling throughout the application
+const RESAMPLER_PARAMETERS: SincInterpolationParameters = SincInterpolationParameters {
+    sinc_len: 256,
+    f_cutoff: 0.95,
+    interpolation: SincInterpolationType::Linear,
+    oversampling_factor: 256,
+    window: WindowFunction::BlackmanHarris2,
+};
 
 /// flutter_rust_bridge:ignore
 pub(crate) mod codec;
@@ -17,6 +26,7 @@ pub(crate) mod codec;
 #[cfg(target_os = "ios")]
 pub(crate) mod ios;
 pub mod player;
+pub(crate) mod processing;
 /// flutter_rust_bridge:ignore
 #[cfg(target_family = "wasm")]
 pub(crate) mod web_audio;
@@ -41,9 +51,8 @@ pub(crate) fn input_processor(
     rms_sender: Option<Sender<f32>>,
     codec_enabled: bool,
 ) -> Result<(), Error> {
-    // the maximum and minimum values for i16 as f32
+    // the maximum value for i16 as f32
     let max_i16_f32 = i16::MAX as f32;
-    let min_i16_f32 = i16::MIN as f32;
     let i16_size = size_of::<i16>();
 
     let ratio = if denoiser.is_some() {
@@ -58,8 +67,8 @@ pub(crate) fn input_processor(
     let post_len = (FRAME_SIZE as f64 + 10_f64) as usize;
     let in_len = (FRAME_SIZE as f64 / ratio).ceil() as usize;
 
+    // resampler is Some if resampling is needed
     let mut resampler = resampler_factory(ratio, 1, in_len)?;
-
     // the input for the resampler
     let mut pre_buf = [vec![0_f32; in_len]];
     // the output for the resampler
@@ -144,8 +153,6 @@ pub(crate) fn input_processor(
         wide_float_scaler(
             &mut target_buffer[..len],
             max_i16_f32 * input_factor.load(Relaxed),
-            min_i16_f32,
-            max_i16_f32,
         );
 
         if let Some(ref mut denoiser) = denoiser {
@@ -203,21 +210,21 @@ pub(crate) fn output_processor(
     output_volume: Arc<AtomicF32>,
     rms_sender: Option<Sender<f32>>,
 ) -> Result<(), Error> {
+    // base scale to convert i16 to f32
     let scale = 1_f32 / i16::MAX as f32;
+    // size of i16 in bytes
     let i16_size = size_of::<i16>();
-
-    let mut primary_resampler = resampler_factory(ratio, 1, FRAME_SIZE)?;
-
     // rubato requires 10 extra spaces in the output buffer as a safety margin
     let post_len = (FRAME_SIZE as f64 * ratio + 10_f64) as usize;
+    // the number of samples that must be buffered before burst handling
+    let burst_thresh = CHANNEL_SIZE / 8;
 
+    // resampler is Some if resampling is needed
+    let mut resampler_option = resampler_factory(ratio, 1, FRAME_SIZE)?;
     // the input for the resampler
     let pre_buf = [&mut [0_f32; FRAME_SIZE]];
     // the output for the resampler
     let mut post_buf = [vec![0_f32; post_len]];
-
-    // the number of samples that must be buffered before burst handling
-    let burst_thresh = CHANNEL_SIZE / 8;
 
     while let Ok(message) = receiver.recv() {
         // no reason to process the frame
@@ -265,16 +272,14 @@ pub(crate) fn output_processor(
             continue;
         }
 
-        // convert the i16 samples to f32
-        wide_i16_to_f32(samples, pre_buf[0], scale);
-        // apply the output volume
-        wide_mul(pre_buf[0], output_volume.load(Relaxed));
+        // convert the i16 samples to f32 & apply the output volume
+        wide_i16_to_f32(samples, pre_buf[0], scale * output_volume.load(Relaxed));
 
         rms_sender
             .as_ref()
             .map(|s| s.send(calculate_rms(pre_buf[0])));
 
-        if let Some(resampler) = &mut primary_resampler {
+        if let Some(resampler) = &mut resampler_option {
             // resample the data
             let processed = resampler.process_into_buffer(&pre_buf, &mut post_buf, None)?;
 
@@ -314,4 +319,24 @@ pub(crate) fn output_processor(
 
     debug!("Output processor ended");
     Ok(())
+}
+
+/// Produces a resampler if needed
+pub(crate) fn resampler_factory(
+    ratio: f64,
+    channels: usize,
+    size: usize,
+) -> Result<Option<SincFixedIn<f32>>, Error> {
+    if ratio == 1_f64 {
+        Ok(None)
+    } else {
+        // create the resampler if needed
+        Ok(Some(SincFixedIn::<f32>::new(
+            ratio,
+            2_f64,
+            RESAMPLER_PARAMETERS,
+            size,
+            channels,
+        )?))
+    }
 }

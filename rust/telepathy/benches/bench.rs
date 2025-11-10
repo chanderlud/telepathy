@@ -103,6 +103,12 @@ pub fn bench_int_conversions(c: &mut Criterion) {
             })
         });
     }
+
+    c.bench_function("old_f32_to_i16", |b| {
+        let pre_buf = pre_buf[..480].try_into().unwrap();
+        let mut out = [0_i16; 480];
+        b.iter(|| old_f32_to_i16(black_box(pre_buf), black_box(&mut out)))
+    });
 }
 
 /// mul with internal selection of optimal implementation
@@ -173,9 +179,8 @@ unsafe fn mul_simd_avx512(frame: &mut [f32], factor: f32) {
     }
 }
 
-// TODO implement avx512
 /// Safety: input length must be a multiple of 16
-pub(crate) fn wide_i16_to_f32(ints: &[i16], out: &mut [f32], scale: f32) {
+pub(crate) fn wide_i16_to_f32(ints: &[i16], out: &mut [f32; 4096], scale: f32) {
     #[cfg(target_arch = "x86_64")]
     {
         if is_x86_feature_detected!("avx2") {
@@ -188,9 +193,9 @@ pub(crate) fn wide_i16_to_f32(ints: &[i16], out: &mut [f32], scale: f32) {
 }
 
 /// scalar implementation of i16 to f32 conversion with scaling
-fn i16_to_f32_scalar(ints: &[i16], out: &mut [f32], scale: f32) {
+fn i16_to_f32_scalar(ints: &[i16], out: &mut [f32; 4096], scale: f32) {
     for (out, &x) in out.iter_mut().zip(ints.iter()) {
-        *out = x as f32 * scale;
+        *out = (x as f32 * scale).clamp(-1_f32, 1_f32);
     }
 }
 
@@ -204,6 +209,8 @@ unsafe fn i16_to_f32_avx2(ints: &[i16], out: &mut [f32], scale: f32) {
     let mut i = 0;
 
     let scale_ps = _mm256_set1_ps(scale);
+    let min_ps = _mm256_set1_ps(-1_f32);
+    let max_ps = _mm256_set1_ps(1_f32);
 
     // process 16 i16 -> 16 f32 per loop
     while i + 16 <= n {
@@ -213,12 +220,14 @@ unsafe fn i16_to_f32_avx2(ints: &[i16], out: &mut [f32], scale: f32) {
         // lower 8 i16 -> 8 i32 -> 8 f32
         let lo16 = _mm256_castsi256_si128(v16);
         let lo32 = _mm256_cvtepi16_epi32(lo16);
-        let lo_ps = _mm256_mul_ps(_mm256_cvtepi32_ps(lo32), scale_ps);
+        let mut lo_ps = _mm256_mul_ps(_mm256_cvtepi32_ps(lo32), scale_ps);
+        lo_ps = _mm256_max_ps(_mm256_min_ps(lo_ps, max_ps), min_ps);
 
         // upper 8 i16 -> 8 i32 -> 8 f32
         let hi16 = _mm256_extracti128_si256::<1>(v16);
         let hi32 = _mm256_cvtepi16_epi32(hi16);
-        let hi_ps = _mm256_mul_ps(_mm256_cvtepi32_ps(hi32), scale_ps);
+        let mut hi_ps = _mm256_mul_ps(_mm256_cvtepi32_ps(hi32), scale_ps);
+        hi_ps = _mm256_max_ps(_mm256_min_ps(hi_ps, max_ps), min_ps);
 
         // store 16 f32
         _mm256_storeu_ps(out.as_mut_ptr().add(i), lo_ps);
@@ -273,6 +282,10 @@ unsafe fn float_to_int_avx(floats: &mut [f32], scale: f32, min: f32, max: f32) {
         _mm256_storeu_ps(floats.as_mut_ptr().add(i), v);
         i += 8;
     }
+}
+
+fn old_f32_to_i16(floats: [f32; 480], out: &mut [i16; 480]) {
+    *out = floats.map(|x| x as i16);
 }
 
 fn dummy_float_frame() -> [f32; 4096] {
