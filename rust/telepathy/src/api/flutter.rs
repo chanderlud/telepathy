@@ -7,7 +7,9 @@ use crate::api::utils::{
 use crate::frb_generated::StreamSink;
 use atomic_float::AtomicF32;
 use chrono::{DateTime, Local};
+#[cfg(not(target_family = "wasm"))]
 use fast_log::Config;
+#[cfg(not(target_family = "wasm"))]
 use fast_log::appender::{FastLogRecord, LogAppender};
 use flutter_rust_bridge::frb;
 use lazy_static::lazy_static;
@@ -21,6 +23,7 @@ use std::str::FromStr;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicU32};
 use std::sync::{Arc, Once};
+#[cfg(not(target_family = "wasm"))]
 use tokio::net::lookup_host;
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 use tokio::spawn;
@@ -114,7 +117,7 @@ pub struct NetworkConfig {
 
 impl NetworkConfig {
     #[frb(sync)]
-    pub fn new(relay_address: String, relay_id: String) -> std::result::Result<Self, DartError> {
+    pub fn new(relay_address: String, relay_id: String) -> Result<Self, DartError> {
         Ok(Self {
             relay_address: Arc::new(RwLock::new(relay_address.parse().map_err(Error::from)?)),
             relay_id: Arc::new(RwLock::new(
@@ -125,10 +128,7 @@ impl NetworkConfig {
     }
 
     #[cfg(not(target_family = "wasm"))]
-    pub async fn set_relay_address(
-        &self,
-        relay_address: String,
-    ) -> std::result::Result<(), DartError> {
+    pub async fn set_relay_address(&self, relay_address: String) -> Result<(), DartError> {
         if let Some(address) = lookup_host(&relay_address)
             .await
             .map_err(Error::from)?
@@ -142,10 +142,7 @@ impl NetworkConfig {
     }
 
     #[cfg(target_family = "wasm")]
-    pub async fn set_relay_address(
-        &self,
-        relay_address: String,
-    ) -> std::result::Result<(), DartError> {
+    pub async fn set_relay_address(&self, relay_address: String) -> Result<(), DartError> {
         *self.relay_address.write().await = SocketAddr::from_str(&relay_address)
             .map_err(|error| DartError::from(error.to_string()))?;
         Ok(())
@@ -155,7 +152,7 @@ impl NetworkConfig {
         self.relay_address.read().await.to_string()
     }
 
-    pub async fn set_relay_id(&self, relay_id: String) -> std::result::Result<(), DartError> {
+    pub async fn set_relay_id(&self, relay_id: String) -> Result<(), DartError> {
         *self.relay_id.write().await = PeerId::from_str(&relay_id).map_err(Error::from)?;
         Ok(())
     }
@@ -498,6 +495,7 @@ impl SendToDartLogger {
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
 impl LogAppender for SendToDartLogger {
     fn do_logs(&mut self, records: &[FastLogRecord]) {
         if let Some(stream) = SEND_TO_DART_LOGGER_STREAM_SINK.read().as_ref() {

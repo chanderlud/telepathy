@@ -36,6 +36,7 @@ use crate::api::telepathy::CHANNEL_SIZE;
 
 /// silences of less than this many frames aren't silence
 const MINIMUM_SILENCE_LENGTH: u8 = 40;
+const SILENCE: [f32; FRAME_SIZE] = [0_f32; FRAME_SIZE];
 
 /// Processes the audio input and sends it to the sending socket
 #[allow(clippy::too_many_arguments)]
@@ -217,6 +218,7 @@ pub(crate) fn output_processor(
     // rubato requires 10 extra spaces in the output buffer as a safety margin
     let post_len = (FRAME_SIZE as f64 * ratio + 10_f64) as usize;
     // the number of samples that must be buffered before burst handling
+    #[cfg(not(target_family = "wasm"))]
     let burst_thresh = CHANNEL_SIZE / 8;
 
     // resampler is Some if resampling is needed
@@ -227,94 +229,70 @@ pub(crate) fn output_processor(
     let mut post_buf = [vec![0_f32; post_len]];
 
     while let Ok(message) = receiver.recv() {
-        // no reason to process the frame
+        #[cfg(not(target_family = "wasm"))]
         if sender.is_full() {
-            continue;
+            continue; // no reason to process the frame
         }
 
-        let samples: &[i16] = match &message {
+        let int_samples_option: Option<&[i16]> = match &message {
             ProcessorMessage::Silence => {
+                #[cfg(not(target_family = "wasm"))]
                 if sender.len() > burst_thresh {
                     continue; // skip silences during burst
                 }
 
-                #[cfg(not(target_family = "wasm"))]
-                for _ in 0..FRAME_SIZE {
-                    sender.try_send(0_f32)?;
-                }
-
-                #[cfg(target_family = "wasm")]
-                web_output
-                    .lock()
-                    .map(|mut data| {
-                        if data.len() < CHANNEL_SIZE {
-                            data.extend(SILENCE)
-                        }
-                    })
-                    .unwrap();
-
-                continue;
+                None
             }
             ProcessorMessage::Data(bytes) => {
                 // convert the bytes to 16-bit integers
-                unsafe {
+                Some(unsafe {
                     std::slice::from_raw_parts(bytes.as_ptr() as *const i16, bytes.len() / i16_size)
-                }
+                })
             }
-            ProcessorMessage::Samples(samples) => samples.as_ref(),
+            ProcessorMessage::Samples(samples) => Some(samples.as_ref()),
         };
 
-        if samples.len() != FRAME_SIZE {
-            warn!(
-                "output_processor: samples.len() != FRAME_SIZE: {}",
-                samples.len()
-            );
-            continue;
-        }
-
-        // convert the i16 samples to f32 & apply the output volume
-        wide_i16_to_f32(samples, pre_buf[0], scale * output_volume.load(Relaxed));
-
-        rms_sender
-            .as_ref()
-            .map(|s| s.send(calculate_rms(pre_buf[0])));
-
-        if let Some(resampler) = &mut resampler_option {
-            // resample the data
-            let processed = resampler.process_into_buffer(&pre_buf, &mut post_buf, None)?;
-
-            // send the resampled data to the output stream
-            #[cfg(not(target_family = "wasm"))]
-            for sample in &post_buf[0][..processed.1] {
-                sender.try_send(*sample)?;
+        let float_samples = if let Some(int_samples) = int_samples_option {
+            if int_samples.len() != FRAME_SIZE {
+                warn!("output frame != FRAME_SIZE: {}", int_samples.len());
+                continue;
             }
 
-            #[cfg(target_family = "wasm")]
-            web_output
-                .lock()
-                .map(|mut data| {
-                    if data.len() < CHANNEL_SIZE {
-                        data.extend(&post_buf[0][..processed.1])
-                    }
-                })
-                .unwrap();
+            // convert the i16 samples to f32 & apply the output volume
+            wide_i16_to_f32(int_samples, pre_buf[0], scale * output_volume.load(Relaxed));
+
+            rms_sender
+                .as_ref()
+                .map(|s| s.send(calculate_rms(pre_buf[0])));
+
+            if let Some(resampler) = &mut resampler_option {
+                // resample the data
+                let processed = resampler.process_into_buffer(&pre_buf, &mut post_buf, None)?;
+
+                // send the resampled data to the output stream
+                &post_buf[0][..processed.1]
+            } else {
+                // if no resampling is needed, send the data to the output stream
+                &*pre_buf[0]
+            }
         } else {
-            // if no resampling is needed, send the data to the output stream
-            #[cfg(not(target_family = "wasm"))]
-            for sample in *pre_buf[0] {
-                sender.try_send(sample)?;
-            }
+            &SILENCE
+        };
 
-            #[cfg(target_family = "wasm")]
-            web_output
-                .lock()
-                .map(|mut data| {
-                    if data.len() < CHANNEL_SIZE {
-                        data.extend(*pre_buf[0])
-                    }
-                })
-                .unwrap();
+        #[cfg(not(target_family = "wasm"))]
+        for sample in float_samples {
+            sender.try_send(*sample)?;
         }
+
+        #[cfg(target_family = "wasm")]
+        web_output
+            .lock()
+            .map(|mut data| {
+                if data.len() < CHANNEL_SIZE {
+                    data.extend(float_samples)
+                }
+            })
+            .unwrap();
     }
 
     debug!("Output processor ended");

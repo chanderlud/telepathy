@@ -37,7 +37,6 @@ use flutter_rust_bridge::for_generated::futures::SinkExt;
 use flutter_rust_bridge::for_generated::futures::stream::{SplitSink, SplitStream};
 use flutter_rust_bridge::{DartFnFuture, frb, spawn, spawn_blocking_with};
 pub use kanal::AsyncReceiver;
-#[cfg(not(target_family = "wasm"))]
 use kanal::bounded;
 use kanal::{AsyncSender, Sender, unbounded_async};
 use libp2p::futures::StreamExt;
@@ -54,6 +53,7 @@ use log::{debug, error, info, warn};
 use messages::{Attachment, AudioHeader, Message};
 use nnnoiseless::{DenoiseState, FRAME_SIZE, RnnModel};
 use sea_codec::ProcessorMessage;
+#[cfg(not(target_family = "wasm"))]
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 use tokio::select;
@@ -87,8 +87,6 @@ const TIMEOUT_DURATION: Duration = Duration::from_millis(100);
 pub(crate) const CHANNEL_SIZE: usize = 2_400;
 /// the protocol identifier for Telepathy
 const CHAT_PROTOCOL: StreamProtocol = StreamProtocol::new("/telepathy/0.0.1");
-#[cfg(target_family = "wasm")]
-const SILENCE: [f32; FRAME_SIZE] = [0_f32; FRAME_SIZE];
 
 #[frb(opaque)]
 #[derive(Clone)]
@@ -1551,7 +1549,7 @@ impl Telepathy {
         // the two clients agree on these codec options
         let codec_config = call_state.codec_config();
 
-        let (input_receiver, input_sender) = self
+        let input_channel = self
             .setup_input(
                 call_state.local_configuration.sample_rate as f64,
                 codec_config,
@@ -1568,7 +1566,7 @@ impl Telepathy {
             .await?;
 
         #[cfg(not(target_family = "wasm"))]
-        let input_stream = self.setup_input_stream(&call_state, input_sender)?;
+        let input_stream = self.setup_input_stream(&call_state, input_channel.1)?;
 
         // play the output stream
         output_stream.stream.play()?;
@@ -1601,7 +1599,7 @@ impl Telepathy {
                 socket_sender.send(write).await?;
 
                 let input_handle = spawn(audio_input(
-                    input_receiver,
+                    input_channel.0,
                     socket_receiver,
                     Arc::clone(stop_io),
                     upload_bandwidth,
@@ -1660,7 +1658,11 @@ impl Telepathy {
                 info!("call controller returned and was handled, call returning");
             }
             _ => {
-                spawn(loopback(input_receiver, output_sender, Arc::clone(stop_io)));
+                spawn(loopback(
+                    input_channel.0,
+                    output_sender,
+                    Arc::clone(stop_io),
+                ));
                 self.end_call.notified().await;
             }
         }
@@ -1876,7 +1878,7 @@ impl Telepathy {
         let download_bandwidth: Arc<AtomicUsize> = Default::default();
         let mut output_streams = Vec::new();
 
-        let (input_receiver, input_sender) = self
+        let input_channel = self
             .setup_input(
                 call_state.local_configuration.sample_rate as f64,
                 (true, true, 5_f32), // hard coded room codec options
@@ -1885,7 +1887,7 @@ impl Telepathy {
             .await?;
 
         #[cfg(not(target_family = "wasm"))]
-        let input_stream = self.setup_input_stream(&call_state, input_sender)?;
+        let input_stream = self.setup_input_stream(&call_state, input_channel.1)?;
 
         // play the input stream (non web)
         #[cfg(not(target_family = "wasm"))]
@@ -1899,7 +1901,7 @@ impl Telepathy {
         }
 
         spawn(audio_input(
-            input_receiver,
+            input_channel.0,
             socket_receiver,
             Arc::clone(stop_io),
             upload_bandwidth.clone(),
@@ -1938,11 +1940,13 @@ impl Telepathy {
         input_rms_sender: Option<Sender<f32>>,
     ) -> Result<(AsyncReceiver<ProcessorMessage>, Sender<f32>)> {
         // input stream -> input processor
-        #[cfg(not(target_family = "wasm"))]
         let (input_sender, input_receiver) = bounded::<f32>(CHANNEL_SIZE);
 
         #[cfg(target_family = "wasm")]
         let input_receiver = {
+            // normal channel is unused on the web
+            drop(input_receiver);
+
             if let Some(web_input) = self.web_input.lock().await.as_ref() {
                 WebInput::from(web_input)
             } else {
@@ -2259,6 +2263,7 @@ impl Telepathy {
 
     /// helper method to load pre-encoded ringtone bytes
     async fn load_ringtone(&self) -> Option<Vec<u8>> {
+        #[cfg(not(target_family = "wasm"))]
         if self.send_custom_ringtone.load(Relaxed) {
             if let Ok(mut file) = File::open("ringtone.sea").await {
                 let mut buffer = Vec::new();
@@ -2276,6 +2281,9 @@ impl Telepathy {
         } else {
             None
         }
+
+        #[cfg(target_family = "wasm")]
+        None
     }
 
     /// helper method to check if a peer is in the current room

@@ -16,6 +16,7 @@ use std::sync::Arc;
 #[cfg(target_family = "wasm")]
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Relaxed;
+#[cfg(not(target_family = "wasm"))]
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::select;
@@ -122,6 +123,7 @@ struct AudioBuffer {
 }
 
 /// loads a ringtone into a sea file for future use in the backend
+#[cfg(not(target_family = "wasm"))]
 pub async fn load_ringtone(path: String) -> Result<(), DartError> {
     let path = Path::new(&path);
 
@@ -137,7 +139,7 @@ pub async fn load_ringtone(path: String) -> Result<(), DartError> {
                 .read_to_end(&mut wav_bytes)
                 .await
                 .map_err(|error| error.to_string())?;
-            let sea_bytes = wav_to_sea(&wav_bytes, 3.0)
+            let sea_bytes = wav_to_sea(&wav_bytes, 5_f32)
                 .await
                 .map_err(|error| error.to_string())?;
             output_file
@@ -148,6 +150,11 @@ pub async fn load_ringtone(path: String) -> Result<(), DartError> {
         _ => return Err("Unsupported file type".to_string().into()),
     }
 
+    Ok(())
+}
+
+#[cfg(target_family = "wasm")]
+pub async fn load_ringtone(path: String) -> Result<(), DartError> {
     Ok(())
 }
 
