@@ -1,4 +1,3 @@
-use nnnoiseless::FRAME_SIZE;
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 
@@ -10,11 +9,11 @@ pub(crate) fn wide_mul(frame: &mut [f32], factor: f32) {
     #[cfg(target_arch = "x86_64")]
     {
         if is_x86_feature_detected!("avx512f") && frame.len().is_multiple_of(16) {
-            unsafe { mul_simd_avx512(frame, factor) }
+            unsafe { avx512_mul(frame, factor) }
             return;
         }
         if is_x86_feature_detected!("avx2") && frame.len().is_multiple_of(8) {
-            unsafe { mul_simd_avx2(frame, factor) }
+            unsafe { avx2_mul(frame, factor) }
             return;
         }
     }
@@ -22,14 +21,10 @@ pub(crate) fn wide_mul(frame: &mut [f32], factor: f32) {
     scalar_mul(frame, factor);
 }
 
-/// Safety: input length must be a multiple of 32
-pub(crate) fn wide_i16_to_f32(ints: &[i16], out: &mut [f32; FRAME_SIZE], scale: f32) {
+/// Safety: input length must be a multiple of 16
+pub(crate) fn wide_i16_to_f32(ints: &[i16], out: &mut [f32], scale: f32) {
     #[cfg(target_arch = "x86_64")]
     {
-        if is_x86_feature_detected!("avx512f") && is_x86_feature_detected!("avx512bw") {
-            unsafe { i16_to_f32_avx512(ints, out, scale) }
-            return;
-        }
         if is_x86_feature_detected!("avx2") {
             unsafe { i16_to_f32_avx2(ints, out, scale) }
             return;
@@ -44,16 +39,16 @@ pub(crate) fn wide_float_scaler(floats: &mut [f32], scale: f32) {
     #[cfg(target_arch = "x86_64")]
     {
         if is_x86_feature_detected!("avx512f") {
-            unsafe { float_to_int_avx512(floats, scale) }
+            unsafe { avx512_float_scaler(floats, scale) }
             return;
         }
         if is_x86_feature_detected!("avx") {
-            unsafe { float_to_int_avx(floats, scale) }
+            unsafe { avx_float_scaler(floats, scale) }
             return;
         }
     }
 
-    float_to_int_scalar(floats, scale);
+    scalar_float_scaler(floats, scale);
 }
 
 /// calculates the RMS of the frame (loop is unrolled for optimization)
@@ -88,7 +83,7 @@ fn scalar_mul(frame: &mut [f32], factor: f32) {
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 #[allow(unsafe_op_in_unsafe_fn)]
-unsafe fn mul_simd_avx2(frame: &mut [f32], factor: f32) {
+unsafe fn avx2_mul(frame: &mut [f32], factor: f32) {
     let len = frame.len();
     let mut i = 0;
 
@@ -109,7 +104,7 @@ unsafe fn mul_simd_avx2(frame: &mut [f32], factor: f32) {
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f")]
 #[allow(unsafe_op_in_unsafe_fn)]
-unsafe fn mul_simd_avx512(frame: &mut [f32], factor: f32) {
+unsafe fn avx512_mul(frame: &mut [f32], factor: f32) {
     let len = frame.len();
     let mut i = 0;
 
@@ -128,7 +123,7 @@ unsafe fn mul_simd_avx512(frame: &mut [f32], factor: f32) {
 }
 
 /// scalar implementation of i16 to f32 conversion with scaling
-fn i16_to_f32_scalar(ints: &[i16], out: &mut [f32; FRAME_SIZE], scale: f32) {
+fn i16_to_f32_scalar(ints: &[i16], out: &mut [f32], scale: f32) {
     for (out, &x) in out.iter_mut().zip(ints.iter()) {
         *out = (x as f32 * scale).clamp(-1_f32, 1_f32);
     }
@@ -138,8 +133,7 @@ fn i16_to_f32_scalar(ints: &[i16], out: &mut [f32; FRAME_SIZE], scale: f32) {
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 #[allow(unsafe_op_in_unsafe_fn)]
-unsafe fn i16_to_f32_avx2(ints: &[i16], out: &mut [f32; FRAME_SIZE], scale: f32) {
-    use core::arch::x86_64::*;
+unsafe fn i16_to_f32_avx2(ints: &[i16], out: &mut [f32], scale: f32) {
     let n = ints.len();
     let mut i = 0;
 
@@ -172,47 +166,7 @@ unsafe fn i16_to_f32_avx2(ints: &[i16], out: &mut [f32; FRAME_SIZE], scale: f32)
     }
 }
 
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx512f,avx512bw")]
-#[allow(unsafe_op_in_unsafe_fn)]
-unsafe fn i16_to_f32_avx512(ints: &[i16], out: &mut [f32; FRAME_SIZE], scale: f32) {
-    use core::arch::x86_64::*;
-    let n = ints.len();
-    let mut i = 0;
-
-    let scale_ps = _mm512_set1_ps(scale);
-    let min_ps = _mm512_set1_ps(-1_f32);
-    let max_ps = _mm512_set1_ps(1_f32);
-
-    // Process 32 i16 -> 32 f32 per iteration (two 16-f32 stores)
-    while i + 32 <= n {
-        // Load 32 i16
-        let v32 = _mm512_loadu_si512(ints.as_ptr().add(i) as *const __m512i);
-
-        // Split into two 256-bit halves of i16
-        let lo16_256 = _mm512_castsi512_si256(v32);
-        let hi16_256 = _mm512_extracti32x8_epi32::<1>(v32);
-
-        // Widen to 32-bit ints
-        let lo32_512 = _mm512_cvtepi16_epi32(lo16_256);
-        let hi32_512 = _mm512_cvtepi16_epi32(hi16_256);
-
-        // Convert to f32, scale and clamp
-        let mut lo_ps = _mm512_mul_ps(_mm512_cvtepi32_ps(lo32_512), scale_ps);
-        lo_ps = _mm512_max_ps(_mm512_min_ps(lo_ps, max_ps), min_ps);
-
-        let mut hi_ps = _mm512_mul_ps(_mm512_cvtepi32_ps(hi32_512), scale_ps);
-        hi_ps = _mm512_max_ps(_mm512_min_ps(hi_ps, max_ps), min_ps);
-
-        // Store 32 f32 (two stores of 16)
-        _mm512_storeu_ps(out.as_mut_ptr().add(i), lo_ps);
-        _mm512_storeu_ps(out.as_mut_ptr().add(i + 16), hi_ps);
-
-        i += 32;
-    }
-}
-
-fn float_to_int_scalar(floats: &mut [f32], scale: f32) {
+fn scalar_float_scaler(floats: &mut [f32], scale: f32) {
     for x in floats.iter_mut() {
         *x *= scale;
         *x = x.trunc().clamp(MIN_I16_F32, MAX_I16_F32);
@@ -222,8 +176,7 @@ fn float_to_int_scalar(floats: &mut [f32], scale: f32) {
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx")]
 #[allow(unsafe_op_in_unsafe_fn)]
-unsafe fn float_to_int_avx(floats: &mut [f32], scale: f32) {
-    use core::arch::x86_64::*;
+unsafe fn avx_float_scaler(floats: &mut [f32], scale: f32) {
     let n = floats.len();
     let mut i = 0;
 
@@ -248,8 +201,7 @@ unsafe fn float_to_int_avx(floats: &mut [f32], scale: f32) {
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f")]
 #[allow(unsafe_op_in_unsafe_fn)]
-unsafe fn float_to_int_avx512(floats: &mut [f32], scale: f32) {
-    use core::arch::x86_64::*;
+unsafe fn avx512_float_scaler(floats: &mut [f32], scale: f32) {
     let n = floats.len();
     let mut i = 0;
 
@@ -281,47 +233,90 @@ unsafe fn float_to_int_avx512(floats: &mut [f32], scale: f32) {
 
 #[cfg(test)]
 mod tests {
+    #![allow(non_snake_case)]
+    #![allow(unused_imports)]
+
     use nnnoiseless::FRAME_SIZE;
 
     #[test]
     #[cfg(target_arch = "x86_64")]
-    fn mul_normal_frame_equal_outputs() {
+    fn MulVariants_DummyFrame_EqualOutputs() {
         let frame = crate::api::telepathy::tests::dummy_frame();
         let mut scalar_frame = frame.clone();
-        let mut simd_avx2_frame = frame.clone();
         let mut wide_frame = frame.clone();
-        // let mut simd_avx512_frame = frame.clone();
 
-        super::scalar_mul(&mut scalar_frame, 200_f32);
-        unsafe {
-            super::mul_simd_avx2(&mut simd_avx2_frame, 200_f32);
+        super::scalar_mul(&mut scalar_frame, 2_f32);
+        super::wide_mul(&mut wide_frame, 2_f32);
+
+        #[cfg(target_arch = "x86_64")]
+        if is_x86_feature_detected!("avx2") {
+            let mut simd_avx2_frame = frame.clone();
+            unsafe {
+                super::avx2_mul(&mut simd_avx2_frame, 2_f32);
+            }
+
+            assert_eq!(scalar_frame, simd_avx2_frame);
         }
-        super::wide_mul(&mut wide_frame, 200_f32);
 
-        // unsafe {
-        //     super::mul_simd_avx512(&mut simd_avx512_frame, 2_f32);
-        // }
+        #[cfg(target_arch = "x86_64")]
+        if is_x86_feature_detected!("avx512f") {
+            let mut simd_avx512_frame = frame.clone();
+            unsafe {
+                super::avx512_mul(&mut simd_avx512_frame, 2_f32);
+            }
 
-        assert_eq!(scalar_frame, simd_avx2_frame);
-        assert_eq!(wide_frame, simd_avx2_frame);
+            assert_eq!(scalar_frame, simd_avx512_frame);
+        }
+
+        assert_eq!(scalar_frame, wide_frame);
     }
 
     #[test]
     #[cfg(target_arch = "x86_64")]
-    fn int_conversion_equal_outputs() {
+    fn IntConversion_DummyFrame_EqualOutputs() {
         let frame = crate::api::telepathy::tests::dummy_int_frame();
         let mut scalar_frame = [0_f32; FRAME_SIZE];
-        let mut simd_avx2_frame = [0_f32; FRAME_SIZE];
+        let mut wide_frame = [0_f32; FRAME_SIZE];
         let scale = (1_f32 / i16::MAX as f32) * 2.0;
 
-        unsafe { super::i16_to_f32_avx2(&frame, &mut simd_avx2_frame, scale) };
-
+        super::wide_i16_to_f32(&frame, &mut wide_frame, scale);
         super::i16_to_f32_scalar(&frame, &mut scalar_frame, scale);
 
-        println!("{:?}", scalar_frame);
-        println!("{:?}", simd_avx2_frame);
-        println!("{:?}", frame);
+        #[cfg(target_arch = "x86_64")]
+        if is_x86_feature_detected!("avx2") {
+            let mut simd_avx2_frame = [0_f32; FRAME_SIZE];
+            unsafe { super::i16_to_f32_avx2(&frame, &mut simd_avx2_frame, scale) };
+            assert_eq!(scalar_frame, simd_avx2_frame);
+        }
 
-        assert_eq!(scalar_frame, simd_avx2_frame);
+        assert_eq!(scalar_frame, wide_frame);
+    }
+
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn FloatConversion_DummyFrame_EqualOutputs() {
+        let frame = crate::api::telepathy::tests::dummy_frame();
+        let mut scalar_frame = frame.clone();
+        let mut wide_frame = frame.clone();
+
+        let scale = i16::MAX as f32 * 2.0;
+        super::scalar_float_scaler(&mut scalar_frame, scale);
+        super::wide_float_scaler(&mut wide_frame, scale);
+
+        #[cfg(target_arch = "x86_64")]
+        if is_x86_feature_detected!("avx") {
+            let mut avx_frame = frame.clone();
+            unsafe { super::avx_float_scaler(&mut avx_frame, scale) };
+            assert_eq!(scalar_frame, avx_frame);
+        }
+
+        #[cfg(target_arch = "x86_64")]
+        if is_x86_feature_detected!("avx512f") {
+            let mut avx_frame = frame.clone();
+            unsafe { super::avx512_float_scaler(&mut avx_frame, scale) };
+            assert_eq!(scalar_frame, avx_frame);
+        }
+
+        assert_eq!(scalar_frame, wide_frame);
     }
 }
