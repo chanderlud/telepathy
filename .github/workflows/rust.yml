@@ -23,13 +23,13 @@ jobs:
         info:
           - image: windows-2022
             target: x86_64-pc-windows-msvc
-          - image: macos-13
+          - image: macos-14
             target: aarch64-apple-darwin
           - image: ubuntu-latest
             target: x86_64-unknown-linux-gnu
           - image: ubuntu-latest
             target: aarch64-linux-android
-          - image: macos-13
+          - image: macos-14
             target: aarch64-apple-ios
 
     steps:
@@ -98,7 +98,7 @@ jobs:
         info:
           - image: windows-2022
             target: windows
-          # - image: macos-13
+          # - image: macos-14
           #   target: macos
           - image: ubuntu-24.04
             target: linux
@@ -106,7 +106,7 @@ jobs:
             target: linux
           - image: windows-2022
             target: apk
-          - image: macos-13
+          - image: macos-14
             target: ios
           - image: ubuntu-24.04
             target: web
