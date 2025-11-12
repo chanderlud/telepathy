@@ -198,7 +198,7 @@ async fn play_sound(
             .await?;
 
         let decoder_handle =
-            spawn_blocking(move || SeaDecoder::new(input_receiver, output_sender).unwrap());
+            spawn_blocking(move || SeaDecoder::new(input_receiver, output_sender, None).unwrap());
 
         let mut decoder = decoder_handle.await?;
         let header = decoder.get_header();

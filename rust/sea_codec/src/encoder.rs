@@ -1,11 +1,11 @@
 use bytes::Bytes;
 use kanal::{Receiver, Sender};
 
+use crate::ProcessorMessage;
 use crate::codec::{
     common::SeaError,
     file::{SeaFile, SeaFileHeader},
 };
-use crate::ProcessorMessage;
 
 pub enum SeaEncoderState {
     Start,
@@ -38,7 +38,7 @@ pub struct SeaEncoder {
     receiver: Receiver<ProcessorMessage>,
     sender: Sender<ProcessorMessage>,
     file: SeaFile,
-    state: SeaEncoderState,
+    pub state: SeaEncoderState,
     written_frames: u32,
 }
 

@@ -790,9 +790,9 @@ class _AVSettingsState extends State<AVSettings> {
           disabled: false,
           onPressed: () async {
             widget.telepathy.joinRoom(memberStrings: [
-              "12D3KooWFGWFRpHLANALFUnvS1rEZXSiL5aihQrR1NvQgXc4ndbZ",
-              "12D3KooWREpempACHNKHCHBXqRgQHv7mMfxLF9p7zEZcNyCYqv9g",
-              "12D3KooWLEyRg5ECHzs4ejc6uY6XFUyzzGY9YU6W36cABwGfVSpb"
+              "12D3KooWPNBuTcwJ1PjM13hD7xq6BABuhnkcdQxbCbZ7HYwpCb1V",
+              "12D3KooWGUA8eC8qwH8g1RWvBbC7NmxUwRGAefFNEU3LteTuxgTp",
+              "12D3KooWJNJcxMtwcPEqxxbgohgwvPx34XAMyA5TzFyFgtFSjJ5r"
             ]);
           },
         )

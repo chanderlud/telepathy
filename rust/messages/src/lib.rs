@@ -5,7 +5,7 @@ pub enum Message {
     Hello {
         ringtone: Option<Vec<u8>>,
         audio_header: AudioHeader,
-        room: bool,
+        room_hash: Option<Vec<u8>>,
     },
     HelloAck {
         audio_header: AudioHeader,

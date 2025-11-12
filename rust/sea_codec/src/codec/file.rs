@@ -1,11 +1,11 @@
-use crate::{codec::chunk::SeaChunk, encoder::EncoderSettings, ProcessorMessage};
+use crate::{ProcessorMessage, codec::chunk::SeaChunk, encoder::EncoderSettings};
 use kanal::Receiver;
 use std::io::Cursor;
 
 use super::{
     chunk::SeaChunkType,
     common::{
-        read_u16_le, read_u32_be, read_u32_le, read_u8, SeaEncoderTrait, SeaError, SEAC_MAGIC,
+        SEAC_MAGIC, SeaEncoderTrait, SeaError, read_u8, read_u16_le, read_u32_be, read_u32_le,
     },
     decoder::Decoder,
     encoder_cbr::CbrEncoder,
@@ -111,11 +111,14 @@ impl SeaFile {
         })
     }
 
-    pub fn from_reader(receiver: &Receiver<ProcessorMessage>) -> Result<Self, SeaError> {
-        let header = SeaFileHeader::from_reader(receiver)?;
+    pub fn from_reader(
+        receiver: &Receiver<ProcessorMessage>,
+        header: Option<SeaFileHeader>,
+    ) -> Result<Self, SeaError> {
+        let header = header.or(SeaFileHeader::from_reader(receiver).ok());
 
         Ok(SeaFile {
-            header,
+            header: header.ok_or(SeaError::InvalidFrame)?,
             decoder: None,
             encoder: None,
             encoder_settings: None,
@@ -170,29 +173,24 @@ impl SeaFile {
             _ => return Err(SeaError::InvalidFrame),
         };
 
-        let chunk = SeaChunk::from_slice(&encoded, &self.header);
+        let chunk = SeaChunk::from_slice(&encoded, &self.header)?;
 
-        match chunk {
-            Ok(chunk) => {
-                if self.decoder.is_none() {
-                    self.decoder = Some(Decoder::init(
-                        self.header.channels as usize,
-                        chunk.scale_factor_bits as usize,
-                    ));
-                }
-                let decoder = self.decoder.as_mut().unwrap();
-                let decoded = match chunk.chunk_type {
-                    SeaChunkType::Cbr => decoder.decode_cbr(&chunk),
-                    SeaChunkType::Vbr => decoder.decode_vbr(&chunk),
-                };
+        if self.decoder.is_none() {
+            self.decoder = Some(Decoder::init(
+                self.header.channels as usize,
+                chunk.scale_factor_bits as usize,
+            ));
+        }
+        let decoder = self.decoder.as_mut().unwrap();
+        let decoded = match chunk.chunk_type {
+            SeaChunkType::Cbr => decoder.decode_cbr(&chunk),
+            SeaChunkType::Vbr => decoder.decode_vbr(&chunk),
+        };
 
-                if decoded.len() != 480 {
-                    Err(SeaError::InvalidFrame)
-                } else {
-                    Ok(ProcessorMessage::Samples(decoded.try_into().unwrap()))
-                }
-            }
-            Err(err) => Err(err),
+        if decoded.len() != 480 {
+            Err(SeaError::InvalidFrame)
+        } else {
+            Ok(ProcessorMessage::Samples(decoded.try_into().unwrap()))
         }
     }
 }

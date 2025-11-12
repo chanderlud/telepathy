@@ -80,6 +80,8 @@ class SettingsController with ChangeNotifier {
 
   Map<String, Contact> get contacts => profiles[activeProfile]!.contacts;
 
+  Map<String, Room> get rooms => profiles[activeProfile]!.rooms;
+
   List<int> get keypair => profiles[activeProfile]!.keypair;
 
   String get peerId => profiles[activeProfile]!.peerId;
@@ -103,6 +105,7 @@ class SettingsController with ChangeNotifier {
 
       // load the contacts for this profile
       Map<String, Contact> contacts = await loadContacts(id);
+      Map<String, Room> rooms = await loadRooms(id);
       String nickname =
           await storage.read(key: '$id-nickname') ?? 'Unnamed Profile';
       List<int> keyBytes = base64Decode(keyStr);
@@ -114,6 +117,7 @@ class SettingsController with ChangeNotifier {
         peerId: peerId,
         keypair: keyBytes,
         contacts: contacts,
+        rooms: rooms,
       );
     }
 
@@ -188,6 +192,23 @@ class SettingsController with ChangeNotifier {
     await storage.write(
       key: '$activeProfile-contacts',
       value: jsonEncode(contactsMap),
+    );
+  }
+
+  Future<void> saveRooms() async {
+    // notify listeners right away because the rooms are already updated
+    notifyListeners();
+
+    // serialized contacts
+    Map<String, Map<String, dynamic>> roomMap = {};
+
+    for (MapEntry<String, Room> entry in rooms.entries) {
+      roomMap[entry.key] = entry.value.toJson();
+    }
+
+    await storage.write(
+      key: '$activeProfile-rooms',
+      value: jsonEncode(roomMap),
     );
   }
 
@@ -287,6 +308,7 @@ class SettingsController with ChangeNotifier {
       peerId: peerId,
       keypair: keypair,
       contacts: {},
+      rooms: {},
     );
 
     await options.setStringList('profiles', profiles.keys.toList());
@@ -350,6 +372,20 @@ class SettingsController with ChangeNotifier {
     }
 
     return contacts;
+  }
+
+  Future<Map<String, Room>> loadRooms(String id) async {
+    Map<String, Room> rooms = {};
+    String? roomStr = await storage.read(key: '$id-rooms');
+
+    if (roomStr != null) {
+      Map<String, dynamic> roomMap = jsonDecode(roomStr);
+      roomMap.forEach((id, value) {
+        rooms[id] = Room.fromJson(value);
+      });
+    }
+
+    return rooms;
   }
 
   NetworkConfig loadNetworkConfig() {
@@ -496,6 +532,7 @@ class Profile {
   final String peerId;
   final List<int> keypair;
   final Map<String, Contact> contacts;
+  final Map<String, Room> rooms;
 
   Profile({
     required this.id,
@@ -503,7 +540,38 @@ class Profile {
     required this.peerId,
     required this.keypair,
     required this.contacts,
+    required this.rooms,
   });
+}
+
+class Room {
+  late String id;
+  late List<String> peerIds;
+  late String nickname;
+
+  Room({
+    required this.id,
+    required this.peerIds,
+    required this.nickname,
+  });
+
+  // Deserialize (from JSON)
+  factory Room.fromJson(Map<String, dynamic> json) {
+    return Room(
+      id: json['id'],
+      peerIds: List<String>.from(json['peerIds']),
+      nickname: json['nickname'],
+    );
+  }
+
+  // Serialize (to JSON)
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'peerIds': peerIds,
+      'nickname': nickname,
+    };
+  }
 }
 
 int darkenColor(int colorInt, double amount) {

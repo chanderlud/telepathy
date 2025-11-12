@@ -1,6 +1,7 @@
 #![allow(clippy::type_complexity)]
 
 use std::collections::{HashMap, VecDeque};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::mem;
 #[cfg(not(target_family = "wasm"))]
 use std::net::Ipv4Addr;
@@ -53,6 +54,7 @@ use log::{debug, error, info, warn};
 use messages::{Attachment, AudioHeader, Message};
 use nnnoiseless::{DenoiseState, FRAME_SIZE, RnnModel};
 use sea_codec::ProcessorMessage;
+use sea_codec::codec::file::SeaFileHeader;
 #[cfg(not(target_family = "wasm"))]
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
@@ -346,6 +348,7 @@ impl Telepathy {
         self.end_call.notify_one();
     }
 
+    /// The only entry point into participating in a room
     pub async fn join_room(
         &self,
         member_strings: Vec<String>,
@@ -1284,14 +1287,14 @@ impl Telepathy {
             result = read_message::<Message, _>(transport) => {
                 let mut other_ringtone = None;
                 let remote_audio_header;
-                // let remote_in_room;
+                let room_hash_option;
 
                 info!("received {:?} from {}", result, contact.nickname);
 
                 match result? {
-                    Message::Hello { ringtone, audio_header, .. } => {
+                    Message::Hello { ringtone, audio_header, room_hash } => {
                         remote_audio_header = audio_header;
-                        // remote_in_room = room;
+                        room_hash_option = room_hash;
                         if self.play_custom_ringtones.load(Relaxed) {
                             other_ringtone = ringtone;
                         }
@@ -1310,14 +1313,17 @@ impl Telepathy {
                 let mut cancel_prompt = None;
                 let mut accept_handle = None;
 
-                if is_in_room {
+                if is_in_room && room_hash_option == self.room_hash().await {
                     // automatically accept calls from member of current room
+                } else if room_hash_option.is_some() {
+                    // the call is part of a room, but the client is not in a room
+                    write_message(transport, &Message::Reject).await?;
+                    return Ok(());
                 } else if self.in_call.load(Relaxed) {
                     // do not accept another call if already in one
                     write_message(transport, &Message::Busy).await?;
                     return Ok(());
                 } else {
-                    // TODO when another user in a room tries to call the room, any user not in the room already will hit this case & not have the state required to successfully join the room
                     let other_cancel_prompt = Arc::new(Notify::new());
                     // a cancel Notify that can be used in the frontend
                     let dart_cancel = DartNotify { inner: Arc::clone(&other_cancel_prompt) };
@@ -1386,7 +1392,8 @@ impl Telepathy {
             _ = state.start_call.notified() => {
                 state.in_call.store(true, Relaxed); // blocks the session from being restarted
 
-                let is_in_room = self.is_in_room(&contact.peer_id).await;
+                let room_hash = self.room_hash().await;
+                let is_in_room = room_hash.is_some();
                 // load custom ringtone if enabled
                 let other_ringtone = self.load_ringtone().await;
                 // initialize call state
@@ -1394,7 +1401,7 @@ impl Telepathy {
                 // when custom ringtone is used wait longer for a response to account for extra data being sent in Hello
                 let hello_timeout = HELLO_TIMEOUT + if other_ringtone.is_some() { Duration::from_secs(10) } else { Default::default() };
                 // queries the other client for a call
-                write_message(transport, &Message::Hello { ringtone: other_ringtone, audio_header: call_state.local_configuration.clone(), room: is_in_room }).await?;
+                write_message(transport, &Message::Hello { ringtone: other_ringtone, audio_header: call_state.local_configuration.clone(), room_hash }).await?;
 
                 loop {
                     select! {
@@ -1554,6 +1561,7 @@ impl Telepathy {
                 call_state.local_configuration.sample_rate as f64,
                 codec_config,
                 input_rms_sender,
+                false,
             )
             .await?;
 
@@ -1562,6 +1570,7 @@ impl Telepathy {
                 call_state.remote_configuration.sample_rate as f64,
                 codec_config.0,
                 output_rms_sender,
+                false,
             )
             .await?;
 
@@ -1863,6 +1872,7 @@ impl Telepathy {
             .map_err(Error::from)
     }
 
+    // TODO keep track of which room members are online (leave, join, etc)
     /// controller for rooms
     async fn room_controller(
         &self,
@@ -1883,6 +1893,7 @@ impl Telepathy {
                 call_state.local_configuration.sample_rate as f64,
                 (true, true, 5_f32), // hard coded room codec options
                 None,
+                true,
             )
             .await?;
 
@@ -1911,10 +1922,15 @@ impl Telepathy {
             info!("received room control message for {:?}", state.peer);
 
             let (write, read) = transport.split();
-            socket_sender.send(write).await?; // TODO write always needs a SEA header sent to it i think
+            socket_sender.send(write).await?;
 
             let (output_sender, output_stream) = self
-                .setup_output(state.remote_configuration.sample_rate as f64, true, None)
+                .setup_output(
+                    state.remote_configuration.sample_rate as f64,
+                    true,
+                    None,
+                    true,
+                )
                 .await?;
 
             output_stream.stream.play()?;
@@ -1938,6 +1954,7 @@ impl Telepathy {
         sample_rate: f64,
         codec_options: (bool, bool, f32),
         input_rms_sender: Option<Sender<f32>>,
+        is_room: bool,
     ) -> Result<(AsyncReceiver<ProcessorMessage>, Sender<f32>)> {
         // input stream -> input processor
         let (input_sender, input_receiver) = bounded::<f32>(CHANNEL_SIZE);
@@ -2004,6 +2021,7 @@ impl Telepathy {
                         if denoise { 48_000 } else { sample_rate as u32 },
                         vbr,
                         residual_bits,
+                        is_room,
                     );
                 },
                 FLUTTER_RUST_BRIDGE_HANDLER.thread_pool(),
@@ -2021,6 +2039,7 @@ impl Telepathy {
         remote_sample_rate: f64,
         codec_enabled: bool,
         output_rms_sender: Option<Sender<f32>>,
+        is_room: bool,
     ) -> Result<(AsyncSender<ProcessorMessage>, SendStream)> {
         // receiving socket -> output processor or decoder
         let (network_output_sender, network_output_receiver) =
@@ -2045,6 +2064,14 @@ impl Telepathy {
         let output_config = output_device.default_output_config()?;
         info!("output device: {:?}", output_device.name());
 
+        // in rooms, the SEA header is hard coded
+        let header = is_room.then_some(SeaFileHeader {
+            version: 1,
+            channels: 1,
+            chunk_size: 960,
+            frames_per_chunk: 480,
+            sample_rate: remote_sample_rate as u32,
+        });
         // the ratio of the output sample rate to the remote input sample rate
         let ratio = output_config.sample_rate().0 as f64 / remote_sample_rate;
         // get a reference to output volume for the processor
@@ -2056,6 +2083,7 @@ impl Telepathy {
                     decoder(
                         network_output_receiver.to_sync(),
                         decoded_output_sender.to_sync(),
+                        header,
                     );
                 },
                 FLUTTER_RUST_BRIDGE_HANDLER.thread_pool(),
@@ -2294,6 +2322,21 @@ impl Telepathy {
             .as_ref()
             .map(|m| m.contains(peer_id))
             .unwrap_or(false)
+    }
+
+    async fn room_hash(&self) -> Option<Vec<u8>> {
+        self.in_room
+            .read()
+            .await
+            .as_ref()
+            .map(|peers| {
+                peers.iter().fold(0u64, |acc, peer| {
+                    let mut hasher = DefaultHasher::new();
+                    peer.hash(&mut hasher);
+                    acc ^ hasher.finish()
+                })
+            })
+            .map(|hash| hash.to_le_bytes().to_vec())
     }
 }
 
@@ -2863,6 +2906,7 @@ pub(crate) mod tests {
                     if denoise { 48_000 } else { sample_rate },
                     true,
                     5.0,
+                    false,
                 );
             });
 
@@ -2917,6 +2961,7 @@ pub(crate) mod tests {
                 decoder(
                     network_output_receiver.to_sync(),
                     decoded_output_sender.to_sync(),
+                    None,
                 );
             });
 

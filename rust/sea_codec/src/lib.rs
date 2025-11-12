@@ -1,6 +1,6 @@
 use bytes::Bytes;
 
-mod codec;
+pub mod codec;
 pub mod decoder;
 pub mod encoder;
 

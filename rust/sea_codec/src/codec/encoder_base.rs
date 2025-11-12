@@ -1,7 +1,7 @@
 use std::mem;
 
 use super::{
-    common::{clamp_i16, SeaResidualSize},
+    common::{SeaResidualSize, clamp_i16},
     dqt::SeaDequantTab,
     lms::SeaLMS,
     qt::SeaQuantTab,

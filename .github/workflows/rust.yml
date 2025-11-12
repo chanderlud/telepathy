@@ -316,7 +316,6 @@ jobs:
                 
                 /flutter/bin/flutter --version # triggers flutter initialization
                 /flutter/bin/cache/dart-sdk/bin/dart pub global activate flutter_distributor
-                flutter_distributor upgrade
                 ;;
             esac
 

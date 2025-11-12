@@ -1,8 +1,8 @@
+use crate::ProcessorMessage;
 use crate::codec::{
     common::SeaError,
     file::{SeaFile, SeaFileHeader},
 };
-use crate::ProcessorMessage;
 use kanal::{Receiver, Sender};
 
 pub struct SeaDecoder {
@@ -16,8 +16,9 @@ impl SeaDecoder {
     pub fn new(
         receiver: Receiver<ProcessorMessage>,
         sender: Sender<ProcessorMessage>,
+        header: Option<SeaFileHeader>,
     ) -> Result<Self, SeaError> {
-        let file = SeaFile::from_reader(&receiver)?;
+        let file = SeaFile::from_reader(&receiver, header)?;
 
         Ok(Self {
             receiver,

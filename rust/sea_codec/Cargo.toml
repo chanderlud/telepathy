@@ -6,7 +6,7 @@ homepage = "https://github.com/Daninet/sea-codec"
 repository = "https://github.com/Daninet/sea-codec"
 keywords = ["audio", "codec", "encoder", "decoder", "embedded"]
 categories = ["multimedia::audio", "multimedia::encoding"]
-edition = "2021"
+edition = "2024"
 license = "MIT"
 
 [dependencies]
