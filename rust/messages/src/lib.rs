@@ -19,8 +19,6 @@ pub enum Message {
         text: String,
         attachments: Vec<Attachment>,
     },
-    ConnectionInterrupted,
-    ConnectionRestored,
     KeepAlive,
     ScreenshareHeader {
         encoder_name: String,

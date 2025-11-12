@@ -5907,6 +5907,7 @@ class TelepathyImpl extends RustOpaque implements Telepathy {
         that: this,
       );
 
+  /// The only entry point into participating in a room
   Future<void> joinRoom({required List<String> memberStrings}) =>
       RustLib.instance.api.crateApiTelepathyTelepathyJoinRoom(
           that: this, memberStrings: memberStrings);

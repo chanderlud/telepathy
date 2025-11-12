@@ -1,6 +1,6 @@
 #![allow(clippy::type_complexity)]
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::mem;
 #[cfg(not(target_family = "wasm"))]
@@ -61,7 +61,7 @@ use tokio::io::AsyncReadExt;
 use tokio::select;
 use tokio::sync::{Mutex, Notify, RwLock};
 #[cfg(not(target_family = "wasm"))]
-use tokio::time::{Instant, Interval, interval, sleep_until, timeout};
+use tokio::time::{Interval, interval, timeout};
 use tokio_util::bytes::Bytes;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 use tokio_util::compat::{Compat, FuturesAsyncReadCompatExt};
@@ -83,8 +83,6 @@ type RoomJoin = (Transport<TransportStream>, EarlyCallState);
 const TRANSFER_BUFFER_SIZE: usize = FRAME_SIZE * size_of::<i16>();
 /// A timeout used when initializing the call
 const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
-/// A timeout used to detect temporary network issues
-const TIMEOUT_DURATION: Duration = Duration::from_millis(100);
 /// the number of samples to hold in a channel
 pub(crate) const CHANNEL_SIZE: usize = 2_400;
 /// the protocol identifier for Telepathy
@@ -1299,10 +1297,6 @@ impl Telepathy {
                             other_ringtone = ringtone;
                         }
                     },
-                    Message::KeepAlive | Message::ConnectionInterrupted | Message::ConnectionRestored => {
-                        warn!("session for {} ending expected Hello", contact.nickname);
-                        return Ok::<(), Error>(());
-                    },
                     message => {
                         warn!("received unexpected {:?} from {}", message, contact.nickname);
                         return Ok::<(), Error>(());
@@ -1603,7 +1597,6 @@ impl Telepathy {
         match (audio_transport, control_transport, message_receiver) {
             (Some(audio_transport), Some(transport), Some(message_receiver)) => {
                 let (socket_sender, socket_receiver) = unbounded_async();
-                let (receiving_sender, receiving_receiver) = unbounded_async::<bool>();
                 let (write, read) = audio_transport.split();
                 socket_sender.send(write).await?;
 
@@ -1619,15 +1612,10 @@ impl Telepathy {
                     read,
                     Arc::clone(stop_io),
                     download_bandwidth,
-                    Some(receiving_sender),
                 ));
 
-                let controller_future = self.call_controller(
-                    transport,
-                    message_receiver,
-                    receiving_receiver,
-                    call_state.peer,
-                );
+                let controller_future =
+                    self.call_controller(transport, message_receiver, call_state.peer);
 
                 info!("call controller starting");
 
@@ -1694,35 +1682,13 @@ impl Telepathy {
         &self,
         transport: &mut Transport<TransportStream>,
         receiver: AsyncReceiver<Message>,
-        receiving: AsyncReceiver<bool>,
         peer: PeerId,
     ) -> Result<Option<String>> {
         let identity = self.identity.read().await.public().to_peer_id();
 
-        // in case this value has been used in a previous call, reset to false
-        CONNECTED.store(false, Relaxed);
-
-        // whether the session is currently receiving audio
-        let mut is_receiving = false;
-        // whether the remote peer is currently receiving audio
-        let mut remote_is_receiving = true;
-
-        // the instant the UI will be notified that the session is not receiving audio
-        let mut notify_ui = Instant::now() + Duration::from_secs(2);
-
-        // the instant the session stopped receiving audio
-        let mut disconnected_at = Instant::now();
-
-        // the instant the disconnect started and the duration of the disconnect
-        let mut disconnect_durations: VecDeque<(Instant, Duration)> = VecDeque::new();
-        // ticks to update the connection quality and remove old entries from `disconnect_durations`
-        let mut update_durations = interval(Duration::from_secs(1));
-
-        // constant durations used in the connection quality algorithm
-        let window_duration = Duration::from_secs(10);
-        let disconnect_duration = Duration::from_millis(1_500);
-
-        let (state_sender, state_receiver) = unbounded_async::<bool>();
+        // TODO smarter initial connected state (i.e. after first audio)
+        CONNECTED.store(true, Relaxed);
+        (self.call_state.lock().await)(false).await;
 
         loop {
             select! {
@@ -1742,24 +1708,6 @@ impl Telepathy {
                                 timestamp: Local::now(),
                                 attachments,
                             }).await;
-                        }
-                        Message::ConnectionInterrupted => {
-                            // info!("received connection interrupted message r={} rr={}", is_receiving, remote_is_receiving);
-
-                            let receiving = is_receiving && remote_is_receiving;
-                            remote_is_receiving = false;
-                            state_sender.send(receiving).await?;
-                        }
-                        Message::ConnectionRestored => {
-                            // info!("received connection restored message r={} rr={}", is_receiving, remote_is_receiving);
-
-                            if remote_is_receiving {
-                                warn!("received connection restored message while already receiving");
-                                continue;
-                            }
-
-                            remote_is_receiving = true;
-                            state_sender.send(false).await?;
                         }
                         Message::ScreenshareHeader { .. } => {
                             info!("received screenshare header {:?}", message);
@@ -1782,77 +1730,6 @@ impl Telepathy {
                     write_message(transport, &Message::Goodbye { reason: None }).await?;
                     break Err(ErrorKind::CallEnded.into());
                 },
-                receiving = state_receiver.recv() => {
-                    if receiving? {
-                        // the instant the disconnect began
-                        disconnected_at = Instant::now();
-                        // notify the ui in 2 seconds if the disconnect hasn't ended
-                        notify_ui = disconnected_at + disconnect_duration;
-                    } else if is_receiving && remote_is_receiving {
-                        let elapsed = disconnected_at.elapsed();
-
-                        // update the overlay to connected
-                        if !CONNECTED.swap(true, Relaxed) {
-                            // update the call state in the UI
-                            (self.call_state.lock().await)(false).await;
-                        }
-
-                        // record the disconnect
-                        disconnect_durations.push_back((disconnected_at, elapsed));
-                        // prevents any notification to the ui as audio is being received
-                        notify_ui = Instant::now() + Duration::from_secs(86400 * 365 * 30);
-                    }
-                },
-                // receives when the receiving state changes
-                Ok(receiving) = receiving.recv() => {
-                    if receiving != is_receiving {
-                        state_sender.send(is_receiving && remote_is_receiving).await?;
-
-                        is_receiving = receiving;
-
-                        let message = if is_receiving {
-                            Message::ConnectionRestored
-                        } else {
-                            Message::ConnectionInterrupted
-                        };
-
-                        if let Err(error) = write_message(transport, &message).await {
-                            error!("Error sending connection notification message: {}", error);
-                        }
-                    } else {
-                        // TODO it appears that this is happening occasionally
-                        warn!("received duplicate receiving state: {}", receiving);
-                    }
-                },
-                // if the session doesn't reconnect within the time limit, notify the UI
-                _ = sleep_until(notify_ui) => {
-                    (self.call_state.lock().await)(true).await;
-                    // the UI does not need to be notified until the session reconnects
-                    notify_ui = Instant::now() + Duration::from_secs(86400 * 365 * 30);
-                    // set the overlay to disconnected
-                    CONNECTED.store(false, Relaxed);
-                },
-                _ = update_durations.tick() => {
-                    let now = Instant::now();
-
-                    // check for disconnects outside the 10-second window
-                    while let Some((start, _)) = disconnect_durations.front() {
-                        if now - *start > window_duration {
-                            disconnect_durations.pop_front();
-                        } else {
-                            break;
-                        }
-                    }
-
-                    let mut total_disconnect = disconnect_durations.iter().fold(Duration::default(), |acc, (_, duration)| acc + *duration).as_millis();
-
-                    // if not receiving, add the current disconnect duration
-                    if !is_receiving || !remote_is_receiving {
-                        total_disconnect += disconnected_at.elapsed().as_millis();
-                    }
-
-                    LOSS.store(total_disconnect as f64 / 10_000_f64, Relaxed);
-                }
             }
         }
     }
@@ -1941,7 +1818,6 @@ impl Telepathy {
                 read,
                 Arc::clone(stop_io),
                 download_bandwidth.clone(),
-                None,
             ));
         }
 
@@ -2565,21 +2441,11 @@ async fn audio_output(
     mut socket: SplitStream<Transport<TransportStream>>,
     stop_io: Arc<Notify>,
     bandwidth: Arc<AtomicUsize>,
-    receiving: Option<AsyncSender<bool>>,
 ) -> Result<()> {
-    let mut is_receiving = false;
-
     let future = async {
         loop {
-            match timeout(TIMEOUT_DURATION, socket.next()).await {
-                Ok(Some(Ok(message))) => {
-                    if !is_receiving {
-                        is_receiving = true;
-                        if let Some(ref sender) = receiving {
-                            _ = sender.send(is_receiving).await;
-                        }
-                    }
-
+            match socket.next().await {
+                Some(Ok(message)) => {
                     let len = message.len();
                     bandwidth.fetch_add(len, Relaxed);
 
@@ -2593,21 +2459,14 @@ async fn audio_output(
                         }
                     }
                 }
-                Ok(Some(Err(error))) => {
+                Some(Err(error)) => {
                     error!("Socket output error: {}", error);
                     break Err(error.into());
                 }
-                Ok(None) => {
+                None => {
                     debug!("Socket output ended with None");
                     break Ok(());
                 }
-                Err(_) if is_receiving => {
-                    is_receiving = false;
-                    if let Some(ref sender) = receiving {
-                        _ = sender.send(is_receiving).await;
-                    }
-                }
-                Err(_) => (),
             }
         }
     };
@@ -2732,6 +2591,7 @@ pub(crate) mod tests {
     use std::fs::read;
     use std::io::Write;
     use std::thread::{sleep, spawn};
+    use std::time::Instant;
 
     const HOGWASH_BYTES: &[u8] = include_bytes!("../../../../assets/models/hogwash.rnn");
 
