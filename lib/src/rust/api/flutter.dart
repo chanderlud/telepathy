@@ -18,6 +18,9 @@ void rustSetUp() => RustLib.instance.api.crateApiFlutterRustSetUp();
 (String, Uint8List) generateKeys() =>
     RustLib.instance.api.crateApiFlutterGenerateKeys();
 
+String roomHash({required List<String> peers}) =>
+    RustLib.instance.api.crateApiFlutterRoomHash(peers: peers);
+
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Capabilities>>
 abstract class Capabilities implements RustOpaqueInterface {
   static Future<Capabilities> default_() =>

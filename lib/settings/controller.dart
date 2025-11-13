@@ -300,6 +300,7 @@ class SettingsController with ChangeNotifier {
     await storage.write(key: '$id-keypair', value: base64Encode(keypair));
     await storage.write(key: '$id-peerId', value: peerId);
     await storage.write(key: '$id-contacts', value: jsonEncode({}));
+    await storage.write(key: '$id-rooms', value: jsonEncode({}));
     await storage.write(key: '$id-nickname', value: nickname);
 
     profiles[id] = Profile(
@@ -557,9 +558,11 @@ class Room {
 
   // Deserialize (from JSON)
   factory Room.fromJson(Map<String, dynamic> json) {
+    List<String> peers = List<String>.from(json['peerIds']);
+
     return Room(
-      id: json['id'],
-      peerIds: List<String>.from(json['peerIds']),
+      id: roomHash(peers: peers),
+      peerIds: peers,
       nickname: json['nickname'],
     );
   }
@@ -567,7 +570,6 @@ class Room {
   // Serialize (to JSON)
   Map<String, dynamic> toJson() {
     return {
-      'id': id,
       'peerIds': peerIds,
       'nickname': nickname,
     };

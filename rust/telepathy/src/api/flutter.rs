@@ -18,6 +18,7 @@ use libp2p::identity::Keypair;
 use log::{LevelFilter, info, warn};
 use messages::Attachment;
 use serde::{Deserialize, Serialize};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::atomic::Ordering::Relaxed;
@@ -564,4 +565,18 @@ pub fn generate_keys() -> Result<(String, Vec<u8>), DartError> {
         pair.to_protobuf_encoding()
             .map_err(|e| DartError::from(e.to_string()))?,
     ))
+}
+
+#[frb(sync)]
+pub fn room_hash(peers: Vec<String>) -> String {
+    let peer_hash = peers
+        .into_iter()
+        .filter_map(|p| PeerId::from_str(&p).ok())
+        .fold(0u64, |acc, peer| {
+            let mut hasher = DefaultHasher::new();
+            peer.hash(&mut hasher);
+            acc ^ hasher.finish()
+        });
+
+    format!("room-{}", peer_hash)
 }

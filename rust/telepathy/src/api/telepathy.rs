@@ -60,11 +60,13 @@ use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 use tokio::select;
 use tokio::sync::{Mutex, Notify, RwLock};
+use tokio::task::JoinHandle;
 #[cfg(not(target_family = "wasm"))]
 use tokio::time::{Interval, interval, timeout};
 use tokio_util::bytes::Bytes;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 use tokio_util::compat::{Compat, FuturesAsyncReadCompatExt};
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 #[cfg(target_family = "wasm")]
 use wasmtimer::std::Instant;
@@ -77,7 +79,6 @@ type TransportStream = Compat<Stream>;
 pub type Transport<T> = Framed<T, LengthDelimitedCodec>;
 type StartScreenshare = (PeerId, Option<Message>);
 type AudioSocket = SplitSink<Transport<TransportStream>, Bytes>;
-type RoomJoin = (Transport<TransportStream>, EarlyCallState);
 
 /// The number of bytes in a single network audio frame
 const TRANSFER_BUFFER_SIZE: usize = FRAME_SIZE * size_of::<i16>();
@@ -124,15 +125,11 @@ pub struct Telepathy {
     /// Keeps track of whether the user is in a call
     in_call: Arc<AtomicBool>,
 
-    /// Tracks whether the user is in a room
-    in_room: Arc<RwLock<Option<Vec<PeerId>>>>,
+    /// Tracks state for the current room
+    room_state: Arc<RwLock<Option<RoomState>>>,
 
     /// Keeps the early call state the same across the whole room
     early_room_state: Arc<RwLock<Option<EarlyCallState>>>,
-
-    room_control_sender: AsyncSender<RoomJoin>,
-
-    room_control_receiver: AsyncReceiver<RoomJoin>,
 
     /// Disables the output stream
     deafened: Arc<AtomicBool>,
@@ -231,7 +228,6 @@ impl Telepathy {
     ) -> Telepathy {
         let (start_session, session) = unbounded_async::<PeerId>();
         let (start_screenshare, screenshare) = unbounded_async::<StartScreenshare>();
-        let (room_control_sender, room_control_receiver) = unbounded_async();
 
         let chat = Self {
             host,
@@ -247,10 +243,8 @@ impl Telepathy {
                 Keypair::from_protobuf_encoding(&identity).unwrap(),
             )),
             in_call: Default::default(),
-            in_room: Default::default(),
+            room_state: Default::default(),
             early_room_state: Default::default(),
-            room_control_sender,
-            room_control_receiver,
             deafened: Default::default(),
             muted: Default::default(),
             play_custom_ringtones: Default::default(),
@@ -321,7 +315,7 @@ impl Telepathy {
     /// Attempts to start a call through an existing session
     pub async fn start_call(&self, contact: &Contact) -> std::result::Result<(), DartError> {
         let in_call = self.in_call.load(Relaxed);
-        let in_room = self.in_room.read().await.is_some();
+        let in_room = self.room_state.read().await.is_some();
         if in_call || in_room {
             warn!("start_call called with in_call={in_call} and in_room={in_room}");
             return Ok(());
@@ -352,7 +346,7 @@ impl Telepathy {
         member_strings: Vec<String>,
     ) -> std::result::Result<(), DartError> {
         let in_call = self.in_call.load(Relaxed);
-        let in_room = self.in_room.read().await.is_some();
+        let in_room = self.room_state.read().await.is_some();
         if in_call || in_room {
             warn!("join_room called with in_call={in_call} and in_room={in_room}");
             return Ok(());
@@ -363,12 +357,20 @@ impl Telepathy {
             .await
             .map_err::<Error, _>(Error::into)?;
 
-        // set the members of the room
+        // message channel
+        let (sender, receiver) = unbounded_async();
+        let cancel = CancellationToken::new();
+        // parse members
         let members: Vec<_> = member_strings
             .into_iter()
             .filter_map(|m| m.parse().ok())
             .collect();
-        self.in_room.write().await.replace(members.clone());
+        // set room state
+        self.room_state.write().await.replace(RoomState {
+            peers: members.clone(),
+            sender,
+            cancel: cancel.clone(),
+        });
 
         // the same early call state is used throughout the room, the real peer ids are set later
         let call_state = self.setup_call(PeerId::random()).await?;
@@ -388,7 +390,10 @@ impl Telepathy {
         let self_clone = self.clone();
         spawn(async move {
             let stop_io = Default::default();
-            if let Err(error) = self_clone.room_controller(call_state, &stop_io).await {
+            if let Err(error) = self_clone
+                .room_controller(receiver, cancel, call_state, &stop_io)
+                .await
+            {
                 error!("error in room controller: {:?}", error);
             }
 
@@ -1686,7 +1691,6 @@ impl Telepathy {
     ) -> Result<Option<String>> {
         let identity = self.identity.read().await.public().to_peer_id();
 
-        // TODO smarter initial connected state (i.e. after first audio)
         CONNECTED.store(true, Relaxed);
         (self.call_state.lock().await)(false).await;
 
@@ -1734,6 +1738,7 @@ impl Telepathy {
         }
     }
 
+    // TODO after calling room_handshake, sessions with non-contacts should be torn down
     async fn room_handshake(
         &self,
         transport: &mut Transport<TransportStream>,
@@ -1742,17 +1747,52 @@ impl Telepathy {
         call_state: EarlyCallState,
     ) -> Result<()> {
         let stream = state.open_stream(transport, control, &call_state).await?;
-        let transport = stream_to_audio_transport(stream);
-        self.room_control_sender
-            .send((transport, call_state))
+        let audio_transport = stream_to_audio_transport(stream);
+        let peer_id = call_state.peer;
+        let (sender, cancel) = self
+            .room_state
+            .read()
+            .await
+            .as_ref()
+            .map(|s| (s.sender.clone(), s.cancel.clone()))
+            .ok_or(ErrorKind::RoomStateMissing)?;
+
+        sender
+            .send(RoomMessage::Join {
+                audio_transport,
+                state: call_state,
+            })
+            .await?;
+
+        loop {
+            select! {
+                Ok(result) = read_message::<Message, _>(transport) => {
+                    // TODO handle chat messages
+                    match result {
+                        Message::Goodbye { .. } => {
+                            break;
+                        }
+                        _ => ()
+                    }
+                }
+                _ = cancel.cancelled() => {
+                    break
+                }
+                else => break,
+            }
+        }
+
+        sender
+            .send(RoomMessage::Leave(peer_id))
             .await
             .map_err(Error::from)
     }
 
-    // TODO keep track of which room members are online (leave, join, etc)
     /// controller for rooms
     async fn room_controller(
         &self,
+        receiver: AsyncReceiver<RoomMessage>,
+        cancel: CancellationToken,
         call_state: EarlyCallState,
         stop_io: &Arc<Notify>,
     ) -> Result<()> {
@@ -1763,7 +1803,8 @@ impl Telepathy {
         let (socket_sender, socket_receiver) = unbounded_async();
         let upload_bandwidth: Arc<AtomicUsize> = Default::default();
         let download_bandwidth: Arc<AtomicUsize> = Default::default();
-        let mut output_streams = Vec::new();
+        // TODO report connections to frontend
+        let mut connections = HashMap::new();
 
         let input_channel = self
             .setup_input(
@@ -1788,39 +1829,79 @@ impl Telepathy {
             return Err(ErrorKind::NoInputDevice.into());
         }
 
-        spawn(audio_input(
+        let input_handle = spawn(audio_input(
             input_channel.0,
             socket_receiver,
             Arc::clone(stop_io),
             upload_bandwidth.clone(),
         ));
 
-        while let Ok((transport, state)) = self.room_control_receiver.recv().await {
-            info!("received room control message for {:?}", state.peer);
+        loop {
+            select! {
+                Ok(message) = receiver.recv() => {
+                    match message{
+                        RoomMessage::Join { audio_transport, state } => {
+                            info!("received room control message for {:?}", state.peer);
 
-            let (write, read) = transport.split();
-            socket_sender.send(write).await?;
+                            // first connection
+                            if connections.is_empty() {
+                                CONNECTED.store(true, Relaxed);
+                                (self.call_state.lock().await)(false).await;
+                            }
 
-            let (output_sender, output_stream) = self
-                .setup_output(
-                    state.remote_configuration.sample_rate as f64,
-                    true,
-                    None,
-                    true,
-                )
-                .await?;
+                            let (write, read) = audio_transport.split();
+                            // begin sending audio to transport
+                            socket_sender.send(write).await?;
+                            // setup output stack
+                            let (output_sender, output_stream) = self
+                                .setup_output(
+                                    state.remote_configuration.sample_rate as f64,
+                                    true,
+                                    None,
+                                    true,
+                                )
+                                .await?;
+                            // begin playing audio
+                            output_stream.stream.play()?;
+                            // begin sending
+                            let handle = spawn(audio_output(
+                                output_sender,
+                                read,
+                                Arc::clone(stop_io),
+                                download_bandwidth.clone(),
+                            ));
 
-            output_stream.stream.play()?;
-            output_streams.push(output_stream);
-
-            spawn(audio_output(
-                output_sender,
-                read,
-                Arc::clone(stop_io),
-                download_bandwidth.clone(),
-            ));
+                            connections.insert(state.peer, RoomConnection {
+                                stream: output_stream,
+                                handle,
+                            });
+                        }
+                        RoomMessage::Leave(peer) => {
+                            // TODO does this connection's output processing stack tear itself down correctly when the peer disconnects?
+                            if let Some(connection) = connections.remove(&peer) {
+                                connection.handle.await??;
+                            }
+                        }
+                    }
+                }
+                _ = self.end_call.notified() => {
+                    break;
+                }
+            }
         }
 
+        // tear down processing stack
+        stop_io.notify_waiters();
+        input_handle.await??;
+        for connection in connections.into_values() {
+            connection.handle.await??;
+            drop(connection.stream);
+        }
+
+        // clean up room state
+        self.room_state.write().await.take();
+        // clean up sessions blocked by room
+        cancel.cancel();
         Ok(())
     }
 
@@ -2192,21 +2273,21 @@ impl Telepathy {
 
     /// helper method to check if a peer is in the current room
     async fn is_in_room(&self, peer_id: &PeerId) -> bool {
-        self.in_room
+        self.room_state
             .read()
             .await
             .as_ref()
-            .map(|m| m.contains(peer_id))
+            .map(|m| m.peers.contains(peer_id))
             .unwrap_or(false)
     }
 
     async fn room_hash(&self) -> Option<Vec<u8>> {
-        self.in_room
+        self.room_state
             .read()
             .await
             .as_ref()
-            .map(|peers| {
-                peers.iter().fold(0u64, |acc, peer| {
+            .map(|state| {
+                state.peers.iter().fold(0u64, |acc, peer| {
                     let mut hasher = DefaultHasher::new();
                     peer.hash(&mut hasher);
                     acc ^ hasher.finish()
@@ -2383,6 +2464,30 @@ impl SessionState {
             }
         }
     }
+}
+
+struct RoomState {
+    peers: Vec<PeerId>,
+
+    sender: AsyncSender<RoomMessage>,
+
+    cancel: CancellationToken,
+}
+
+enum RoomMessage {
+    Join {
+        /// established audio transport
+        audio_transport: Transport<TransportStream>,
+
+        /// established early call state
+        state: EarlyCallState,
+    },
+    Leave(PeerId),
+}
+
+struct RoomConnection {
+    stream: SendStream,
+    handle: JoinHandle<Result<()>>,
 }
 
 /// Receives frames of audio data from the input processor and sends them to the socket

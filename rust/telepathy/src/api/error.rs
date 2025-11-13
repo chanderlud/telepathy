@@ -66,6 +66,7 @@ pub(crate) enum ErrorKind {
     CallEnded,
     #[cfg(not(target_family = "wasm"))]
     InvalidEncoder,
+    RoomStateMissing,
 }
 
 impl From<std::io::Error> for Error {
@@ -344,6 +345,7 @@ impl Display for Error {
                 ErrorKind::CallEnded => "Call ended".to_string(),
                 #[cfg(not(target_family = "wasm"))]
                 ErrorKind::InvalidEncoder => "Invalid encoder".to_string(),
+                ErrorKind::RoomStateMissing => "Room state missing".to_string(),
             }
         )
     }

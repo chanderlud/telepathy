@@ -215,9 +215,7 @@ Future<void> main() async {
       // called when a new chat message is received by the backend
       messageReceived: chatStateController.messageReceived,
       // called when the session manager state changes
-      managerActive: (bool active, bool restartable) {
-        stateController.setSessionManager(active, restartable);
-      },
+      managerActive: stateController.setSessionManager,
       screenshareStarted: stateController.screenshareStarted);
 
   final audioDevices = AudioDevices(telepathy: telepathy);
@@ -440,6 +438,7 @@ class HomePage extends StatelessWidget {
                             return ContactsList(
                               telepathy: telepathy,
                               contacts: contacts,
+                              rooms: settingsController.rooms.values.toList(),
                               stateController: stateController,
                               settingsController: settingsController,
                               player: player,
@@ -702,6 +701,7 @@ class ContactsList extends StatelessWidget {
   final StateController stateController;
   final SettingsController settingsController;
   final List<Contact> contacts;
+  final List<Room> rooms;
   final SoundPlayer player;
   final double maxWidth;
 
@@ -709,6 +709,7 @@ class ContactsList extends StatelessWidget {
       {super.key,
       required this.telepathy,
       required this.contacts,
+      required this.rooms,
       required this.stateController,
       required this.settingsController,
       required this.player,
@@ -716,6 +717,11 @@ class ContactsList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final List<Object> items = [
+      ...contacts,
+      ...rooms,
+    ];
+
     return Container(
       padding: const EdgeInsets.only(bottom: 15, left: 12, right: 12, top: 8),
       decoration: BoxDecoration(
@@ -767,19 +773,33 @@ class ContactsList extends StatelessWidget {
                 borderRadius: BorderRadius.circular(10),
               ),
               child: ListView.builder(
-                itemCount: contacts.length,
+                itemCount: items.length,
                 itemBuilder: (BuildContext context, int index) {
                   return ListenableBuilder(
-                      listenable: stateController,
-                      builder: (BuildContext context, Widget? child) {
+                    listenable: stateController,
+                    builder: (BuildContext context, Widget? child) {
+                      final item = items[index];
+
+                      if (item is Contact) {
                         return ContactWidget(
-                          contact: contacts[index],
+                          contact: item,
                           telepathy: telepathy,
                           stateController: stateController,
                           player: player,
                           settingsController: settingsController,
                         );
-                      });
+                      } else if (item is Room) {
+                        return RoomWidget(
+                          room: item,
+                          telepathy: telepathy,
+                          stateController: stateController,
+                          player: player,
+                        );
+                      } else {
+                        return const SizedBox.shrink();
+                      }
+                    },
+                  );
                 },
               ),
             ),
@@ -836,10 +856,10 @@ class ContactWidgetState extends State<ContactWidget> {
 
   @override
   Widget build(BuildContext context) {
-    bool online = widget.stateController.isOnlineContact(widget.contact);
     bool active = widget.stateController.isActiveContact(widget.contact);
     String status =
         widget.stateController.sessions[widget.contact.peerId()] ?? 'Unknown';
+    bool online = status == 'Online';
 
     return InkWell(
       onHover: (hover) {
@@ -960,7 +980,6 @@ class ContactWidgetState extends State<ContactWidget> {
           children: [
             CircleAvatar(
               maxRadius: 17,
-              // TODO the edit icon needs some work
               child: SvgPicture.asset(isHovered
                   ? 'assets/icons/Edit.svg'
                   : 'assets/icons/Profile.svg'),
@@ -1041,6 +1060,121 @@ class ContactWidgetState extends State<ContactWidget> {
                   try {
                     await widget.telepathy.startCall(contact: widget.contact);
                     widget.stateController.setActiveContact(widget.contact);
+                  } on DartError catch (e) {
+                    widget.stateController.setStatus('Inactive');
+                    outgoingSoundHandle?.cancel();
+                    if (!context.mounted) return;
+                    showErrorDialog(context, 'Call failed', e.message);
+                  }
+                },
+              )
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class RoomWidget extends StatefulWidget {
+  final Room room;
+  final Telepathy telepathy;
+  final StateController stateController;
+  final SoundPlayer player;
+
+  const RoomWidget({
+    super.key,
+    required this.room,
+    required this.stateController,
+    required this.telepathy,
+    required this.player,
+  });
+
+  @override
+  State<StatefulWidget> createState() => RoomWidgetState();
+}
+
+class RoomWidgetState extends State<RoomWidget> {
+  bool isHovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    bool active = widget.stateController.isActiveRoom(widget.room);
+
+    return InkWell(
+      onHover: (hover) {
+        setState(() {
+          isHovered = hover;
+        });
+      },
+      onTap: () {},
+      hoverColor: Colors.transparent,
+      child: Container(
+        margin: const EdgeInsets.all(5.0),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.secondaryContainer,
+          borderRadius: BorderRadius.circular(10.0),
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6.5),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CircleAvatar(
+              maxRadius: 17,
+              child: SvgPicture.asset(isHovered
+                  ? 'assets/icons/Edit.svg'
+                  : 'assets/icons/Profile.svg'),
+            ),
+            const SizedBox(width: 10),
+            Text(widget.room.nickname, style: const TextStyle(fontSize: 16)),
+            const Spacer(),
+            if (active)
+              IconButton(
+                visualDensity: VisualDensity.comfortable,
+                icon: SvgPicture.asset(
+                  'assets/icons/PhoneOff.svg',
+                  semanticsLabel: 'End call icon',
+                  width: 32,
+                ),
+                onPressed: () async {
+                  outgoingSoundHandle?.cancel();
+
+                  widget.telepathy.endCall();
+                  widget.stateController.endOfCall();
+
+                  List<int> bytes = await readSeaBytes('call_ended');
+                  await widget.player.play(bytes: bytes);
+                },
+              ),
+            if (!active)
+              IconButton(
+                visualDensity: VisualDensity.comfortable,
+                icon: SvgPicture.asset(
+                  'assets/icons/Phone.svg',
+                  semanticsLabel: 'Call icon',
+                  width: 32,
+                ),
+                onPressed: () async {
+                  if (widget.stateController.isCallActive) {
+                    showErrorDialog(context, 'Call failed',
+                        'There is a call already active');
+                    return;
+                  } else if (widget.stateController.inAudioTest) {
+                    showErrorDialog(context, 'Call failed',
+                        'Cannot make a call while in an audio test');
+                    return;
+                  } else if (widget.stateController.callEndedRecently) {
+                    // if the call button is pressed right after a call ended, we assume the user did not want to make a call
+                    return;
+                  }
+
+                  widget.stateController.setStatus('Connecting');
+                  List<int> bytes = await readSeaBytes('outgoing');
+                  outgoingSoundHandle = await widget.player.play(bytes: bytes);
+
+                  try {
+                    await widget.telepathy
+                        .joinRoom(memberStrings: widget.room.peerIds);
+                    widget.stateController.setActiveRoom(widget.room);
                   } on DartError catch (e) {
                     widget.stateController.setStatus('Inactive');
                     outgoingSoundHandle?.cancel();
@@ -2125,6 +2259,8 @@ class CustomSwitch extends StatelessWidget {
 /// A controller which helps bridge the gap between the UI and backend
 class StateController extends ChangeNotifier {
   Contact? _activeContact;
+  Room? _activeRoom;
+
   String status = 'Inactive';
   bool _deafened = false;
   bool _muted = false;
@@ -2145,13 +2281,21 @@ class StateController extends ChangeNotifier {
   bool isReceivingScreenshare = false;
 
   Contact? get activeContact => _activeContact;
-  bool get isCallActive => _activeContact != null;
+
+  bool get isCallActive => _activeContact != null || _activeRoom != null;
+
   bool get isDeafened => _deafened;
+
   bool get isMuted => _muted;
+
   bool get callEndedRecently => _callEndedRecently;
+
   bool get blockAudioChanges => isCallActive || inAudioTest;
+
   bool get sessionManagerActive => _sessionManager.$1;
+
   bool get sessionManagerRestartable => _sessionManager.$2;
+
   String get callDuration =>
       formatElapsedTime(_callTimer.elapsed.inMilliseconds);
 
@@ -2160,11 +2304,17 @@ class StateController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void setActiveRoom(Room? room) {
+    _activeRoom = room;
+    notifyListeners();
+  }
+
   void setStatus(String status) {
     this.status = status;
 
     if (status == 'Inactive') {
       _activeContact = null;
+      _activeRoom = null;
       _callTimer.stop();
       _callTimer.reset();
       callDisconnected = false;
@@ -2182,6 +2332,10 @@ class StateController extends ChangeNotifier {
 
   bool isActiveContact(Contact contact) {
     return _activeContact?.id() == contact.id();
+  }
+
+  bool isActiveRoom(Room room) {
+    return _activeRoom?.id == room.id;
   }
 
   bool isOnlineContact(Contact contact) {
@@ -2266,6 +2420,7 @@ class StateController extends ChangeNotifier {
   /// a group of actions run when the call ends
   void endOfCall() {
     setActiveContact(null);
+    setActiveRoom(null);
     setStatus('Inactive');
     disableCallsTemporarily();
     stopScreenshare(true);
@@ -2278,14 +2433,19 @@ class StatisticsController extends ChangeNotifier {
   Statistics? _statistics;
 
   int get latency => _statistics == null ? 0 : _statistics!.latency.toInt();
+
   double get inputLevel => _statistics == null ? 0 : _statistics!.inputLevel;
+
   double get outputLevel => _statistics == null ? 0 : _statistics!.outputLevel;
+
   String get upload => _statistics == null
       ? '?'
       : formatBandwidth(_statistics!.uploadBandwidth.toInt());
+
   String get download => _statistics == null
       ? '?'
       : formatBandwidth(_statistics!.downloadBandwidth.toInt());
+
   double get loss => _statistics == null ? 0 : _statistics!.loss;
 
   void setStatistics(Statistics statistics) {
