@@ -397,7 +397,7 @@ impl Telepathy {
                 error!("error in room controller: {:?}", error);
             }
 
-            stop_io.notify_waiters();
+            stop_io.cancel();
         });
 
         Ok(())
@@ -433,8 +433,6 @@ impl Telepathy {
 
     /// Blocks while an audio test is running
     pub async fn audio_test(&self) -> std::result::Result<(), DartError> {
-        let stop_io = Arc::new(Notify::new());
-
         #[cfg(target_family = "wasm")]
         self.init_web_audio()
             .await
@@ -442,13 +440,14 @@ impl Telepathy {
 
         let mut audio_config = self.setup_call(PeerId::random()).await?;
         audio_config.remote_configuration = audio_config.local_configuration.clone();
+        let stop_io = CancellationToken::new();
 
         self.in_call.store(true, Relaxed);
         let result = self
             .call(&stop_io, audio_config, None, None, None, None)
             .await
             .map_err(Into::into);
-        stop_io.notify_waiters();
+        stop_io.cancel();
         self.in_call.store(false, Relaxed);
         result
     }
@@ -1475,7 +1474,7 @@ impl Telepathy {
         self.overlay.show();
 
         // stop_io must notify when the call ends, so it is external to the call function
-        let stop_io = Arc::new(Notify::new());
+        let stop_io = CancellationToken::new();
 
         let result = self
             .call(
@@ -1491,7 +1490,7 @@ impl Telepathy {
         info!("call ended in handshake");
 
         // ensure that all background i/o threads are stopped
-        stop_io.notify_waiters();
+        stop_io.cancel();
         info!("notified stop_io");
 
         // the call has ended
@@ -1526,7 +1525,7 @@ impl Telepathy {
     /// The bulk of the normal call logic
     async fn call(
         &self,
-        stop_io: &Arc<Notify>,
+        stop_io: &CancellationToken,
         call_state: EarlyCallState,
         audio_transport: Option<Transport<TransportStream>>,
         control_transport: Option<&mut Transport<TransportStream>>,
@@ -1596,7 +1595,7 @@ impl Telepathy {
             Arc::clone(&upload_bandwidth),
             Arc::clone(&download_bandwidth),
             Arc::clone(&self.statistics),
-            Arc::clone(stop_io),
+            stop_io.clone(),
         ));
 
         match (audio_transport, control_transport, message_receiver) {
@@ -1608,14 +1607,14 @@ impl Telepathy {
                 let input_handle = spawn(audio_input(
                     input_channel.0,
                     socket_receiver,
-                    Arc::clone(stop_io),
+                    stop_io.clone(),
                     upload_bandwidth,
                 ));
 
                 let output_handle = spawn(audio_output(
                     output_sender,
                     read,
-                    Arc::clone(stop_io),
+                    stop_io.clone(),
                     download_bandwidth,
                 ));
 
@@ -1635,7 +1634,7 @@ impl Telepathy {
                 }
 
                 info!("call controller done, notifying stop_io");
-                stop_io.notify_waiters();
+                stop_io.cancel();
 
                 match input_handle.await {
                     Ok(Ok(())) => info!("input handle joined"),
@@ -1660,11 +1659,7 @@ impl Telepathy {
                 info!("call controller returned and was handled, call returning");
             }
             _ => {
-                spawn(loopback(
-                    input_channel.0,
-                    output_sender,
-                    Arc::clone(stop_io),
-                ));
+                spawn(loopback(input_channel.0, output_sender, stop_io.clone()));
                 self.end_call.notified().await;
             }
         }
@@ -1759,7 +1754,7 @@ impl Telepathy {
 
         sender
             .send(RoomMessage::Join {
-                audio_transport,
+                audio_transport: Box::new(audio_transport),
                 state: call_state,
             })
             .await?;
@@ -1767,10 +1762,12 @@ impl Telepathy {
         loop {
             select! {
                 Ok(result) = read_message::<Message, _>(transport) => {
-                    // TODO handle chat messages
                     match result {
                         Message::Goodbye { .. } => {
                             break;
+                        }
+                        Message::Chat { .. } => {
+                            // TODO handle chat messages
                         }
                         _ => ()
                     }
@@ -1792,9 +1789,9 @@ impl Telepathy {
     async fn room_controller(
         &self,
         receiver: AsyncReceiver<RoomMessage>,
-        cancel: CancellationToken,
+        end_sessions: CancellationToken,
         call_state: EarlyCallState,
-        stop_io: &Arc<Notify>,
+        stop_io: &CancellationToken,
     ) -> Result<()> {
         // on ios the audio session must be configured
         #[cfg(target_os = "ios")]
@@ -1832,7 +1829,7 @@ impl Telepathy {
         let input_handle = spawn(audio_input(
             input_channel.0,
             socket_receiver,
-            Arc::clone(stop_io),
+            stop_io.clone(),
             upload_bandwidth.clone(),
         ));
 
@@ -1849,7 +1846,7 @@ impl Telepathy {
                                 (self.call_state.lock().await)(false).await;
                             }
 
-                            let (write, read) = audio_transport.split();
+                            let (write, read) = (*audio_transport).split();
                             // begin sending audio to transport
                             socket_sender.send(write).await?;
                             // setup output stack
@@ -1867,7 +1864,7 @@ impl Telepathy {
                             let handle = spawn(audio_output(
                                 output_sender,
                                 read,
-                                Arc::clone(stop_io),
+                                stop_io.clone(),
                                 download_bandwidth.clone(),
                             ));
 
@@ -1891,7 +1888,7 @@ impl Telepathy {
         }
 
         // tear down processing stack
-        stop_io.notify_waiters();
+        stop_io.cancel();
         input_handle.await??;
         for connection in connections.into_values() {
             connection.handle.await??;
@@ -1901,7 +1898,7 @@ impl Telepathy {
         // clean up room state
         self.room_state.write().await.take();
         // clean up sessions blocked by room
-        cancel.cancel();
+        end_sessions.cancel();
         Ok(())
     }
 
@@ -2477,7 +2474,7 @@ struct RoomState {
 enum RoomMessage {
     Join {
         /// established audio transport
-        audio_transport: Transport<TransportStream>,
+        audio_transport: Box<Transport<TransportStream>>,
 
         /// established early call state
         state: EarlyCallState,
@@ -2494,49 +2491,43 @@ struct RoomConnection {
 async fn audio_input(
     input_receiver: AsyncReceiver<ProcessorMessage>,
     socket_receiver: AsyncReceiver<AudioSocket>,
-    stop_io: Arc<Notify>,
+    cancel: CancellationToken,
     bandwidth: Arc<AtomicUsize>,
 ) -> Result<()> {
     // a static byte used as the silence signal
     let silence_byte = Bytes::from_static(&[0]);
     let mut sockets: Vec<AudioSocket> = Vec::new();
 
-    let future = async {
-        loop {
-            select! {
-                Ok(socket) = socket_receiver.recv() => {
-                    sockets.push(socket); // new connection established
-                }
-                Ok(message) = input_receiver.recv() => {
-                    let bytes = match message {
-                        ProcessorMessage::Silence => silence_byte.clone(),
-                        ProcessorMessage::Data(bytes) => bytes,
-                        ProcessorMessage::Samples(_) => {
-                            warn!("audio input received Samples");
-                            continue;
-                        },
-                    };
-
-                    // send the bytes to all connections
-                    for socket in &mut sockets {
-                        socket.send(bytes.clone()).await?;
-                    }
-
-                    // update bandwidth
-                    bandwidth.fetch_add(bytes.len() * sockets.len(), Relaxed);
-                }
-                else => return Ok::<(), Error>(()),
+    loop {
+        select! {
+            Ok(socket) = socket_receiver.recv() => {
+                sockets.push(socket); // new connection established
             }
-        }
-    };
+            Ok(message) = input_receiver.recv() => {
+                let bytes = match message {
+                    ProcessorMessage::Silence => silence_byte.clone(),
+                    ProcessorMessage::Data(bytes) => bytes,
+                    // unreachable
+                    ProcessorMessage::Samples(_) => continue,
+                };
 
-    select! {
-        // this future should never complete
-        result = future => result,
-        _ = stop_io.notified() => {
-            debug!("Input to socket ended");
-            Ok(())
-        },
+                // send the bytes to all connections
+                for socket in &mut sockets {
+                    socket.send(bytes.clone()).await?;
+                }
+
+                // update bandwidth
+                bandwidth.fetch_add(bytes.len() * sockets.len(), Relaxed);
+            }
+            _ = cancel.cancelled() => {
+                warn!("audio_input ended with cancellation");
+                break Ok(());
+            }
+            else => {
+                warn!("audio_input ended with else");
+                break Ok(());
+            },
+        }
     }
 }
 
@@ -2544,44 +2535,42 @@ async fn audio_input(
 async fn audio_output(
     sender: AsyncSender<ProcessorMessage>,
     mut socket: SplitStream<Transport<TransportStream>>,
-    stop_io: Arc<Notify>,
+    cancel: CancellationToken,
     bandwidth: Arc<AtomicUsize>,
 ) -> Result<()> {
-    let future = async {
-        loop {
-            match socket.next().await {
-                Some(Ok(message)) => {
-                    let len = message.len();
-                    bandwidth.fetch_add(len, Relaxed);
+    loop {
+        select! {
+            message = socket.next() => {
+                match message {
+                    Some(Ok(message)) => {
+                        let len = message.len();
+                        bandwidth.fetch_add(len, Relaxed);
 
-                    match len {
-                        1 => match message[0] {
-                            0 => _ = sender.try_send(ProcessorMessage::silence())?, // silence
-                            _ => error!("received unknown control signal {}", message[0]),
-                        },
-                        _ => {
-                            sender.try_send(ProcessorMessage::bytes(message.freeze()))?;
+                        match len {
+                            1 => match message[0] {
+                                0 => _ = sender.try_send(ProcessorMessage::silence())?, // silence
+                                _ => error!("received unknown control signal {}", message[0]),
+                            },
+                            _ => {
+                                sender.try_send(ProcessorMessage::bytes(message.freeze()))?;
+                            }
                         }
                     }
-                }
-                Some(Err(error)) => {
-                    error!("Socket output error: {}", error);
-                    break Err(error.into());
-                }
-                None => {
-                    debug!("Socket output ended with None");
-                    break Ok(());
+                    Some(Err(error)) => {
+                        error!("audio_output error: {}", error);
+                        break Err(error.into());
+                    }
+                    None => {
+                        debug!("audio_output ended with None");
+                        break Ok(());
+                    }
                 }
             }
+            _ = cancel.cancelled() => {
+                debug!("audio_output ended with cancellation");
+                break Ok(());
+            },
         }
-    };
-
-    select! {
-        result = future => result,
-        _ = stop_io.notified() => {
-            debug!("Socket output ended from stop_io");
-            Ok(())
-        },
     }
 }
 
@@ -2589,7 +2578,7 @@ async fn audio_output(
 async fn loopback(
     input_receiver: AsyncReceiver<ProcessorMessage>,
     output_sender: AsyncSender<ProcessorMessage>,
-    notify: Arc<Notify>,
+    cancel: CancellationToken,
 ) {
     let loopback_future = async {
         while let Ok(message) = input_receiver.recv().await {
@@ -2601,7 +2590,7 @@ async fn loopback(
 
     select! {
         result = loopback_future => result,
-        _ = notify.notified() => {
+        _ = cancel.cancelled() => {
             debug!("Loopback ended");
         },
     }
@@ -2615,26 +2604,17 @@ async fn statistics_collector(
     upload_bandwidth: Arc<AtomicUsize>,
     download_bandwidth: Arc<AtomicUsize>,
     callback: Arc<Mutex<dyn Fn(Statistics) -> DartFnFuture<()> + Send>>,
-    notify: Arc<Notify>,
+    cancel: CancellationToken,
 ) -> Result<()> {
     // the interval for statistics updates
     let mut update_interval = interval(Duration::from_millis(100));
     // the interval for the input_max and output_max to decrease
     let mut reset_interval = interval(Duration::from_secs(5));
 
-    let stop = Arc::new(AtomicBool::new(false));
-
     let mut input_max = 0_f32;
     let mut output_max = 0_f32;
 
-    let stop_clone = Arc::clone(&stop);
-    spawn(async move {
-        notify.notified().await;
-        stop_clone.store(true, Relaxed);
-        info!("statistics collector set stop=true");
-    });
-
-    while !stop.load(Relaxed) {
+    loop {
         select! {
             _ = update_interval.tick() => {
                 let statistics = Statistics {
@@ -2660,6 +2640,9 @@ async fn statistics_collector(
             _ = reset_interval.tick() => {
                 input_max /= 2_f32;
                 output_max /= 2_f32;
+            }
+            _ = cancel.cancelled() => {
+                break;
             }
         }
     }
