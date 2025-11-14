@@ -169,7 +169,6 @@ impl SeaFile {
     ) -> Result<ProcessorMessage, SeaError> {
         let encoded = match receiver.recv()? {
             ProcessorMessage::Data(data) => data,
-            ProcessorMessage::Silence => return Ok(ProcessorMessage::silence()),
             _ => return Err(SeaError::InvalidFrame),
         };
 

@@ -76,10 +76,6 @@ impl SeaEncoder {
 
         let samples = match self.receiver.recv()? {
             ProcessorMessage::Samples(samples) => samples,
-            ProcessorMessage::Silence => {
-                self.sender.send(ProcessorMessage::silence())?;
-                return Ok(());
-            }
             _ => return Err(SeaError::InvalidFrame),
         };
 

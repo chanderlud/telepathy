@@ -32,11 +32,10 @@ pub(crate) mod processing;
 pub(crate) mod web_audio;
 
 use crate::api::error::Error;
-use crate::api::telepathy::CHANNEL_SIZE;
 
 /// silences of less than this many frames aren't silence
 const MINIMUM_SILENCE_LENGTH: u8 = 40;
-const SILENCE: [f32; FRAME_SIZE] = [0_f32; FRAME_SIZE];
+const TRANSITION_LENGTH: usize = 96;
 
 /// Processes the audio input and sends it to the sending socket
 #[allow(clippy::too_many_arguments)]
@@ -124,16 +123,13 @@ pub(crate) fn input_processor(
             }
         }
 
-        if position < in_len {
-            continue;
-        }
-
-        position = 0;
-
-        // sends a silence signal if the input is muted
         if muted.load(Relaxed) {
-            sender.send(ProcessorMessage::silence())?;
+            position = 0;
             continue;
+        } else if position < in_len {
+            continue;
+        } else {
+            position = 0;
         }
 
         let (target_buffer, len) = if let Some(resampler) = &mut resampler {
@@ -172,11 +168,28 @@ pub(crate) fn input_processor(
         if rms < rms_threshold.load(Relaxed) {
             if silence_length < MINIMUM_SILENCE_LENGTH {
                 silence_length += 1; // short silences are ignored
+            } else if silence_length == MINIMUM_SILENCE_LENGTH {
+                // insert frame to cleanly transition down to silence
+                sender.send(ProcessorMessage::samples(make_transition_down(
+                    TRANSITION_LENGTH,
+                    out_buf[0] as i16,
+                )))?;
+                // don't transition down again
+                silence_length += 1;
+                continue;
             } else {
-                sender.send(ProcessorMessage::silence())?;
                 continue;
             }
         } else {
+            let first_sample = out_buf[0] as i16;
+            if silence_length > 0 && first_sample > 0 {
+                // insert frame to transition up from silence to the audio
+                sender.send(ProcessorMessage::samples(make_transition_up(
+                    TRANSITION_LENGTH,
+                    first_sample,
+                )))?;
+            }
+
             silence_length = 0;
         }
 
@@ -217,9 +230,6 @@ pub(crate) fn output_processor(
     let i16_size = size_of::<i16>();
     // rubato requires 10 extra spaces in the output buffer as a safety margin
     let post_len = (FRAME_SIZE as f64 * ratio + 10_f64) as usize;
-    // the number of samples that must be buffered before burst handling
-    #[cfg(not(target_family = "wasm"))]
-    let burst_thresh = CHANNEL_SIZE / 8;
 
     // resampler is Some if resampling is needed
     let mut resampler_option = resampler_factory(ratio, 1, FRAME_SIZE)?;
@@ -234,49 +244,37 @@ pub(crate) fn output_processor(
             continue; // no reason to process the frame
         }
 
-        let int_samples_option: Option<&[i16]> = match &message {
-            ProcessorMessage::Silence => {
-                #[cfg(not(target_family = "wasm"))]
-                if sender.len() > burst_thresh {
-                    continue; // skip silences during burst
-                }
-
-                None
-            }
+        let int_samples: &[i16] = match &message {
             ProcessorMessage::Data(bytes) => {
                 // convert the bytes to 16-bit integers
-                Some(unsafe {
+                unsafe {
                     std::slice::from_raw_parts(bytes.as_ptr() as *const i16, bytes.len() / i16_size)
-                })
+                }
             }
-            ProcessorMessage::Samples(samples) => Some(samples.as_ref()),
+            ProcessorMessage::Samples(samples) => samples.as_ref(),
         };
 
-        let float_samples = if let Some(int_samples) = int_samples_option {
-            if int_samples.len() != FRAME_SIZE {
-                warn!("output frame != FRAME_SIZE: {}", int_samples.len());
-                continue;
-            }
+        if int_samples.len() != FRAME_SIZE {
+            warn!("output frame != FRAME_SIZE: {}", int_samples.len());
+            continue;
+        }
 
-            // convert the i16 samples to f32 & apply the output volume
-            wide_i16_to_f32(int_samples, pre_buf[0], scale * output_volume.load(Relaxed));
+        // convert the i16 samples to f32 & apply the output volume
+        wide_i16_to_f32(int_samples, pre_buf[0], scale * output_volume.load(Relaxed));
 
-            rms_sender
-                .as_ref()
-                .map(|s| s.send(calculate_rms(pre_buf[0])));
+        rms_sender
+            .as_ref()
+            .map(|s| s.send(calculate_rms(pre_buf[0])));
 
-            if let Some(resampler) = &mut resampler_option {
-                // resample the data
-                let processed = resampler.process_into_buffer(&pre_buf, &mut post_buf, None)?;
+        let float_samples = if let Some(resampler) = &mut resampler_option {
+            // resample the data
+            let processed = resampler.process_into_buffer(&pre_buf, &mut post_buf, None)?;
 
-                // send the resampled data to the output stream
-                &post_buf[0][..processed.1]
-            } else {
-                // if no resampling is needed, send the data to the output stream
-                &*pre_buf[0]
-            }
+            // send the resampled data to the output stream
+            &post_buf[0][..processed.1]
         } else {
-            &SILENCE
+            // if no resampling is needed, send the data to the output stream
+            &*pre_buf[0]
         };
 
         #[cfg(not(target_family = "wasm"))]
@@ -317,4 +315,42 @@ pub(crate) fn resampler_factory(
             channels,
         )?))
     }
+}
+
+fn make_transition_up(length: usize, sample: i16) -> [i16; 480] {
+    assert!(length <= 480, "length must be <= 480");
+
+    let mut buf = [0; 480];
+
+    let start = 480 - length;
+    let f = sample as i32 / length as i32;
+
+    for i in 0..length {
+        // i goes from 0 to length-1
+        // Last value (i = length-1) will be: s * length / length = s
+        let value = f * (i as i32 + 1);
+        buf[start + i] = value as i16;
+    }
+
+    buf
+}
+
+fn make_transition_down(length: usize, sample: i16) -> [i16; 480] {
+    assert!(length <= 480, "length must be <= 480");
+
+    let mut buf = [0; 480];
+
+    let l = length as i32;
+    let f = sample as i32 / l;
+
+    // First length items: linear ramp from `sample` down toward 0
+    // Remaining (480 - length) items are left as 0.
+    for (i, item) in buf.iter_mut().enumerate().take(length) {
+        // i = 0       → value ≈ sample
+        // i = length - 1   → value ≈ sample * 1/m
+        let value = f * (l - i as i32);
+        *item = value as i16;
+    }
+
+    buf
 }

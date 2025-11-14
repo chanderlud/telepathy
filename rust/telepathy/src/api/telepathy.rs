@@ -84,6 +84,8 @@ type AudioSocket = SplitSink<Transport<TransportStream>, Bytes>;
 const TRANSFER_BUFFER_SIZE: usize = FRAME_SIZE * size_of::<i16>();
 /// A timeout used when initializing the call
 const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
+/// How often to keep-alive libp2p streams
+const KEEP_ALIVE: Duration = Duration::from_secs(10);
 /// the number of samples to hold in a channel
 pub(crate) const CHANNEL_SIZE: usize = 2_400;
 /// the protocol identifier for Telepathy
@@ -1218,7 +1220,7 @@ impl Telepathy {
             }
 
             // controls keep alive messages
-            let mut keep_alive = interval(Duration::from_secs(10));
+            let mut keep_alive = interval(KEEP_ALIVE);
 
             let result = loop {
                 let future = self_clone.session(
@@ -1301,9 +1303,10 @@ impl Telepathy {
                             other_ringtone = ringtone;
                         }
                     },
+                    Message::KeepAlive => return Ok(()),
                     message => {
                         warn!("received unexpected {:?} from {}", message, contact.nickname);
-                        return Ok::<(), Error>(());
+                        return Ok(());
                     }
                 }
 
@@ -1488,11 +1491,8 @@ impl Telepathy {
             .await;
 
         info!("call ended in handshake");
-
         // ensure that all background i/o threads are stopped
         stop_io.cancel();
-        info!("notified stop_io");
-
         // the call has ended
         self.in_call.store(false, Relaxed);
         // hide the overlay
@@ -2494,39 +2494,63 @@ async fn audio_input(
     cancel: CancellationToken,
     bandwidth: Arc<AtomicUsize>,
 ) -> Result<()> {
-    // a static byte used as the silence signal
-    let silence_byte = Bytes::from_static(&[0]);
+    // static signal bytes
+    let keep_alive = Bytes::from_static(&[1]);
     let mut sockets: Vec<AudioSocket> = Vec::new();
 
     loop {
         select! {
-            Ok(socket) = socket_receiver.recv() => {
-                sockets.push(socket); // new connection established
+            message = socket_receiver.recv() => {
+                if let Ok(socket) = message {
+                    sockets.push(socket); // new connection established
+                } else {
+                    // in theory, this is dead code, the socket_sender isn't dropped
+                    debug!("audio_input ended with socket shutdown");
+                    break Ok(());
+                }
             }
-            Ok(message) = input_receiver.recv() => {
+            message = timeout(KEEP_ALIVE, input_receiver.recv()) => {
                 let bytes = match message {
-                    ProcessorMessage::Silence => silence_byte.clone(),
-                    ProcessorMessage::Data(bytes) => bytes,
-                    // unreachable
-                    ProcessorMessage::Samples(_) => continue,
+                    Ok(Ok(ProcessorMessage::Data(bytes))) => bytes,
+                    // shutdown
+                    Ok(_) => {
+                        debug!("audio_input ended with input shutdown");
+                        break Ok(())
+                    },
+                    // send keep alive during extended silence
+                    Err(_) => keep_alive.clone(),
                 };
 
-                // send the bytes to all connections
-                for socket in &mut sockets {
-                    socket.send(bytes.clone()).await?;
+                // send the bytes to all connections, dropping any that error
+                let mut i = 0;
+                let mut successful_sends = 0;
+
+                while i < sockets.len() {
+                    let send_result = {
+                        // limit the &mut borrow to this block
+                        let socket = &mut sockets[i];
+                        socket.send(bytes.clone()).await
+                    };
+
+                    if send_result.is_err() {
+                        // remove this socket, do NOT increment i
+                        _ = sockets.remove(i);
+                        info!("audio_input dropping socket [remaining={}]", sockets.len());
+                    } else {
+                        successful_sends += 1;
+                        i += 1;
+                    }
                 }
 
-                // update bandwidth
-                bandwidth.fetch_add(bytes.len() * sockets.len(), Relaxed);
+                // update bandwidth based on successful sends only
+                if successful_sends > 0 {
+                    bandwidth.fetch_add(bytes.len() * successful_sends, Relaxed);
+                }
             }
             _ = cancel.cancelled() => {
-                warn!("audio_input ended with cancellation");
+                debug!("audio_input ended with cancellation");
                 break Ok(());
             }
-            else => {
-                warn!("audio_input ended with else");
-                break Ok(());
-            },
         }
     }
 }
@@ -2546,14 +2570,10 @@ async fn audio_output(
                         let len = message.len();
                         bandwidth.fetch_add(len, Relaxed);
 
-                        match len {
-                            1 => match message[0] {
-                                0 => _ = sender.try_send(ProcessorMessage::silence())?, // silence
-                                _ => error!("received unknown control signal {}", message[0]),
-                            },
-                            _ => {
-                                sender.try_send(ProcessorMessage::bytes(message.freeze()))?;
-                            }
+                        if len != 1 {
+                            sender.try_send(ProcessorMessage::bytes(message.freeze()))?;
+                        } else {
+                            debug!("audio_output received keep alive");
                         }
                     }
                     Some(Err(error)) => {
@@ -2773,18 +2793,6 @@ pub(crate) mod tests {
             messages.len(),
             now.elapsed()
         );
-
-        let silence_count = messages
-            .iter()
-            .filter(|m| {
-                if let ProcessorMessage::Silence = m {
-                    true
-                } else {
-                    false
-                }
-            })
-            .count();
-        info!("silence count: {}", silence_count);
 
         let now = Instant::now();
         // use the output stack simulator to process the messages in a burst situation

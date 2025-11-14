@@ -9,17 +9,12 @@ pub mod encoder;
 pub enum ProcessorMessage {
     Data(Bytes),
     Samples(Box<[i16; 480]>),
-    Silence,
 }
 
 /// common processor message constructors
 impl ProcessorMessage {
     pub fn slice(bytes: &'static [u8]) -> Self {
         Self::Data(Bytes::from(bytes))
-    }
-
-    pub fn silence() -> Self {
-        Self::Silence
     }
 
     pub fn bytes(frame: Bytes) -> Self {

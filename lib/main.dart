@@ -859,7 +859,7 @@ class ContactWidgetState extends State<ContactWidget> {
     bool active = widget.stateController.isActiveContact(widget.contact);
     String status =
         widget.stateController.sessions[widget.contact.peerId()] ?? 'Unknown';
-    bool online = status == 'Online';
+    bool online = status == 'Connected';
 
     return InkWell(
       onHover: (hover) {
