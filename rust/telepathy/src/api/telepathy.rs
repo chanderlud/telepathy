@@ -1,20 +1,9 @@
-use std::collections::HashMap;
-use std::hash::{DefaultHasher, Hash, Hasher};
-use std::mem;
-#[cfg(not(target_family = "wasm"))]
-use std::net::Ipv4Addr;
-pub use std::net::{IpAddr, SocketAddr};
-use std::sync::Arc;
-use std::sync::atomic::Ordering::Relaxed;
-use std::sync::atomic::{AtomicBool, AtomicUsize};
-use std::time::Duration;
-
 use crate::api::audio::codec::{decoder, encoder};
 #[cfg(target_os = "ios")]
 use crate::api::audio::ios::{configure_audio_session, deactivate_audio_session};
 #[cfg(target_family = "wasm")]
 use crate::api::audio::web_audio::{WebAudioWrapper, WebInput};
-use crate::api::audio::{input_processor, output_processor};
+use crate::api::audio::{InputProcessorState, input_processor, output_processor};
 use crate::api::error::{DartError, Error, ErrorKind};
 use crate::api::flutter::*;
 use crate::api::overlay::overlay::Overlay;
@@ -30,6 +19,8 @@ use cpal::Device;
 pub use cpal::Host;
 use cpal::SupportedStreamConfig;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+#[cfg(target_family = "wasm")]
+use flutter_rust_bridge::JoinHandle;
 use flutter_rust_bridge::for_generated::futures::SinkExt;
 use flutter_rust_bridge::for_generated::futures::stream::{SplitSink, SplitStream};
 use flutter_rust_bridge::{frb, spawn, spawn_blocking_with};
@@ -52,11 +43,22 @@ use messages::{Attachment, AudioHeader, Message};
 use nnnoiseless::{DenoiseState, FRAME_SIZE, RnnModel};
 use sea_codec::ProcessorMessage;
 use sea_codec::codec::file::SeaFileHeader;
+use std::collections::HashMap;
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::mem;
+#[cfg(not(target_family = "wasm"))]
+use std::net::Ipv4Addr;
+pub use std::net::{IpAddr, SocketAddr};
+use std::sync::Arc;
+use std::sync::atomic::Ordering::Relaxed;
+use std::sync::atomic::{AtomicBool, AtomicUsize};
+use std::time::Duration;
 #[cfg(not(target_family = "wasm"))]
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 use tokio::select;
 use tokio::sync::{Mutex, Notify, RwLock};
+#[cfg(not(target_family = "wasm"))]
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
 #[cfg(not(target_family = "wasm"))]
@@ -1984,12 +1986,14 @@ impl Telepathy {
                     input_receiver,
                     processed_input_sender,
                     sample_rate,
-                    input_volume,
-                    rms_threshold,
-                    muted,
                     denoiser,
-                    rms_sender,
                     codec_enabled,
+                    InputProcessorState {
+                        input_factor: input_volume,
+                        rms_threshold,
+                        muted,
+                        rms_sender,
+                    },
                 )
             },
             FLUTTER_RUST_BRIDGE_HANDLER.thread_pool(),
@@ -2078,6 +2082,8 @@ impl Telepathy {
         } else {
             network_output_receiver.to_sync()
         };
+        // a reference to the flag for use in the output processor
+        let deafened = Arc::clone(&self.deafened);
 
         // spawn the output processor thread
         spawn_blocking_with(
@@ -2088,6 +2094,7 @@ impl Telepathy {
                     ratio,
                     output_volume,
                     rms_sender,
+                    deafened,
                 )
             },
             FLUTTER_RUST_BRIDGE_HANDLER.thread_pool(),
@@ -2095,18 +2102,11 @@ impl Telepathy {
 
         // get the output channels for chunking the output
         let output_channels = output_config.channels() as usize;
-        // a reference to the flag for use in the output callback
-        let deafened = Arc::clone(&self.deafened);
 
         let output_stream = SendStream {
             stream: output_device.build_output_stream(
                 &output_config.into(),
                 move |output: &mut [f32], _: &_| {
-                    if deafened.load(Relaxed) {
-                        output.fill(0_f32);
-                        return;
-                    }
-
                     // unwrap is safe because this mutex should never be poisoned
                     #[cfg(target_family = "wasm")]
                     let mut data = web_output.lock().unwrap();
@@ -2124,9 +2124,7 @@ impl Telepathy {
                         let sample = samples.next().unwrap_or(0_f32);
 
                         // write the sample to all the channels
-                        for channel in frame.iter_mut() {
-                            *channel = sample;
-                        }
+                        frame.fill(sample);
                     }
                 },
                 move |err| {
@@ -2737,6 +2735,7 @@ pub(crate) mod tests {
     use rand::prelude::SliceRandom;
     use std::fs::read;
     use std::io::Write;
+    use std::sync::atomic::AtomicU32;
     use std::thread::{sleep, spawn};
     use std::time::Instant;
 
@@ -2880,12 +2879,14 @@ pub(crate) mod tests {
                 input_receiver,
                 processed_input_sender,
                 sample_rate as f64,
-                Arc::new(AtomicF32::new(1_f32)),
-                Arc::new(AtomicF32::new(db_to_multiplier(50_f32))),
-                Arc::new(AtomicBool::new(false)),
                 denoiser,
-                Default::default(),
                 codec_enabled,
+                InputProcessorState {
+                    input_factor: Arc::new(AtomicF32::new(1.0)),
+                    rms_threshold: Arc::new(AtomicF32::new(db_to_multiplier(50_f32))),
+                    muted: Default::default(),
+                    rms_sender: Default::default(),
+                },
             );
 
             if let Err(error) = result {
@@ -2971,6 +2972,7 @@ pub(crate) mod tests {
                 output_sender,
                 ratio,
                 Arc::new(AtomicF32::new(1_f32)),
+                Default::default(),
                 Default::default(),
             )
         });

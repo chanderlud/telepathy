@@ -2172,7 +2172,7 @@ class CallDetailsWidget extends StatelessWidget {
             listenable: stateController,
             builder: (BuildContext context, Widget? child) {
               return Text(
-                'Connection Type: ${stateController._activeRoom != null ? "Mesh" : "Direct"}',
+                'Connection: ${stateController._activeRoom != null ? "Mesh" : "Direct"}',
                 style: TextStyle(fontSize: 16),
               );
             }),

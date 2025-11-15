@@ -1,4 +1,7 @@
 use crate::api::audio::processing::*;
+use crate::api::error::Error;
+#[cfg(target_family = "wasm")]
+use crate::api::telepathy::CHANNEL_SIZE;
 use atomic_float::AtomicF32;
 use kanal::{Receiver, Sender};
 use log::{debug, warn};
@@ -31,25 +34,26 @@ pub(crate) mod processing;
 #[cfg(target_family = "wasm")]
 pub(crate) mod web_audio;
 
-use crate::api::error::Error;
-
 /// silences of less than this many frames aren't silence
 const MINIMUM_SILENCE_LENGTH: u8 = 40;
 const TRANSITION_LENGTH: usize = 96;
 
+pub(crate) struct InputProcessorState {
+    pub(crate) input_factor: Arc<AtomicF32>,
+    pub(crate) rms_threshold: Arc<AtomicF32>,
+    pub(crate) muted: Arc<AtomicBool>,
+    pub(crate) rms_sender: Arc<AtomicF32>,
+}
+
 /// Processes the audio input and sends it to the sending socket
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn input_processor(
     #[cfg(not(target_family = "wasm"))] receiver: Receiver<f32>,
-    #[cfg(target_family = "wasm")] web_input: crate::api::audio::web_audio::WebInput,
+    #[cfg(target_family = "wasm")] web_input: web_audio::WebInput,
     sender: Sender<ProcessorMessage>,
     sample_rate: f64,
-    input_factor: Arc<AtomicF32>,
-    rms_threshold: Arc<AtomicF32>,
-    muted: Arc<AtomicBool>,
     mut denoiser: Option<Box<DenoiseState>>,
-    rms_sender: Arc<AtomicF32>,
     codec_enabled: bool,
+    state: InputProcessorState,
 ) -> Result<(), Error> {
     // the maximum value for i16 as f32
     let max_i16_f32 = i16::MAX as f32;
@@ -123,7 +127,7 @@ pub(crate) fn input_processor(
             }
         }
 
-        if muted.load(Relaxed) {
+        if state.muted.load(Relaxed) {
             position = 0;
             continue;
         } else if position < in_len {
@@ -149,7 +153,7 @@ pub(crate) fn input_processor(
         // apply the input volume & scale the samples to -32768.0 to 32767.0
         wide_float_scaler(
             &mut target_buffer[..len],
-            max_i16_f32 * input_factor.load(Relaxed),
+            max_i16_f32 * state.input_factor.load(Relaxed),
         );
 
         if let Some(ref mut denoiser) = denoiser {
@@ -162,10 +166,10 @@ pub(crate) fn input_processor(
         // calculate the rms
         let rms = calculate_rms(&out_buf);
         // send the rms to the statistics collector
-        rms_sender.fetch_max(rms, Relaxed);
+        state.rms_sender.fetch_max(rms, Relaxed);
 
         // check if the frame is below the rms threshold
-        if rms < rms_threshold.load(Relaxed) {
+        if rms < state.rms_threshold.load(Relaxed) {
             if silence_length < MINIMUM_SILENCE_LENGTH {
                 silence_length += 1; // short silences are ignored
             } else if silence_length == MINIMUM_SILENCE_LENGTH {
@@ -223,6 +227,7 @@ pub(crate) fn output_processor(
     ratio: f64,
     output_volume: Arc<AtomicF32>,
     rms_sender: Arc<AtomicF32>,
+    deafened: Arc<AtomicBool>,
 ) -> Result<(), Error> {
     // base scale to convert i16 to f32
     let scale = 1_f32 / i16::MAX as f32;
@@ -238,10 +243,16 @@ pub(crate) fn output_processor(
     // the output for the resampler
     let mut post_buf = [vec![0_f32; post_len]];
 
-    while let Ok(message) = receiver.recv() {
+    let is_full = || {
         #[cfg(not(target_family = "wasm"))]
-        if sender.is_full() {
-            continue; // no reason to process the frame
+        return sender.is_full();
+        #[cfg(target_family = "wasm")]
+        return web_output.lock().as_ref().unwrap_or_default().len() == CHANNEL_SIZE;
+    };
+
+    while let Ok(message) = receiver.recv() {
+        if deafened.load(Relaxed) || is_full() {
+            continue; // ignore frames while deafened or output is full
         }
 
         let int_samples: &[i16] = match &message {
