@@ -1,5 +1,3 @@
-#![allow(clippy::type_complexity)]
-
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::mem;
@@ -18,9 +16,7 @@ use crate::api::audio::ios::{configure_audio_session, deactivate_audio_session};
 use crate::api::audio::web_audio::{WebAudioWrapper, WebInput};
 use crate::api::audio::{input_processor, output_processor};
 use crate::api::error::{DartError, Error, ErrorKind};
-use crate::api::flutter::{
-    ChatMessage, CodecConfig, Contact, DartNotify, NetworkConfig, ScreenshareConfig, Statistics,
-};
+use crate::api::flutter::*;
 use crate::api::overlay::overlay::Overlay;
 use crate::api::overlay::{CONNECTED, LATENCY, LOSS};
 use crate::api::screenshare;
@@ -36,7 +32,7 @@ use cpal::SupportedStreamConfig;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use flutter_rust_bridge::for_generated::futures::SinkExt;
 use flutter_rust_bridge::for_generated::futures::stream::{SplitSink, SplitStream};
-use flutter_rust_bridge::{DartFnFuture, frb, spawn, spawn_blocking_with};
+use flutter_rust_bridge::{frb, spawn, spawn_blocking_with};
 pub use kanal::AsyncReceiver;
 use kanal::bounded;
 use kanal::{AsyncSender, Sender, unbounded_async};
@@ -47,10 +43,11 @@ use libp2p::swarm::{ConnectionId, SwarmEvent};
 #[cfg(not(target_family = "wasm"))]
 use libp2p::tcp;
 use libp2p::{
-    Multiaddr, PeerId, Stream, StreamProtocol, autonat, dcutr, identify, noise, ping, yamux,
+    Multiaddr, PeerId, Stream, StreamProtocol, autonat, dcutr, dcutr::Event as DcutrEvent,
+    identify, identify::Event as IdentifyEvent, noise, ping, yamux,
 };
 use libp2p_stream::Control;
-use log::{debug, error, info, warn};
+use log::{debug, error, info, trace, warn};
 use messages::{Attachment, AudioHeader, Message};
 use nnnoiseless::{DenoiseState, FRAME_SIZE, RnnModel};
 use sea_codec::ProcessorMessage;
@@ -61,9 +58,9 @@ use tokio::io::AsyncReadExt;
 use tokio::select;
 use tokio::sync::{Mutex, Notify, RwLock};
 use tokio::task::JoinHandle;
+use tokio::time::sleep;
 #[cfg(not(target_family = "wasm"))]
 use tokio::time::{Interval, interval, timeout};
-use tokio::time::sleep;
 use tokio_util::bytes::Bytes;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 use tokio_util::compat::{Compat, FuturesAsyncReadCompatExt};
@@ -113,9 +110,6 @@ pub struct Telepathy {
     /// The rnnoise model
     denoise_model: Arc<RwLock<RnnModel>>,
 
-    /// Notifies the call to end
-    end_call: Arc<Notify>,
-
     /// Manually set the input device
     input_device: DeviceName,
 
@@ -127,6 +121,9 @@ pub struct Telepathy {
 
     /// Keeps track of whether the user is in a call
     in_call: Arc<AtomicBool>,
+
+    /// used to end an audio test, if there is one
+    end_audio_test: Arc<Mutex<Option<Arc<Notify>>>>,
 
     /// Tracks state for the current room
     room_state: Arc<RwLock<Option<RoomState>>>,
@@ -175,42 +172,12 @@ pub struct Telepathy {
     #[cfg(target_family = "wasm")]
     web_input: Arc<Mutex<Option<WebAudioWrapper>>>,
 
-    /// Prompts the user to accept a call
-    accept_call:
-        Arc<Mutex<dyn Fn(String, Option<Vec<u8>>, DartNotify) -> DartFnFuture<bool> + Send>>,
-
-    /// Alerts the UI that a call has ended
-    call_ended: Arc<Mutex<dyn Fn(String, bool) -> DartFnFuture<()> + Send>>,
-
-    /// Fetches a contact from the front end
-    get_contact: Arc<Mutex<dyn Fn(Vec<u8>) -> DartFnFuture<Option<Contact>> + Send>>,
-
-    /// Notifies the frontend that the call has disconnected or reconnected
-    call_state: Arc<Mutex<dyn Fn(CallState) -> DartFnFuture<()> + Send>>,
-
-    /// Alerts the UI when the status of a session changes
-    session_status: Arc<Mutex<dyn Fn(String, String) -> DartFnFuture<()> + Send>>,
-
-    /// Starts a session for each of the UI's contacts
-    start_sessions: Arc<Mutex<dyn Fn(Telepathy) -> DartFnFuture<()> + Send>>,
-
-    /// Used to report statistics to the frontend
-    statistics: Arc<Mutex<dyn Fn(Statistics) -> DartFnFuture<()> + Send>>,
-
-    /// Used to send chat messages to the frontend
-    message_received: Arc<Mutex<dyn Fn(ChatMessage) -> DartFnFuture<()> + Send>>,
-
-    /// Alerts the UI when the manager is active and restartable
-    manager_active: Arc<Mutex<dyn Fn(bool, bool) -> DartFnFuture<()> + Send>>,
-
-    /// Called when a screenshare starts
-    #[allow(dead_code)]
-    screenshare_started: Arc<Mutex<dyn Fn(DartNotify, bool) -> DartFnFuture<()> + Send>>,
+    /// callback methods provided by the flutter frontend
+    callbacks: TelepathyCallbacks,
 }
 
 impl Telepathy {
     // this function must be async to use `spawn`
-    #[allow(clippy::too_many_arguments)]
     pub async fn new(
         identity: Vec<u8>,
         host: Arc<Host>,
@@ -218,19 +185,10 @@ impl Telepathy {
         screenshare_config: &ScreenshareConfig,
         overlay: &Overlay,
         codec_config: &CodecConfig,
-        accept_call: impl Fn(String, Option<Vec<u8>>, DartNotify) -> DartFnFuture<bool> + Send + 'static,
-        call_ended: impl Fn(String, bool) -> DartFnFuture<()> + Send + 'static,
-        get_contact: impl Fn(Vec<u8>) -> DartFnFuture<Option<Contact>> + Send + 'static,
-        call_state: impl Fn(CallState) -> DartFnFuture<()> + Send + 'static,
-        session_status: impl Fn(String, String) -> DartFnFuture<()> + Send + 'static,
-        start_sessions: impl Fn(Telepathy) -> DartFnFuture<()> + Send + 'static,
-        statistics: impl Fn(Statistics) -> DartFnFuture<()> + Send + 'static,
-        message_received: impl Fn(ChatMessage) -> DartFnFuture<()> + Send + 'static,
-        manager_active: impl Fn(bool, bool) -> DartFnFuture<()> + Send + 'static,
-        screenshare_started: impl Fn(DartNotify, bool) -> DartFnFuture<()> + Send + 'static,
+        callbacks: TelepathyCallbacks,
     ) -> Telepathy {
-        let (start_session, session) = unbounded_async::<PeerId>();
-        let (start_screenshare, screenshare) = unbounded_async::<StartScreenshare>();
+        let (start_session, receive_session) = unbounded_async::<PeerId>();
+        let (start_screenshare, receive_screenshare) = unbounded_async::<StartScreenshare>();
 
         let chat = Self {
             host,
@@ -239,13 +197,13 @@ impl Telepathy {
             output_volume: Default::default(),
             denoise: Default::default(),
             denoise_model: Default::default(),
-            end_call: Default::default(),
             input_device: Default::default(),
             output_device: Default::default(),
             identity: Arc::new(RwLock::new(
                 Keypair::from_protobuf_encoding(&identity).unwrap(),
             )),
             in_call: Default::default(),
+            end_audio_test: Default::default(),
             room_state: Default::default(),
             early_room_state: Default::default(),
             deafened: Default::default(),
@@ -263,24 +221,17 @@ impl Telepathy {
             codec_config: codec_config.clone(),
             #[cfg(target_family = "wasm")]
             web_input: Default::default(),
-            accept_call: Arc::new(Mutex::new(accept_call)),
-            call_ended: Arc::new(Mutex::new(call_ended)),
-            get_contact: Arc::new(Mutex::new(get_contact)),
-            call_state: Arc::new(Mutex::new(call_state)),
-            session_status: Arc::new(Mutex::new(session_status)),
-            start_sessions: Arc::new(Mutex::new(start_sessions)),
-            statistics: Arc::new(Mutex::new(statistics)),
-            message_received: Arc::new(Mutex::new(message_received)),
-            manager_active: Arc::new(Mutex::new(manager_active)),
-            screenshare_started: Arc::new(Mutex::new(screenshare_started)),
+            callbacks,
         };
 
         // start the session manager
         let chat_clone = chat.clone();
         spawn(async move {
             loop {
-                if let Err(error) = chat_clone.session_manager(&session, &screenshare).await {
-                    (chat_clone.manager_active.lock().await)(false, false).await;
+                if let Err(error) = chat_clone
+                    .session_manager(&receive_session, &receive_screenshare)
+                    .await
+                {
                     error!("Session manager failed: {}", error);
                 }
 
@@ -290,8 +241,7 @@ impl Telepathy {
         });
 
         // start the sessions
-        (chat.start_sessions.lock().await)(chat.clone()).await;
-
+        notify(&chat.callbacks.start_sessions, chat.clone()).await;
         chat
     }
 
@@ -306,11 +256,10 @@ impl Telepathy {
 
     /// Attempts to start a call through an existing session
     pub async fn start_call(&self, contact: &Contact) -> std::result::Result<(), DartError> {
-        let in_call = self.in_call.load(Relaxed);
-        let in_room = self.room_state.read().await.is_some();
-        if in_call || in_room {
-            warn!("start_call called with in_call={in_call} and in_room={in_room}");
-            return Ok(());
+        if self.is_call_active().await {
+            return Err("Cannot start call while a call is already active"
+                .to_string()
+                .into());
         }
 
         if let Some(state) = self.session_states.read().await.get(&contact.peer_id) {
@@ -326,10 +275,26 @@ impl Telepathy {
         }
     }
 
-    /// Ends the call (if there is one)
-    #[frb(sync)]
-    pub fn end_call(&self) {
-        self.end_call.notify_one();
+    /// Ends the current audio test, room, or call in that order
+    pub async fn end_call(&self) {
+        if let Some(end_audio_test) = self.end_audio_test.lock().await.as_ref() {
+            debug!("ending audio test");
+            end_audio_test.notify_one();
+        } else if let Some(room_state) = self.room_state.read().await.as_ref() {
+            debug!("ending room");
+            room_state.end_call.notify_one();
+        } else if let Some(session_state) = self
+            .session_states
+            .read()
+            .await
+            .values()
+            .find(|s| s.in_call.load(Relaxed))
+        {
+            debug!("ending call");
+            session_state.end_call.notify_one();
+        } else {
+            warn!("end_call failed to end anything");
+        }
     }
 
     /// The only entry point into participating in a room
@@ -337,11 +302,10 @@ impl Telepathy {
         &self,
         member_strings: Vec<String>,
     ) -> std::result::Result<(), DartError> {
-        let in_call = self.in_call.load(Relaxed);
-        let in_room = self.room_state.read().await.is_some();
-        if in_call || in_room {
-            warn!("join_room called with in_call={in_call} and in_room={in_room}");
-            return Ok(());
+        if self.is_call_active().await {
+            return Err("Cannot join room while a call is already active"
+                .to_string()
+                .into());
         }
 
         #[cfg(target_family = "wasm")]
@@ -352,6 +316,7 @@ impl Telepathy {
         // message channel
         let (sender, receiver) = unbounded_async();
         let cancel = CancellationToken::new();
+        let end_call = Arc::new(Notify::new());
         // parse members
         let members: Vec<_> = member_strings
             .into_iter()
@@ -362,6 +327,7 @@ impl Telepathy {
             peers: members.clone(),
             sender,
             cancel: cancel.clone(),
+            end_call: end_call.clone(),
         });
 
         // the same early call state is used throughout the room, the real peer ids are set later
@@ -386,7 +352,7 @@ impl Telepathy {
         spawn(async move {
             let stop_io = Default::default();
             if let Err(error) = self_clone
-                .room_controller(receiver, cancel, call_state, &stop_io)
+                .room_controller(receiver, cancel, call_state, &stop_io, end_call)
                 .await
             {
                 error!("error in room controller: {:?}", error);
@@ -400,11 +366,13 @@ impl Telepathy {
 
     /// Restarts the session manager
     pub async fn restart_manager(&self) -> std::result::Result<(), DartError> {
-        if self.in_call.load(Relaxed) {
-            Err(ErrorKind::InCall.into())
+        if self.is_call_active().await {
+            Err("Cannot restart manager while call is active"
+                .to_string()
+                .into())
         } else {
             self.restart_manager.notify_one();
-            (self.start_sessions.lock().await)(self.clone()).await;
+            notify(&self.callbacks.start_sessions, self.clone()).await;
             Ok(())
         }
     }
@@ -428,6 +396,10 @@ impl Telepathy {
 
     /// Blocks while an audio test is running
     pub async fn audio_test(&self) -> std::result::Result<(), DartError> {
+        if self.is_call_active().await {
+            return Err("Cannot start test while call is active".to_string().into());
+        }
+
         #[cfg(target_family = "wasm")]
         self.init_web_audio()
             .await
@@ -436,13 +408,16 @@ impl Telepathy {
         let mut audio_config = self.setup_call(PeerId::random()).await?;
         audio_config.remote_configuration = audio_config.local_configuration.clone();
         let stop_io = CancellationToken::new();
+        let end_call = Arc::new(Notify::new());
 
         self.in_call.store(true, Relaxed);
+        *self.end_audio_test.lock().await = Some(end_call.clone());
         let result = self
-            .call(&stop_io, audio_config, None, None, None, None)
+            .call(&stop_io, audio_config, &end_call, None)
             .await
             .map_err(Into::into);
         stop_io.cancel();
+        self.end_audio_test.lock().await.take();
         self.in_call.store(false, Relaxed);
         result
     }
@@ -757,13 +732,17 @@ impl Telepathy {
         swarm.listen_on(relay_address.clone())?;
 
         // alerts the UI that the manager is active
-        (self.manager_active.lock().await)(true, true).await;
+        notify(&self.callbacks.manager_active, (true, true)).await;
 
         // handle incoming streams
         let self_clone = self.clone();
         let control = swarm.behaviour().stream.new_control();
-        spawn(async move {
-            self_clone.incoming_stream_handler(control).await;
+        let stop_handler = Arc::new(Notify::new());
+        let stop_handler_clone = stop_handler.clone();
+        let stream_handler_handle = spawn(async move {
+            self_clone
+                .incoming_stream_handler(control, stop_handler_clone)
+                .await
         });
 
         // handles the state needed for negotiating sessions
@@ -774,7 +753,7 @@ impl Telepathy {
             let event = select! {
                 // restart the manager
                 _ = self.restart_manager.notified() => {
-                    break Ok(());
+                    break;
                 }
                 // events are handled outside the select to help with spagetification
                 event = swarm.select_next_some() => event,
@@ -795,13 +774,14 @@ impl Telepathy {
                     debug!("initial dial for {}", peer_id);
 
                     // dial the peer through the relay
-                    if let Err(error) = swarm.dial(relay_address.clone().with(Protocol::P2p(peer_id))) {
+                    let status = if let Err(error) = swarm.dial(relay_address.clone().with(Protocol::P2p(peer_id))) {
                         error!("dial error for {}: {}", peer_id, error);
-                        (self.session_status.lock().await)(peer_id.to_string(), "Inactive".to_string()).await;
+                        SessionStatus::Inactive
                     } else {
-                        (self.session_status.lock().await)(peer_id.to_string(), "Connecting".to_string()).await;
-                    }
+                        SessionStatus::Connected
+                    };
 
+                    notify(&self.callbacks.session_status, (peer_id.to_string(), status)).await;
                     continue;
                 }
                 // starts a stream for outgoing screen shares
@@ -825,7 +805,7 @@ impl Telepathy {
                                 let height = self.screenshare_config.height.load(Relaxed);
 
                                 spawn(screenshare::playback(stream, stop, state.download_bandwidth.clone(), encoder_name, width, height));
-                                (self.screenshare_started.lock().await)(dart_stop, false).await;
+                                notify(&self.callbacks.screenshare_started, (dart_stop, false)).await;
                             }
                         } else if let Some(config) = self.screenshare_config.recording_config.read().await.clone() {
                             let message = Message::ScreenshareHeader { encoder_name: config.encoder.to_string() };
@@ -843,7 +823,7 @@ impl Telepathy {
                             }
 
                             state.wants_stream.store(false, Relaxed);
-                            (self.screenshare_started.lock().await)(dart_stop, true).await;
+                            notify(&self.callbacks.screenshare_started, (dart_stop, true)).await;
                         } else {
                             // TODO this should be blocked from occurring via the frontend i think
                             warn!("screenshare started without recording configuration");
@@ -873,15 +853,15 @@ impl Telepathy {
                         continue;
                     }
 
-                    let contact_option = (self.get_contact.lock().await)(peer_id.to_bytes()).await;
-
+                    let contact_option =
+                        invoke(&self.callbacks.get_contact, peer_id.to_bytes()).await;
                     let relayed = endpoint.is_relayed();
                     let listener = endpoint.is_listener();
 
                     if contact_option.is_none() && !self.is_in_room(&peer_id).await {
                         warn!("received a connection from an unknown peer: {:?}", peer_id);
                         if swarm.disconnect_peer_id(peer_id).is_err() {
-                            error!("error disconnecting from unknown peer");
+                            warn!("unknown peer was no longer connected");
                         }
                     } else if let Some(peer_state) = peer_states.get_mut(&peer_id) {
                         // insert the new connection
@@ -901,43 +881,30 @@ impl Telepathy {
                         if listener {
                             // a stream will be established by the other client
                             // the dialer already has the connecting status set
-                            (self.session_status.lock().await)(
-                                peer_id.to_string(),
-                                "Connecting".to_string(),
+                            notify(
+                                &self.callbacks.session_status,
+                                (peer_id.to_string(), SessionStatus::Connecting),
                             )
                             .await;
                         }
                     }
                 }
                 SwarmEvent::OutgoingConnectionError {
-                    peer_id,
+                    peer_id: Some(peer_id),
                     error,
                     connection_id,
                 } => {
-                    if let Some(peer_id) = peer_id {
-                        if self.session_states.read().await.contains_key(&peer_id) {
-                            warn!(
-                                "outgoing connection failed for {} because {}",
-                                peer_id, error
-                            );
-                        } else if let Some(peer_state) = peer_states.get_mut(&peer_id) {
-                            warn!(
-                                "outgoing connection failed for {} because {}",
-                                peer_id, error
-                            );
-                            peer_state.connections.remove(&connection_id);
-                        } else {
-                            // if an outgoing error occurs when no connection is active, the session initialization failed
-                            error!(
-                                "session initialization failed for {} because {}",
-                                peer_id, error
-                            );
-                            (self.session_status.lock().await)(
-                                peer_id.to_string(),
-                                "Inactive".to_string(),
-                            )
-                            .await;
-                        }
+                    warn!("outgoing connection failed for {peer_id} because {error}",);
+
+                    if let Some(peer_state) = peer_states.get_mut(&peer_id) {
+                        peer_state.connections.remove(&connection_id);
+                    } else if !self.session_states.read().await.contains_key(&peer_id) {
+                        // if an outgoing error occurs when no connection is active, the session initialization failed
+                        notify(
+                            &self.callbacks.session_status,
+                            (peer_id.to_string(), SessionStatus::Inactive),
+                        )
+                        .await;
                     }
                 }
                 SwarmEvent::ConnectionClosed {
@@ -1020,24 +987,26 @@ impl Telepathy {
                             // close the other connections
                             peer_state
                                 .connections
-                                .iter()
-                                .filter(|(id, _)| *id != connection_id)
-                                .for_each(|(id, _)| {
+                                .keys()
+                                .filter(|id| id != &connection_id)
+                                .for_each(|id| {
                                     swarm.close_connection(*id);
                                 });
 
-                            let control = swarm.behaviour().stream.new_control();
-
                             // open a session control stream and start the session controller
-                            let connections_count = peer_state.connections.len();
-                            self.open_stream(event.peer, control, &mut peer_states, connections_count)
-                                .await;
+                            self.open_session(
+                                event.peer,
+                                swarm.behaviour().stream.new_control(),
+                                peer_state.connections.len(),
+                                &mut peer_states,
+                            )
+                            .await;
                         } else {
                             warn!("no connection available for {}", event.peer);
                         }
                     }
                 }
-                SwarmEvent::Behaviour(BehaviourEvent::Identify(identify::Event::Received {
+                SwarmEvent::Behaviour(BehaviourEvent::Identify(IdentifyEvent::Received {
                     peer_id,
                     info,
                     ..
@@ -1068,7 +1037,7 @@ impl Telepathy {
                     }
                 }
                 // TODO validate that this logic successfully handles cases where the relay is the only available connection
-                SwarmEvent::Behaviour(BehaviourEvent::Dcutr(dcutr::Event {
+                SwarmEvent::Behaviour(BehaviourEvent::Dcutr(DcutrEvent {
                     remote_peer_id,
                     result,
                 })) => {
@@ -1079,93 +1048,96 @@ impl Telepathy {
                         && result.is_err()
                     {
                         info!("ductr failed while relayed_only, falling back to relay");
-                        let control = swarm.behaviour().stream.new_control();
-                        let connections_count = peer_state.connections.len();
-                        self.open_stream(remote_peer_id, control, &mut peer_states, connections_count)
-                            .await;
+                        self.open_session(
+                            remote_peer_id,
+                            swarm.behaviour().stream.new_control(),
+                            peer_state.connections.len(),
+                            &mut peer_states,
+                        )
+                        .await;
                     }
                 }
                 event => {
-                    debug!("other swarm event: {:?}", event);
+                    trace!("other swarm event: {:?}", event);
                 }
             }
         }
+
+        debug!("tearing down old swarm");
+        notify(&self.callbacks.manager_active, (false, false)).await;
+        stop_handler.notify_one();
+        stream_handler_handle.await??;
+        debug!("joined stream handler");
+
+        Ok(())
     }
 
     /// Handles incoming streams for the libp2p swarm
-    async fn incoming_stream_handler(&self, mut control: Control) {
-        while let Ok(mut incoming_streams) = control.accept(CHAT_PROTOCOL) {
-            while let Some((peer, stream)) = incoming_streams.next().await {
-                let state_option = self.session_states.read().await.get(&peer).cloned();
+    async fn incoming_stream_handler(&self, mut control: Control, stop: Arc<Notify>) -> Result<()> {
+        let mut incoming_streams = control.accept(CHAT_PROTOCOL)?;
 
-                if let Some(state) = state_option {
-                    if state.wants_stream.load(Relaxed) {
-                        info!("sub-stream accepted for {}", peer);
+        loop {
+            select! {
+                _ = stop.notified() => break Ok(()),
+                Some((peer, stream)) = incoming_streams.next() => {
+                    let state_option = self.session_states.read().await.get(&peer).cloned();
 
-                        if let Err(error) = state.stream_sender.send(stream).await {
-                            error!("error sending sub-stream to {}: {}", peer, error);
+                    if let Some(state) = state_option {
+                        if state.wants_stream.load(Relaxed) {
+                            info!("sub-stream accepted for {}", peer);
+
+                            if let Err(error) = state.stream_sender.send(stream).await {
+                                error!("error sending sub-stream to {}: {}", peer, error);
+                            }
+
+                            continue;
+                        } else {
+                            warn!(
+                                "received a stream while {} did not want sub-stream, starting new session",
+                                peer
+                            );
                         }
-
-                        continue;
                     } else {
-                        warn!(
-                            "received a stream while {} did not want sub-stream, starting new session",
-                            peer
-                        );
+                        info!("stream accepted for new session with {}", peer);
                     }
-                } else {
-                    info!("stream accepted for new session with {}", peer);
-                }
 
-                if let Err(error) = self._start_session(peer, None, stream).await {
-                    error!("error starting session with {}: {}", peer, error);
+                    self.session_outer(peer, None, stream).await;
                 }
+                else => break Err(ErrorKind::StreamsEnded.into())
             }
-
-            info!("incoming streams ended, trying to restart");
         }
-
-        warn!("stopped accepting incoming streams; restarting controller");
-        self.restart_manager.notify_one();
     }
 
     /// Called by the dialer to open a stream and session
-    async fn open_stream(
+    async fn open_session(
         &self,
         peer_id: PeerId,
         mut control: Control,
-        peer_states: &mut HashMap<PeerId, PeerState>,
         connection_count: usize,
+        peer_states: &mut HashMap<PeerId, PeerState>,
     ) {
         // it may take multiple tries to open the stream because the of the RNG in the stream handler
         for _ in 0..connection_count {
             match control.open_stream(peer_id, CHAT_PROTOCOL).await {
                 Ok(stream) => {
                     info!("opened stream with {}, starting new session", peer_id);
-
-                    if let Err(error) = self._start_session(peer_id, Some(control), stream).await {
-                        error!("error starting session with {}: {}", peer_id, error);
-                    }
-
+                    self.session_outer(peer_id, Some(control), stream).await;
                     // the peer state is no longer needed
                     peer_states.remove(&peer_id);
-                    break;
+                    return;
                 }
                 Err(error) => {
-                    error!("error opening stream {}: {}", peer_id, error);
+                    warn!("OpenStreamError for {peer_id}: {error}");
                 }
             }
         }
+
+        error!("failed to open stream for {peer_id} after {connection_count} tries");
     }
 
-    /// A wrapper which manages the session throughout its lifetime
-    async fn _start_session(
-        &self,
-        peer_id: PeerId,
-        mut control: Option<Control>,
-        stream: Stream,
-    ) -> Result<()> {
-        let contact_option = (self.get_contact.lock().await)(peer_id.to_bytes()).await;
+    /// Manages a session throughout its lifetime
+    async fn session_outer(&self, peer_id: PeerId, mut control: Option<Control>, stream: Stream) {
+        let contact_option = invoke(&self.callbacks.get_contact, peer_id.to_bytes()).await;
         // sends messages to the session from elsewhere in the program
         let message_channel = unbounded_async::<Message>();
         // create the state and a clone of it for the session
@@ -1182,7 +1154,7 @@ impl Telepathy {
 
             if old_state.in_call.load(Relaxed) {
                 // if the session was in a call, end it so the session can end
-                self.end_call.notify_one();
+                state.end_call.notify_one();
             }
 
             // stop the session
@@ -1191,7 +1163,11 @@ impl Telepathy {
 
         let contact = if let Some(contact) = contact_option {
             // alert the UI that this session is now connected
-            (self.session_status.lock().await)(peer_id.to_string(), "Connected".to_string()).await;
+            notify(
+                &self.callbacks.session_status,
+                (peer_id.to_string(), SessionStatus::Connected),
+            )
+            .await;
             contact
         } else {
             // there may be no contact for members of a group
@@ -1220,50 +1196,49 @@ impl Telepathy {
             let mut keep_alive = interval(KEEP_ALIVE);
 
             let result = loop {
-                let future = self_clone.session(
-                    &contact,
-                    control.as_mut(),
-                    &mut transport,
-                    &state,
-                    &message_channel,
-                    &mut keep_alive,
-                );
+                let result = self_clone
+                    .session_inner(
+                        &contact,
+                        control.as_mut(),
+                        &mut transport,
+                        &state,
+                        &message_channel,
+                        &mut keep_alive,
+                    )
+                    .await;
 
-                match future.await {
-                    // continue session
-                    Ok(SessionStatus::Continue) => {
-                        if contact.is_room_only {
-                            break Ok(());
-                        }
-                    }
-                    Ok(SessionStatus::Stopped) => {
+                match (result, contact.is_room_only) {
+                    (Ok(true), true) | (Ok(false), _) => {
                         break Ok(());
                     }
-                    Err(error) => {
-                        // if an error occurred during the call, it is ended now
-                        if self_clone.room_state.read().await.is_none() && state.in_call.load(Relaxed) {
+                    (Ok(true), false) => {
+                        // the session is not in a call
+                        state.in_call.store(false, Relaxed);
+                    }
+                    (Err(error), room_only) => {
+                        // if an error occurred during a non-room call, it is ended now
+                        if state.in_call.load(Relaxed)
+                            && !room_only
+                            && !self_clone.is_in_room(&contact.peer_id).await
+                        {
                             warn!("session error while call active, alerting ui (e={error:?})");
-                            (self_clone.call_ended.lock().await)(error.to_string(), false).await;
+                            notify(
+                                &self_clone.callbacks.call_state,
+                                CallState::CallEnded(error.to_string(), false),
+                            )
+                            .await;
                         }
 
-                        if contact.is_room_only
-                            || matches!(
-                                error.kind,
-                                ErrorKind::KanalReceive(_)
-                                    | ErrorKind::TransportRecv
-                                    | ErrorKind::TransportSend
-                            )
-                        {
+                        if room_only || error.is_session_critical() {
                             // session cannot recover from these errors
                             break Err(error);
                         } else {
-                            warn!("recoverable session failure: {:?}", error)
+                            warn!("recoverable session failure: {:?}", error);
+                            // the session is not in a call
+                            state.in_call.store(false, Relaxed);
                         }
                     }
                 }
-
-                // the session is now safe to restart
-                state.in_call.store(false, Relaxed);
             };
 
             if let Err(error) = result {
@@ -1276,26 +1251,23 @@ impl Telepathy {
             }
 
             // cleanup
-            self_clone
-                .session_states
-                .write()
-                .await
-                .remove(&contact.peer_id);
+            self_clone.session_states.write().await.remove(&peer_id);
 
             // avoid sending session statuses for dummy contacts
             if !contact.is_room_only {
-                (self_clone.session_status.lock().await)(contact.peer_id(), "Inactive".to_string())
-                    .await;
+                notify(
+                    &self_clone.callbacks.session_status,
+                    (peer_id.to_string(), SessionStatus::Inactive),
+                )
+                .await;
             }
 
             info!("Session for {} cleaned up", contact.nickname);
         });
-
-        Ok(())
     }
 
-    /// The session logic
-    async fn session(
+    /// The inner logic of a session that may execute many times
+    async fn session_inner(
         &self,
         contact: &Contact,
         control: Option<&mut Control>,
@@ -1303,7 +1275,7 @@ impl Telepathy {
         state: &Arc<SessionState>,
         message_channel: &(AsyncSender<Message>, AsyncReceiver<Message>),
         keep_alive: &mut Interval,
-    ) -> Result<SessionStatus> {
+    ) -> Result<bool> {
         info!("[{}] session waiting for event", contact.nickname);
 
         select! {
@@ -1322,10 +1294,10 @@ impl Telepathy {
                             other_ringtone = ringtone;
                         }
                     },
-                    Message::KeepAlive => return Ok(SessionStatus::Continue),
+                    Message::KeepAlive => return Ok(true),
                     message => {
                         warn!("received unexpected {:?} from {}", message, contact.nickname);
-                        return Ok(SessionStatus::Continue);
+                        return Ok(true);
                     }
                 }
 
@@ -1336,23 +1308,23 @@ impl Telepathy {
                 if is_in_room && room_hash_option == self.room_hash().await {
                     // automatically accept calls from member of current room
                 } else if room_hash_option.is_some() {
-                    // the call is part of a room, but the client is not in a room
+                    // the call is part of a room, but the client is not in the room
                     write_message(transport, &Message::Reject).await?;
-                    return Ok(SessionStatus::Continue);
+                    return Ok(true);
                 } else if self.in_call.load(Relaxed) {
                     // do not accept another call if already in one
                     write_message(transport, &Message::Busy).await?;
-                    return Ok(SessionStatus::Continue);
+                    return Ok(true);
                 } else {
                     let other_cancel_prompt = Arc::new(Notify::new());
                     // a cancel Notify that can be used in the frontend
                     let dart_cancel = DartNotify { inner: Arc::clone(&other_cancel_prompt) };
                     cancel_prompt = Some(other_cancel_prompt);
 
-                    let accept_call_clone = Arc::clone(&self.accept_call);
+                    let accept_call_clone = Arc::clone(&self.callbacks.accept_call);
                     let contact_id = contact.id.clone();
                     accept_handle = Some(spawn(async move {
-                        (accept_call_clone.lock().await)(contact_id, other_ringtone, dart_cancel).await
+                        invoke(&accept_call_clone, (contact_id, other_ringtone, dart_cancel)).await
                     }));
                 }
 
@@ -1407,7 +1379,7 @@ impl Telepathy {
                     }
                 }
 
-                Ok(SessionStatus::Continue)
+                Ok(true)
             }
             _ = state.start_call.notified() => {
                 state.in_call.store(true, Relaxed); // blocks the session from being restarted
@@ -1427,7 +1399,7 @@ impl Telepathy {
                     select! {
                         result = timeout(hello_timeout, read_message(transport)) => {
                             // handles a variety of outcomes in response to Hello
-                            match result?? {
+                            let message_option = match result?? {
                                 Message::HelloAck { audio_header } => {
                                     call_state.remote_configuration = audio_header;
 
@@ -1439,46 +1411,48 @@ impl Telepathy {
                                     }
 
                                     keep_alive.reset(); // start sending normal keep alive messages
+                                    None
                                 }
+                                Message::Reject | Message::Busy if is_in_room => None,
                                 Message::Reject => {
-                                    if !is_in_room {
-                                        (self.call_ended.lock().await)(format!("{} did not accept the call", contact.nickname), true).await;
-                                    }
+                                    Some(format!("{} did not accept the call", contact.nickname))
                                 },
                                 Message::Busy => {
-                                    if !is_in_room {
-                                        (self.call_ended.lock().await)(format!("{} is busy", contact.nickname), true).await;
-                                    }
-                                }
+                                    Some(format!("{} is busy", contact.nickname))
+                                },
                                 // keep alive messages are sometimes received here
                                 Message::KeepAlive => continue,
                                 message => {
                                     // the front end needs to know that the call ended here
-                                    (self.call_ended.lock().await)(format!("Received an unexpected message from {}", contact.nickname), true).await;
                                     warn!("received unexpected {:?} from {} [stopped call process]", message, contact.nickname);
+                                    Some(format!("Received an unexpected message from {}", contact.nickname))
                                 }
+                            };
+
+                            if let Some(message) = message_option {
+                                invoke(&self.callbacks.call_state, CallState::CallEnded(message, true)).await;
                             }
 
                             break;
                         }
-                        _ = self.end_call.notified() => {
+                        _ = state.end_call.notified() => {
                             info!("end call notified while waiting for hello ack");
                             write_message(transport, &Message::Goodbye { reason: None }).await?;
                         }
                     }
                 }
 
-                Ok(SessionStatus::Continue)
+                Ok(true)
             }
             // state will never notify while a call is active
             _ = state.stop_session.notified() => {
                 info!("session state stop notified for {}", contact.nickname);
-                Ok(SessionStatus::Stopped)
+                Ok(false)
             },
             _ = keep_alive.tick() => {
                 debug!("sending keep alive to {}", contact.nickname);
                 write_message(transport, &Message::KeepAlive).await?;
-                Ok(SessionStatus::Continue)
+                Ok(true)
             },
         }
     }
@@ -1506,10 +1480,13 @@ impl Telepathy {
             .call(
                 &stop_io,
                 call_state,
-                Some(stream_to_audio_transport(stream)),
-                Some(transport),
-                Some(message_receiver.clone()),
-                Some(state),
+                &state.end_call,
+                Some(OptionalCallArgs {
+                    audio_transport: stream_to_audio_transport(stream),
+                    control_transport: transport,
+                    message_receiver: message_receiver.clone(),
+                    state,
+                }),
             )
             .await;
 
@@ -1550,24 +1527,25 @@ impl Telepathy {
         &self,
         stop_io: &CancellationToken,
         call_state: EarlyCallState,
-        audio_transport: Option<Transport<TransportStream>>,
-        control_transport: Option<&mut Transport<TransportStream>>,
-        message_receiver: Option<AsyncReceiver<Message>>,
-        state: Option<&Arc<SessionState>>,
+        end_call: &Arc<Notify>,
+        optional: Option<OptionalCallArgs<'_>>,
     ) -> Result<()> {
         // on ios the audio session must be configured
         #[cfg(target_os = "ios")]
         configure_audio_session();
 
         // shared values for various statistics
-        let latency = state
-            .map(|state| Arc::clone(&state.latency))
+        let latency = optional
+            .as_ref()
+            .map(|o| Arc::clone(&o.state.latency))
             .unwrap_or_default();
-        let upload_bandwidth = state
-            .map(|state| Arc::clone(&state.upload_bandwidth))
+        let upload_bandwidth = optional
+            .as_ref()
+            .map(|o| Arc::clone(&o.state.upload_bandwidth))
             .unwrap_or_default();
-        let download_bandwidth = state
-            .map(|state| Arc::clone(&state.download_bandwidth))
+        let download_bandwidth = optional
+            .as_ref()
+            .map(|o| Arc::clone(&o.state.download_bandwidth))
             .unwrap_or_default();
         // shared values used to move rms to statistics collector
         let input_rms_sender: Arc<AtomicF32> = Default::default();
@@ -1591,11 +1569,13 @@ impl Telepathy {
                 codec_config.0,
                 output_rms_sender.clone(),
                 false,
+                end_call.clone(),
             )
             .await?;
 
         #[cfg(not(target_family = "wasm"))]
-        let input_stream = self.setup_input_stream(&call_state, input_channel.1)?;
+        let input_stream =
+            self.setup_input_stream(&call_state, input_channel.1, end_call.clone())?;
 
         // play the output stream
         output_stream.stream.play()?;
@@ -1616,74 +1596,78 @@ impl Telepathy {
             latency,
             Arc::clone(&upload_bandwidth),
             Arc::clone(&download_bandwidth),
-            Arc::clone(&self.statistics),
+            Arc::clone(&self.callbacks.statistics),
             stop_io.clone(),
         ));
 
-        match (audio_transport, control_transport, message_receiver) {
-            (Some(audio_transport), Some(transport), Some(message_receiver)) => {
-                let (socket_sender, socket_receiver) = unbounded_async();
-                let (write, read) = audio_transport.split();
-                socket_sender.send(write).await?;
+        if let Some(o) = optional {
+            let (socket_sender, socket_receiver) = unbounded_async();
+            let (write, read) = o.audio_transport.split();
+            socket_sender.send(write).await?;
 
-                let input_handle = spawn(audio_input(
-                    input_channel.0,
-                    socket_receiver,
-                    stop_io.clone(),
-                    upload_bandwidth,
-                ));
+            let input_handle = spawn(audio_input(
+                input_channel.0,
+                socket_receiver,
+                stop_io.clone(),
+                upload_bandwidth,
+            ));
 
-                let output_handle = spawn(audio_output(
-                    output_sender,
-                    read,
-                    stop_io.clone(),
-                    download_bandwidth,
-                ));
+            let output_handle = spawn(audio_output(
+                output_sender,
+                read,
+                stop_io.clone(),
+                download_bandwidth,
+            ));
 
-                let controller_future =
-                    self.call_controller(transport, message_receiver, call_state.peer);
+            let controller_future = self.call_controller(
+                o.control_transport,
+                o.message_receiver,
+                call_state.peer,
+                end_call,
+            );
 
-                info!("call controller starting");
+            info!("call controller starting");
 
-                match controller_future.await {
-                    Ok(message) => {
-                        (self.call_ended.lock().await)(message.unwrap_or_default(), true).await
-                    }
-                    Err(error) => match error.kind {
-                        ErrorKind::CallEnded => (), // when the call is ended externally, no UI notification is needed
-                        _ => (self.call_ended.lock().await)(error.to_string(), false).await,
-                    },
-                }
+            let message_option = match controller_future.await {
+                Ok((message, notify)) if notify => Some(message.unwrap_or_default()),
+                Err(error) => Some(error.to_string()),
+                _ => None,
+            };
 
-                info!("call controller done, notifying stop_io");
-                stop_io.cancel();
-
-                match input_handle.await {
-                    Ok(Ok(())) => info!("input handle joined"),
-                    Ok(Err(error)) => {
-                        error!("audio_input failed: {}", error);
-                    }
-                    Err(error) => {
-                        error!("audio_input failed: {}", error);
-                    }
-                }
-
-                match output_handle.await {
-                    Ok(Ok(())) => info!("output handle joined"),
-                    Ok(Err(error)) => {
-                        error!("audio_output failed: {}", error);
-                    }
-                    Err(error) => {
-                        error!("audio_output failed: {}", error);
-                    }
-                }
-
-                info!("call controller returned and was handled, call returning");
+            if let Some(message) = message_option {
+                invoke(
+                    &self.callbacks.call_state,
+                    CallState::CallEnded(message, true),
+                )
+                .await;
             }
-            _ => {
-                spawn(loopback(input_channel.0, output_sender, stop_io.clone()));
-                self.end_call.notified().await;
+
+            info!("call controller done, notifying stop_io");
+            stop_io.cancel();
+
+            match input_handle.await {
+                Ok(Ok(())) => info!("input handle joined"),
+                Ok(Err(error)) => {
+                    error!("audio_input failed: {}", error);
+                }
+                Err(error) => {
+                    error!("audio_input failed: {}", error);
+                }
             }
+
+            match output_handle.await {
+                Ok(Ok(())) => info!("output handle joined"),
+                Ok(Err(error)) => {
+                    error!("audio_output failed: {}", error);
+                }
+                Err(error) => {
+                    error!("audio_output failed: {}", error);
+                }
+            }
+
+            info!("call controller returned and was handled, call returning");
+        } else {
+            loopback(input_channel.0, output_sender, stop_io, end_call).await;
         }
 
         // on ios the audio session must be deactivated
@@ -1705,11 +1689,12 @@ impl Telepathy {
         transport: &mut Transport<TransportStream>,
         receiver: AsyncReceiver<Message>,
         peer: PeerId,
-    ) -> Result<Option<String>> {
+        end_call: &Arc<Notify>,
+    ) -> Result<(Option<String>, bool)> {
         let identity = self.identity.read().await.public().to_peer_id();
 
         CONNECTED.store(true, Relaxed);
-        (self.call_state.lock().await)(CallState::Connected).await;
+        invoke(&self.callbacks.call_state, CallState::Connected).await;
 
         loop {
             select! {
@@ -1720,10 +1705,10 @@ impl Telepathy {
                     match message {
                         Message::Goodbye { reason } => {
                             debug!("received goodbye, reason = {:?}", reason);
-                            break Ok(reason);
+                            break Ok((reason, true));
                         },
                         Message::Chat { text, attachments } => {
-                            (self.message_received.lock().await)(ChatMessage {
+                            invoke(&self.callbacks.message_received, ChatMessage {
                                 text,
                                 receiver: identity,
                                 timestamp: Local::now(),
@@ -1743,13 +1728,13 @@ impl Telepathy {
                         write_message(transport, &message).await?;
                     } else {
                         // if the channel closes, the call has ended
-                        break Ok(None);
+                        break Ok((None, true));
                     }
                 },
                 // ends the call
-                _ = self.end_call.notified() => {
+                _ = end_call.notified() => {
                     write_message(transport, &Message::Goodbye { reason: None }).await?;
-                    break Err(ErrorKind::CallEnded.into());
+                    break Ok((None, false));
                 },
             }
         }
@@ -1814,6 +1799,7 @@ impl Telepathy {
         end_sessions: CancellationToken,
         call_state: EarlyCallState,
         stop_io: &CancellationToken,
+        end_call: Arc<Notify>,
     ) -> Result<()> {
         // on ios the audio session must be configured
         #[cfg(target_os = "ios")]
@@ -1839,7 +1825,8 @@ impl Telepathy {
             .await?;
 
         #[cfg(not(target_family = "wasm"))]
-        let input_stream = self.setup_input_stream(&call_state, input_channel.1)?;
+        let input_stream =
+            self.setup_input_stream(&call_state, input_channel.1, end_call.clone())?;
 
         // play the input stream (non web)
         #[cfg(not(target_family = "wasm"))]
@@ -1865,15 +1852,18 @@ impl Telepathy {
             Default::default(), // TODO decide what to do with room latencies
             Arc::clone(&upload_bandwidth),
             Arc::clone(&download_bandwidth),
-            Arc::clone(&self.statistics),
+            Arc::clone(&self.callbacks.statistics),
             stop_io.clone(),
         ));
 
         // kick the UI out of connecting mode
-        (self.call_state.lock().await)(CallState::Waiting).await;
+        invoke(&self.callbacks.call_state, CallState::Waiting).await;
 
         loop {
             select! {
+                _ = end_call.notified() => {
+                    break;
+                }
                 Ok(message) = receiver.recv() => {
                     match message{
                         RoomMessage::Join { audio_transport, state } => {
@@ -1882,7 +1872,7 @@ impl Telepathy {
                             // first connection
                             if connections.is_empty() {
                                 CONNECTED.store(true, Relaxed);
-                                (self.call_state.lock().await)(CallState::Connected).await;
+                                invoke(&self.callbacks.call_state, CallState::Connected).await;
                             }
 
                             let (write, read) = (*audio_transport).split();
@@ -1895,6 +1885,7 @@ impl Telepathy {
                                     true,
                                     output_rms_sender.clone(),
                                     true,
+                                    end_call.clone(),
                                 )
                                 .await?;
                             // begin playing audio
@@ -1911,10 +1902,10 @@ impl Telepathy {
                                 stream: output_stream,
                                 handle,
                             });
-                            (self.call_state.lock().await)(CallState::RoomJoin(state.peer.to_string())).await;
+                            invoke(&self.callbacks.call_state, CallState::RoomJoin(state.peer.to_string())).await;
                         }
                         RoomMessage::Leave(peer) => {
-                            (self.call_state.lock().await)(CallState::RoomLeave(peer.to_string())).await;
+                            invoke(&self.callbacks.call_state, CallState::RoomLeave(peer.to_string())).await;
 
                             if let Some(connection) = connections.remove(&peer) {
                                 connection.handle.await??;
@@ -1924,9 +1915,6 @@ impl Telepathy {
                             }
                         }
                     }
-                }
-                _ = self.end_call.notified() => {
-                    break;
                 }
             }
         }
@@ -2040,6 +2028,7 @@ impl Telepathy {
         codec_enabled: bool,
         rms_sender: Arc<AtomicF32>,
         is_room: bool,
+        end_call: Arc<Notify>,
     ) -> Result<(AsyncSender<ProcessorMessage>, SendStream)> {
         // receiving socket -> output processor or decoder
         let (network_output_sender, network_output_receiver) =
@@ -2112,7 +2101,6 @@ impl Telepathy {
         let output_channels = output_config.channels() as usize;
         // a reference to the flag for use in the output callback
         let deafened = Arc::clone(&self.deafened);
-        let end_call = Arc::clone(&self.end_call);
 
         let output_stream = SendStream {
             stream: output_device.build_output_stream(
@@ -2162,9 +2150,9 @@ impl Telepathy {
         &self,
         call_state: &EarlyCallState,
         input_sender: Sender<f32>,
+        end_call: Arc<Notify>,
     ) -> Result<SendStream> {
         let input_channels = call_state.local_configuration.channels as usize;
-        let end_call = Arc::clone(&self.end_call);
 
         Ok(SendStream {
             stream: call_state.input_device.build_input_stream(
@@ -2328,6 +2316,12 @@ impl Telepathy {
             })
             .map(|hash| hash.to_le_bytes().to_vec())
     }
+
+    async fn is_call_active(&self) -> bool {
+        self.in_call.load(Relaxed)
+            || self.room_state.read().await.is_some()
+            || self.end_audio_test.lock().await.is_some()
+    }
 }
 
 /// state used early in the call before it starts
@@ -2439,6 +2433,8 @@ struct SessionState {
 
     /// whether the session wants a sub-stream
     wants_stream: Arc<AtomicBool>,
+
+    end_call: Arc<Notify>,
 }
 
 impl SessionState {
@@ -2456,6 +2452,7 @@ impl SessionState {
             upload_bandwidth: Default::default(),
             download_bandwidth: Default::default(),
             wants_stream: Default::default(),
+            end_call: Default::default(),
         }
     }
 
@@ -2505,6 +2502,8 @@ struct RoomState {
     sender: AsyncSender<RoomMessage>,
 
     cancel: CancellationToken,
+
+    end_call: Arc<Notify>,
 }
 
 enum RoomMessage {
@@ -2523,16 +2522,11 @@ struct RoomConnection {
     handle: JoinHandle<Result<()>>,
 }
 
-enum SessionStatus {
-    Continue,
-    Stopped,
-}
-
-pub enum CallState {
-    Connected,
-    Waiting,
-    RoomJoin(String),
-    RoomLeave(String),
+struct OptionalCallArgs<'a> {
+    audio_transport: Transport<TransportStream>,
+    control_transport: &'a mut Transport<TransportStream>,
+    message_receiver: AsyncReceiver<Message>,
+    state: &'a Arc<SessionState>,
 }
 
 /// Receives frames of audio data from the input processor and sends them to the socket
@@ -2646,21 +2640,27 @@ async fn audio_output(
 async fn loopback(
     input_receiver: AsyncReceiver<ProcessorMessage>,
     output_sender: AsyncSender<ProcessorMessage>,
-    cancel: CancellationToken,
+    cancel: &CancellationToken,
+    end_call: &Arc<Notify>,
 ) {
-    let loopback_future = async {
-        while let Ok(message) = input_receiver.recv().await {
-            if output_sender.try_send(message).is_err() {
+    loop {
+        select! {
+            _ = end_call.notified() => {
                 break;
             }
+            _ = cancel.cancelled() => {
+                break;
+            },
+            message = input_receiver.recv() => {
+                if let Ok(message) = message {
+                    if output_sender.try_send(message).is_err() {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            },
         }
-    };
-
-    select! {
-        result = loopback_future => result,
-        _ = cancel.cancelled() => {
-            debug!("Loopback ended");
-        },
     }
 }
 
@@ -2671,7 +2671,7 @@ async fn statistics_collector(
     latency: Arc<AtomicUsize>,
     upload_bandwidth: Arc<AtomicUsize>,
     download_bandwidth: Arc<AtomicUsize>,
-    callback: Arc<Mutex<dyn Fn(Statistics) -> DartFnFuture<()> + Send>>,
+    callback: DartVoid<Statistics>,
     cancel: CancellationToken,
 ) -> Result<()> {
     // the interval for statistics updates
@@ -2688,7 +2688,7 @@ async fn statistics_collector(
                 let latency = latency.load(Relaxed);
                 LATENCY.store(latency, Relaxed);
 
-                (callback.lock().await)(Statistics {
+                 invoke(&callback, Statistics {
                     input_level: level_from_window(input_rms.load(Relaxed), &mut input_max),
                     output_level: level_from_window(output_rms.load(Relaxed), &mut output_max),
                     latency,
@@ -2712,7 +2712,7 @@ async fn statistics_collector(
 
     // zero out the statistics when the collector ends
     let statistics = Statistics::default();
-    (callback.lock().await)(statistics).await;
+    invoke(&callback, statistics).await;
 
     LATENCY.store(0, Relaxed);
     LOSS.store(0_f64, Relaxed);

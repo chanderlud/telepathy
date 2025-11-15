@@ -85,6 +85,135 @@ Future<void> main() async {
 
   final chatStateController = ChatStateController(soundPlayer);
 
+  /// called when there is an incoming call
+  FutureOr<bool> acceptCall(
+      (String id, Uint8List? ringtone, DartNotify cancel) record) async {
+    final (String id, Uint8List? ringtone, DartNotify cancel) = record;
+
+    Contact? contact = settingsController.getContact(id);
+
+    if (stateController.isCallActive) {
+      return false;
+    } else if (contact == null) {
+      DebugConsole.warn('contact is null');
+      return false;
+    }
+
+    List<int> bytes;
+
+    if (ringtone == null) {
+      bytes = await readSeaBytes('incoming');
+    } else {
+      bytes = ringtone;
+    }
+
+    SoundHandle handle = await soundPlayer.play(bytes: bytes);
+
+    if (navigatorKey.currentState == null ||
+        !navigatorKey.currentState!.mounted) {
+      return false;
+    }
+
+    Future acceptedFuture =
+        acceptCallPrompt(navigatorKey.currentState!.context, contact);
+    Future cancelFuture = cancel.notified();
+
+    final result = await Future.any([acceptedFuture, cancelFuture]);
+
+    handle.cancel();
+
+    if (result == null) {
+      DebugConsole.debug('cancelled');
+
+      if (navigatorKey.currentState != null &&
+          navigatorKey.currentState!.mounted) {
+        Navigator.pop(navigatorKey.currentState!.context);
+      }
+
+      return false; // cancelled
+    } else if (result) {
+      stateController.setStatus('Connecting');
+      stateController.setActiveContact(contact);
+    }
+
+    return result;
+  }
+
+  /// called when a contact is needed in the backend
+  Contact? getContact(Uint8List peerId) {
+    try {
+      Contact? contact = settingsController.contacts.values
+          .firstWhere((Contact contact) => contact.idEq(id: peerId));
+      return contact.pubClone();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// called when the call state changes
+  FutureOr<void> callState(CallState state) async {
+    if (!stateController.isCallActive) {
+      return;
+    }
+
+    // ensure the outgoing sound has been canceled as the call is now active
+    outgoingSoundHandle?.cancel();
+    List<int> bytes;
+
+    switch (state) {
+      case CallState_Connected():
+        // handles the initial connect
+        bytes = await readSeaBytes('connected');
+        stateController.setStatus('Active');
+      case CallState_Waiting():
+        stateController.setStatus('Waiting for peers');
+        return;
+      case CallState_RoomJoin():
+        stateController.roomJoin(state.field0);
+        return; // TODO add room join sound
+      case CallState_RoomLeave():
+        stateController.roomLeave(state.field0);
+        return; // TODO add room leave sound
+      case CallState_CallEnded():
+        if (!stateController.isCallActive) {
+          DebugConsole.warn("call ended entered but there is no active call");
+          return;
+        }
+
+        stateController.endOfCall();
+        bytes = await readSeaBytes('call_ended');
+
+        if (state.field0.isNotEmpty &&
+            navigatorKey.currentState != null &&
+            navigatorKey.currentState!.mounted) {
+          showErrorDialog(
+              navigatorKey.currentState!.context,
+              state.field1 ? 'Call failed (remote)' : 'Call failed',
+              state.field0);
+        }
+    }
+
+    await soundPlayer.play(bytes: bytes);
+  }
+
+  /// called when the backend wants to start sessions
+  void startSessions(Telepathy telepathy) {
+    for (Contact contact in settingsController.contacts.values) {
+      telepathy.startSession(contact: contact);
+    }
+  }
+
+  TelepathyCallbacks callbacks = TelepathyCallbacks(
+      acceptCall: acceptCall,
+      getContact: getContact,
+      callState: callState,
+      sessionStatus: stateController.updateSession,
+      startSessions: startSessions,
+      statistics: statisticsController.setStatistics,
+      messageReceived: chatStateController.messageReceived,
+      managerActive: stateController.setSessionManager,
+      screenshareStarted: stateController.screenshareStarted);
+
   final telepathy = await Telepathy.newInstance(
       identity: settingsController.keypair,
       host: host,
@@ -92,129 +221,7 @@ Future<void> main() async {
       screenshareConfig: settingsController.screenshareConfig,
       overlay: overlay,
       codecConfig: settingsController.codecConfig,
-      // called when there is an incoming call
-      acceptCall: (String id, Uint8List? ringtone, DartNotify cancel) async {
-        Contact? contact = settingsController.getContact(id);
-
-        if (stateController.isCallActive) {
-          return false;
-        } else if (contact == null) {
-          DebugConsole.warn('contact is null');
-          return false;
-        }
-
-        List<int> bytes;
-
-        if (ringtone == null) {
-          bytes = await readSeaBytes('incoming');
-        } else {
-          bytes = ringtone;
-        }
-
-        SoundHandle handle = await soundPlayer.play(bytes: bytes);
-
-        if (navigatorKey.currentState == null ||
-            !navigatorKey.currentState!.mounted) {
-          return false;
-        }
-
-        Future acceptedFuture =
-            acceptCallPrompt(navigatorKey.currentState!.context, contact);
-        Future cancelFuture = cancel.notified();
-
-        final result = await Future.any([acceptedFuture, cancelFuture]);
-
-        handle.cancel();
-
-        if (result == null) {
-          DebugConsole.debug('cancelled');
-
-          if (navigatorKey.currentState != null &&
-              navigatorKey.currentState!.mounted) {
-            Navigator.pop(navigatorKey.currentState!.context);
-          }
-
-          return false; // cancelled
-        } else if (result) {
-          stateController.setStatus('Connecting');
-          stateController.setActiveContact(contact);
-        }
-
-        return result;
-      },
-      // called when a call ends
-      callEnded: (String message, bool remote) async {
-        if (!stateController.isCallActive) {
-          DebugConsole.warn("call ended entered but there is no active call");
-          return;
-        }
-
-        outgoingSoundHandle?.cancel();
-        stateController.endOfCall();
-
-        List<int> bytes = await readSeaBytes('call_ended');
-        await soundPlayer.play(bytes: bytes);
-
-        if (message.isNotEmpty &&
-            navigatorKey.currentState != null &&
-            navigatorKey.currentState!.mounted) {
-          showErrorDialog(navigatorKey.currentState!.context,
-              remote ? 'Call failed (remote)' : 'Call failed', message);
-        }
-      },
-      // called when a contact is needed in the backend
-      getContact: (Uint8List peerId) {
-        try {
-          Contact? contact = settingsController.contacts.values
-              .firstWhere((Contact contact) => contact.idEq(id: peerId));
-          return contact.pubClone();
-        } catch (_) {
-          return null;
-        }
-      },
-      // called when the call state changes
-      callState: (CallState state) async {
-        if (!stateController.isCallActive) {
-          return;
-        }
-
-        // ensure the outgoing sound has been canceled as the call is now active
-        outgoingSoundHandle?.cancel();
-        List<int> bytes;
-
-        switch (state) {
-          case CallState_Connected():
-            // handles the initial connect
-            bytes = await readSeaBytes('connected');
-            stateController.setStatus('Active');
-          case CallState_Waiting():
-            stateController.setStatus('Waiting for peers');
-            return;
-          case CallState_RoomJoin():
-            stateController.roomJoin(state.field0);
-            return; // TODO add room join sound
-          case CallState_RoomLeave():
-            stateController.roomLeave(state.field0);
-            return; // TODO add room leave sound
-        }
-
-        await soundPlayer.play(bytes: bytes);
-      },
-      // called when a session changes status
-      sessionStatus: stateController.updateSession,
-      // called when the backend wants to start sessions
-      startSessions: (Telepathy telepathy) {
-        for (Contact contact in settingsController.contacts.values) {
-          telepathy.startSession(contact: contact);
-        }
-      },
-      // called when the backend has updated statistics
-      statistics: statisticsController.setStatistics,
-      // called when a new chat message is received by the backend
-      messageReceived: chatStateController.messageReceived,
-      // called when the session manager state changes
-      managerActive: stateController.setSessionManager,
-      screenshareStarted: stateController.screenshareStarted);
+      callbacks: callbacks);
 
   final audioDevices = AudioDevices(telepathy: telepathy);
 
@@ -402,18 +409,20 @@ class HomePage extends StatelessWidget {
 
                             // sort contacts by session status then nickname
                             contacts.sort((a, b) {
-                              String aStatus = stateController.sessionStatus(a);
-                              String bStatus = stateController.sessionStatus(b);
+                              SessionStatus aStatus =
+                                  stateController.sessionStatus(a);
+                              SessionStatus bStatus =
+                                  stateController.sessionStatus(b);
 
                               if (aStatus == bStatus) {
                                 return a.nickname().compareTo(b.nickname());
-                              } else if (aStatus == 'Connected') {
+                              } else if (aStatus == SessionStatus.connected) {
                                 return -1;
-                              } else if (bStatus == 'Connected') {
+                              } else if (bStatus == SessionStatus.connected) {
                                 return 1;
-                              } else if (aStatus == 'Connecting') {
+                              } else if (aStatus == SessionStatus.connecting) {
                                 return -1;
-                              } else if (bStatus == 'Connecting') {
+                              } else if (bStatus == SessionStatus.connecting) {
                                 return 1;
                               } else {
                                 return 0;
@@ -870,7 +879,15 @@ class ContactFormState extends State<ContactForm> {
                         showErrorDialog(context, 'Failed to add room',
                             'Peer IDs cannot be empty');
                         return;
-                      } else if (widget.settingsController.rooms.keys
+                      }
+
+                      // the room must always contain the current profile's peer id
+                      if (!_peerIds
+                          .contains(widget.settingsController.peerId)) {
+                        _peerIds.add(widget.settingsController.peerId);
+                      }
+
+                      if (widget.settingsController.rooms.keys
                           .contains(roomHash(peers: _peerIds))) {
                         showErrorDialog(context, 'Failed to add room',
                             'It appears this room already exists');
@@ -1071,9 +1088,8 @@ class ContactWidgetState extends State<ContactWidget> {
   @override
   Widget build(BuildContext context) {
     bool active = widget.stateController.isActiveContact(widget.contact);
-    String status =
-        widget.stateController.sessions[widget.contact.peerId()] ?? 'Unknown';
-    bool online = status == 'Connected';
+    SessionStatus status = widget.stateController.sessionStatus(widget.contact);
+    bool online = status == SessionStatus.connected;
 
     return InkWell(
       onHover: (hover) {
@@ -1194,21 +1210,21 @@ class ContactWidgetState extends State<ContactWidget> {
           children: [
             CircleAvatar(
               maxRadius: 17,
-              child: SvgPicture.asset(profilePath(isHovered, widget.contact)),
+              child: SvgPicture.asset(isHovered ? 'assets/icons/Edit.svg' : 'assets/icons/Profile.svg'),
             ),
             const SizedBox(width: 10),
             Text(widget.contact.nickname(),
                 style: const TextStyle(fontSize: 16)),
             const Spacer(),
-            if (status == 'Inactive')
+            if (status == SessionStatus.inactive)
               IconButton(
                   onPressed: () {
                     widget.telepathy.startSession(contact: widget.contact);
                   },
                   icon: SvgPicture.asset('assets/icons/Restart.svg',
                       semanticsLabel: 'Retry the session initiation')),
-            if (status == 'Inactive') const SizedBox(width: 4),
-            if (status == 'Connecting')
+            if (status == SessionStatus.inactive) const SizedBox(width: 4),
+            if (status == SessionStatus.connecting)
               const Padding(
                 padding: EdgeInsets.symmetric(vertical: 10),
                 child: SizedBox(
@@ -1216,8 +1232,8 @@ class ContactWidgetState extends State<ContactWidget> {
                     height: 20,
                     child: CircularProgressIndicator(strokeWidth: 3)),
               ),
-            if (status == 'Connecting') const SizedBox(width: 10),
-            if (!online && status != 'Connecting')
+            if (status == SessionStatus.connecting) const SizedBox(width: 10),
+            if (!online && status != SessionStatus.connecting)
               Padding(
                   padding: const EdgeInsets.only(left: 7, right: 10),
                   child: SvgPicture.asset(
@@ -1310,8 +1326,6 @@ class RoomWidgetState extends State<RoomWidget> {
 
   @override
   Widget build(BuildContext context) {
-    bool active = widget.stateController.isActiveRoom(widget.room);
-
     return InkWell(
       onHover: (hover) {
         setState(() {
@@ -1339,62 +1353,44 @@ class RoomWidgetState extends State<RoomWidget> {
             const SizedBox(width: 10),
             Text(widget.room.nickname, style: const TextStyle(fontSize: 16)),
             const Spacer(),
-            if (active)
-              IconButton(
-                visualDensity: VisualDensity.comfortable,
-                icon: SvgPicture.asset(
-                  'assets/icons/PhoneOff.svg',
-                  semanticsLabel: 'End call icon',
-                  width: 32,
-                ),
-                onPressed: () async {
-                  outgoingSoundHandle?.cancel();
-
-                  widget.telepathy.endCall();
-                  widget.stateController.endOfCall();
-
-                  List<int> bytes = await readSeaBytes('call_ended');
-                  await widget.player.play(bytes: bytes);
-                },
+            IconButton(
+              visualDensity: VisualDensity.comfortable,
+              icon: SvgPicture.asset(
+                'assets/icons/Phone.svg',
+                semanticsLabel: 'Call icon',
+                width: 32,
               ),
-            if (!active)
-              IconButton(
-                visualDensity: VisualDensity.comfortable,
-                icon: SvgPicture.asset(
-                  'assets/icons/Phone.svg',
-                  semanticsLabel: 'Call icon',
-                  width: 32,
-                ),
-                onPressed: () async {
-                  if (widget.stateController.isCallActive) {
-                    showErrorDialog(context, 'Call failed',
-                        'There is a call already active');
-                    return;
-                  } else if (widget.stateController.inAudioTest) {
-                    showErrorDialog(context, 'Call failed',
-                        'Cannot make a call while in an audio test');
-                    return;
-                  } else if (widget.stateController.callEndedRecently) {
-                    // if the call button is pressed right after a call ended, we assume the user did not want to make a call
-                    return;
-                  }
+              onPressed: () async {
+                if (widget.stateController.isCallActive) {
+                  showErrorDialog(
+                      context, 'Call failed', 'There is a call already active');
+                  return;
+                } else if (widget.stateController.inAudioTest) {
+                  showErrorDialog(context, 'Call failed',
+                      'Cannot make a call while in an audio test');
+                  return;
+                } else if (widget.stateController.callEndedRecently) {
+                  // if the call button is pressed right after a call ended, we assume the user did not want to make a call
+                  return;
+                }
 
-                  widget.stateController.setStatus('Connecting');
-                  List<int> bytes = await readSeaBytes('outgoing');
-                  outgoingSoundHandle = await widget.player.play(bytes: bytes);
+                widget.stateController.setStatus('Connecting');
+                List<int> bytes = await readSeaBytes('outgoing');
+                outgoingSoundHandle = await widget.player.play(bytes: bytes);
 
-                  try {
-                    await widget.telepathy
-                        .joinRoom(memberStrings: widget.room.peerIds);
-                    widget.stateController.setActiveRoom(widget.room);
-                  } on DartError catch (e) {
-                    widget.stateController.setStatus('Inactive');
-                    outgoingSoundHandle?.cancel();
-                    if (!context.mounted) return;
-                    showErrorDialog(context, 'Call failed', e.message);
-                  }
-                },
-              )
+                try {
+                  await widget.telepathy
+                      .joinRoom(memberStrings: widget.room.peerIds);
+                  widget.room.online.clear();
+                  widget.stateController.setActiveRoom(widget.room);
+                } on DartError catch (e) {
+                  widget.stateController.setStatus('Inactive');
+                  outgoingSoundHandle?.cancel();
+                  if (!context.mounted) return;
+                  showErrorDialog(context, 'Call failed', e.message);
+                }
+              },
+            )
           ],
         ),
       ),
@@ -2171,6 +2167,15 @@ class CallDetailsWidget extends StatelessWidget {
                   ],
                 );
               }),
+          const SizedBox(height: 6),
+        ListenableBuilder(
+            listenable: stateController,
+            builder: (BuildContext context, Widget? child) {
+              return Text(
+                'Connection Type: ${stateController._activeRoom != null ? "Mesh" : "Direct"}',
+                style: TextStyle(fontSize: 16),
+              );
+            }),
           const Spacer(),
           const Text('Input level'),
           const SizedBox(height: 7),
@@ -2561,7 +2566,7 @@ class StateController extends ChangeNotifier {
   final Stopwatch _callTimer = Stopwatch();
 
   /// peerId, status
-  final Map<String, String> sessions = {};
+  final Map<String, SessionStatus> sessions = {};
 
   /// active, restartable
   (bool, bool) _sessionManager = (false, false);
@@ -2615,8 +2620,9 @@ class StateController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void setSessionManager(bool active, bool restartable) {
-    _sessionManager = (active, restartable);
+  /// called when the session manager state changes
+  void setSessionManager((bool active, bool restartable) record) {
+    _sessionManager = record;
     notifyListeners();
   }
 
@@ -2639,17 +2645,17 @@ class StateController extends ChangeNotifier {
   }
 
   bool isOnlineContact(Contact contact) {
-    String status = sessions[contact.peerId()] ?? 'Unknown';
-    return status == 'Connected';
+    return sessionStatus(contact) == SessionStatus.connected;
   }
 
-  void updateSession(String peerId, String status) {
-    sessions[peerId] = status;
+  /// called when a session changes status
+  void updateSession((String peerId, SessionStatus status) record) {
+    sessions[record.$1] = record.$2;
     notifyListeners();
   }
 
-  String sessionStatus(Contact contact) {
-    return sessions[contact.peerId()] ?? 'Unknown';
+  SessionStatus sessionStatus(Contact contact) {
+    return sessions[contact.peerId()] ?? SessionStatus.unknown;
   }
 
   void deafen() {
@@ -2678,15 +2684,15 @@ class StateController extends ChangeNotifier {
     });
   }
 
-  void screenshareStarted(DartNotify stop, bool sending) {
-    if (sending) {
+  void screenshareStarted((DartNotify stop, bool sending) record) {
+    if (record.$2) {
       DebugConsole.log('Sending screenshare started');
-      _stopSendingScreenshare = stop;
+      _stopSendingScreenshare = record.$1;
       isSendingScreenshare = true;
 
       // this catches the sending screenshare being closed by the receiver
       Future.microtask(() async {
-        await stop.notified();
+        await record.$1.notified();
         // if the screen share is still sending, stop the screenshare
         if (isSendingScreenshare) {
           stopScreenshare(true);
@@ -2694,7 +2700,7 @@ class StateController extends ChangeNotifier {
       });
     } else {
       DebugConsole.log('Receiving screenshare started');
-      _stopReceivingScreenshare = stop;
+      _stopReceivingScreenshare = record.$1;
       isReceivingScreenshare = true;
     }
 
@@ -2719,6 +2725,7 @@ class StateController extends ChangeNotifier {
 
   /// a group of actions run when the call ends
   void endOfCall() {
+    _activeRoom?.online.clear();
     setActiveContact(null);
     setActiveRoom(null);
     setStatus('Inactive');
@@ -2748,6 +2755,7 @@ class StatisticsController extends ChangeNotifier {
 
   double get loss => _statistics == null ? 0 : _statistics!.loss;
 
+  /// called when the backend has updated statistics
   void setStatistics(Statistics statistics) {
     _statistics = statistics;
     notifyListeners();
@@ -2793,7 +2801,7 @@ class ChatStateController extends ChangeNotifier {
 
   ChatStateController(this.soundPlayer);
 
-  /// called when the call receives a message
+  /// called when a new chat message is received by the backend
   void messageReceived(ChatMessage message) async {
     messages.add(message);
 
@@ -3103,15 +3111,5 @@ Future<File?> saveFile(Uint8List fileBytes, String fileName) async {
   } else {
     DebugConsole.warn('Unable to get downloads directory');
     return null;
-  }
-}
-
-String profilePath(bool isHovered, Contact contact) {
-  if (isHovered) {
-    return 'assets/icons/Edit.svg';
-  } else if (contact.extraOne()) {
-    return 'assets/icons/Extra1.svg';
-  } else {
-    return 'assets/icons/Profile.svg';
   }
 }

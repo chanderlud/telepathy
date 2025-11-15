@@ -52,7 +52,6 @@ pub(crate) enum ErrorKind {
     NoOutputDevice,
     NoInputDevice,
     InvalidContactFormat,
-    InCall,
     UnknownSampleFormat,
     InvalidWav,
     TryFromSlice(TryFromSliceError),
@@ -61,10 +60,10 @@ pub(crate) enum ErrorKind {
     UnexpectedSwarmEvent,
     SwarmBuild,
     SwarmEnded,
-    CallEnded,
     #[cfg(not(target_family = "wasm"))]
     InvalidEncoder,
     RoomStateMissing,
+    StreamsEnded,
 }
 
 impl From<std::io::Error> for Error {
@@ -330,7 +329,6 @@ impl Display for Error {
                 ErrorKind::NoOutputDevice => "No output device found".to_string(),
                 ErrorKind::NoInputDevice => "No input device found".to_string(),
                 ErrorKind::InvalidContactFormat => "Invalid contact format".to_string(),
-                ErrorKind::InCall => "Cannot change this option while a call is active".to_string(),
                 ErrorKind::UnknownSampleFormat => "Unknown sample format".to_string(),
                 ErrorKind::InvalidWav => "Invalid WAV file".to_string(),
                 ErrorKind::TransportSend => "Transport failed on send".to_string(),
@@ -338,11 +336,20 @@ impl Display for Error {
                 ErrorKind::UnexpectedSwarmEvent => "Unexpected swarm event".to_string(),
                 ErrorKind::SwarmBuild => "Swarm build error".to_string(),
                 ErrorKind::SwarmEnded => "Swarm ended".to_string(),
-                ErrorKind::CallEnded => "Call ended".to_string(),
                 #[cfg(not(target_family = "wasm"))]
                 ErrorKind::InvalidEncoder => "Invalid encoder".to_string(),
                 ErrorKind::RoomStateMissing => "Room state missing".to_string(),
+                ErrorKind::StreamsEnded => "Streams ended".to_string(),
             }
+        )
+    }
+}
+
+impl Error {
+    pub(crate) fn is_session_critical(&self) -> bool {
+        matches!(
+            self.kind,
+            ErrorKind::KanalReceive(_) | ErrorKind::TransportRecv | ErrorKind::TransportSend
         )
     }
 }

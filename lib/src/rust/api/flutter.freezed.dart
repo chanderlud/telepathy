@@ -3,7 +3,7 @@
 // ignore_for_file: type=lint
 // ignore_for_file: unused_element, deprecated_member_use, deprecated_member_use_from_same_package, use_function_type_syntax_for_parameters, unnecessary_const, avoid_init_to_null, invalid_override_different_default_values_named, prefer_expression_function_bodies, annotate_overrides, invalid_annotation_target, unnecessary_question_mark
 
-part of 'telepathy.dart';
+part of 'flutter.dart';
 
 // **************************************************************************
 // FreezedGenerator
@@ -54,6 +54,7 @@ extension CallStatePatterns on CallState {
     TResult Function(CallState_Waiting value)? waiting,
     TResult Function(CallState_RoomJoin value)? roomJoin,
     TResult Function(CallState_RoomLeave value)? roomLeave,
+    TResult Function(CallState_CallEnded value)? callEnded,
     required TResult orElse(),
   }) {
     final _that = this;
@@ -66,6 +67,8 @@ extension CallStatePatterns on CallState {
         return roomJoin(_that);
       case CallState_RoomLeave() when roomLeave != null:
         return roomLeave(_that);
+      case CallState_CallEnded() when callEnded != null:
+        return callEnded(_that);
       case _:
         return orElse();
     }
@@ -90,6 +93,7 @@ extension CallStatePatterns on CallState {
     required TResult Function(CallState_Waiting value) waiting,
     required TResult Function(CallState_RoomJoin value) roomJoin,
     required TResult Function(CallState_RoomLeave value) roomLeave,
+    required TResult Function(CallState_CallEnded value) callEnded,
   }) {
     final _that = this;
     switch (_that) {
@@ -101,6 +105,8 @@ extension CallStatePatterns on CallState {
         return roomJoin(_that);
       case CallState_RoomLeave():
         return roomLeave(_that);
+      case CallState_CallEnded():
+        return callEnded(_that);
     }
   }
 
@@ -122,6 +128,7 @@ extension CallStatePatterns on CallState {
     TResult? Function(CallState_Waiting value)? waiting,
     TResult? Function(CallState_RoomJoin value)? roomJoin,
     TResult? Function(CallState_RoomLeave value)? roomLeave,
+    TResult? Function(CallState_CallEnded value)? callEnded,
   }) {
     final _that = this;
     switch (_that) {
@@ -133,6 +140,8 @@ extension CallStatePatterns on CallState {
         return roomJoin(_that);
       case CallState_RoomLeave() when roomLeave != null:
         return roomLeave(_that);
+      case CallState_CallEnded() when callEnded != null:
+        return callEnded(_that);
       case _:
         return null;
     }
@@ -156,6 +165,7 @@ extension CallStatePatterns on CallState {
     TResult Function()? waiting,
     TResult Function(String field0)? roomJoin,
     TResult Function(String field0)? roomLeave,
+    TResult Function(String field0, bool field1)? callEnded,
     required TResult orElse(),
   }) {
     final _that = this;
@@ -168,6 +178,8 @@ extension CallStatePatterns on CallState {
         return roomJoin(_that.field0);
       case CallState_RoomLeave() when roomLeave != null:
         return roomLeave(_that.field0);
+      case CallState_CallEnded() when callEnded != null:
+        return callEnded(_that.field0, _that.field1);
       case _:
         return orElse();
     }
@@ -192,6 +204,7 @@ extension CallStatePatterns on CallState {
     required TResult Function() waiting,
     required TResult Function(String field0) roomJoin,
     required TResult Function(String field0) roomLeave,
+    required TResult Function(String field0, bool field1) callEnded,
   }) {
     final _that = this;
     switch (_that) {
@@ -203,6 +216,8 @@ extension CallStatePatterns on CallState {
         return roomJoin(_that.field0);
       case CallState_RoomLeave():
         return roomLeave(_that.field0);
+      case CallState_CallEnded():
+        return callEnded(_that.field0, _that.field1);
     }
   }
 
@@ -224,6 +239,7 @@ extension CallStatePatterns on CallState {
     TResult? Function()? waiting,
     TResult? Function(String field0)? roomJoin,
     TResult? Function(String field0)? roomLeave,
+    TResult? Function(String field0, bool field1)? callEnded,
   }) {
     final _that = this;
     switch (_that) {
@@ -235,6 +251,8 @@ extension CallStatePatterns on CallState {
         return roomJoin(_that.field0);
       case CallState_RoomLeave() when roomLeave != null:
         return roomLeave(_that.field0);
+      case CallState_CallEnded() when callEnded != null:
+        return callEnded(_that.field0, _that.field1);
       case _:
         return null;
     }
@@ -405,6 +423,77 @@ class _$CallState_RoomLeaveCopyWithImpl<$Res>
           ? _self.field0
           : field0 // ignore: cast_nullable_to_non_nullable
               as String,
+    ));
+  }
+}
+
+/// @nodoc
+
+class CallState_CallEnded extends CallState {
+  const CallState_CallEnded(this.field0, this.field1) : super._();
+
+  final String field0;
+  final bool field1;
+
+  /// Create a copy of CallState
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @pragma('vm:prefer-inline')
+  $CallState_CallEndedCopyWith<CallState_CallEnded> get copyWith =>
+      _$CallState_CallEndedCopyWithImpl<CallState_CallEnded>(this, _$identity);
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is CallState_CallEnded &&
+            (identical(other.field0, field0) || other.field0 == field0) &&
+            (identical(other.field1, field1) || other.field1 == field1));
+  }
+
+  @override
+  int get hashCode => Object.hash(runtimeType, field0, field1);
+
+  @override
+  String toString() {
+    return 'CallState.callEnded(field0: $field0, field1: $field1)';
+  }
+}
+
+/// @nodoc
+abstract mixin class $CallState_CallEndedCopyWith<$Res>
+    implements $CallStateCopyWith<$Res> {
+  factory $CallState_CallEndedCopyWith(
+          CallState_CallEnded value, $Res Function(CallState_CallEnded) _then) =
+      _$CallState_CallEndedCopyWithImpl;
+  @useResult
+  $Res call({String field0, bool field1});
+}
+
+/// @nodoc
+class _$CallState_CallEndedCopyWithImpl<$Res>
+    implements $CallState_CallEndedCopyWith<$Res> {
+  _$CallState_CallEndedCopyWithImpl(this._self, this._then);
+
+  final CallState_CallEnded _self;
+  final $Res Function(CallState_CallEnded) _then;
+
+  /// Create a copy of CallState
+  /// with the given fields replaced by the non-null parameter values.
+  @pragma('vm:prefer-inline')
+  $Res call({
+    Object? field0 = null,
+    Object? field1 = null,
+  }) {
+    return _then(CallState_CallEnded(
+      null == field0
+          ? _self.field0
+          : field0 // ignore: cast_nullable_to_non_nullable
+              as String,
+      null == field1
+          ? _self.field1
+          : field1 // ignore: cast_nullable_to_non_nullable
+              as bool,
     ));
   }
 }

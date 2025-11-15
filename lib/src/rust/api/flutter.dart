@@ -6,9 +6,13 @@
 import '../frb_generated.dart';
 import 'error.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
+import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
+import 'telepathy.dart';
+part 'flutter.freezed.dart';
 
+// These functions are ignored because they are not marked as `pub`: `invoke`, `notify`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `SEND_TO_DART_LOGGER_STREAM_SINK`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `deref`, `do_logs`, `fmt`, `fmt`, `fmt`, `initialize`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `deref`, `do_logs`, `fmt`, `fmt`, `fmt`, `initialize`
 
 Stream<String> createLogStream() =>
     RustLib.instance.api.crateApiFlutterCreateLogStream();
@@ -69,8 +73,6 @@ abstract class CodecConfig implements RustOpaqueInterface {
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Contact>>
 abstract class Contact implements RustOpaqueInterface {
-  bool extraOne();
-
   static Contact fromParts(
           {required String id,
           required String nickname,
@@ -158,6 +160,51 @@ abstract class ScreenshareConfig implements RustOpaqueInterface {
       int? height});
 }
 
+// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<TelepathyCallbacks>>
+abstract class TelepathyCallbacks implements RustOpaqueInterface {
+  factory TelepathyCallbacks(
+          {required FutureOr<bool> Function((String, Uint8List?, DartNotify))
+              acceptCall,
+          required FutureOr<Contact?> Function(Uint8List) getContact,
+          required FutureOr<void> Function(CallState) callState,
+          required FutureOr<void> Function((String, SessionStatus))
+              sessionStatus,
+          required FutureOr<void> Function(Telepathy) startSessions,
+          required FutureOr<void> Function(Statistics) statistics,
+          required FutureOr<void> Function(ChatMessage) messageReceived,
+          required FutureOr<void> Function((bool, bool)) managerActive,
+          required FutureOr<void> Function((DartNotify, bool))
+              screenshareStarted}) =>
+      RustLib.instance.api.crateApiFlutterTelepathyCallbacksNew(
+          acceptCall: acceptCall,
+          getContact: getContact,
+          callState: callState,
+          sessionStatus: sessionStatus,
+          startSessions: startSessions,
+          statistics: statistics,
+          messageReceived: messageReceived,
+          managerActive: managerActive,
+          screenshareStarted: screenshareStarted);
+}
+
+@freezed
+sealed class CallState with _$CallState {
+  const CallState._();
+
+  const factory CallState.connected() = CallState_Connected;
+  const factory CallState.waiting() = CallState_Waiting;
+  const factory CallState.roomJoin(
+    String field0,
+  ) = CallState_RoomJoin;
+  const factory CallState.roomLeave(
+    String field0,
+  ) = CallState_RoomLeave;
+  const factory CallState.callEnded(
+    String field0,
+    bool field1,
+  ) = CallState_CallEnded;
+}
+
 class SendToDartLogger {
   const SendToDartLogger();
 
@@ -171,6 +218,14 @@ class SendToDartLogger {
   bool operator ==(Object other) =>
       identical(this, other) ||
       other is SendToDartLogger && runtimeType == other.runtimeType;
+}
+
+enum SessionStatus {
+  connecting,
+  connected,
+  inactive,
+  unknown,
+  ;
 }
 
 /// processed statistics for the frontend

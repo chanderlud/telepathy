@@ -1,6 +1,7 @@
 use crate::api::error::{DartError, Error, ErrorKind};
 use crate::api::screenshare;
 use crate::api::screenshare::{Decoder, Encoder};
+use crate::api::telepathy::Telepathy;
 use crate::api::utils::{
     atomic_u32_deserialize, atomic_u32_serialize, rwlock_option_recording_config,
 };
@@ -11,7 +12,7 @@ use chrono::{DateTime, Local};
 use fast_log::Config;
 #[cfg(not(target_family = "wasm"))]
 use fast_log::appender::{FastLogRecord, LogAppender};
-use flutter_rust_bridge::frb;
+use flutter_rust_bridge::{DartFnFuture, frb};
 use lazy_static::lazy_static;
 use libp2p::PeerId;
 use libp2p::identity::Keypair;
@@ -28,7 +29,7 @@ use std::sync::{Arc, Once};
 use tokio::net::lookup_host;
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 use tokio::spawn;
-use tokio::sync::{Notify, RwLock};
+use tokio::sync::{Mutex, Notify, RwLock};
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 use tokio::time::Instant;
 use uuid::Uuid;
@@ -38,6 +39,88 @@ static INIT_LOGGER_ONCE: Once = Once::new();
 lazy_static! {
     static ref SEND_TO_DART_LOGGER_STREAM_SINK: parking_lot::RwLock<Option<StreamSink<String>>> =
         parking_lot::RwLock::new(None);
+}
+
+pub(crate) type DartVoid<A> = Arc<Mutex<dyn Fn(A) -> DartFnFuture<()> + Send>>;
+pub(crate) type DartMethod<A, R> = Arc<Mutex<dyn Fn(A) -> DartFnFuture<R> + Send>>;
+pub(crate) type AcceptCallArgs = (String, Option<Vec<u8>>, DartNotify);
+pub(crate) type SessionStatusArgs = (String, SessionStatus);
+pub(crate) type ScreenshareStartedArgs = (DartNotify, bool);
+pub(crate) type ManagerActiveArgs = (bool, bool);
+
+#[frb(opaque)]
+#[derive(Clone)]
+pub struct TelepathyCallbacks {
+    /// Prompts the user to accept a call
+    pub(crate) accept_call: DartMethod<AcceptCallArgs, bool>,
+
+    /// Fetches a contact from the front end
+    pub(crate) get_contact: DartMethod<Vec<u8>, Option<Contact>>,
+
+    /// Notifies the frontend that the call has disconnected or reconnected
+    pub(crate) call_state: DartVoid<CallState>,
+
+    /// Alerts the UI when the status of a session changes
+    pub(crate) session_status: DartVoid<SessionStatusArgs>,
+
+    /// Starts a session for each of the UI's contacts
+    pub(crate) start_sessions: DartVoid<Telepathy>,
+
+    /// Used to report statistics to the frontend
+    pub(crate) statistics: DartVoid<Statistics>,
+
+    /// Used to send chat messages to the frontend
+    pub(crate) message_received: DartVoid<ChatMessage>,
+
+    /// Alerts the UI when the manager is active and restartable
+    pub(crate) manager_active: DartVoid<ManagerActiveArgs>,
+
+    /// Called when a screenshare starts
+    #[allow(dead_code)]
+    pub(crate) screenshare_started: DartVoid<ScreenshareStartedArgs>,
+}
+
+impl TelepathyCallbacks {
+    #[frb(sync)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        accept_call: impl Fn(AcceptCallArgs) -> DartFnFuture<bool> + Send + 'static,
+        get_contact: impl Fn(Vec<u8>) -> DartFnFuture<Option<Contact>> + Send + 'static,
+        call_state: impl Fn(CallState) -> DartFnFuture<()> + Send + 'static,
+        session_status: impl Fn(SessionStatusArgs) -> DartFnFuture<()> + Send + 'static,
+        start_sessions: impl Fn(Telepathy) -> DartFnFuture<()> + Send + 'static,
+        statistics: impl Fn(Statistics) -> DartFnFuture<()> + Send + 'static,
+        message_received: impl Fn(ChatMessage) -> DartFnFuture<()> + Send + 'static,
+        manager_active: impl Fn(ManagerActiveArgs) -> DartFnFuture<()> + Send + 'static,
+        screenshare_started: impl Fn(ScreenshareStartedArgs) -> DartFnFuture<()> + Send + 'static,
+    ) -> Self {
+        Self {
+            accept_call: Arc::new(Mutex::new(accept_call)),
+            get_contact: Arc::new(Mutex::new(get_contact)),
+            call_state: Arc::new(Mutex::new(call_state)),
+            session_status: Arc::new(Mutex::new(session_status)),
+            start_sessions: Arc::new(Mutex::new(start_sessions)),
+            statistics: Arc::new(Mutex::new(statistics)),
+            message_received: Arc::new(Mutex::new(message_received)),
+            manager_active: Arc::new(Mutex::new(manager_active)),
+            screenshare_started: Arc::new(Mutex::new(screenshare_started)),
+        }
+    }
+}
+
+pub enum CallState {
+    Connected,
+    Waiting,
+    RoomJoin(String),
+    RoomLeave(String),
+    CallEnded(String, bool),
+}
+
+pub enum SessionStatus {
+    Connecting,
+    Connected,
+    Inactive,
+    Unknown,
 }
 
 #[derive(Clone, Debug)]
@@ -105,17 +188,6 @@ impl Contact {
     #[frb(sync)]
     pub fn id_eq(&self, id: Vec<u8>) -> bool {
         self.peer_id.to_bytes() == id
-    }
-
-    #[frb(sync)]
-    pub fn extra_one(&self) -> bool {
-        PeerId::from_bytes(&[
-            0x00, 0x24, 0x08, 0x01, 0x12, 0x20, 0x7f, 0x0c, 0x11, 0xc8, 0x6d, 0x3b, 0x73, 0x11,
-            0x55, 0x5d, 0x7a, 0xfe, 0x59, 0x5f, 0xad, 0xcf, 0x49, 0xe4, 0x0f, 0x70, 0x7d, 0x04,
-            0xb0, 0x55, 0xea, 0x81, 0xdc, 0x7f, 0xf8, 0x22, 0x16, 0x9d,
-        ])
-        .map(|p| p == self.peer_id)
-        .unwrap_or(false)
     }
 }
 
@@ -603,4 +675,12 @@ pub fn room_hash(peers: Vec<String>) -> Result<String, DartError> {
 #[frb(sync)]
 pub fn validate_peer_id(peer_id: String) -> bool {
     PeerId::from_str(&peer_id).is_ok()
+}
+
+pub(crate) async fn notify<A>(void: &DartVoid<A>, args: A) {
+    (void.lock().await)(args).await
+}
+
+pub(crate) async fn invoke<A, R>(method: &DartMethod<A, R>, args: A) -> R {
+    (method.lock().await)(args).await
 }

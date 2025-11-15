@@ -69,6 +69,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   CrossPlatformFinalizerArg get rust_arc_decrement_strong_count_TelepathyPtr =>
       wire._rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathyPtr;
 
+  CrossPlatformFinalizerArg
+      get rust_arc_decrement_strong_count_TelepathyCallbacksPtr => wire
+          ._rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathyCallbacksPtr;
+
   @protected
   AnyhowException dco_decode_AnyhowException(dynamic raw);
 
@@ -135,6 +139,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   Telepathy
       dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
+          dynamic raw);
+
+  @protected
+  TelepathyCallbacks
+      dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathyCallbacks(
           dynamic raw);
 
   @protected
@@ -213,33 +222,8 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
           dynamic raw);
 
   @protected
-  FutureOr<void> Function(DartNotify, bool)
-      dco_decode_DartFn_Inputs_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDartNotify_bool_Output_unit_AnyhowException(
-          dynamic raw);
-
-  @protected
   FutureOr<void> Function(Telepathy)
       dco_decode_DartFn_Inputs_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy_Output_unit_AnyhowException(
-          dynamic raw);
-
-  @protected
-  FutureOr<void> Function(String, String)
-      dco_decode_DartFn_Inputs_String_String_Output_unit_AnyhowException(
-          dynamic raw);
-
-  @protected
-  FutureOr<void> Function(String, bool)
-      dco_decode_DartFn_Inputs_String_bool_Output_unit_AnyhowException(
-          dynamic raw);
-
-  @protected
-  FutureOr<bool> Function(String, Uint8List?, DartNotify)
-      dco_decode_DartFn_Inputs_String_opt_list_prim_u_8_strict_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDartNotify_Output_bool_AnyhowException(
-          dynamic raw);
-
-  @protected
-  FutureOr<void> Function(bool, bool)
-      dco_decode_DartFn_Inputs_bool_bool_Output_unit_AnyhowException(
           dynamic raw);
 
   @protected
@@ -250,6 +234,26 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   FutureOr<Contact?> Function(Uint8List)
       dco_decode_DartFn_Inputs_list_prim_u_8_strict_Output_opt_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerContact_AnyhowException(
+          dynamic raw);
+
+  @protected
+  FutureOr<void> Function((DartNotify, bool))
+      dco_decode_DartFn_Inputs_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_dart_notify_bool_Output_unit_AnyhowException(
+          dynamic raw);
+
+  @protected
+  FutureOr<void> Function((bool, bool))
+      dco_decode_DartFn_Inputs_record_bool_bool_Output_unit_AnyhowException(
+          dynamic raw);
+
+  @protected
+  FutureOr<bool> Function((String, Uint8List?, DartNotify))
+      dco_decode_DartFn_Inputs_record_string_opt_list_prim_u_8_strict_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_dart_notify_Output_bool_AnyhowException(
+          dynamic raw);
+
+  @protected
+  FutureOr<void> Function((String, SessionStatus))
+      dco_decode_DartFn_Inputs_record_string_session_status_Output_unit_AnyhowException(
           dynamic raw);
 
   @protected
@@ -326,6 +330,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
           dynamic raw);
 
   @protected
+  TelepathyCallbacks
+      dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathyCallbacks(
+          dynamic raw);
+
+  @protected
   RustStreamSink<String> dco_decode_StreamSink_String_Sse(dynamic raw);
 
   @protected
@@ -398,6 +407,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Uint8List? dco_decode_opt_list_prim_u_8_strict(dynamic raw);
 
   @protected
+  (
+    DartNotify,
+    bool
+  ) dco_decode_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_dart_notify_bool(
+      dynamic raw);
+
+  @protected
+  (bool, bool) dco_decode_record_bool_bool(dynamic raw);
+
+  @protected
   (bool, bool, double) dco_decode_record_bool_bool_f_32(dynamic raw);
 
   @protected
@@ -412,7 +431,21 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       dynamic raw);
 
   @protected
+  (
+    String,
+    Uint8List?,
+    DartNotify
+  ) dco_decode_record_string_opt_list_prim_u_8_strict_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_dart_notify(
+      dynamic raw);
+
+  @protected
+  (String, SessionStatus) dco_decode_record_string_session_status(dynamic raw);
+
+  @protected
   SendToDartLogger dco_decode_send_to_dart_logger(dynamic raw);
+
+  @protected
+  SessionStatus dco_decode_session_status(dynamic raw);
 
   @protected
   Statistics dco_decode_statistics(dynamic raw);
@@ -495,6 +528,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   Telepathy
       sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
+          SseDeserializer deserializer);
+
+  @protected
+  TelepathyCallbacks
+      sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathyCallbacks(
           SseDeserializer deserializer);
 
   @protected
@@ -636,6 +674,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
           SseDeserializer deserializer);
 
   @protected
+  TelepathyCallbacks
+      sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathyCallbacks(
+          SseDeserializer deserializer);
+
+  @protected
   RustStreamSink<String> sse_decode_StreamSink_String_Sse(
       SseDeserializer deserializer);
 
@@ -709,6 +752,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Uint8List? sse_decode_opt_list_prim_u_8_strict(SseDeserializer deserializer);
 
   @protected
+  (
+    DartNotify,
+    bool
+  ) sse_decode_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_dart_notify_bool(
+      SseDeserializer deserializer);
+
+  @protected
+  (bool, bool) sse_decode_record_bool_bool(SseDeserializer deserializer);
+
+  @protected
   (bool, bool, double) sse_decode_record_bool_bool_f_32(
       SseDeserializer deserializer);
 
@@ -724,7 +777,22 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       SseDeserializer deserializer);
 
   @protected
+  (
+    String,
+    Uint8List?,
+    DartNotify
+  ) sse_decode_record_string_opt_list_prim_u_8_strict_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_dart_notify(
+      SseDeserializer deserializer);
+
+  @protected
+  (String, SessionStatus) sse_decode_record_string_session_status(
+      SseDeserializer deserializer);
+
+  @protected
   SendToDartLogger sse_decode_send_to_dart_logger(SseDeserializer deserializer);
+
+  @protected
+  SessionStatus sse_decode_session_status(SseDeserializer deserializer);
 
   @protected
   Statistics sse_decode_statistics(SseDeserializer deserializer);
@@ -812,6 +880,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void
+      sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathyCallbacks(
+          TelepathyCallbacks self, SseSerializer serializer);
+
+  @protected
+  void
       sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerChatMessage(
           ChatMessage self, SseSerializer serializer);
 
@@ -887,32 +960,8 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void
-      sse_encode_DartFn_Inputs_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDartNotify_bool_Output_unit_AnyhowException(
-          FutureOr<void> Function(DartNotify, bool) self,
-          SseSerializer serializer);
-
-  @protected
-  void
       sse_encode_DartFn_Inputs_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy_Output_unit_AnyhowException(
           FutureOr<void> Function(Telepathy) self, SseSerializer serializer);
-
-  @protected
-  void sse_encode_DartFn_Inputs_String_String_Output_unit_AnyhowException(
-      FutureOr<void> Function(String, String) self, SseSerializer serializer);
-
-  @protected
-  void sse_encode_DartFn_Inputs_String_bool_Output_unit_AnyhowException(
-      FutureOr<void> Function(String, bool) self, SseSerializer serializer);
-
-  @protected
-  void
-      sse_encode_DartFn_Inputs_String_opt_list_prim_u_8_strict_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDartNotify_Output_bool_AnyhowException(
-          FutureOr<bool> Function(String, Uint8List?, DartNotify) self,
-          SseSerializer serializer);
-
-  @protected
-  void sse_encode_DartFn_Inputs_bool_bool_Output_unit_AnyhowException(
-      FutureOr<void> Function(bool, bool) self, SseSerializer serializer);
 
   @protected
   void sse_encode_DartFn_Inputs_call_state_Output_unit_AnyhowException(
@@ -922,6 +971,28 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void
       sse_encode_DartFn_Inputs_list_prim_u_8_strict_Output_opt_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerContact_AnyhowException(
           FutureOr<Contact?> Function(Uint8List) self,
+          SseSerializer serializer);
+
+  @protected
+  void
+      sse_encode_DartFn_Inputs_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_dart_notify_bool_Output_unit_AnyhowException(
+          FutureOr<void> Function((DartNotify, bool)) self,
+          SseSerializer serializer);
+
+  @protected
+  void sse_encode_DartFn_Inputs_record_bool_bool_Output_unit_AnyhowException(
+      FutureOr<void> Function((bool, bool)) self, SseSerializer serializer);
+
+  @protected
+  void
+      sse_encode_DartFn_Inputs_record_string_opt_list_prim_u_8_strict_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_dart_notify_Output_bool_AnyhowException(
+          FutureOr<bool> Function((String, Uint8List?, DartNotify)) self,
+          SseSerializer serializer);
+
+  @protected
+  void
+      sse_encode_DartFn_Inputs_record_string_session_status_Output_unit_AnyhowException(
+          FutureOr<void> Function((String, SessionStatus)) self,
           SseSerializer serializer);
 
   @protected
@@ -995,6 +1066,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void
       sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
           Telepathy self, SseSerializer serializer);
+
+  @protected
+  void
+      sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathyCallbacks(
+          TelepathyCallbacks self, SseSerializer serializer);
 
   @protected
   void sse_encode_StreamSink_String_Sse(
@@ -1072,6 +1148,14 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       Uint8List? self, SseSerializer serializer);
 
   @protected
+  void
+      sse_encode_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_dart_notify_bool(
+          (DartNotify, bool) self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_record_bool_bool((bool, bool) self, SseSerializer serializer);
+
+  @protected
   void sse_encode_record_bool_bool_f_32(
       (bool, bool, double) self, SseSerializer serializer);
 
@@ -1087,8 +1171,20 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       (String, Uint8List) self, SseSerializer serializer);
 
   @protected
+  void
+      sse_encode_record_string_opt_list_prim_u_8_strict_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_dart_notify(
+          (String, Uint8List?, DartNotify) self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_record_string_session_status(
+      (String, SessionStatus) self, SseSerializer serializer);
+
+  @protected
   void sse_encode_send_to_dart_logger(
       SendToDartLogger self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_session_status(SessionStatus self, SseSerializer serializer);
 
   @protected
   void sse_encode_statistics(Statistics self, SseSerializer serializer);
@@ -1534,5 +1630,37 @@ class RustLibWire implements BaseWire {
           'frbgen_telepathy_rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy');
   late final _rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy =
       _rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathyPtr
+          .asFunction<void Function(ffi.Pointer<ffi.Void>)>();
+
+  void
+      rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathyCallbacks(
+    ffi.Pointer<ffi.Void> ptr,
+  ) {
+    return _rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathyCallbacks(
+      ptr,
+    );
+  }
+
+  late final _rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathyCallbacksPtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Pointer<ffi.Void>)>>(
+          'frbgen_telepathy_rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathyCallbacks');
+  late final _rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathyCallbacks =
+      _rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathyCallbacksPtr
+          .asFunction<void Function(ffi.Pointer<ffi.Void>)>();
+
+  void
+      rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathyCallbacks(
+    ffi.Pointer<ffi.Void> ptr,
+  ) {
+    return _rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathyCallbacks(
+      ptr,
+    );
+  }
+
+  late final _rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathyCallbacksPtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Pointer<ffi.Void>)>>(
+          'frbgen_telepathy_rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathyCallbacks');
+  late final _rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathyCallbacks =
+      _rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathyCallbacksPtr
           .asFunction<void Function(ffi.Pointer<ffi.Void>)>();
 }
