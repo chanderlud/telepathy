@@ -106,6 +106,10 @@ impl TelepathyCallbacks {
             screenshare_started: Arc::new(Mutex::new(screenshare_started)),
         }
     }
+
+    pub(crate) async fn update_status(&self, status: SessionStatus, peer: PeerId) {
+        notify(&self.session_status, (peer.to_string(), status)).await;
+    }
 }
 
 pub enum CallState {

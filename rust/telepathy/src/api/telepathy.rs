@@ -781,7 +781,7 @@ impl Telepathy {
                         SessionStatus::Connected
                     };
 
-                    notify(&self.callbacks.session_status, (peer_id.to_string(), status)).await;
+                    self.callbacks.update_status(status, peer_id).await;
                     continue;
                 }
                 // starts a stream for outgoing screen shares
@@ -881,11 +881,9 @@ impl Telepathy {
                         if listener {
                             // a stream will be established by the other client
                             // the dialer already has the connecting status set
-                            notify(
-                                &self.callbacks.session_status,
-                                (peer_id.to_string(), SessionStatus::Connecting),
-                            )
-                            .await;
+                            self.callbacks
+                                .update_status(SessionStatus::Connecting, peer_id)
+                                .await;
                         }
                     }
                 }
@@ -900,11 +898,9 @@ impl Telepathy {
                         peer_state.connections.remove(&connection_id);
                     } else if !self.session_states.read().await.contains_key(&peer_id) {
                         // if an outgoing error occurs when no connection is active, the session initialization failed
-                        notify(
-                            &self.callbacks.session_status,
-                            (peer_id.to_string(), SessionStatus::Inactive),
-                        )
-                        .await;
+                        self.callbacks
+                            .update_status(SessionStatus::Inactive, peer_id)
+                            .await;
                     }
                 }
                 SwarmEvent::ConnectionClosed {
@@ -913,12 +909,15 @@ impl Telepathy {
                     connection_id,
                     ..
                 } => {
-                    warn!(
-                        "connection {} closed with {} cause={:?}",
-                        connection_id, peer_id, cause
-                    );
+                    warn!("connection {connection_id} closed with {peer_id} cause={cause:?}",);
 
-                    if let Some(peer_state) = peer_states.get_mut(&peer_id) {
+                    // if there is no connection to the peer, the session initialization failed
+                    if !swarm.is_connected(&peer_id) {
+                        peer_states.remove(&peer_id);
+                        self.callbacks
+                            .update_status(SessionStatus::Inactive, peer_id)
+                            .await;
+                    } else if let Some(peer_state) = peer_states.get_mut(&peer_id) {
                         peer_state.connections.remove(&connection_id);
                     }
                 }
@@ -1163,11 +1162,9 @@ impl Telepathy {
 
         let contact = if let Some(contact) = contact_option {
             // alert the UI that this session is now connected
-            notify(
-                &self.callbacks.session_status,
-                (peer_id.to_string(), SessionStatus::Connected),
-            )
-            .await;
+            self.callbacks
+                .update_status(SessionStatus::Connected, peer_id)
+                .await;
             contact
         } else {
             // there may be no contact for members of a group
@@ -1255,11 +1252,10 @@ impl Telepathy {
 
             // avoid sending session statuses for dummy contacts
             if !contact.is_room_only {
-                notify(
-                    &self_clone.callbacks.session_status,
-                    (peer_id.to_string(), SessionStatus::Inactive),
-                )
-                .await;
+                self_clone
+                    .callbacks
+                    .update_status(SessionStatus::Inactive, peer_id)
+                    .await;
             }
 
             info!("Session for {} cleaned up", contact.nickname);
