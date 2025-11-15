@@ -5,7 +5,6 @@ use bincode::{Decode, Encode, decode_from_slice, encode_to_vec};
 use cpal::traits::{DeviceTrait, HostTrait};
 use cpal::{Device, Host, Stream};
 use flutter_rust_bridge::for_generated::futures::{Sink, SinkExt};
-use kanal::AsyncReceiver;
 use libp2p::bytes::Bytes;
 use libp2p::futures::StreamExt;
 use serde::Deserialize;
@@ -55,27 +54,14 @@ pub(crate) async fn get_output_device(
 }
 
 /// Returns the percentage of the max input volume in the window compared to the max volume
-pub(crate) async fn level_from_window(receiver: &AsyncReceiver<f32>, max: &mut f32) -> f32 {
-    let mut window = Vec::new();
-
-    while let Ok(Some(rms)) = receiver.try_recv() {
-        window.push(rms);
-    }
-
-    let level = if window.is_empty() {
-        0_f32
+pub(crate) fn level_from_window(local_max: f32, max: &mut f32) -> f32 {
+    *max = max.max(local_max);
+    if *max != 0_f32 {
+        let level = local_max / *max;
+        if level < 0.01 { 0_f32 } else { level }
     } else {
-        let local_max = window.into_iter().reduce(f32::max).unwrap_or(0_f32);
-        *max = max.max(local_max);
-
-        if *max != 0_f32 {
-            local_max / *max
-        } else {
-            0_f32
-        }
-    };
-
-    if level < 0.01 { 0_f32 } else { level }
+        0_f32
+    }
 }
 
 /// Writes a bincode message to the stream

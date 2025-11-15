@@ -240,12 +240,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
           dynamic raw);
 
   @protected
-  FutureOr<void> Function(bool)
-      dco_decode_DartFn_Inputs_bool_Output_unit_AnyhowException(dynamic raw);
-
-  @protected
   FutureOr<void> Function(bool, bool)
       dco_decode_DartFn_Inputs_bool_bool_Output_unit_AnyhowException(
+          dynamic raw);
+
+  @protected
+  FutureOr<void> Function(CallState)
+      dco_decode_DartFn_Inputs_call_state_Output_unit_AnyhowException(
           dynamic raw);
 
   @protected
@@ -347,6 +348,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   int dco_decode_box_autoadd_u_32(dynamic raw);
+
+  @protected
+  CallState dco_decode_call_state(dynamic raw);
 
   @protected
   DartError dco_decode_dart_error(dynamic raw);
@@ -657,6 +661,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   int sse_decode_box_autoadd_u_32(SseDeserializer deserializer);
 
   @protected
+  CallState sse_decode_call_state(SseDeserializer deserializer);
+
+  @protected
   DartError sse_decode_dart_error(SseDeserializer deserializer);
 
   @protected
@@ -906,12 +913,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
           SseSerializer serializer);
 
   @protected
-  void sse_encode_DartFn_Inputs_bool_Output_unit_AnyhowException(
-      FutureOr<void> Function(bool) self, SseSerializer serializer);
-
-  @protected
   void sse_encode_DartFn_Inputs_bool_bool_Output_unit_AnyhowException(
       FutureOr<void> Function(bool, bool) self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_DartFn_Inputs_call_state_Output_unit_AnyhowException(
+      FutureOr<void> Function(CallState) self, SseSerializer serializer);
 
   @protected
   void
@@ -1013,6 +1020,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_box_autoadd_u_32(int self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_call_state(CallState self, SseSerializer serializer);
 
   @protected
   void sse_encode_dart_error(DartError self, SseSerializer serializer);

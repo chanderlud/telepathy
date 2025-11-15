@@ -48,7 +48,7 @@ pub(crate) fn input_processor(
     rms_threshold: Arc<AtomicF32>,
     muted: Arc<AtomicBool>,
     mut denoiser: Option<Box<DenoiseState>>,
-    rms_sender: Option<Sender<f32>>,
+    rms_sender: Arc<AtomicF32>,
     codec_enabled: bool,
 ) -> Result<(), Error> {
     // the maximum value for i16 as f32
@@ -162,7 +162,7 @@ pub(crate) fn input_processor(
         // calculate the rms
         let rms = calculate_rms(&out_buf);
         // send the rms to the statistics collector
-        rms_sender.as_ref().map(|s| s.send(rms));
+        rms_sender.fetch_max(rms, Relaxed);
 
         // check if the frame is below the rms threshold
         if rms < rms_threshold.load(Relaxed) {
@@ -222,7 +222,7 @@ pub(crate) fn output_processor(
     #[cfg(not(target_family = "wasm"))] sender: Sender<f32>,
     ratio: f64,
     output_volume: Arc<AtomicF32>,
-    rms_sender: Option<Sender<f32>>,
+    rms_sender: Arc<AtomicF32>,
 ) -> Result<(), Error> {
     // base scale to convert i16 to f32
     let scale = 1_f32 / i16::MAX as f32;
@@ -261,15 +261,12 @@ pub(crate) fn output_processor(
 
         // convert the i16 samples to f32 & apply the output volume
         wide_i16_to_f32(int_samples, pre_buf[0], scale * output_volume.load(Relaxed));
-
-        rms_sender
-            .as_ref()
-            .map(|s| s.send(calculate_rms(pre_buf[0])));
-
+        // send the rms to the statistics collector
+        rms_sender.fetch_max(calculate_rms(pre_buf[0]), Relaxed);
+        // get finalized samples
         let float_samples = if let Some(resampler) = &mut resampler_option {
             // resample the data
             let processed = resampler.process_into_buffer(&pre_buf, &mut post_buf, None)?;
-
             // send the resampled data to the output stream
             &post_buf[0][..processed.1]
         } else {

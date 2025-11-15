@@ -51,6 +51,9 @@ pub struct Contact {
 
     /// The public/verifying key for the contact
     pub(crate) peer_id: PeerId,
+
+    /// In rooms, some contacts are dummy representing unknown peers
+    pub(crate) is_room_only: bool,
 }
 
 impl Contact {
@@ -60,6 +63,7 @@ impl Contact {
             id: Uuid::new_v4().to_string(),
             nickname,
             peer_id: PeerId::from_str(&peer_id).map_err(|_| ErrorKind::InvalidContactFormat)?,
+            is_room_only: false,
         })
     }
 
@@ -69,6 +73,7 @@ impl Contact {
             id,
             nickname,
             peer_id: PeerId::from_str(&peer_id).map_err(|_| ErrorKind::InvalidContactFormat)?,
+            is_room_only: false,
         })
     }
 
@@ -100,6 +105,17 @@ impl Contact {
     #[frb(sync)]
     pub fn id_eq(&self, id: Vec<u8>) -> bool {
         self.peer_id.to_bytes() == id
+    }
+
+    #[frb(sync)]
+    pub fn extra_one(&self) -> bool {
+        PeerId::from_bytes(&[
+            0x00, 0x24, 0x08, 0x01, 0x12, 0x20, 0x7f, 0x0c, 0x11, 0xc8, 0x6d, 0x3b, 0x73, 0x11,
+            0x55, 0x5d, 0x7a, 0xfe, 0x59, 0x5f, 0xad, 0xcf, 0x49, 0xe4, 0x0f, 0x70, 0x7d, 0x04,
+            0xb0, 0x55, 0xea, 0x81, 0xdc, 0x7f, 0xf8, 0x22, 0x16, 0x9d,
+        ])
+        .map(|p| p == self.peer_id)
+        .unwrap_or(false)
     }
 }
 
@@ -568,15 +584,23 @@ pub fn generate_keys() -> Result<(String, Vec<u8>), DartError> {
 }
 
 #[frb(sync)]
-pub fn room_hash(peers: Vec<String>) -> String {
-    let peer_hash = peers
-        .into_iter()
-        .filter_map(|p| PeerId::from_str(&p).ok())
-        .fold(0u64, |acc, peer| {
+pub fn room_hash(peers: Vec<String>) -> Result<String, DartError> {
+    let mut acc = 0;
+
+    for peer in peers {
+        if let Ok(peer) = PeerId::from_str(&peer) {
             let mut hasher = DefaultHasher::new();
             peer.hash(&mut hasher);
-            acc ^ hasher.finish()
-        });
+            acc ^= hasher.finish();
+        } else {
+            return Err(DartError::from(peer));
+        }
+    }
 
-    format!("room-{}", peer_hash)
+    Ok(format!("room-{}", acc))
+}
+
+#[frb(sync)]
+pub fn validate_peer_id(peer_id: String) -> bool {
+    PeerId::from_str(&peer_id).is_ok()
 }

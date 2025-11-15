@@ -21,6 +21,9 @@ void rustSetUp() => RustLib.instance.api.crateApiFlutterRustSetUp();
 String roomHash({required List<String> peers}) =>
     RustLib.instance.api.crateApiFlutterRoomHash(peers: peers);
 
+bool validatePeerId({required String peerId}) =>
+    RustLib.instance.api.crateApiFlutterValidatePeerId(peerId: peerId);
+
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Capabilities>>
 abstract class Capabilities implements RustOpaqueInterface {
   static Future<Capabilities> default_() =>
@@ -66,6 +69,8 @@ abstract class CodecConfig implements RustOpaqueInterface {
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Contact>>
 abstract class Contact implements RustOpaqueInterface {
+  bool extraOne();
+
   static Contact fromParts(
           {required String id,
           required String nickname,

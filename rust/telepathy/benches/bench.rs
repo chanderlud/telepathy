@@ -1,9 +1,5 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use rand::Rng;
-use std::arch::x86_64::{
-    _mm256_loadu_ps, _mm256_max_ps, _mm256_min_ps, _mm256_mul_ps, _mm256_set1_ps, _mm256_storeu_ps,
-    _mm512_loadu_ps, _mm512_max_ps, _mm512_min_ps, _mm512_mul_ps, _mm512_set1_ps, _mm512_storeu_ps,
-};
 use std::hint::black_box;
 
 include!("../src/api/audio/processing.rs");

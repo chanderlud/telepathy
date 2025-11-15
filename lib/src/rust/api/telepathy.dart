@@ -9,9 +9,11 @@ import 'error.dart';
 import 'flutter.dart';
 import 'overlay/overlay.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
+import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
+part 'telepathy.freezed.dart';
 
 // These functions are ignored because they are not marked as `pub`: `_start_session`, `audio_input`, `audio_output`, `call_controller`, `call_handshake`, `call`, `codec_config`, `efficiency_channel`, `get_input_device`, `incoming_stream_handler`, `is_in_room`, `latencies_missing`, `load_ringtone`, `loopback`, `new`, `new`, `new`, `open_stream`, `open_stream`, `relayed_only`, `room_controller`, `room_handshake`, `room_hash`, `session_manager`, `session`, `setup_call`, `setup_input_stream`, `setup_input`, `setup_output`, `statistics_collector`, `stream_to_audio_transport`
-// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `ConnectionState`, `EarlyCallState`, `PeerState`, `SessionState`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `ConnectionState`, `EarlyCallState`, `PeerState`, `RoomConnection`, `RoomMessage`, `RoomState`, `SessionState`, `SessionStatus`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `fmt`, `fmt`
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Telepathy>>
@@ -45,7 +47,7 @@ abstract class Telepathy implements RustOpaqueInterface {
               acceptCall,
           required FutureOr<void> Function(String, bool) callEnded,
           required FutureOr<Contact?> Function(Uint8List) getContact,
-          required FutureOr<void> Function(bool) callState,
+          required FutureOr<void> Function(CallState) callState,
           required FutureOr<void> Function(String, String) sessionStatus,
           required FutureOr<void> Function(Telepathy) startSessions,
           required FutureOr<void> Function(Statistics) statistics,
@@ -115,4 +117,18 @@ abstract class Telepathy implements RustOpaqueInterface {
 
   /// Stops a specific session (called when a contact is deleted)
   Future<void> stopSession({required Contact contact});
+}
+
+@freezed
+sealed class CallState with _$CallState {
+  const CallState._();
+
+  const factory CallState.connected() = CallState_Connected;
+  const factory CallState.waiting() = CallState_Waiting;
+  const factory CallState.roomJoin(
+    String field0,
+  ) = CallState_RoomJoin;
+  const factory CallState.roomLeave(
+    String field0,
+  ) = CallState_RoomLeave;
 }

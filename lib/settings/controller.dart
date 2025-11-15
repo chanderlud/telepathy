@@ -195,6 +195,18 @@ class SettingsController with ChangeNotifier {
     );
   }
 
+  Room addRoom(
+    String nickname,
+    List<String> peerIds,
+  ) {
+    Room room = Room(
+        id: roomHash(peers: peerIds), peerIds: peerIds, nickname: nickname);
+    rooms[room.id] = room;
+
+    saveRooms();
+    return room;
+  }
+
   Future<void> saveRooms() async {
     // notify listeners right away because the rooms are already updated
     notifyListeners();
@@ -549,6 +561,7 @@ class Room {
   late String id;
   late List<String> peerIds;
   late String nickname;
+  List<String> online = [];
 
   Room({
     required this.id,

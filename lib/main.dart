@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:collection/collection.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart' hide Overlay;
 
@@ -171,8 +172,8 @@ Future<void> main() async {
           return null;
         }
       },
-      // called when the call connects, disconnects, or reconnects
-      callState: (bool disconnected) async {
+      // called when the call state changes
+      callState: (CallState state) async {
         if (!stateController.isCallActive) {
           return;
         }
@@ -181,23 +182,20 @@ Future<void> main() async {
         outgoingSoundHandle?.cancel();
         List<int> bytes;
 
-        if (disconnected && !stateController.callDisconnected) {
-          // handles disconnects in an active call
-          bytes = await readSeaBytes('disconnected');
-          stateController.setStatus('Reconnecting');
-          stateController.callDisconnected = true;
-        } else if (!disconnected && stateController.callDisconnected) {
-          // handles reconnects in an active call
-          bytes = await readSeaBytes('reconnected');
-          stateController.setStatus('Active');
-          stateController.callDisconnected = false;
-        } else if (!disconnected && !stateController.callDisconnected) {
-          // handles the initial connect
-          bytes = await readSeaBytes('connected');
-          stateController.setStatus('Active');
-          stateController.callDisconnected = false;
-        } else {
-          return;
+        switch (state) {
+          case CallState_Connected():
+            // handles the initial connect
+            bytes = await readSeaBytes('connected');
+            stateController.setStatus('Active');
+          case CallState_Waiting():
+            stateController.setStatus('Waiting for peers');
+            return;
+          case CallState_RoomJoin():
+            stateController.roomJoin(state.field0);
+            return; // TODO add room join sound
+          case CallState_RoomLeave():
+            stateController.roomLeave(state.field0);
+            return; // TODO add room leave sound
         }
 
         await soundPlayer.play(bytes: bytes);
@@ -365,19 +363,6 @@ class HomePage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    ListenableBuilder contactForm = ListenableBuilder(
-        listenable: stateController,
-        builder: (BuildContext context, Widget? child) {
-          if (stateController.isCallActive) {
-            return CallDetailsWidget(
-                statisticsController: statisticsController,
-                stateController: stateController);
-          } else {
-            return ContactForm(
-                telepathy: telepathy, settingsController: settingsController);
-          }
-        });
-
     PeriodicNotifier notifier = PeriodicNotifier();
 
     CallControls callControls = CallControls(
@@ -442,23 +427,62 @@ class HomePage extends StatelessWidget {
                               stateController: stateController,
                               settingsController: settingsController,
                               player: player,
-                              maxWidth: constraints.maxWidth,
                             );
                           });
                     });
+
                 if (constraints.maxWidth > 600) {
                   return Column(
                     children: [
-                      Container(
-                        constraints: const BoxConstraints(maxHeight: 250),
-                        child: Row(mainAxisSize: MainAxisSize.min, children: [
-                          Container(
-                            constraints: const BoxConstraints(maxWidth: 300),
-                            child: contactForm,
-                          ),
-                          const SizedBox(width: 20),
-                          Flexible(fit: FlexFit.loose, child: contactsList)
-                        ]),
+                      ListenableBuilder(
+                        listenable: stateController,
+                        builder: (BuildContext context, Widget? child) {
+                          return Container(
+                              constraints: const BoxConstraints(maxHeight: 275),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  // Animated call-details / form area
+                                  AnimatedSize(
+                                    duration: const Duration(milliseconds: 250),
+                                    curve: Curves.easeInOut,
+                                    alignment: Alignment.centerLeft,
+                                    child: stateController.isCallActive
+                                        ? Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Container(
+                                                constraints:
+                                                    const BoxConstraints(
+                                                        maxWidth: 300),
+                                                child: CallDetailsWidget(
+                                                    statisticsController:
+                                                        statisticsController,
+                                                    stateController:
+                                                        stateController),
+                                              ),
+                                              const SizedBox(width: 20),
+                                            ],
+                                          )
+                                        : const SizedBox.shrink(),
+                                  ),
+
+                                  // Contacts list always present, just expands when the left bit collapses
+                                  Flexible(
+                                    fit: FlexFit.loose,
+                                    child: stateController._activeRoom != null
+                                        ? RoomDetailsWidget(
+                                            telepathy: telepathy,
+                                            stateController: stateController,
+                                            player: player,
+                                            settingsController:
+                                                settingsController,
+                                          )
+                                        : contactsList,
+                                  ),
+                                ],
+                              ));
+                        },
                       ),
                       const SizedBox(height: 20),
                       Flexible(
@@ -630,68 +654,247 @@ class ContactForm extends StatefulWidget {
 class ContactFormState extends State<ContactForm> {
   final TextEditingController _nicknameInput = TextEditingController();
   final TextEditingController _peerIdInput = TextEditingController();
+  final List<String> _peerIds = [];
+  String? selectedPeer;
+  bool? addContact;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 15.0, horizontal: 20.0),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.secondaryContainer,
-        borderRadius: BorderRadius.circular(10.0),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text("Add Contact", style: TextStyle(fontSize: 20)),
-          const SizedBox(height: 21),
-          TextInput(controller: _nicknameInput, labelText: 'Nickname'),
-          const SizedBox(height: 15),
-          TextInput(
-              controller: _peerIdInput,
-              labelText: 'Peer ID',
-              hintText: 'string encoded peer ID',
-              obscureText: true),
-          const SizedBox(height: 26),
-          Center(
-            child: Button(
+    if (addContact == null) {
+      return Container(
+        padding: const EdgeInsets.symmetric(vertical: 15.0, horizontal: 20.0),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.secondaryContainer,
+          borderRadius: BorderRadius.circular(10.0),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Button(
               text: 'Add Contact',
               onPressed: () async {
-                String nickname = _nicknameInput.text;
-                String peerId = _peerIdInput.text;
-
-                if (nickname.isEmpty || peerId.isEmpty) {
-                  showErrorDialog(context, 'Failed to add contact',
-                      'Nickname and peer id cannot be empty');
-                  return;
-                } else if (widget.settingsController.contacts.keys
-                    .contains(peerId)) {
-                  showErrorDialog(context, 'Failed to add contact',
-                      'Contact for peer ID already exists');
-                  return;
-                } else if (widget.settingsController.peerId == peerId) {
-                  showErrorDialog(context, 'Failed to add contact',
-                      'Cannot add self as a contact');
-                  return;
-                }
-
-                try {
-                  Contact contact =
-                      widget.settingsController.addContact(nickname, peerId);
-
-                  widget.telepathy.startSession(contact: contact);
-
-                  _nicknameInput.clear();
-                  _peerIdInput.clear();
-                } on DartError catch (_) {
-                  showErrorDialog(
-                      context, 'Failed to add contact', 'Invalid peer ID');
-                }
+                setState(() {
+                  addContact = true;
+                });
               },
             ),
-          ),
-        ],
-      ),
-    );
+            Button(
+              text: 'Add Room',
+              onPressed: () async {
+                setState(() {
+                  addContact = false;
+                });
+              },
+            )
+          ],
+        ),
+      );
+    } else if (addContact == true) {
+      return Container(
+        padding: const EdgeInsets.symmetric(vertical: 15.0, horizontal: 20.0),
+        constraints: const BoxConstraints(maxWidth: 250),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.secondaryContainer,
+          borderRadius: BorderRadius.circular(10.0),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text("Add Contact", style: TextStyle(fontSize: 20)),
+            const SizedBox(height: 21),
+            TextInput(controller: _nicknameInput, labelText: 'Nickname'),
+            const SizedBox(height: 15),
+            TextInput(
+                controller: _peerIdInput,
+                labelText: 'Peer ID',
+                hintText: 'string encoded peer ID',
+                obscureText: true),
+            const SizedBox(height: 26),
+            Center(
+              child: Button(
+                text: 'Add Contact',
+                onPressed: () async {
+                  String nickname = _nicknameInput.text;
+                  String peerId = _peerIdInput.text;
+
+                  if (nickname.isEmpty || peerId.isEmpty) {
+                    showErrorDialog(context, 'Failed to add contact',
+                        'Nickname and peer id cannot be empty');
+                    return;
+                  } else if (widget.settingsController.contacts.keys
+                      .contains(peerId)) {
+                    showErrorDialog(context, 'Failed to add contact',
+                        'Contact for peer ID already exists');
+                    return;
+                  } else if (widget.settingsController.peerId == peerId) {
+                    showErrorDialog(context, 'Failed to add contact',
+                        'Cannot add self as a contact');
+                    return;
+                  }
+
+                  try {
+                    Contact contact =
+                        widget.settingsController.addContact(nickname, peerId);
+
+                    widget.telepathy.startSession(contact: contact);
+
+                    _nicknameInput.clear();
+                    _peerIdInput.clear();
+                    Navigator.pop(context);
+                  } on DartError catch (_) {
+                    showErrorDialog(
+                        context, 'Failed to add contact', 'Invalid peer ID');
+                  }
+                },
+              ),
+            ),
+          ],
+        ),
+      );
+    } else {
+      var contacts = widget.settingsController.contacts.values
+          .where((c) => !_peerIds.contains(c.peerId()));
+
+      return Container(
+        padding: const EdgeInsets.symmetric(vertical: 15.0, horizontal: 20.0),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.secondaryContainer,
+          borderRadius: BorderRadius.circular(10.0),
+        ),
+        constraints: const BoxConstraints(maxWidth: 300),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                const Padding(
+                  padding: EdgeInsetsGeometry.directional(bottom: 7),
+                  child: Text("Add Room", style: TextStyle(fontSize: 20)),
+                ),
+                const SizedBox(width: 12),
+                IconButton(
+                  onPressed: () {
+                    // TODO handle paste room details from URL
+                  },
+                  icon: SvgPicture.asset('assets/icons/Copy.svg'),
+                  constraints:
+                      const BoxConstraints(maxWidth: 32, maxHeight: 32),
+                  padding: EdgeInsetsGeometry.directional(
+                      start: 7, top: 7, end: 7, bottom: 7),
+                )
+              ],
+            ),
+            const SizedBox(height: 15),
+            TextInput(controller: _nicknameInput, labelText: 'Nickname'),
+            const SizedBox(height: 15),
+            Row(
+              children: [
+                Expanded(
+                  child: TextInput(
+                    controller: _peerIdInput,
+                    labelText: 'Peer ID',
+                    hintText: 'string encoded peer ID',
+                    obscureText: true,
+                  ),
+                ),
+                const SizedBox(width: 16),
+                IconButton(
+                  icon: SvgPicture.asset('assets/icons/Plus.svg'),
+                  onPressed: () {
+                    if (_peerIds.contains(_peerIdInput.text)) {
+                      return;
+                    } else if (validatePeerId(peerId: _peerIdInput.text)) {
+                      _peerIds.add(_peerIdInput.text);
+                      _peerIdInput.clear();
+                    } else {
+                      showErrorDialog(context, 'Failed to add Peer ID',
+                          'The provided Peer ID is invalid');
+                    }
+                  },
+                ),
+              ],
+            ),
+            if (contacts.isNotEmpty) const SizedBox(height: 15),
+            if (contacts.isNotEmpty)
+              Row(
+                children: [
+                  Expanded(
+                    child: DropDown(
+                      items: contacts
+                          .map((c) => (c.peerId(), c.nickname()))
+                          .toList(),
+                      initialSelection: contacts.elementAtOrNull(0)?.peerId(),
+                      onSelected: (selected) => {
+                        setState(() {
+                          selectedPeer = selected;
+                        })
+                      },
+                      label: "Contact",
+                      width: 250,
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  IconButton(
+                    icon: SvgPicture.asset('assets/icons/Plus.svg'),
+                    onPressed: () {
+                      String? peerId =
+                          selectedPeer ?? contacts.elementAtOrNull(0)?.peerId();
+                      if (peerId != null && !_peerIds.contains(peerId)) {
+                        setState(() {
+                          _peerIds.add(peerId);
+                        });
+                      }
+                    },
+                  ),
+                ],
+              ),
+            const SizedBox(height: 26),
+            Center(
+                child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('Peers: ${_peerIds.length}'),
+                const SizedBox(width: 24),
+                Button(
+                  text: 'Add room',
+                  onPressed: () async {
+                    String nickname = _nicknameInput.text;
+
+                    try {
+                      if (nickname.isEmpty) {
+                        showErrorDialog(context, 'Failed to add room',
+                            'Nickname cannot be empty');
+                        return;
+                      } else if (_peerIds.isEmpty) {
+                        showErrorDialog(context, 'Failed to add room',
+                            'Peer IDs cannot be empty');
+                        return;
+                      } else if (widget.settingsController.rooms.keys
+                          .contains(roomHash(peers: _peerIds))) {
+                        showErrorDialog(context, 'Failed to add room',
+                            'It appears this room already exists');
+                        return;
+                      }
+
+                      widget.settingsController.addRoom(nickname, _peerIds);
+                      _nicknameInput.clear();
+                      setState(() {
+                        _peerIds.clear();
+                      });
+                      Navigator.pop(context);
+                    } on DartError catch (error) {
+                      showErrorDialog(context, 'Failed to add room',
+                          'Invalid peer ID: ${error.message}');
+                    }
+                  },
+                )
+              ],
+            )),
+          ],
+        ),
+      );
+    }
   }
 }
 
@@ -703,7 +906,6 @@ class ContactsList extends StatelessWidget {
   final List<Contact> contacts;
   final List<Room> rooms;
   final SoundPlayer player;
-  final double maxWidth;
 
   const ContactsList(
       {super.key,
@@ -712,8 +914,7 @@ class ContactsList extends StatelessWidget {
       required this.rooms,
       required this.stateController,
       required this.settingsController,
-      required this.player,
-      required this.maxWidth});
+      required this.player});
 
   @override
   Widget build(BuildContext context) {
@@ -736,32 +937,38 @@ class ContactsList extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
               child: Row(
                 children: [
-                  const Text("Contacts", style: TextStyle(fontSize: 20)),
-                  if (maxWidth <= 600)
-                    Padding(
-                      padding: const EdgeInsets.only(left: 10, top: 3),
-                      child: IconButton(
-                          onPressed: () {
-                            showDialog(
-                                context: context,
-                                builder: (BuildContext context) {
-                                  return SimpleDialog(
-                                    backgroundColor: Theme.of(context)
-                                        .colorScheme
-                                        .secondaryContainer,
-                                    children: [
-                                      ContactForm(
-                                        telepathy: telepathy,
-                                        settingsController: settingsController,
-                                      )
-                                    ],
-                                  );
-                                });
-                          },
-                          visualDensity: const VisualDensity(
-                              horizontal: -4.0, vertical: -4.0),
-                          icon: SvgPicture.asset('assets/icons/Plus.svg')),
-                    ),
+                  const Padding(
+                    padding: EdgeInsetsGeometry.directional(bottom: 2),
+                    child: Text("Contacts", style: TextStyle(fontSize: 20)),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.only(left: 10, top: 3),
+                    child: IconButton(
+                        onPressed: () {
+                          showDialog(
+                              context: context,
+                              builder: (BuildContext context) {
+                                return SimpleDialog(
+                                  backgroundColor: Theme.of(context)
+                                      .colorScheme
+                                      .secondaryContainer,
+                                  children: [
+                                    ContactForm(
+                                      telepathy: telepathy,
+                                      settingsController: settingsController,
+                                    )
+                                  ],
+                                );
+                              });
+                        },
+                        constraints: const BoxConstraints(
+                          maxWidth: 36,
+                          maxHeight: 36,
+                        ),
+                        padding: EdgeInsetsGeometry.directional(
+                            start: 1, top: 1, end: 1, bottom: 1),
+                        icon: SvgPicture.asset('assets/icons/Plus.svg')),
+                  ),
                 ],
               )),
           const SizedBox(height: 10.0),
@@ -772,36 +979,43 @@ class ContactsList extends StatelessWidget {
                 color: Theme.of(context).colorScheme.tertiaryContainer,
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: ListView.builder(
-                itemCount: items.length,
-                itemBuilder: (BuildContext context, int index) {
-                  return ListenableBuilder(
-                    listenable: stateController,
-                    builder: (BuildContext context, Widget? child) {
-                      final item = items[index];
+              padding: EdgeInsets.symmetric(vertical: 3),
+              child: LayoutBuilder(builder: (context, constraints) {
+                final itemHeight = constraints.maxHeight / 3;
 
-                      if (item is Contact) {
-                        return ContactWidget(
-                          contact: item,
-                          telepathy: telepathy,
-                          stateController: stateController,
-                          player: player,
-                          settingsController: settingsController,
-                        );
-                      } else if (item is Room) {
-                        return RoomWidget(
-                          room: item,
-                          telepathy: telepathy,
-                          stateController: stateController,
-                          player: player,
-                        );
-                      } else {
-                        return const SizedBox.shrink();
-                      }
-                    },
-                  );
-                },
-              ),
+                return ListView.builder(
+                  itemCount: items.length,
+                  itemExtent: itemHeight, // every item = 1/4 of viewport
+                  physics: SnapScrollPhysics(itemExtent: itemHeight),
+                  itemBuilder: (BuildContext context, int index) {
+                    return ListenableBuilder(
+                      listenable: stateController,
+                      builder: (BuildContext context, Widget? child) {
+                        final item = items[index];
+
+                        if (item is Contact) {
+                          return ContactWidget(
+                            contact: item,
+                            telepathy: telepathy,
+                            stateController: stateController,
+                            player: player,
+                            settingsController: settingsController,
+                          );
+                        } else if (item is Room) {
+                          return RoomWidget(
+                            room: item,
+                            telepathy: telepathy,
+                            stateController: stateController,
+                            player: player,
+                          );
+                        } else {
+                          return const SizedBox.shrink();
+                        }
+                      },
+                    );
+                  },
+                );
+              }),
             ),
           ),
         ],
@@ -969,7 +1183,7 @@ class ContactWidgetState extends State<ContactWidget> {
       },
       hoverColor: Colors.transparent,
       child: Container(
-        margin: const EdgeInsets.all(5.0),
+        margin: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
         decoration: BoxDecoration(
           color: Theme.of(context).colorScheme.secondaryContainer,
           borderRadius: BorderRadius.circular(10.0),
@@ -980,9 +1194,7 @@ class ContactWidgetState extends State<ContactWidget> {
           children: [
             CircleAvatar(
               maxRadius: 17,
-              child: SvgPicture.asset(isHovered
-                  ? 'assets/icons/Edit.svg'
-                  : 'assets/icons/Profile.svg'),
+              child: SvgPicture.asset(profilePath(isHovered, widget.contact)),
             ),
             const SizedBox(width: 10),
             Text(widget.contact.nickname(),
@@ -1109,7 +1321,7 @@ class RoomWidgetState extends State<RoomWidget> {
       onTap: () {},
       hoverColor: Colors.transparent,
       child: Container(
-        margin: const EdgeInsets.all(5.0),
+        margin: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
         decoration: BoxDecoration(
           color: Theme.of(context).colorScheme.secondaryContainer,
           borderRadius: BorderRadius.circular(10.0),
@@ -1122,7 +1334,7 @@ class RoomWidgetState extends State<RoomWidget> {
               maxRadius: 17,
               child: SvgPicture.asset(isHovered
                   ? 'assets/icons/Edit.svg'
-                  : 'assets/icons/Profile.svg'),
+                  : 'assets/icons/Group.svg'),
             ),
             const SizedBox(width: 10),
             Text(widget.room.nickname, style: const TextStyle(fontSize: 16)),
@@ -1937,7 +2149,8 @@ class CallDetailsWidget extends StatelessWidget {
           ListenableBuilder(
               listenable: stateController,
               builder: (BuildContext context, Widget? child) {
-                return Text('Call ${stateController.status.toLowerCase()}',
+                return Text(
+                    '${stateController._activeRoom != null ? "Room" : "Call"} ${stateController.status.toLowerCase()}',
                     style: const TextStyle(fontSize: 20));
               }),
           const SizedBox(height: 8),
@@ -2017,6 +2230,85 @@ class CallDetailsWidget extends StatelessWidget {
                   }),
             ],
           ),
+        ],
+      ),
+    );
+  }
+}
+
+class RoomDetailsWidget extends StatelessWidget {
+  final Telepathy telepathy;
+  final StateController stateController;
+  final SoundPlayer player;
+  final SettingsController settingsController;
+
+  const RoomDetailsWidget(
+      {super.key,
+      required this.telepathy,
+      required this.stateController,
+      required this.player,
+      required this.settingsController});
+
+  @override
+  Widget build(BuildContext context) {
+    String getNickname(String peerId) {
+      Contact? contact = settingsController.contacts.values
+          .firstWhereOrNull((c) => c.peerId() == peerId);
+      if (contact != null) {
+        return contact.nickname();
+      } else if (peerId == settingsController.peerId) {
+        return "You";
+      } else {
+        return "Anonymous";
+      }
+    }
+
+    List<String> online = [
+      ...stateController._activeRoom?.online ?? [],
+      settingsController.peerId
+    ];
+    var offline = stateController._activeRoom?.peerIds
+            .where((p) => !online.contains(p)) ??
+        [];
+
+    return Container(
+      padding: const EdgeInsets.only(bottom: 15, left: 12, right: 12, top: 8),
+      height: 300,
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.secondaryContainer,
+        borderRadius: BorderRadius.circular(10.0),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+              child: Row(
+                children: [
+                  const Text("Room Details", style: TextStyle(fontSize: 20)),
+                ],
+              )),
+          const SizedBox(height: 10.0),
+          IconButton(
+            visualDensity: VisualDensity.comfortable,
+            icon: SvgPicture.asset(
+              'assets/icons/PhoneOff.svg',
+              semanticsLabel: 'End call icon',
+              width: 32,
+            ),
+            onPressed: () async {
+              outgoingSoundHandle?.cancel();
+
+              telepathy.endCall();
+              stateController.endOfCall();
+
+              List<int> bytes = await readSeaBytes('call_ended');
+              await player.play(bytes: bytes);
+            },
+          ),
+          Text("Online: ${online.map(getNickname).join(" ")}"),
+          Text("Offline: ${offline.map(getNickname).join("  ")}")
         ],
       ),
     );
@@ -2266,7 +2558,6 @@ class StateController extends ChangeNotifier {
   bool _muted = false;
   bool inAudioTest = false;
   bool _callEndedRecently = false;
-  bool callDisconnected = false;
   final Stopwatch _callTimer = Stopwatch();
 
   /// peerId, status
@@ -2317,7 +2608,6 @@ class StateController extends ChangeNotifier {
       _activeRoom = null;
       _callTimer.stop();
       _callTimer.reset();
-      callDisconnected = false;
     } else if (status == 'Active') {
       _callTimer.start();
     }
@@ -2336,6 +2626,16 @@ class StateController extends ChangeNotifier {
 
   bool isActiveRoom(Room room) {
     return _activeRoom?.id == room.id;
+  }
+
+  void roomJoin(String peerId) {
+    _activeRoom?.online.add(peerId);
+    notifyListeners();
+  }
+
+  void roomLeave(String peerId) {
+    _activeRoom?.online.remove(peerId);
+    notifyListeners();
   }
 
   bool isOnlineContact(Contact contact) {
@@ -2591,6 +2891,76 @@ class PeriodicNotifier extends ChangeNotifier {
   }
 }
 
+class SnapScrollPhysics extends ScrollPhysics {
+  final double itemExtent;
+
+  const SnapScrollPhysics({
+    required this.itemExtent,
+    super.parent,
+  });
+
+  @override
+  SnapScrollPhysics applyTo(ScrollPhysics? ancestor) {
+    return SnapScrollPhysics(
+      itemExtent: itemExtent,
+      parent: buildParent(ancestor),
+    );
+  }
+
+  double _getTargetPixels(
+    ScrollMetrics position,
+    Tolerance tolerance,
+    double velocity,
+  ) {
+    double page = position.pixels / itemExtent;
+
+    // Decide direction based on velocity
+    if (velocity < -tolerance.velocity) {
+      page -= 0.5;
+    } else if (velocity > tolerance.velocity) {
+      page += 0.5;
+    }
+
+    return (page.roundToDouble()) * itemExtent;
+  }
+
+  @override
+  Simulation? createBallisticSimulation(
+    ScrollMetrics position,
+    double velocity,
+  ) {
+    // Let parent handle overscroll at edges
+    if ((velocity <= 0.0 && position.pixels <= position.minScrollExtent) ||
+        (velocity >= 0.0 && position.pixels >= position.maxScrollExtent)) {
+      return super.createBallisticSimulation(position, velocity);
+    }
+
+    final target = _getTargetPixels(position, toleranceFor(position), velocity);
+
+    if (target == position.pixels) {
+      return null;
+    }
+
+    // Instant jump: simulation that is already at the target & done
+    return _JumpToSimulation(target);
+  }
+}
+
+class _JumpToSimulation extends Simulation {
+  final double target;
+
+  _JumpToSimulation(this.target);
+
+  @override
+  double x(double time) => target;
+
+  @override
+  double dx(double time) => 0.0;
+
+  @override
+  bool isDone(double time) => true;
+}
+
 /// Shows an error modal
 void showErrorDialog(BuildContext context, String title, String errorMessage) {
   showDialog(
@@ -2733,5 +3103,15 @@ Future<File?> saveFile(Uint8List fileBytes, String fileName) async {
   } else {
     DebugConsole.warn('Unable to get downloads directory');
     return null;
+  }
+}
+
+String profilePath(bool isHovered, Contact contact) {
+  if (isHovered) {
+    return 'assets/icons/Edit.svg';
+  } else if (contact.extraOne()) {
+    return 'assets/icons/Extra1.svg';
+  } else {
+    return 'assets/icons/Profile.svg';
   }
 }

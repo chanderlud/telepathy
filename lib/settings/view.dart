@@ -511,7 +511,9 @@ class _AVSettingsState extends State<AVSettings> {
                       children: [
                         DropDown(
                             label: 'Input Device',
-                            items: widget.audioDevices.inputDevices,
+                            items: widget.audioDevices.inputDevices
+                                .map((d) => (d, d))
+                                .toList(),
                             initialSelection: inputInitialSelection,
                             onSelected: (String? value) {
                               if (value == 'Default') value = null;
@@ -521,7 +523,9 @@ class _AVSettingsState extends State<AVSettings> {
                             width: width),
                         DropDown(
                           label: 'Output Device',
-                          items: widget.audioDevices.outputDevices,
+                          items: widget.audioDevices.outputDevices
+                              .map((d) => (d, d))
+                              .toList(),
                           initialSelection: outputInitialSelection,
                           onSelected: (String? value) {
                             if (value == 'Default') value = null;
@@ -587,7 +591,11 @@ class _AVSettingsState extends State<AVSettings> {
                       listenable: widget.stateController,
                       builder: (BuildContext context, Widget? child) {
                         return DropDown(
-                            items: const ['Off', 'Vanilla', 'Hogwash'],
+                            items: const [
+                              ('Off', 'Off'),
+                              ('Vanilla', 'Vanilla'),
+                              ('Hogwash', 'Hogwash')
+                            ],
                             initialSelection: widget.controller.useDenoise
                                 ? widget.controller.denoiseModel ?? 'Vanilla'
                                 : 'Off',
@@ -713,7 +721,7 @@ class _AVSettingsState extends State<AVSettings> {
           children: [
             DropDown(
               label: 'Encoder',
-              items: encoders,
+              items: encoders.map((d) => (d, d)).toList(),
               initialSelection:
                   _recordingConfig?.encoder() ?? encoders.firstOrNull,
               onSelected: (String? value) {
@@ -731,7 +739,7 @@ class _AVSettingsState extends State<AVSettings> {
             ),
             DropDown(
               label: 'Capture Device',
-              items: devices,
+              items: devices.map((d) => (d, d)).toList(),
               initialSelection:
                   _recordingConfig?.device() ?? devices.firstOrNull,
               onSelected: (String? value) {
@@ -783,19 +791,6 @@ class _AVSettingsState extends State<AVSettings> {
                     context, 'Error in Encoder Selection', e.message);
               }
             }),
-        Button(
-          text: "test room",
-          width: 80,
-          height: 25,
-          disabled: false,
-          onPressed: () async {
-            widget.telepathy.joinRoom(memberStrings: [
-              "12D3KooWPNBuTcwJ1PjM13hD7xq6BABuhnkcdQxbCbZ7HYwpCb1V",
-              "12D3KooWGUA8eC8qwH8g1RWvBbC7NmxUwRGAefFNEU3LteTuxgTp",
-              "12D3KooWJNJcxMtwcPEqxxbgohgwvPx34XAMyA5TzFyFgtFSjJ5r"
-            ]);
-          },
-        )
       ],
     );
   }
@@ -1589,9 +1584,9 @@ class OverlayPositionWidgetState extends State<OverlayPositionWidget> {
   }
 }
 
-class DropDown extends StatelessWidget {
+class DropDown<T> extends StatelessWidget {
   final String? label;
-  final List<String> items;
+  final List<(String, String)> items;
   final String? initialSelection;
   final void Function(String?) onSelected;
   final double? width;
@@ -1612,10 +1607,10 @@ class DropDown extends StatelessWidget {
       width: width,
       label: label == null ? null : Text(label!),
       enabled: enabled,
-      dropdownMenuEntries: items.map<DropdownMenuEntry<String>>((item) {
+      dropdownMenuEntries: items.map((item) {
         return DropdownMenuEntry(
-          value: item,
-          label: item,
+          value: item.$1,
+          label: item.$2,
         );
       }).toList(),
       onSelected: onSelected,
