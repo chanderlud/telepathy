@@ -5353,13 +5353,6 @@ impl SseDecode for f32 {
     }
 }
 
-impl SseDecode for f64 {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
-        deserializer.cursor.read_f64::<NativeEndian>().unwrap()
-    }
-}
-
 impl SseDecode for i32 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -5568,7 +5561,7 @@ impl SseDecode for crate::api::flutter::Statistics {
         let mut var_latency = <usize>::sse_decode(deserializer);
         let mut var_uploadBandwidth = <usize>::sse_decode(deserializer);
         let mut var_downloadBandwidth = <usize>::sse_decode(deserializer);
-        let mut var_loss = <f64>::sse_decode(deserializer);
+        let mut var_loss = <usize>::sse_decode(deserializer);
         return crate::api::flutter::Statistics {
             input_level: var_inputLevel,
             output_level: var_outputLevel,
@@ -6587,13 +6580,6 @@ impl SseEncode for f32 {
     }
 }
 
-impl SseEncode for f64 {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
-        serializer.cursor.write_f64::<NativeEndian>(self).unwrap();
-    }
-}
-
 impl SseEncode for i32 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -6788,7 +6774,7 @@ impl SseEncode for crate::api::flutter::Statistics {
         <usize>::sse_encode(self.latency, serializer);
         <usize>::sse_encode(self.upload_bandwidth, serializer);
         <usize>::sse_encode(self.download_bandwidth, serializer);
-        <f64>::sse_encode(self.loss, serializer);
+        <usize>::sse_encode(self.loss, serializer);
     }
 }
 

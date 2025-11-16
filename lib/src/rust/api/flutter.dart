@@ -10,7 +10,7 @@ import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 import 'telepathy.dart';
 part 'flutter.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `invoke`, `notify`
+// These functions are ignored because they are not marked as `pub`: `invoke`, `notify`, `update_status`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `SEND_TO_DART_LOGGER_STREAM_SINK`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `deref`, `do_logs`, `fmt`, `fmt`, `fmt`, `initialize`
 
@@ -245,8 +245,8 @@ class Statistics {
   /// the approximate download bandwidth used by the current call
   final BigInt downloadBandwidth;
 
-  /// a value between 0 and 1 representing the percent of audio lost in a sliding window
-  final double loss;
+  /// the number of output samples that were lost in the interval
+  final BigInt loss;
 
   const Statistics({
     required this.inputLevel,

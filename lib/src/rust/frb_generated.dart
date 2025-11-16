@@ -3937,12 +3937,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  double dco_decode_f_64(dynamic raw) {
-    // Codec=Dco (DartCObject based), see doc to use other codecs
-    return raw as double;
-  }
-
-  @protected
   int dco_decode_i_32(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as int;
@@ -4167,7 +4161,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       latency: dco_decode_usize(arr[2]),
       uploadBandwidth: dco_decode_usize(arr[3]),
       downloadBandwidth: dco_decode_usize(arr[4]),
-      loss: dco_decode_f_64(arr[5]),
+      loss: dco_decode_usize(arr[5]),
     );
   }
 
@@ -4670,12 +4664,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  double sse_decode_f_64(SseDeserializer deserializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    return deserializer.buffer.getFloat64();
-  }
-
-  @protected
   int sse_decode_i_32(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return deserializer.buffer.getInt32();
@@ -4892,7 +4880,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_latency = sse_decode_usize(deserializer);
     var var_uploadBandwidth = sse_decode_usize(deserializer);
     var var_downloadBandwidth = sse_decode_usize(deserializer);
-    var var_loss = sse_decode_f_64(deserializer);
+    var var_loss = sse_decode_usize(deserializer);
     return Statistics(
         inputLevel: var_inputLevel,
         outputLevel: var_outputLevel,
@@ -5518,12 +5506,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_f_64(double self, SseSerializer serializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    serializer.buffer.putFloat64(self);
-  }
-
-  @protected
   void sse_encode_i_32(int self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     serializer.buffer.putInt32(self);
@@ -5717,7 +5699,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_usize(self.latency, serializer);
     sse_encode_usize(self.uploadBandwidth, serializer);
     sse_encode_usize(self.downloadBandwidth, serializer);
-    sse_encode_f_64(self.loss, serializer);
+    sse_encode_usize(self.loss, serializer);
   }
 
   @protected

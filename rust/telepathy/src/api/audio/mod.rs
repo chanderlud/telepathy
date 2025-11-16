@@ -2,6 +2,8 @@ use crate::api::audio::processing::*;
 use crate::api::error::Error;
 #[cfg(target_family = "wasm")]
 use crate::api::telepathy::CHANNEL_SIZE;
+#[cfg(test)]
+use crate::api::utils::db_to_multiplier;
 use atomic_float::AtomicF32;
 use kanal::{Receiver, Sender};
 use log::{debug, warn};
@@ -11,8 +13,8 @@ use rubato::{
 };
 use sea_codec::ProcessorMessage;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Relaxed;
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 
 /// Parameters used for resampling throughout the application
 const RESAMPLER_PARAMETERS: SincInterpolationParameters = SincInterpolationParameters {
@@ -39,10 +41,105 @@ const MINIMUM_SILENCE_LENGTH: u8 = 40;
 const TRANSITION_LENGTH: usize = 96;
 
 pub(crate) struct InputProcessorState {
-    pub(crate) input_factor: Arc<AtomicF32>,
-    pub(crate) rms_threshold: Arc<AtomicF32>,
-    pub(crate) muted: Arc<AtomicBool>,
-    pub(crate) rms_sender: Arc<AtomicF32>,
+    input_volume: Arc<AtomicF32>,
+    rms_threshold: Arc<AtomicF32>,
+    muted: Arc<AtomicBool>,
+    rms_sender: Arc<AtomicF32>,
+}
+
+#[cfg(test)]
+impl Default for InputProcessorState {
+    fn default() -> Self {
+        Self {
+            input_volume: Arc::new(AtomicF32::new(1.0)),
+            rms_threshold: Arc::new(AtomicF32::new(db_to_multiplier(50_f32))),
+            muted: Arc::new(Default::default()),
+            rms_sender: Arc::new(Default::default()),
+        }
+    }
+}
+
+impl InputProcessorState {
+    pub(crate) fn new(
+        input_volume: &Arc<AtomicF32>,
+        rms_threshold: &Arc<AtomicF32>,
+        muted: &Arc<AtomicBool>,
+        rms_sender: Arc<AtomicF32>,
+    ) -> Self {
+        Self {
+            input_volume: input_volume.clone(),
+            rms_threshold: rms_threshold.clone(),
+            muted: muted.clone(),
+            rms_sender,
+        }
+    }
+
+    fn input_volume(&self) -> f32 {
+        self.input_volume.load(Relaxed)
+    }
+
+    fn rms_threshold(&self) -> f32 {
+        self.rms_threshold.load(Relaxed)
+    }
+
+    fn is_muted(&self) -> bool {
+        self.muted.load(Relaxed)
+    }
+
+    fn send_rms(&self, rms: f32) {
+        self.rms_sender.fetch_max(rms, Relaxed);
+    }
+}
+
+pub(crate) struct OutputProcessorState {
+    output_volume: Arc<AtomicF32>,
+    rms_sender: Arc<AtomicF32>,
+    deafened: Arc<AtomicBool>,
+    loss_sender: Arc<AtomicUsize>,
+}
+
+#[cfg(test)]
+impl Default for OutputProcessorState {
+    fn default() -> Self {
+        Self {
+            output_volume: Arc::new(AtomicF32::new(1.0)),
+            rms_sender: Arc::new(Default::default()),
+            deafened: Arc::new(Default::default()),
+            loss_sender: Arc::new(Default::default()),
+        }
+    }
+}
+
+impl OutputProcessorState {
+    pub(crate) fn new(
+        output_volume: &Arc<AtomicF32>,
+        rms_sender: Arc<AtomicF32>,
+        deafened: &Arc<AtomicBool>,
+        loss_sender: Arc<AtomicUsize>,
+    ) -> Self {
+        Self {
+            output_volume: output_volume.clone(),
+            rms_sender,
+            deafened: deafened.clone(),
+            loss_sender,
+        }
+    }
+
+    fn output_volume(&self) -> f32 {
+        self.output_volume.load(Relaxed)
+    }
+
+    fn is_deafened(&self) -> bool {
+        self.deafened.load(Relaxed)
+    }
+
+    fn send_rms(&self, rms: f32) {
+        self.rms_sender.fetch_max(rms, Relaxed);
+    }
+
+    fn send_loss(&self, loss: usize) {
+        self.loss_sender.fetch_add(loss, Relaxed);
+    }
 }
 
 /// Processes the audio input and sends it to the sending socket
@@ -127,7 +224,7 @@ pub(crate) fn input_processor(
             }
         }
 
-        if state.muted.load(Relaxed) {
+        if state.is_muted() {
             position = 0;
             continue;
         } else if position < in_len {
@@ -153,7 +250,7 @@ pub(crate) fn input_processor(
         // apply the input volume & scale the samples to -32768.0 to 32767.0
         wide_float_scaler(
             &mut target_buffer[..len],
-            max_i16_f32 * state.input_factor.load(Relaxed),
+            max_i16_f32 * state.input_volume(),
         );
 
         if let Some(ref mut denoiser) = denoiser {
@@ -166,10 +263,10 @@ pub(crate) fn input_processor(
         // calculate the rms
         let rms = calculate_rms(&out_buf);
         // send the rms to the statistics collector
-        state.rms_sender.fetch_max(rms, Relaxed);
+        state.send_rms(rms);
 
         // check if the frame is below the rms threshold
-        if rms < state.rms_threshold.load(Relaxed) {
+        if rms < state.rms_threshold() {
             if silence_length < MINIMUM_SILENCE_LENGTH {
                 silence_length += 1; // short silences are ignored
             } else if silence_length == MINIMUM_SILENCE_LENGTH {
@@ -225,9 +322,7 @@ pub(crate) fn output_processor(
     #[cfg(target_family = "wasm")] web_output: Arc<wasm_sync::Mutex<Vec<f32>>>,
     #[cfg(not(target_family = "wasm"))] sender: Sender<f32>,
     ratio: f64,
-    output_volume: Arc<AtomicF32>,
-    rms_sender: Arc<AtomicF32>,
-    deafened: Arc<AtomicBool>,
+    state: OutputProcessorState,
 ) -> Result<(), Error> {
     // base scale to convert i16 to f32
     let scale = 1_f32 / i16::MAX as f32;
@@ -245,7 +340,6 @@ pub(crate) fn output_processor(
 
     #[cfg(not(target_family = "wasm"))]
     let is_full = || sender.is_full();
-
     #[cfg(target_family = "wasm")]
     let is_full = || {
         if let Ok(lock) = web_output.lock() {
@@ -256,8 +350,11 @@ pub(crate) fn output_processor(
     };
 
     while let Ok(message) = receiver.recv() {
-        if deafened.load(Relaxed) || is_full() {
-            continue; // ignore frames while deafened or output is full
+        if state.is_deafened() {
+            continue; // ignore frames while deafened
+        } else if is_full() {
+            state.send_loss(FRAME_SIZE);
+            continue; // ignore frames while output is full
         }
 
         let int_samples: &[i16] = match &message {
@@ -276,9 +373,9 @@ pub(crate) fn output_processor(
         }
 
         // convert the i16 samples to f32 & apply the output volume
-        wide_i16_to_f32(int_samples, pre_buf[0], scale * output_volume.load(Relaxed));
+        wide_i16_to_f32(int_samples, pre_buf[0], scale * state.output_volume());
         // send the rms to the statistics collector
-        rms_sender.fetch_max(calculate_rms(pre_buf[0]), Relaxed);
+        state.send_rms(calculate_rms(pre_buf[0]));
         // get finalized samples
         let float_samples = if let Some(resampler) = &mut resampler_option {
             // resample the data
@@ -291,8 +388,14 @@ pub(crate) fn output_processor(
         };
 
         #[cfg(not(target_family = "wasm"))]
-        for sample in float_samples {
-            sender.try_send(*sample)?;
+        {
+            let mut failed = 0;
+            for sample in float_samples {
+                if !sender.try_send(*sample)? {
+                    failed += 1;
+                }
+            }
+            state.send_loss(failed);
         }
 
         #[cfg(target_family = "wasm")]

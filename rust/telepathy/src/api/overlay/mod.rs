@@ -6,7 +6,6 @@ use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicUsize};
 #[cfg(windows)]
 extern crate windows as other_windows;
 
-use atomic_float::AtomicF64;
 use lazy_static::lazy_static;
 #[cfg(windows)]
 use widestring::error::ContainsNul;
@@ -22,7 +21,7 @@ mod windows;
 
 lazy_static! {
     pub(crate) static ref LATENCY: Arc<AtomicUsize> = Default::default();
-    pub(crate) static ref LOSS: Arc<AtomicF64> = Default::default();
+    pub(crate) static ref LOSS: Arc<AtomicUsize> = Default::default();
     pub(crate) static ref CONNECTED: Arc<AtomicBool> = Default::default();
     static ref FONT_HEIGHT: Arc<AtomicI32> = Default::default();
     static ref BACKGROUND_COLOR: Arc<AtomicU32> = Default::default();
@@ -98,7 +97,7 @@ mod tests {
         for x in 0..=500 {
             sleep(std::time::Duration::from_millis(100)).await;
 
-            LOSS.store(x as f64 / 500_f64, std::sync::atomic::Ordering::Relaxed);
+            LOSS.store(x as usize, std::sync::atomic::Ordering::Relaxed);
 
             if x == 250 {
                 CONNECTED.store(false, std::sync::atomic::Ordering::Relaxed);

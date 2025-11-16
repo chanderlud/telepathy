@@ -3,7 +3,9 @@ use crate::api::audio::codec::{decoder, encoder};
 use crate::api::audio::ios::{configure_audio_session, deactivate_audio_session};
 #[cfg(target_family = "wasm")]
 use crate::api::audio::web_audio::{WebAudioWrapper, WebInput};
-use crate::api::audio::{InputProcessorState, input_processor, output_processor};
+use crate::api::audio::{
+    InputProcessorState, OutputProcessorState, input_processor, output_processor,
+};
 use crate::api::error::{DartError, Error, ErrorKind};
 use crate::api::flutter::*;
 use crate::api::overlay::overlay::Overlay;
@@ -59,6 +61,7 @@ use std::time::Duration;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 use tokio::select;
+use tokio::sync::mpsc::{Receiver as MReceiver, Sender as MSender, channel};
 use tokio::sync::{Mutex, Notify, RwLock};
 #[cfg(not(target_family = "wasm"))]
 use tokio::task::JoinHandle;
@@ -118,7 +121,7 @@ pub struct Telepathy {
     /// Manually set the output device
     output_device: DeviceName,
 
-    /// Private key for signing the handshake
+    /// The current libp2p private key
     identity: Arc<RwLock<Keypair>>,
 
     /// Keeps track of whether the user is in a call
@@ -129,9 +132,6 @@ pub struct Telepathy {
 
     /// Tracks state for the current room
     room_state: Arc<RwLock<Option<RoomState>>>,
-
-    /// Keeps the early call state the same across the whole room
-    early_room_state: Arc<RwLock<Option<EarlyCallState>>>,
 
     /// Disables the output stream
     deafened: Arc<AtomicBool>,
@@ -151,10 +151,10 @@ pub struct Telepathy {
     session_states: Arc<RwLock<HashMap<PeerId, Arc<SessionState>>>>,
 
     /// Signals the session manager to start a new session
-    start_session: AsyncSender<PeerId>,
+    start_session: MSender<PeerId>,
 
     /// Signals the session manager to start a screenshare
-    start_screenshare: AsyncSender<StartScreenshare>,
+    start_screenshare: MSender<StartScreenshare>,
 
     /// Restarts the session manager when needed
     restart_manager: Arc<Notify>,
@@ -189,8 +189,8 @@ impl Telepathy {
         codec_config: &CodecConfig,
         callbacks: TelepathyCallbacks,
     ) -> Telepathy {
-        let (start_session, receive_session) = unbounded_async::<PeerId>();
-        let (start_screenshare, receive_screenshare) = unbounded_async::<StartScreenshare>();
+        let (start_session, mut receive_session) = channel(8);
+        let (start_screenshare, mut receive_screenshare) = channel(8);
 
         let chat = Self {
             host,
@@ -207,7 +207,6 @@ impl Telepathy {
             in_call: Default::default(),
             end_audio_test: Default::default(),
             room_state: Default::default(),
-            early_room_state: Default::default(),
             deafened: Default::default(),
             muted: Default::default(),
             play_custom_ringtones: Default::default(),
@@ -231,7 +230,7 @@ impl Telepathy {
         spawn(async move {
             loop {
                 if let Err(error) = chat_clone
-                    .session_manager(&receive_session, &receive_screenshare)
+                    .session_manager(&mut receive_session, &mut receive_screenshare)
                     .await
                 {
                     error!("Session manager failed: {}", error);
@@ -315,38 +314,36 @@ impl Telepathy {
             .await
             .map_err::<Error, _>(Error::into)?;
 
-        // message channel
-        let (sender, receiver) = unbounded_async();
-        let cancel = CancellationToken::new();
-        let end_call = Arc::new(Notify::new());
         // parse members
         let members: Vec<_> = member_strings
             .into_iter()
             .filter_map(|m| m.parse().ok())
             .collect();
+        // delivers messages from each session to the room controller
+        let (sender, receiver) = channel(32);
+        // cancels all processing threads
+        let cancel = CancellationToken::new();
+        // gracefully ends the room call
+        let end_call = Arc::new(Notify::new());
+        // the same early call state is used throughout the room, the real peer ids are set later
+        let call_state = self.setup_call(PeerId::random()).await?;
         // set room state
         self.room_state.write().await.replace(RoomState {
             peers: members.clone(),
             sender,
             cancel: cancel.clone(),
             end_call: end_call.clone(),
+            early_state: call_state.clone(),
         });
 
-        // the same early call state is used throughout the room, the real peer ids are set later
-        let call_state = self.setup_call(PeerId::random()).await?;
-        *self.early_room_state.write().await = Some(call_state.clone());
-
-        let identity = self.identity.read().await.public().to_peer_id();
+        // tries to connect to every member of the room using existing sessions, or new ones if needed
+        // note: sending your own identity to start_session is safe
         for member in members {
             if let Some(state) = self.session_states.read().await.get(&member) {
                 state.start_call.notify_one();
-            } else if member == identity {
-                continue;
             } else {
                 // when the session opens, start_call will be notified
-                if self.start_session.send(member).await.is_err() {
-                    error!("start_session channel is closed");
-                }
+                _ = self.start_session.send(member).await;
             }
         }
 
@@ -464,17 +461,14 @@ impl Telepathy {
                 .message_sender
                 .send(message)
                 .await
-                .map_err(Error::from)?;
+                .map_err(|_| "channel closed".to_string())?;
         }
 
         Ok(())
     }
 
     pub async fn start_screenshare(&self, contact: &Contact) -> std::result::Result<(), DartError> {
-        self.start_screenshare
-            .send((contact.peer_id, None))
-            .await
-            .map_err(Error::from)?;
+        _ = self.start_screenshare.send((contact.peer_id, None)).await;
         Ok(())
     }
 
@@ -572,8 +566,8 @@ impl Telepathy {
     /// Starts new sessions
     async fn session_manager(
         &self,
-        start: &AsyncReceiver<PeerId>,
-        screenshare: &AsyncReceiver<StartScreenshare>,
+        start: &mut MReceiver<PeerId>,
+        screenshare: &mut MReceiver<StartScreenshare>,
     ) -> Result<()> {
         let builder =
             libp2p::SwarmBuilder::with_existing_identity(self.identity.read().await.clone());
@@ -760,9 +754,7 @@ impl Telepathy {
                 // events are handled outside the select to help with spagetification
                 event = swarm.select_next_some() => event,
                 // start a new session
-                result = start.recv() => {
-                    let peer_id = result?;
-
+                Some(peer_id) = start.recv() => {
                     if peer_id == self.identity.read().await.public().to_peer_id() {
                         // prevents dialing yourself
                         continue;
@@ -787,8 +779,7 @@ impl Telepathy {
                     continue;
                 }
                 // starts a stream for outgoing screen shares
-                result = screenshare.recv() => {
-                    let (peer_id, header_option) = result?;
+                Some((peer_id, header_option)) = screenshare.recv() => {
                     info!("starting screenshare for {} {:?}", peer_id, header_option);
 
                     #[cfg(not(target_family = "wasm"))]
@@ -797,35 +788,32 @@ impl Telepathy {
                         let dart_stop = DartNotify { inner: stop.clone() };
 
                         if let Some(Message::ScreenshareHeader { encoder_name }) = header_option {
-                            if let Ok(stream) = swarm
-                                .behaviour()
-                                .stream
-                                .new_control()
-                                .open_stream(peer_id, CHAT_PROTOCOL)
-                                .await {
-                                let width = self.screenshare_config.width.load(Relaxed);
-                                let height = self.screenshare_config.height.load(Relaxed);
-
-                                spawn(screenshare::playback(stream, stop, state.download_bandwidth.clone(), encoder_name, width, height));
-                                notify(&self.callbacks.screenshare_started, (dart_stop, false)).await;
+                            let stream_result = swarm.behaviour().stream.new_control().open_stream(peer_id, CHAT_PROTOCOL).await;
+                            match stream_result {
+                                Ok(stream) => {
+                                    let width = self.screenshare_config.width.load(Relaxed);
+                                    let height = self.screenshare_config.height.load(Relaxed);
+                                    let bandwidth = state.download_bandwidth.clone();
+                                    spawn(screenshare::playback(stream, stop, bandwidth, encoder_name, width, height));
+                                    notify(&self.callbacks.screenshare_started, (dart_stop, false)).await;
+                                }
+                                Err(error) => {
+                                    error!("failed to open stream for screenshare playback {error}");
+                                }
                             }
                         } else if let Some(config) = self.screenshare_config.recording_config.read().await.clone() {
-                            let message = Message::ScreenshareHeader { encoder_name: config.encoder.to_string() };
-
-                            state
-                                .message_sender
-                                .send(message)
-                                .await
-                                .map_err(Error::from)?;
-
+                            _ = state.message_sender.send(Message::ScreenshareHeader { encoder_name: config.encoder.to_string() }).await;
                             state.wants_stream.store(true, Relaxed);
-
-                            if let Ok(stream) = state.stream_receiver.recv().await {
-                                spawn(screenshare::record(stream, stop, state.upload_bandwidth.clone(), config));
+                            match state.stream_receiver.recv().await {
+                                Ok(stream) => {
+                                    spawn(screenshare::record(stream, stop, state.upload_bandwidth.clone(), config));
+                                    notify(&self.callbacks.screenshare_started, (dart_stop, true)).await;
+                                }
+                                Err(error) => {
+                                    error!("failed to receive sub-stream for screenshare broadcast {error}");
+                                }
                             }
-
                             state.wants_stream.store(false, Relaxed);
-                            notify(&self.callbacks.screenshare_started, (dart_stop, true)).await;
                         } else {
                             // TODO this should be blocked from occurring via the frontend i think
                             warn!("screenshare started without recording configuration");
@@ -836,6 +824,7 @@ impl Telepathy {
 
                     continue;
                 }
+                else => unreachable!()
             };
 
             match event {
@@ -1140,7 +1129,7 @@ impl Telepathy {
     async fn session_outer(&self, peer_id: PeerId, mut control: Option<Control>, stream: Stream) {
         let contact_option = invoke(&self.callbacks.get_contact, peer_id.to_bytes()).await;
         // sends messages to the session from elsewhere in the program
-        let message_channel = unbounded_async::<Message>();
+        let mut message_channel = channel::<Message>(8);
         // create the state and a clone of it for the session
         let state = Arc::new(SessionState::new(&message_channel.0));
         // insert the new state
@@ -1201,7 +1190,7 @@ impl Telepathy {
                         control.as_mut(),
                         &mut transport,
                         &state,
-                        &message_channel,
+                        &mut message_channel,
                         &mut keep_alive,
                     )
                     .await;
@@ -1271,7 +1260,7 @@ impl Telepathy {
         control: Option<&mut Control>,
         transport: &mut Transport<TransportStream>,
         state: &Arc<SessionState>,
-        message_channel: &(AsyncSender<Message>, AsyncReceiver<Message>),
+        message_channel: &mut (MSender<Message>, MReceiver<Message>),
         keep_alive: &mut Interval,
     ) -> Result<bool> {
         info!("[{}] session waiting for event", contact.nickname);
@@ -1348,7 +1337,7 @@ impl Telepathy {
                                 self.room_handshake(transport, control, state, call_state).await?;
                             } else {
                                 // normal call handshake
-                                self.call_handshake(transport, control, &message_channel.1, state, call_state).await?;
+                                self.call_handshake(transport, control, &mut message_channel.1, state, call_state).await?;
                             }
 
                             keep_alive.reset(); // start sending normal keep alive messages
@@ -1405,7 +1394,7 @@ impl Telepathy {
                                         self.room_handshake(transport, control, state, call_state).await?;
                                     } else {
                                         // normal call handshake
-                                        self.call_handshake(transport, control, &message_channel.1, state, call_state).await?;
+                                        self.call_handshake(transport, control, &mut message_channel.1, state, call_state).await?;
                                     }
 
                                     keep_alive.reset(); // start sending normal keep alive messages
@@ -1460,7 +1449,7 @@ impl Telepathy {
         &self,
         transport: &mut Transport<TransportStream>,
         control: Option<&mut Control>,
-        message_receiver: &AsyncReceiver<Message>,
+        message_receiver: &mut MReceiver<Message>,
         state: &Arc<SessionState>,
         call_state: EarlyCallState,
     ) -> Result<()> {
@@ -1482,7 +1471,7 @@ impl Telepathy {
                 Some(OptionalCallArgs {
                     audio_transport: stream_to_audio_transport(stream),
                     control_transport: transport,
-                    message_receiver: message_receiver.clone(),
+                    message_receiver,
                     state,
                 }),
             )
@@ -1520,7 +1509,7 @@ impl Telepathy {
         }
     }
 
-    /// The bulk of the normal call logic
+    /// normal call & self-test logic
     async fn call(
         &self,
         stop_io: &CancellationToken,
@@ -1532,22 +1521,11 @@ impl Telepathy {
         #[cfg(target_os = "ios")]
         configure_audio_session();
 
-        // shared values for various statistics
-        let latency = optional
-            .as_ref()
-            .map(|o| Arc::clone(&o.state.latency))
-            .unwrap_or_default();
-        let upload_bandwidth = optional
-            .as_ref()
-            .map(|o| Arc::clone(&o.state.upload_bandwidth))
-            .unwrap_or_default();
-        let download_bandwidth = optional
-            .as_ref()
-            .map(|o| Arc::clone(&o.state.download_bandwidth))
-            .unwrap_or_default();
-        // shared values used to move rms to statistics collector
-        let input_rms_sender: Arc<AtomicF32> = Default::default();
-        let output_rms_sender: Arc<AtomicF32> = Default::default();
+        // shared statistics values
+        let statistics_state = StatisticsCollectorState::new(optional.as_ref().map(|o| o.state));
+        // references for use in networking threads
+        let upload_bandwidth = statistics_state.upload_bandwidth.clone();
+        let download_bandwidth = statistics_state.download_bandwidth.clone();
 
         // the two clients agree on these codec options
         let codec_config = call_state.codec_config();
@@ -1556,7 +1534,7 @@ impl Telepathy {
             .setup_input(
                 call_state.local_configuration.sample_rate as f64,
                 codec_config,
-                input_rms_sender.clone(),
+                &statistics_state,
                 false,
             )
             .await?;
@@ -1565,7 +1543,7 @@ impl Telepathy {
             .setup_output(
                 call_state.remote_configuration.sample_rate as f64,
                 codec_config.0,
-                output_rms_sender.clone(),
+                &statistics_state,
                 false,
                 end_call.clone(),
             )
@@ -1589,23 +1567,18 @@ impl Telepathy {
         }
 
         spawn(statistics_collector(
-            input_rms_sender,
-            output_rms_sender,
-            latency,
-            Arc::clone(&upload_bandwidth),
-            Arc::clone(&download_bandwidth),
+            statistics_state,
             Arc::clone(&self.callbacks.statistics),
             stop_io.clone(),
         ));
 
         if let Some(o) = optional {
-            let (socket_sender, socket_receiver) = unbounded_async();
             let (write, read) = o.audio_transport.split();
-            socket_sender.send(write).await?;
+            let sockets = Arc::new(Mutex::new(vec![write]));
 
             let input_handle = spawn(audio_input(
                 input_channel.0,
-                socket_receiver,
+                sockets,
                 stop_io.clone(),
                 upload_bandwidth,
             ));
@@ -1685,7 +1658,7 @@ impl Telepathy {
     async fn call_controller(
         &self,
         transport: &mut Transport<TransportStream>,
-        receiver: AsyncReceiver<Message>,
+        receiver: &mut MReceiver<Message>,
         peer: PeerId,
         end_call: &Arc<Notify>,
     ) -> Result<(Option<String>, bool)> {
@@ -1715,14 +1688,14 @@ impl Telepathy {
                         }
                         Message::ScreenshareHeader { .. } => {
                             info!("received screenshare header {:?}", message);
-                            self.start_screenshare.send((peer, Some(message))).await?;
+                            _ = self.start_screenshare.send((peer, Some(message))).await;
                         }
                         _ => error!("call controller unexpected message: {:?}", message),
                     }
                 },
                 // sends messages to the callee
                 result = receiver.recv() => {
-                    if let Ok(message) = result {
+                    if let Some(message) = result {
                         write_message(transport, &message).await?;
                     } else {
                         // if the channel closes, the call has ended
@@ -1761,16 +1734,17 @@ impl Telepathy {
                 audio_transport: Box::new(audio_transport),
                 state: call_state,
             })
-            .await?;
+            .await
+            .map_err(|_| ErrorKind::RoomStateMissing)?;
 
         loop {
             select! {
-                Ok(result) = read_message::<Message, _>(transport) => {
+                result = read_message::<Message, _>(transport) => {
                     match result {
-                        Message::Goodbye { .. } => {
+                        Ok(Message::Goodbye { .. }) | Err(_) => {
                             break;
                         }
-                        Message::Chat { .. } => {
+                        Ok(Message::Chat { .. }) => {
                             // TODO handle chat messages
                         }
                         _ => ()
@@ -1781,7 +1755,6 @@ impl Telepathy {
                     _ = write_message(transport, &Message::Goodbye { reason: None }).await;
                     break
                 }
-                else => break,
             }
         }
 
@@ -1793,7 +1766,7 @@ impl Telepathy {
     /// controller for rooms
     async fn room_controller(
         &self,
-        receiver: AsyncReceiver<RoomMessage>,
+        mut receiver: MReceiver<RoomMessage>,
         end_sessions: CancellationToken,
         call_state: EarlyCallState,
         stop_io: &CancellationToken,
@@ -1804,12 +1777,9 @@ impl Telepathy {
         configure_audio_session();
 
         // moves new sockets to audio_input
-        let (socket_sender, socket_receiver) = unbounded_async();
-        // shared values used for moving values to the statistics collector
-        let upload_bandwidth: Arc<AtomicUsize> = Default::default();
-        let download_bandwidth: Arc<AtomicUsize> = Default::default();
-        let input_rms_sender: Arc<AtomicF32> = Default::default();
-        let output_rms_sender: Arc<AtomicF32> = Default::default();
+        let sockets: Arc<Mutex<Vec<AudioSocket>>> = Default::default();
+        // shared statistics
+        let statistics_state = StatisticsCollectorState::new(None);
         // tracks connection state for peers
         let mut connections = HashMap::new();
 
@@ -1817,7 +1787,7 @@ impl Telepathy {
             .setup_input(
                 call_state.local_configuration.sample_rate as f64,
                 (true, true, 5_f32), // hard coded room codec options
-                input_rms_sender.clone(),
+                &statistics_state,
                 true,
             )
             .await?;
@@ -1839,17 +1809,13 @@ impl Telepathy {
 
         let input_handle = spawn(audio_input(
             input_channel.0,
-            socket_receiver,
+            sockets.clone(),
             stop_io.clone(),
-            upload_bandwidth.clone(),
+            statistics_state.upload_bandwidth.clone(),
         ));
 
         spawn(statistics_collector(
-            input_rms_sender,
-            output_rms_sender.clone(),
-            Default::default(), // TODO decide what to do with room latencies
-            Arc::clone(&upload_bandwidth),
-            Arc::clone(&download_bandwidth),
+            statistics_state.clone(),
             Arc::clone(&self.callbacks.statistics),
             stop_io.clone(),
         ));
@@ -1859,10 +1825,7 @@ impl Telepathy {
 
         loop {
             select! {
-                _ = end_call.notified() => {
-                    break;
-                }
-                Ok(message) = receiver.recv() => {
+                Some(message) = receiver.recv() => {
                     match message{
                         RoomMessage::Join { audio_transport, state } => {
                             info!("received room Join [p={}]", state.peer);
@@ -1875,13 +1838,13 @@ impl Telepathy {
 
                             let (write, read) = (*audio_transport).split();
                             // begin sending audio to transport
-                            socket_sender.send(write).await?;
+                            sockets.lock().await.push(write);
                             // setup output stack
                             let (output_sender, output_stream) = self
                                 .setup_output(
                                     state.remote_configuration.sample_rate as f64,
                                     true,
-                                    output_rms_sender.clone(),
+                                    &statistics_state,
                                     true,
                                     end_call.clone(),
                                 )
@@ -1893,7 +1856,7 @@ impl Telepathy {
                                 output_sender,
                                 read,
                                 stop_io.clone(),
-                                download_bandwidth.clone(),
+                                statistics_state.download_bandwidth.clone(),
                             ));
 
                             connections.insert(state.peer, RoomConnection {
@@ -1913,6 +1876,9 @@ impl Telepathy {
                             }
                         }
                     }
+                }
+                _ = end_call.notified() => {
+                    break;
                 }
             }
         }
@@ -1939,7 +1905,7 @@ impl Telepathy {
         &self,
         sample_rate: f64,
         codec_options: (bool, bool, f32),
-        rms_sender: Arc<AtomicF32>,
+        statistics_state: &StatisticsCollectorState,
         is_room: bool,
     ) -> Result<(AsyncReceiver<ProcessorMessage>, Sender<f32>)> {
         // input stream -> input processor
@@ -1966,41 +1932,34 @@ impl Telepathy {
 
         let (codec_enabled, vbr, residual_bits) = codec_options;
         let denoise = self.denoise.load(Relaxed);
-        // get a reference to input volume for the processor
-        let input_volume = Arc::clone(&self.input_volume);
-        // get a reference to the rms threshold for the processor
-        let rms_threshold = Arc::clone(&self.rms_threshold);
-        // get a reference to the muted flag for the processor
-        let muted = Arc::clone(&self.muted);
-        // get a sync version of the processed input sender
-        let processed_input_sender = processed_input_sender.to_sync();
         // the rnnoise denoiser
         let denoiser = denoise.then_some(DenoiseState::from_model(
             self.denoise_model.read().await.clone(),
         ));
+        let state = InputProcessorState::new(
+            &self.input_volume,
+            &self.rms_threshold,
+            &self.muted,
+            statistics_state.input_rms.clone(),
+        );
 
         // spawn the input processor thread
         spawn_blocking_with(
             move || {
                 input_processor(
                     input_receiver,
-                    processed_input_sender,
+                    processed_input_sender.to_sync(),
                     sample_rate,
                     denoiser,
                     codec_enabled,
-                    InputProcessorState {
-                        input_factor: input_volume,
-                        rms_threshold,
-                        muted,
-                        rms_sender,
-                    },
+                    state,
                 )
             },
             FLUTTER_RUST_BRIDGE_HANDLER.thread_pool(),
         );
 
-        // if using codec, spawn extra encoder thread
         if codec_enabled {
+            // if using codec, spawn extra encoder thread
             spawn_blocking_with(
                 move || {
                     encoder(
@@ -2026,7 +1985,7 @@ impl Telepathy {
         &self,
         remote_sample_rate: f64,
         codec_enabled: bool,
-        rms_sender: Arc<AtomicF32>,
+        statistics_state: &StatisticsCollectorState,
         is_room: bool,
         end_call: Arc<Notify>,
     ) -> Result<(AsyncSender<ProcessorMessage>, SendStream)> {
@@ -2063,10 +2022,15 @@ impl Telepathy {
         });
         // the ratio of the output sample rate to the remote input sample rate
         let ratio = output_config.sample_rate().0 as f64 / remote_sample_rate;
-        // get a reference to output volume for the processor
-        let output_volume = Arc::clone(&self.output_volume);
-        // do this outside the output processor thread
+        let state = OutputProcessorState::new(
+            &self.output_volume,
+            statistics_state.output_rms.clone(),
+            &self.deafened,
+            statistics_state.loss.clone(),
+        );
+
         let output_processor_receiver = if codec_enabled {
+            // if codec enabled, spawn extra decoder thread
             spawn_blocking_with(
                 move || {
                     decoder(
@@ -2082,21 +2046,10 @@ impl Telepathy {
         } else {
             network_output_receiver.to_sync()
         };
-        // a reference to the flag for use in the output processor
-        let deafened = Arc::clone(&self.deafened);
 
         // spawn the output processor thread
         spawn_blocking_with(
-            move || {
-                output_processor(
-                    output_processor_receiver,
-                    output_sender,
-                    ratio,
-                    output_volume,
-                    rms_sender,
-                    deafened,
-                )
-            },
+            move || output_processor(output_processor_receiver, output_sender, ratio, state),
             FLUTTER_RUST_BRIDGE_HANDLER.thread_pool(),
         );
 
@@ -2168,7 +2121,13 @@ impl Telepathy {
     /// helper method to set up EarlyCallState
     async fn setup_call(&self, peer: PeerId) -> Result<EarlyCallState> {
         // if there is an early room state, use it w/ the real peer id
-        if let Some(mut state) = self.early_room_state.read().await.clone() {
+        if let Some(mut state) = self
+            .room_state
+            .read()
+            .await
+            .as_ref()
+            .map(|s| s.early_state.clone())
+        {
             state.peer = peer;
             return Ok(state);
         }
@@ -2408,7 +2367,7 @@ struct SessionState {
     in_call: AtomicBool,
 
     /// a reusable sender for messages while a call is active
-    message_sender: AsyncSender<Message>,
+    message_sender: MSender<Message>,
 
     /// forwards sub-streams to the session
     stream_sender: AsyncSender<Stream>,
@@ -2432,7 +2391,7 @@ struct SessionState {
 }
 
 impl SessionState {
-    fn new(message_sender: &AsyncSender<Message>) -> Self {
+    fn new(message_sender: &MSender<Message>) -> Self {
         let stream_channel = unbounded_async();
 
         Self {
@@ -2461,6 +2420,7 @@ impl SessionState {
 
         // TODO evaluate this loop's performance in handling unexpected messages
         loop {
+            // TODO this future is not cancellation safe
             let future = async {
                 let stream = if let Some(control) = control.as_mut() {
                     // if dialer, open stream
@@ -2493,11 +2453,13 @@ impl SessionState {
 struct RoomState {
     peers: Vec<PeerId>,
 
-    sender: AsyncSender<RoomMessage>,
+    sender: MSender<RoomMessage>,
 
     cancel: CancellationToken,
 
     end_call: Arc<Notify>,
+
+    early_state: EarlyCallState,
 }
 
 enum RoomMessage {
@@ -2519,32 +2481,49 @@ struct RoomConnection {
 struct OptionalCallArgs<'a> {
     audio_transport: Transport<TransportStream>,
     control_transport: &'a mut Transport<TransportStream>,
-    message_receiver: AsyncReceiver<Message>,
+    message_receiver: &'a mut MReceiver<Message>,
     state: &'a Arc<SessionState>,
+}
+
+#[derive(Clone)]
+struct StatisticsCollectorState {
+    input_rms: Arc<AtomicF32>,
+    output_rms: Arc<AtomicF32>,
+    latency: Arc<AtomicUsize>,
+    upload_bandwidth: Arc<AtomicUsize>,
+    download_bandwidth: Arc<AtomicUsize>,
+    loss: Arc<AtomicUsize>,
+}
+
+impl StatisticsCollectorState {
+    fn new(state: Option<&Arc<SessionState>>) -> Self {
+        Self {
+            input_rms: Arc::new(Default::default()),
+            output_rms: Arc::new(Default::default()),
+            latency: state.map(|s| s.latency.clone()).unwrap_or_default(),
+            upload_bandwidth: state
+                .map(|s| s.upload_bandwidth.clone())
+                .unwrap_or_default(),
+            download_bandwidth: state
+                .map(|s| s.download_bandwidth.clone())
+                .unwrap_or_default(),
+            loss: Arc::new(Default::default()),
+        }
+    }
 }
 
 /// Receives frames of audio data from the input processor and sends them to the socket
 async fn audio_input(
     input_receiver: AsyncReceiver<ProcessorMessage>,
-    socket_receiver: AsyncReceiver<AudioSocket>,
+    sockets: Arc<Mutex<Vec<AudioSocket>>>,
     cancel: CancellationToken,
     bandwidth: Arc<AtomicUsize>,
 ) -> Result<()> {
     // static signal bytes
     let keep_alive = Bytes::from_static(&[1]);
-    let mut sockets: Vec<AudioSocket> = Vec::new();
 
     loop {
         select! {
-            message = socket_receiver.recv() => {
-                if let Ok(socket) = message {
-                    sockets.push(socket); // new connection established
-                } else {
-                    // in theory, this is dead code, the socket_sender isn't dropped
-                    debug!("audio_input ended with socket shutdown");
-                    break Ok(());
-                }
-            }
             message = timeout(KEEP_ALIVE, input_receiver.recv()) => {
                 let bytes = match message {
                     Ok(Ok(ProcessorMessage::Data(bytes))) => bytes,
@@ -2561,6 +2540,7 @@ async fn audio_input(
                 let mut i = 0;
                 let mut successful_sends = 0;
 
+                let mut sockets = sockets.lock().await;
                 while i < sockets.len() {
                     let send_result = {
                         // limit the &mut borrow to this block
@@ -2639,12 +2619,6 @@ async fn loopback(
 ) {
     loop {
         select! {
-            _ = end_call.notified() => {
-                break;
-            }
-            _ = cancel.cancelled() => {
-                break;
-            },
             message = input_receiver.recv() => {
                 if let Ok(message) = message {
                     if output_sender.try_send(message).is_err() {
@@ -2654,17 +2628,19 @@ async fn loopback(
                     break;
                 }
             },
+            _ = end_call.notified() => {
+                break;
+            }
+            _ = cancel.cancelled() => {
+                break;
+            },
         }
     }
 }
 
 /// Collects statistics from throughout the application, processes them, and provides them to the frontend
 async fn statistics_collector(
-    input_rms: Arc<AtomicF32>,
-    output_rms: Arc<AtomicF32>,
-    latency: Arc<AtomicUsize>,
-    upload_bandwidth: Arc<AtomicUsize>,
-    download_bandwidth: Arc<AtomicUsize>,
+    state: StatisticsCollectorState,
     callback: DartVoid<Statistics>,
     cancel: CancellationToken,
 ) -> Result<()> {
@@ -2672,27 +2648,28 @@ async fn statistics_collector(
     let mut update_interval = interval(Duration::from_millis(100));
     // the interval for the input_max and output_max to decrease
     let mut reset_interval = interval(Duration::from_secs(5));
-
+    // max input RMS
     let mut input_max = 0_f32;
+    // max output RMS
     let mut output_max = 0_f32;
 
     loop {
         select! {
             _ = update_interval.tick() => {
-                let latency = latency.load(Relaxed);
-                LATENCY.store(latency, Relaxed);
+                let latency = state.latency.load(Relaxed);
+                let loss = state.loss.swap(0, Relaxed);
 
-                 invoke(&callback, Statistics {
-                    input_level: level_from_window(input_rms.load(Relaxed), &mut input_max),
-                    output_level: level_from_window(output_rms.load(Relaxed), &mut output_max),
+                invoke(&callback, Statistics {
+                    input_level: level_from_window(state.input_rms.swap(0_f32, Relaxed), &mut input_max),
+                    output_level: level_from_window(state.output_rms.swap(0_f32, Relaxed), &mut output_max),
                     latency,
-                    upload_bandwidth: upload_bandwidth.load(Relaxed),
-                    download_bandwidth: download_bandwidth.load(Relaxed),
-                    loss: LOSS.load(Relaxed),
+                    upload_bandwidth: state.upload_bandwidth.load(Relaxed),
+                    download_bandwidth: state.download_bandwidth.load(Relaxed),
+                    loss,
                 }).await;
 
-                input_rms.store(0_f32, Relaxed);
-                output_rms.store(0_f32, Relaxed);
+                LATENCY.store(latency, Relaxed);
+                LOSS.store(loss, Relaxed);
             }
             _ = reset_interval.tick() => {
                 input_max /= 2_f32;
@@ -2709,7 +2686,7 @@ async fn statistics_collector(
     invoke(&callback, statistics).await;
 
     LATENCY.store(0, Relaxed);
-    LOSS.store(0_f64, Relaxed);
+    LOSS.store(0, Relaxed);
     CONNECTED.store(false, Relaxed);
 
     info!("statistics collector returning");
@@ -2881,12 +2858,7 @@ pub(crate) mod tests {
                 sample_rate as f64,
                 denoiser,
                 codec_enabled,
-                InputProcessorState {
-                    input_factor: Arc::new(AtomicF32::new(1.0)),
-                    rms_threshold: Arc::new(AtomicF32::new(db_to_multiplier(50_f32))),
-                    muted: Default::default(),
-                    rms_sender: Default::default(),
-                },
+                InputProcessorState::default(),
             );
 
             if let Err(error) = result {
@@ -2971,9 +2943,7 @@ pub(crate) mod tests {
                 output_processor_receiver,
                 output_sender,
                 ratio,
-                Arc::new(AtomicF32::new(1_f32)),
-                Default::default(),
-                Default::default(),
+                OutputProcessorState::default(),
             )
         });
 

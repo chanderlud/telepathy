@@ -561,8 +561,8 @@ pub struct Statistics {
     /// the approximate download bandwidth used by the current call
     pub download_bandwidth: usize,
 
-    /// a value between 0 and 1 representing the percent of audio lost in a sliding window
-    pub loss: f64,
+    /// the number of output samples that were lost in the interval
+    pub loss: usize,
 }
 
 // The following is a modified version of the code found at

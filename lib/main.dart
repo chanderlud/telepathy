@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:io';
+import 'dart:math';
 import 'package:collection/collection.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart' hide Overlay;
@@ -1210,7 +1212,9 @@ class ContactWidgetState extends State<ContactWidget> {
           children: [
             CircleAvatar(
               maxRadius: 17,
-              child: SvgPicture.asset(isHovered ? 'assets/icons/Edit.svg' : 'assets/icons/Profile.svg'),
+              child: SvgPicture.asset(isHovered
+                  ? 'assets/icons/Edit.svg'
+                  : 'assets/icons/Profile.svg'),
             ),
             const SizedBox(width: 10),
             Text(widget.contact.nickname(),
@@ -2153,29 +2157,11 @@ class CallDetailsWidget extends StatelessWidget {
           ListenableBuilder(
               listenable: statisticsController,
               builder: (BuildContext context, Widget? child) {
-                Color color = getColor(statisticsController.loss);
-                return Row(
-                  children: [
-                    const Text(
-                      'Loss: ',
-                      style: TextStyle(fontSize: 17),
-                    ),
-                    Text(
-                      '${(statisticsController.loss * 100).toStringAsFixed(1)}%',
-                      style: TextStyle(color: color, fontSize: 17),
-                    ),
-                  ],
-                );
+                return GradientMiniLineChart(
+                    values: statisticsController.lossWindow,
+                    strokeWidth: 2);
               }),
           const SizedBox(height: 6),
-        ListenableBuilder(
-            listenable: stateController,
-            builder: (BuildContext context, Widget? child) {
-              return Text(
-                'Connection: ${stateController._activeRoom != null ? "Mesh" : "Direct"}',
-                style: TextStyle(fontSize: 16),
-              );
-            }),
           const Spacer(),
           const Text('Input level'),
           const SizedBox(height: 7),
@@ -2553,6 +2539,103 @@ class CustomSwitch extends StatelessWidget {
   }
 }
 
+class GradientMiniLineChart extends StatelessWidget {
+  final List<int> values;
+  final double strokeWidth;
+
+  const GradientMiniLineChart({
+    super.key,
+    required this.values,
+    this.strokeWidth = 2,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 250,
+      height: 50,
+      child: CustomPaint(
+        painter: _GradientMiniLineChartPainter(
+          values: values,
+          strokeWidth: strokeWidth,
+        ),
+      ),
+    );
+  }
+}
+
+class _GradientMiniLineChartPainter extends CustomPainter {
+  final List<int> values;
+  final double strokeWidth;
+
+  _GradientMiniLineChartPainter({
+    required this.values,
+    required this.strokeWidth,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (values.isEmpty) return;
+
+    double maximum = max(values.max.toDouble(), 1);
+    final clamped = values
+        .map((v) => (1 - (v.toDouble() / maximum)) * size.height)
+        .map((v) => v.clamp(1, size.height).toDouble())
+        .toList();
+
+    final count = clamped.length;
+
+    // Build the full path once
+    final path = Path();
+    final dx = size.width / (count - 1);
+
+    path.moveTo(0, clamped[0]);
+    for (int i = 1; i < count; i++) {
+      final x = dx * i;
+      path.lineTo(x, clamped[i]);
+    }
+
+    final bounds = Offset.zero & size;
+
+    // 1) Draw the line in a solid color into a layer
+    canvas.saveLayer(bounds, Paint());
+
+    final linePaint = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = strokeWidth
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
+      ..isAntiAlias = true;
+
+    canvas.drawPath(path, linePaint);
+
+    // 2) Draw vertical gradient, masked to the line with srcIn
+    final gradientPaint = Paint()
+      ..shader = LinearGradient(
+        begin: Alignment.bottomCenter,
+        end: Alignment.topCenter,
+        colors: [
+          quietColor,
+          mediumColor,
+          loudColor,
+        ],
+        stops: const [0.0, 0.5, 1.0],
+      ).createShader(bounds)
+      ..blendMode = BlendMode.srcIn;
+
+    canvas.drawRect(bounds, gradientPaint);
+
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant _GradientMiniLineChartPainter oldDelegate) {
+    return oldDelegate.values != values ||
+        oldDelegate.strokeWidth != strokeWidth;
+  }
+}
+
 /// A controller which helps bridge the gap between the UI and backend
 class StateController extends ChangeNotifier {
   Contact? _activeContact;
@@ -2737,27 +2820,34 @@ class StateController extends ChangeNotifier {
 
 /// A controller responsible for managing the statistics of the call
 class StatisticsController extends ChangeNotifier {
+  static const int lossWindowSize = 100;
+
   Statistics? _statistics;
+  final ListQueue<int> _lossWindow = ListQueue<int>(lossWindowSize)
+    ..addAll(List<int>.filled(lossWindowSize, 0));
 
-  int get latency => _statistics == null ? 0 : _statistics!.latency.toInt();
+  List<int> get lossWindow => List.unmodifiable(_lossWindow);
 
-  double get inputLevel => _statistics == null ? 0 : _statistics!.inputLevel;
+  int get latency => _statistics?.latency.toInt() ?? 0;
 
-  double get outputLevel => _statistics == null ? 0 : _statistics!.outputLevel;
+  double get inputLevel => _statistics?.inputLevel ?? 0;
 
-  String get upload => _statistics == null
-      ? '?'
-      : formatBandwidth(_statistics!.uploadBandwidth.toInt());
+  double get outputLevel => _statistics?.outputLevel ?? 0;
 
-  String get download => _statistics == null
-      ? '?'
-      : formatBandwidth(_statistics!.downloadBandwidth.toInt());
+  String get upload => formatBandwidth(_statistics?.uploadBandwidth.toInt());
 
-  double get loss => _statistics == null ? 0 : _statistics!.loss;
+  String get download =>
+      formatBandwidth(_statistics?.downloadBandwidth.toInt());
 
   /// called when the backend has updated statistics
   void setStatistics(Statistics statistics) {
     _statistics = statistics;
+
+    _lossWindow.add(statistics.loss.toInt());
+    if (_lossWindow.length > lossWindowSize) {
+      _lossWindow.removeFirst();
+    }
+
     notifyListeners();
   }
 }
@@ -3069,8 +3159,10 @@ String formatElapsedTime(int milliseconds) {
   return "$hoursStr:$minutesStr:$secondsStr";
 }
 
-String formatBandwidth(int bytes) {
-  if (bytes < 100000) {
+String formatBandwidth(int? bytes) {
+  if (bytes == null) {
+    return '?';
+  } else if (bytes < 100000) {
     return '${roundToTotalDigits(bytes / 1000)} KB';
   } else if (bytes < 100000000) {
     return '${roundToTotalDigits(bytes / 1000000)} MB';
