@@ -11,6 +11,7 @@ use log::error;
 use nnnoiseless::FRAME_SIZE;
 use rubato::Resampler;
 use std::mem;
+#[cfg(not(target_family = "wasm"))]
 use std::path::Path;
 use std::sync::Arc;
 #[cfg(target_family = "wasm")]
@@ -18,6 +19,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Relaxed;
 #[cfg(not(target_family = "wasm"))]
 use tokio::fs::File;
+#[cfg(not(target_family = "wasm"))]
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::select;
 use tokio::sync::Notify;

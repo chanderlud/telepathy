@@ -243,11 +243,16 @@ pub(crate) fn output_processor(
     // the output for the resampler
     let mut post_buf = [vec![0_f32; post_len]];
 
+    #[cfg(not(target_family = "wasm"))]
+    let is_full = || sender.is_full();
+
+    #[cfg(target_family = "wasm")]
     let is_full = || {
-        #[cfg(not(target_family = "wasm"))]
-        return sender.is_full();
-        #[cfg(target_family = "wasm")]
-        return web_output.lock().as_ref().unwrap_or_default().len() == CHANNEL_SIZE;
+        if let Ok(lock) = web_output.lock() {
+            lock.len() == CHANNEL_SIZE
+        } else {
+            false
+        }
     };
 
     while let Ok(message) = receiver.recv() {

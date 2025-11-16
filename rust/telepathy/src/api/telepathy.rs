@@ -8,6 +8,7 @@ use crate::api::error::{DartError, Error, ErrorKind};
 use crate::api::flutter::*;
 use crate::api::overlay::overlay::Overlay;
 use crate::api::overlay::{CONNECTED, LATENCY, LOSS};
+#[cfg(not(target_family = "wasm"))]
 use crate::api::screenshare;
 use crate::api::utils::*;
 use crate::frb_generated::FLUTTER_RUST_BRIDGE_HANDLER;
@@ -17,6 +18,7 @@ use chrono::Local;
 #[cfg(not(target_family = "wasm"))]
 use cpal::Device;
 pub use cpal::Host;
+#[cfg(not(target_family = "wasm"))]
 use cpal::SupportedStreamConfig;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 #[cfg(target_family = "wasm")]
@@ -69,9 +71,7 @@ use tokio_util::compat::{Compat, FuturesAsyncReadCompatExt};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 #[cfg(target_family = "wasm")]
-use wasmtimer::std::Instant;
-#[cfg(target_family = "wasm")]
-use wasmtimer::tokio::{Interval, interval, sleep_until, timeout};
+use wasmtimer::tokio::{Interval, interval, timeout};
 
 type Result<T> = std::result::Result<T, Error>;
 pub(crate) type DeviceName = Arc<Mutex<Option<String>>>;
