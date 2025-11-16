@@ -352,6 +352,16 @@ impl Error {
             ErrorKind::KanalReceive(_) | ErrorKind::TransportRecv | ErrorKind::TransportSend
         )
     }
+
+    pub(crate) fn is_audio_error(&self) -> bool {
+        matches!(
+            self.kind,
+            ErrorKind::NoInputDevice
+                | ErrorKind::NoOutputDevice
+                | ErrorKind::BuildStream(_)
+                | ErrorKind::StreamConfig(_)
+        )
+    }
 }
 
 pub struct DartError {

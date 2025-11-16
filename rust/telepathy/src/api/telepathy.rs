@@ -387,9 +387,6 @@ impl Telepathy {
     pub async fn stop_session(&self, contact: &Contact) {
         if let Some(state) = self.session_states.write().await.remove(&contact.peer_id) {
             state.stop_session.notify_one();
-
-            // clean up the session state
-            self.session_states.write().await.remove(&contact.peer_id);
         }
     }
 
@@ -775,7 +772,7 @@ impl Telepathy {
                         SessionStatus::Connected
                     };
 
-                    self.callbacks.update_status(status, peer_id).await;
+                    self.callbacks.session_status(status, peer_id).await;
                     continue;
                 }
                 // starts a stream for outgoing screen shares
@@ -803,8 +800,7 @@ impl Telepathy {
                             }
                         } else if let Some(config) = self.screenshare_config.recording_config.read().await.clone() {
                             _ = state.message_sender.send(Message::ScreenshareHeader { encoder_name: config.encoder.to_string() }).await;
-                            state.wants_stream.store(true, Relaxed);
-                            match state.stream_receiver.recv().await {
+                            match state.receive_stream().await {
                                 Ok(stream) => {
                                     spawn(screenshare::record(stream, stop, state.upload_bandwidth.clone(), config));
                                     notify(&self.callbacks.screenshare_started, (dart_stop, true)).await;
@@ -813,7 +809,6 @@ impl Telepathy {
                                     error!("failed to receive sub-stream for screenshare broadcast {error}");
                                 }
                             }
-                            state.wants_stream.store(false, Relaxed);
                         } else {
                             // TODO this should be blocked from occurring via the frontend i think
                             warn!("screenshare started without recording configuration");
@@ -844,12 +839,11 @@ impl Telepathy {
                         continue;
                     }
 
-                    let contact_option =
-                        invoke(&self.callbacks.get_contact, peer_id.to_bytes()).await;
+                    let contact = invoke(&self.callbacks.get_contact, peer_id.to_bytes()).await;
                     let relayed = endpoint.is_relayed();
                     let listener = endpoint.is_listener();
 
-                    if contact_option.is_none() && !self.is_in_room(&peer_id).await {
+                    if contact.is_none() && !self.is_in_room(&peer_id).await {
                         warn!("received a connection from an unknown peer: {:?}", peer_id);
                         if swarm.disconnect_peer_id(peer_id).is_err() {
                             warn!("unknown peer was no longer connected");
@@ -873,7 +867,7 @@ impl Telepathy {
                             // a stream will be established by the other client
                             // the dialer already has the connecting status set
                             self.callbacks
-                                .update_status(SessionStatus::Connecting, peer_id)
+                                .session_status(SessionStatus::Connecting, peer_id)
                                 .await;
                         }
                     }
@@ -890,7 +884,7 @@ impl Telepathy {
                     } else if !self.session_states.read().await.contains_key(&peer_id) {
                         // if an outgoing error occurs when no connection is active, the session initialization failed
                         self.callbacks
-                            .update_status(SessionStatus::Inactive, peer_id)
+                            .session_status(SessionStatus::Inactive, peer_id)
                             .await;
                     }
                 }
@@ -906,7 +900,7 @@ impl Telepathy {
                     if !swarm.is_connected(&peer_id) {
                         peer_states.remove(&peer_id);
                         self.callbacks
-                            .update_status(SessionStatus::Inactive, peer_id)
+                            .session_status(SessionStatus::Inactive, peer_id)
                             .await;
                     } else if let Some(peer_state) = peer_states.get_mut(&peer_id) {
                         peer_state.connections.remove(&connection_id);
@@ -1091,7 +1085,7 @@ impl Telepathy {
                         info!("stream accepted for new session with {}", peer);
                     }
 
-                    self.session_outer(peer, None, stream).await;
+                    self.initialize_session(peer, None, stream).await;
                 }
                 else => break Err(ErrorKind::StreamsEnded.into())
             }
@@ -1101,35 +1095,35 @@ impl Telepathy {
     /// Called by the dialer to open a stream and session
     async fn open_session(
         &self,
-        peer_id: PeerId,
+        peer: PeerId,
         mut control: Control,
         connection_count: usize,
         peer_states: &mut HashMap<PeerId, PeerState>,
     ) {
         // it may take multiple tries to open the stream because the of the RNG in the stream handler
         for _ in 0..connection_count {
-            match control.open_stream(peer_id, CHAT_PROTOCOL).await {
+            match control.open_stream(peer, CHAT_PROTOCOL).await {
                 Ok(stream) => {
-                    info!("opened stream with {}, starting new session", peer_id);
-                    self.session_outer(peer_id, Some(control), stream).await;
+                    info!("opened stream with {}, starting new session", peer);
+                    self.initialize_session(peer, Some(control), stream).await;
                     // the peer state is no longer needed
-                    peer_states.remove(&peer_id);
+                    peer_states.remove(&peer);
                     return;
                 }
                 Err(error) => {
-                    warn!("OpenStreamError for {peer_id}: {error}");
+                    warn!("OpenStreamError for {peer}: {error}");
                 }
             }
         }
 
-        error!("failed to open stream for {peer_id} after {connection_count} tries");
+        error!("failed to open stream for {peer} after {connection_count} tries");
     }
 
-    /// Manages a session throughout its lifetime
-    async fn session_outer(&self, peer_id: PeerId, mut control: Option<Control>, stream: Stream) {
-        let contact_option = invoke(&self.callbacks.get_contact, peer_id.to_bytes()).await;
+    /// Entry point to a session that sets up state and spawns session outer
+    async fn initialize_session(&self, peer: PeerId, control: Option<Control>, stream: Stream) {
+        let contact_option = invoke(&self.callbacks.get_contact, peer.to_bytes()).await;
         // sends messages to the session from elsewhere in the program
-        let mut message_channel = channel::<Message>(8);
+        let message_channel = channel::<Message>(8);
         // create the state and a clone of it for the session
         let state = Arc::new(SessionState::new(&message_channel.0));
         // insert the new state
@@ -1137,16 +1131,12 @@ impl Telepathy {
             .session_states
             .write()
             .await
-            .insert(peer_id, state.clone());
+            .insert(peer, state.clone());
 
         if let Some(old_state) = old_state_option {
-            warn!("{} already has a session", peer_id);
-
-            if old_state.in_call.load(Relaxed) {
-                // if the session was in a call, end it so the session can end
-                state.end_call.notify_one();
-            }
-
+            warn!("{peer} already had a session");
+            // if the session was in a call, end it so the session can end
+            old_state.end_call.notify_one();
             // stop the session
             old_state.stop_session.notify_one();
         }
@@ -1154,7 +1144,7 @@ impl Telepathy {
         let contact = if let Some(contact) = contact_option {
             // alert the UI that this session is now connected
             self.callbacks
-                .update_status(SessionStatus::Connected, peer_id)
+                .session_status(SessionStatus::Connected, peer)
                 .await;
             contact
         } else {
@@ -1162,98 +1152,114 @@ impl Telepathy {
             Contact {
                 id: Uuid::new_v4().to_string(),
                 nickname: String::from("GroupContact"),
-                peer_id,
+                peer_id: peer,
                 is_room_only: true,
             }
         };
 
         let self_clone = self.clone();
         spawn(async move {
-            // the length delimited transport used for the session
-            let mut transport = LengthDelimitedCodec::builder()
-                .max_frame_length(usize::MAX)
-                .length_field_type::<u64>()
-                .new_framed(stream.compat());
-
-            // the dialer for room sessions always starts a call
-            if self_clone.is_in_room(&peer_id).await && control.is_some() {
-                state.start_call.notify_one();
-            }
-
-            // controls keep alive messages
-            let mut keep_alive = interval(KEEP_ALIVE);
-
-            let result = loop {
-                let result = self_clone
-                    .session_inner(
-                        &contact,
-                        control.as_mut(),
-                        &mut transport,
-                        &state,
-                        &mut message_channel,
-                        &mut keep_alive,
-                    )
-                    .await;
-
-                match (result, contact.is_room_only) {
-                    (Ok(true), true) | (Ok(false), _) => {
-                        break Ok(());
-                    }
-                    (Ok(true), false) => {
-                        // the session is not in a call
-                        state.in_call.store(false, Relaxed);
-                    }
-                    (Err(error), room_only) => {
-                        // if an error occurred during a non-room call, it is ended now
-                        if state.in_call.load(Relaxed)
-                            && !room_only
-                            && !self_clone.is_in_room(&contact.peer_id).await
-                        {
-                            warn!("session error while call active, alerting ui (e={error:?})");
-                            notify(
-                                &self_clone.callbacks.call_state,
-                                CallState::CallEnded(error.to_string(), false),
-                            )
-                            .await;
-                        }
-
-                        if room_only || error.is_session_critical() {
-                            // session cannot recover from these errors
-                            break Err(error);
-                        } else {
-                            warn!("recoverable session failure: {:?}", error);
-                            // the session is not in a call
-                            state.in_call.store(false, Relaxed);
-                        }
-                    }
-                }
-            };
-
-            if let Err(error) = result {
-                // session failed & requires cleanup
-                error!("Session error for {}: {error:?}", contact.nickname);
-            } else if !contact.is_room_only {
-                // the session has already been cleaned up
-                warn!("Session for {} stopped", contact.nickname);
-                return;
-            }
-
-            // cleanup
-            self_clone.session_states.write().await.remove(&peer_id);
-
-            // avoid sending session statuses for dummy contacts
-            if !contact.is_room_only {
-                self_clone
-                    .callbacks
-                    .update_status(SessionStatus::Inactive, peer_id)
-                    .await;
-            }
-
-            info!("Session for {} cleaned up", contact.nickname);
+            self_clone
+                .session_outer(peer, control, stream, state, contact, message_channel)
+                .await;
         });
     }
 
+    /// Runs session inner as many times as needed, performs cleanup if needed
+    async fn session_outer(
+        &self,
+        peer: PeerId,
+        mut control: Option<Control>,
+        stream: Stream,
+        state: Arc<SessionState>,
+        contact: Contact,
+        mut message_channel: (MSender<Message>, MReceiver<Message>),
+    ) {
+        // controls keep alive messages
+        let mut keep_alive = interval(KEEP_ALIVE);
+        // the length delimited transport used for the session
+        let mut transport = LengthDelimitedCodec::builder()
+            .max_frame_length(usize::MAX)
+            .length_field_type::<u64>()
+            .new_framed(stream.compat());
+
+        // the dialer for room sessions always starts a call
+        if self.is_in_room(&peer).await && control.is_some() {
+            state.start_call.notify_one();
+        }
+
+        let result = loop {
+            let result = self
+                .session_inner(
+                    &contact,
+                    control.as_mut(),
+                    &mut transport,
+                    &state,
+                    &mut message_channel,
+                    &mut keep_alive,
+                )
+                .await;
+
+            match (result, contact.is_room_only) {
+                // the session was stopped
+                (Ok(false), _) => break Ok(false),
+                // room only sessions never continue
+                (Ok(true), true) => break Ok(true),
+                // normal session continue
+                (Ok(true), false) => {
+                    // the session is not in a call
+                    state.in_call.store(false, Relaxed);
+                }
+                (Err(error), room_only) => {
+                    // if an error occurred during a non-room call, it is ended now
+                    if state.in_call.load(Relaxed)
+                        && !room_only
+                        && !self.is_in_room(&contact.peer_id).await
+                    {
+                        warn!("session error while call active, alerting ui (e={error:?})");
+                        self.callbacks
+                            .call_state(CallState::CallEnded(error.to_string(), false))
+                            .await;
+                    }
+
+                    if room_only || error.is_session_critical() {
+                        // session cannot recover from these errors
+                        error!("Session error for {}: {error:?}", contact.nickname);
+                        break Err(error);
+                    } else {
+                        warn!("recoverable session failure: {:?}", error);
+                        // the session is not in a call
+                        state.in_call.store(false, Relaxed);
+                    }
+                }
+            }
+        };
+
+        match result {
+            // session cleanup required
+            Ok(true) | Err(_) => (),
+            // the session has already been cleaned up
+            Ok(false) => {
+                warn!("Session for {} stopped", contact.nickname);
+                return;
+            }
+        }
+
+        // cleanup
+        self.session_states.write().await.remove(&peer);
+
+        // avoid sending session statuses for dummy contacts
+        if !contact.is_room_only {
+            self.callbacks
+                .session_status(SessionStatus::Inactive, peer)
+                .await;
+        }
+
+        info!("Session for {} cleaned up", contact.nickname);
+    }
+
     /// The inner logic of a session that may execute many times
+    /// Returns true if the session should continue
     async fn session_inner(
         &self,
         contact: &Contact,
@@ -1417,7 +1423,7 @@ impl Telepathy {
                             };
 
                             if let Some(message) = message_option {
-                                invoke(&self.callbacks.call_state, CallState::CallEnded(message, true)).await;
+                                self.callbacks.call_state(CallState::CallEnded(message, true)).await;
                             }
 
                             break;
@@ -1487,25 +1493,17 @@ impl Telepathy {
 
         match result {
             Ok(()) => Ok(()),
-            Err(error) => match error.kind {
-                ErrorKind::NoInputDevice
-                | ErrorKind::NoOutputDevice
-                | ErrorKind::BuildStream(_)
-                | ErrorKind::StreamConfig(_) => {
-                    let message = Message::Goodbye {
-                        reason: Some("Audio device error".to_string()),
-                    };
-                    write_message(transport, &message).await?;
-                    Err(error)
-                }
-                _ => {
-                    let message = Message::Goodbye {
-                        reason: Some(error.to_string()),
-                    };
-                    write_message(transport, &message).await?;
-                    Err(error)
-                }
-            },
+            Err(error) => {
+                let message = Message::Goodbye {
+                    reason: Some(if error.is_audio_error() {
+                        "Audio device error".to_string()
+                    } else {
+                        error.to_string()
+                    }),
+                };
+                write_message(transport, &message).await?;
+                Err(error)
+            }
         }
     }
 
@@ -1606,11 +1604,9 @@ impl Telepathy {
             };
 
             if let Some(message) = message_option {
-                invoke(
-                    &self.callbacks.call_state,
-                    CallState::CallEnded(message, true),
-                )
-                .await;
+                self.callbacks
+                    .call_state(CallState::CallEnded(message, true))
+                    .await;
             }
 
             info!("call controller done, notifying stop_io");
@@ -1665,7 +1661,7 @@ impl Telepathy {
         let identity = self.identity.read().await.public().to_peer_id();
 
         CONNECTED.store(true, Relaxed);
-        invoke(&self.callbacks.call_state, CallState::Connected).await;
+        self.callbacks.call_state(CallState::Connected).await;
 
         loop {
             select! {
@@ -1821,7 +1817,7 @@ impl Telepathy {
         ));
 
         // kick the UI out of connecting mode
-        invoke(&self.callbacks.call_state, CallState::Waiting).await;
+        self.callbacks.call_state(CallState::Waiting).await;
 
         loop {
             select! {
@@ -1833,7 +1829,7 @@ impl Telepathy {
                             // first connection
                             if connections.is_empty() {
                                 CONNECTED.store(true, Relaxed);
-                                invoke(&self.callbacks.call_state, CallState::Connected).await;
+                                self.callbacks.call_state(CallState::Connected).await;
                             }
 
                             let (write, read) = (*audio_transport).split();
@@ -1863,10 +1859,10 @@ impl Telepathy {
                                 stream: output_stream,
                                 handle,
                             });
-                            invoke(&self.callbacks.call_state, CallState::RoomJoin(state.peer.to_string())).await;
+                            self.callbacks.call_state(CallState::RoomJoin(state.peer.to_string())).await;
                         }
                         RoomMessage::Leave(peer) => {
-                            invoke(&self.callbacks.call_state, CallState::RoomLeave(peer.to_string())).await;
+                            self.callbacks.call_state(CallState::RoomLeave(peer.to_string())).await;
 
                             if let Some(connection) = connections.remove(&peer) {
                                 connection.handle.await??;
@@ -2447,6 +2443,13 @@ impl SessionState {
                 }
             }
         }
+    }
+
+    async fn receive_stream(&self) -> Result<Stream> {
+        self.wants_stream.store(true, Relaxed);
+        let result = self.stream_receiver.recv().await.map_err(Into::into);
+        self.wants_stream.store(false, Relaxed);
+        result
     }
 }
 

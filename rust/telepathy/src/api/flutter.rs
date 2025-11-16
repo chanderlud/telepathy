@@ -107,8 +107,12 @@ impl TelepathyCallbacks {
         }
     }
 
-    pub(crate) async fn update_status(&self, status: SessionStatus, peer: PeerId) {
+    pub(crate) async fn session_status(&self, status: SessionStatus, peer: PeerId) {
         notify(&self.session_status, (peer.to_string(), status)).await;
+    }
+
+    pub(crate) async fn call_state(&self, status: CallState) {
+        invoke(&self.call_state, status).await;
     }
 }
 
