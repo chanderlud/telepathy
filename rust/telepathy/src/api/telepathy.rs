@@ -1450,7 +1450,7 @@ impl Telepathy {
         }
     }
 
-    /// Gets everything ready for the call
+    /// gets everything ready for the call
     async fn call_handshake(
         &self,
         transport: &mut Transport<TransportStream>,
@@ -1459,7 +1459,7 @@ impl Telepathy {
         state: &Arc<SessionState>,
         call_state: EarlyCallState,
     ) -> Result<()> {
-        let stream = state.open_stream(transport, control, &call_state).await?;
+        let stream = state.open_stream(control, &call_state).await?;
 
         // change the app call state
         self.in_call.store(true, Relaxed);
@@ -1707,6 +1707,7 @@ impl Telepathy {
         }
     }
 
+    /// manages connection with one room peer
     async fn room_handshake(
         &self,
         transport: &mut Transport<TransportStream>,
@@ -1714,7 +1715,7 @@ impl Telepathy {
         state: &Arc<SessionState>,
         call_state: EarlyCallState,
     ) -> Result<()> {
-        let stream = state.open_stream(transport, control, &call_state).await?;
+        let stream = state.open_stream(control, &call_state).await?;
         let audio_transport = stream_to_audio_transport(stream);
         let peer_id = call_state.peer;
         let (sender, cancel) = self
@@ -1759,7 +1760,7 @@ impl Telepathy {
         Ok(())
     }
 
-    /// controller for rooms
+    /// the controller for rooms
     async fn room_controller(
         &self,
         mut receiver: MReceiver<RoomMessage>,
@@ -2087,7 +2088,7 @@ impl Telepathy {
         Ok((network_output_sender, output_stream))
     }
 
-    /// Helper method to set up non-web audio input stream
+    /// helper method to set up non-web audio input stream
     #[cfg(not(target_family = "wasm"))]
     fn setup_input_stream(
         &self,
@@ -2407,42 +2408,22 @@ impl SessionState {
 
     async fn open_stream(
         &self,
-        transport: &mut Transport<TransportStream>,
         mut control: Option<&mut Control>,
         call_state: &EarlyCallState,
     ) -> Result<Stream> {
         // change the session state to accept incoming audio streams
         self.wants_stream.store(true, Relaxed);
 
-        // TODO evaluate this loop's performance in handling unexpected messages
-        loop {
-            // TODO this future is not cancellation safe
-            let future = async {
-                let stream = if let Some(control) = control.as_mut() {
-                    // if dialer, open stream
-                    control.open_stream(call_state.peer, CHAT_PROTOCOL).await?
-                } else {
-                    // if listener, receive stream
-                    self.stream_receiver.recv().await?
-                };
+        let stream_result = if let Some(control) = control.as_mut() {
+            // if dialer, open stream
+            control.open_stream(call_state.peer, CHAT_PROTOCOL).await.map_err(Error::from)
+        } else {
+            // if listener, receive stream
+            self.stream_receiver.recv().await.map_err(Error::from)
+        };
 
-                Ok::<_, Error>(stream)
-            };
-
-            select! {
-                stream = future => {
-                    // change the session state back
-                    self.wants_stream.store(false, Relaxed);
-                    break stream
-                },
-                // handle unexpected messages while waiting for the audio stream
-                // these messages tend to be from previous calls close together
-                result = read_message::<Message, _>(transport) => {
-                    warn!("received unexpected message while waiting for audio stream: {:?}", result);
-                    // return Err(ErrorKind::UnexpectedMessage.into());
-                }
-            }
-        }
+        self.wants_stream.store(false, Relaxed);
+        stream_result
     }
 
     async fn receive_stream(&self) -> Result<Stream> {
