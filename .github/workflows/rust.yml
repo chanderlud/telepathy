@@ -106,8 +106,8 @@ jobs:
             target: linux
           - image: windows-2022
             target: apk
-          - image: macos-14
-            target: ios
+          # - image: macos-14
+          #   target: ios
           - image: ubuntu-24.04
             target: web
 
