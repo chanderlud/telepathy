@@ -2416,7 +2416,10 @@ impl SessionState {
 
         let stream_result = if let Some(control) = control.as_mut() {
             // if dialer, open stream
-            control.open_stream(call_state.peer, CHAT_PROTOCOL).await.map_err(Error::from)
+            control
+                .open_stream(call_state.peer, CHAT_PROTOCOL)
+                .await
+                .map_err(Error::from)
         } else {
             // if listener, receive stream
             self.stream_receiver.recv().await.map_err(Error::from)
