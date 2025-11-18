@@ -24,7 +24,7 @@ pub(crate) type TransportStream = Compat<Stream>;
 pub(crate) type Transport<T> = Framed<T, LengthDelimitedCodec>;
 pub(crate) type AudioSocket = SplitSink<Transport<TransportStream>, Bytes>;
 
-/// only packets younger than this are accepted, represents 5 seconds
+/// only packets younger than this are accepted, represents 2.5 seconds
 const MAX_AGE: u32 = 250;
 
 pub(crate) trait SendingSocket {
