@@ -1,5 +1,6 @@
 use crate::api::error::{Error, ErrorKind};
-use crate::api::telepathy::{DeviceName, Transport};
+use crate::api::sockets::Transport;
+use crate::api::telepathy::DeviceName;
 use bincode::config::standard;
 use bincode::{Decode, Encode, decode_from_slice, encode_to_vec};
 use cpal::traits::{DeviceTrait, HostTrait};

@@ -2747,7 +2747,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
-        decodeErrorData: sse_decode_dart_error,
+        decodeErrorData: null,
       ),
       constMeta: kCrateApiTelepathyTelepathyStartScreenshareConstMeta,
       argValues: [that, contact],

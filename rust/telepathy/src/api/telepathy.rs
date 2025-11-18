@@ -12,6 +12,10 @@ use crate::api::overlay::overlay::Overlay;
 use crate::api::overlay::{CONNECTED, LATENCY, LOSS};
 #[cfg(not(target_family = "wasm"))]
 use crate::api::screenshare;
+use crate::api::sockets::{
+    ConstSocket, SendingSockets, SharedSockets, Transport, TransportStream, audio_input,
+    audio_output,
+};
 use crate::api::utils::*;
 use crate::frb_generated::FLUTTER_RUST_BRIDGE_HANDLER;
 use crate::{Behaviour, BehaviourEvent};
@@ -25,8 +29,6 @@ use cpal::SupportedStreamConfig;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 #[cfg(target_family = "wasm")]
 use flutter_rust_bridge::JoinHandle;
-use flutter_rust_bridge::for_generated::futures::SinkExt;
-use flutter_rust_bridge::for_generated::futures::stream::{SplitSink, SplitStream};
 use flutter_rust_bridge::{frb, spawn, spawn_blocking_with};
 pub use kanal::AsyncReceiver;
 use kanal::bounded;
@@ -68,9 +70,8 @@ use tokio::task::JoinHandle;
 use tokio::time::sleep;
 #[cfg(not(target_family = "wasm"))]
 use tokio::time::{Interval, interval, timeout};
-use tokio_util::bytes::Bytes;
-use tokio_util::codec::{Framed, LengthDelimitedCodec};
-use tokio_util::compat::{Compat, FuturesAsyncReadCompatExt};
+use tokio_util::codec::LengthDelimitedCodec;
+use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 #[cfg(target_family = "wasm")]
@@ -78,17 +79,13 @@ use wasmtimer::tokio::{Interval, interval, timeout};
 
 type Result<T> = std::result::Result<T, Error>;
 pub(crate) type DeviceName = Arc<Mutex<Option<String>>>;
-type TransportStream = Compat<Stream>;
-pub type Transport<T> = Framed<T, LengthDelimitedCodec>;
-type StartScreenshare = (PeerId, Option<Message>);
-type AudioSocket = SplitSink<Transport<TransportStream>, Bytes>;
 
 /// The number of bytes in a single network audio frame
 const TRANSFER_BUFFER_SIZE: usize = FRAME_SIZE * size_of::<i16>();
 /// A timeout used when initializing the call
 const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 /// How often to keep-alive libp2p streams
-const KEEP_ALIVE: Duration = Duration::from_secs(10);
+pub(crate) const KEEP_ALIVE: Duration = Duration::from_secs(10);
 /// the number of samples to hold in a channel
 pub(crate) const CHANNEL_SIZE: usize = 2_400;
 /// the protocol identifier for Telepathy
@@ -464,9 +461,8 @@ impl Telepathy {
         Ok(())
     }
 
-    pub async fn start_screenshare(&self, contact: &Contact) -> std::result::Result<(), DartError> {
-        _ = self.start_screenshare.send((contact.peer_id, None)).await;
-        Ok(())
+    pub async fn start_screenshare(&self, contact: &Contact) {
+        self.send_start_screenshare(contact.peer_id, None).await;
     }
 
     #[frb(sync)]
@@ -776,16 +772,16 @@ impl Telepathy {
                     continue;
                 }
                 // starts a stream for outgoing screen shares
-                Some((peer_id, header_option)) = screenshare.recv() => {
-                    info!("starting screenshare for {} {:?}", peer_id, header_option);
+                Some(message) = screenshare.recv() => {
+                    info!("starting screenshare for {message:?}");
 
                     #[cfg(not(target_family = "wasm"))]
-                    if let Some(state) = self.session_states.read().await.get(&peer_id) {
+                    if let Some(state) = self.session_states.read().await.get(&message.peer) {
                         let stop = Arc::new(Notify::new());
                         let dart_stop = DartNotify { inner: stop.clone() };
 
-                        if let Some(Message::ScreenshareHeader { encoder_name }) = header_option {
-                            let stream_result = swarm.behaviour().stream.new_control().open_stream(peer_id, CHAT_PROTOCOL).await;
+                        if let Some(Message::ScreenshareHeader { encoder_name }) = message.header {
+                            let stream_result = swarm.behaviour().stream.new_control().open_stream(message.peer, CHAT_PROTOCOL).await;
                             match stream_result {
                                 Ok(stream) => {
                                     let width = self.screenshare_config.width.load(Relaxed);
@@ -814,7 +810,7 @@ impl Telepathy {
                             warn!("screenshare started without recording configuration");
                         }
                     } else {
-                        warn!("screenshare started for a peer without a session: {}", peer_id);
+                        warn!("screenshare started for a peer without a session: {}", message.peer);
                     }
 
                     continue;
@@ -1524,6 +1520,7 @@ impl Telepathy {
         // references for use in networking threads
         let upload_bandwidth = statistics_state.upload_bandwidth.clone();
         let download_bandwidth = statistics_state.download_bandwidth.clone();
+        let loss = statistics_state.loss.clone();
 
         // the two clients agree on these codec options
         let codec_config = call_state.codec_config();
@@ -1572,11 +1569,10 @@ impl Telepathy {
 
         if let Some(o) = optional {
             let (write, read) = o.audio_transport.split();
-            let sockets = Arc::new(Mutex::new(vec![write]));
 
             let input_handle = spawn(audio_input(
                 input_channel.0,
-                sockets,
+                ConstSocket::new(write),
                 stop_io.clone(),
                 upload_bandwidth,
             ));
@@ -1586,6 +1582,7 @@ impl Telepathy {
                 read,
                 stop_io.clone(),
                 download_bandwidth,
+                loss,
             ));
 
             let controller_future = self.call_controller(
@@ -1684,7 +1681,7 @@ impl Telepathy {
                         }
                         Message::ScreenshareHeader { .. } => {
                             info!("received screenshare header {:?}", message);
-                            _ = self.start_screenshare.send((peer, Some(message))).await;
+                            self.send_start_screenshare(peer, Some(message)).await;
                         }
                         _ => error!("call controller unexpected message: {:?}", message),
                     }
@@ -1773,8 +1770,8 @@ impl Telepathy {
         #[cfg(target_os = "ios")]
         configure_audio_session();
 
-        // moves new sockets to audio_input
-        let sockets: Arc<Mutex<Vec<AudioSocket>>> = Default::default();
+        // moves sockets to audio_input
+        let new_sockets = SharedSockets::default();
         // shared statistics
         let statistics_state = StatisticsCollectorState::new(None);
         // tracks connection state for peers
@@ -1806,7 +1803,7 @@ impl Telepathy {
 
         let input_handle = spawn(audio_input(
             input_channel.0,
-            sockets.clone(),
+            SendingSockets::new(new_sockets.clone()),
             stop_io.clone(),
             statistics_state.upload_bandwidth.clone(),
         ));
@@ -1834,8 +1831,8 @@ impl Telepathy {
                             }
 
                             let (write, read) = (*audio_transport).split();
-                            // begin sending audio to transport
-                            sockets.lock().await.push(write);
+                            // this unwrap is safe because audio_input never panics
+                            new_sockets.lock().unwrap().push(write);
                             // setup output stack
                             let (output_sender, output_stream) = self
                                 .setup_output(
@@ -1854,6 +1851,7 @@ impl Telepathy {
                                 read,
                                 stop_io.clone(),
                                 statistics_state.download_bandwidth.clone(),
+                                statistics_state.loss.clone(),
                             ));
 
                             connections.insert(state.peer, RoomConnection {
@@ -2272,6 +2270,13 @@ impl Telepathy {
             || self.room_state.read().await.is_some()
             || self.end_audio_test.lock().await.is_some()
     }
+
+    async fn send_start_screenshare(&self, peer: PeerId, header: Option<Message>) {
+        _ = self
+            .start_screenshare
+            .send(StartScreenshare { peer, header })
+            .await;
+    }
 }
 
 /// state used early in the call before it starts
@@ -2499,102 +2504,10 @@ impl StatisticsCollectorState {
     }
 }
 
-/// Receives frames of audio data from the input processor and sends them to the socket
-async fn audio_input(
-    input_receiver: AsyncReceiver<ProcessorMessage>,
-    sockets: Arc<Mutex<Vec<AudioSocket>>>,
-    cancel: CancellationToken,
-    bandwidth: Arc<AtomicUsize>,
-) -> Result<()> {
-    // static signal bytes
-    let keep_alive = Bytes::from_static(&[1]);
-
-    loop {
-        select! {
-            message = timeout(KEEP_ALIVE, input_receiver.recv()) => {
-                let bytes = match message {
-                    Ok(Ok(ProcessorMessage::Data(bytes))) => bytes,
-                    // shutdown
-                    Ok(_) => {
-                        debug!("audio_input ended with input shutdown");
-                        break Ok(())
-                    },
-                    // send keep alive during extended silence
-                    Err(_) => keep_alive.clone(),
-                };
-
-                // send the bytes to all connections, dropping any that error
-                let mut i = 0;
-                let mut successful_sends = 0;
-
-                let mut sockets = sockets.lock().await;
-                while i < sockets.len() {
-                    let send_result = {
-                        // limit the &mut borrow to this block
-                        let socket = &mut sockets[i];
-                        socket.send(bytes.clone()).await
-                    };
-
-                    if send_result.is_err() {
-                        // remove this socket, do NOT increment i
-                        _ = sockets.remove(i);
-                        info!("audio_input dropping socket [remaining={}]", sockets.len());
-                    } else {
-                        successful_sends += 1;
-                        i += 1;
-                    }
-                }
-
-                // update bandwidth based on successful sends only
-                if successful_sends > 0 {
-                    bandwidth.fetch_add(bytes.len() * successful_sends, Relaxed);
-                }
-            }
-            _ = cancel.cancelled() => {
-                debug!("audio_input ended with cancellation");
-                break Ok(());
-            }
-        }
-    }
-}
-
-/// Receives audio data from the socket and sends it to the output processor
-async fn audio_output(
-    sender: AsyncSender<ProcessorMessage>,
-    mut socket: SplitStream<Transport<TransportStream>>,
-    cancel: CancellationToken,
-    bandwidth: Arc<AtomicUsize>,
-) -> Result<()> {
-    loop {
-        select! {
-            message = socket.next() => {
-                match message {
-                    Some(Ok(message)) => {
-                        let len = message.len();
-                        bandwidth.fetch_add(len, Relaxed);
-
-                        if len != 1 {
-                            sender.try_send(ProcessorMessage::bytes(message.freeze()))?;
-                        } else {
-                            debug!("audio_output received keep alive");
-                        }
-                    }
-                    Some(Err(error)) => {
-                        error!("audio_output error: {}", error);
-                        break Err(error.into());
-                    }
-                    None => {
-                        debug!("audio_output ended with None");
-                        break Ok(());
-                    }
-                }
-            }
-            _ = cancel.cancelled() => {
-                debug!("audio_output ended with cancellation");
-                break Ok(());
-            },
-        }
-    }
+#[derive(Debug)]
+struct StartScreenshare {
+    peer: PeerId,
+    header: Option<Message>,
 }
 
 /// Used for audio tests, plays the input into the output

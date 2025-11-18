@@ -4179,7 +4179,7 @@ fn wire__crate__api__telepathy__Telepathy_start_screenshare_impl(
             >>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
-                transform_result_sse::<_, crate::api::error::DartError>(
+                transform_result_sse::<_, ()>(
                     (move || async move {
                         let mut api_that_guard = None;
                         let mut api_contact_guard = None;
@@ -4211,11 +4211,13 @@ fn wire__crate__api__telepathy__Telepathy_start_screenshare_impl(
                         }
                         let api_that_guard = api_that_guard.unwrap();
                         let api_contact_guard = api_contact_guard.unwrap();
-                        let output_ok = crate::api::telepathy::Telepathy::start_screenshare(
-                            &*api_that_guard,
-                            &*api_contact_guard,
-                        )
-                        .await?;
+                        let output_ok = Result::<_, ()>::Ok({
+                            crate::api::telepathy::Telepathy::start_screenshare(
+                                &*api_that_guard,
+                                &*api_contact_guard,
+                            )
+                            .await;
+                        })?;
                         Ok(output_ok)
                     })()
                     .await,
