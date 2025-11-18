@@ -177,7 +177,6 @@ pub(crate) async fn audio_output(
                         sender.try_send(ProcessorMessage::bytes(message.freeze()))?;
                     } else {
                         loss.fetch_add(FRAME_SIZE, Relaxed);
-                        warn!("dropping old audio frame");
                     }
                 } else if len == 1 {
                     debug!("audio_output received keep alive");
