@@ -58,7 +58,7 @@ pub use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 #[cfg(not(target_family = "wasm"))]
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
@@ -1832,7 +1832,7 @@ impl Telepathy {
 
                             let (write, read) = (*audio_transport).split();
                             // this unwrap is safe because audio_input never panics
-                            new_sockets.lock().unwrap().push(write);
+                            new_sockets.lock().unwrap().push((write, Instant::now()));
                             // setup output stack
                             let (output_sender, output_stream) = self
                                 .setup_output(

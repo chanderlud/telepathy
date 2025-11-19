@@ -19,7 +19,7 @@ use tokio_util::codec::{Framed, LengthDelimitedCodec};
 use tokio_util::compat::Compat;
 use tokio_util::sync::CancellationToken;
 
-pub(crate) type SharedSockets = Arc<Mutex<Vec<AudioSocket>>>;
+pub(crate) type SharedSockets = Arc<Mutex<Vec<(AudioSocket, Instant)>>>;
 pub(crate) type TransportStream = Compat<Stream>;
 pub(crate) type Transport<T> = Framed<T, LengthDelimitedCodec>;
 pub(crate) type AudioSocket = SplitSink<Transport<TransportStream>, Bytes>;
@@ -66,8 +66,8 @@ pub(crate) struct SendingSockets {
 impl SendingSocket for SendingSockets {
     async fn send(&mut self, packet: Bytes) -> usize {
         // this unwrap is safe because holders of SharedSockets do not panic
-        for socket in self.new_sockets.lock().unwrap().drain(..) {
-            self.sockets.push((socket, Instant::now()));
+        for pair in self.new_sockets.lock().unwrap().drain(..) {
+            self.sockets.push(pair);
         }
 
         // send the bytes to all connections, dropping any that error
