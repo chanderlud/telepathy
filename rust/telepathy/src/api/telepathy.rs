@@ -765,7 +765,7 @@ impl Telepathy {
                         error!("dial error for {}: {}", peer_id, error);
                         SessionStatus::Inactive
                     } else {
-                        SessionStatus::Connected
+                        SessionStatus::Connecting
                     };
 
                     self.callbacks.session_status(status, peer_id).await;
