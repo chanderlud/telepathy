@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:collection/collection.dart';
 import 'package:telepathy/src/rust/api/error.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -25,8 +26,10 @@ const defaultOverlayFontBackgroundColor = 0x80000000;
 class SettingsController with ChangeNotifier {
   final FlutterSecureStorage storage;
   final SharedPreferences options;
+  final List<String> args;
 
-  SettingsController({required this.storage, required this.options});
+  SettingsController(
+      {required this.storage, required this.options, required this.args});
 
   /// the ids of all available profiles
   late Map<String, Profile> profiles;
@@ -127,6 +130,16 @@ class SettingsController with ChangeNotifier {
     } else {
       // if there are profiles, load the active profile or use the first profile if needed
       activeProfile = options.getString('activeProfile') ?? profiles.keys.first;
+    }
+
+    String? override = args.elementAtOrNull(0);
+    if (override != null) {
+      String? profileId = profiles.entries
+          .firstWhereOrNull((c) => c.value.nickname == override)
+          ?.key;
+      if (profileId != null) {
+        activeProfile = profileId;
+      }
     }
 
     // ensure that the active profile is now persisted

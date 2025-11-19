@@ -30,7 +30,7 @@ import 'console.dart';
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 SoundHandle? outgoingSoundHandle;
 
-Future<void> main() async {
+Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
 
   await RustLib.init();
@@ -61,7 +61,7 @@ Future<void> main() async {
   final SharedPreferences options = await SharedPreferences.getInstance();
 
   final SettingsController settingsController =
-      SettingsController(storage: storage, options: options);
+      SettingsController(storage: storage, options: options, args: args);
   await settingsController.init();
 
   final StateController stateController = StateController();
