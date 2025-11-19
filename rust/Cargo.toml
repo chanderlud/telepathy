@@ -1,6 +1,5 @@
 [workspace]
 members = [
-    "relay_server",
     "telepathy",
     "messages",
     "sea_codec"
