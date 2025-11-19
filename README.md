@@ -12,12 +12,13 @@
 
 - Screensharing for Windows, macOS, and Linux
 - Game overlay for Windows
-- Web support (waiting on https://github.com/libp2p/rust-libp2p/pull/5564)
+- Web support
+- Telepathy rooms (group calls)
 
 ## Planned
 
 - Lossless audio codec support
-- Telepathy rooms (group calls)
+- QUIC datagrams for live audio streams
 
 ## History
 
