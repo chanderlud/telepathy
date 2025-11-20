@@ -4,14 +4,17 @@ use crate::error::ErrorKind;
 use crate::frb_generated::FLUTTER_RUST_BRIDGE_HANDLER;
 use crate::telepathy::utils::{SendStream, get_output_device};
 use crate::telepathy::{
-    CHANNEL_SIZE, EarlyCallState, StartScreenshare, StatisticsCollectorState, Telepathy,
+    CHANNEL_SIZE, EarlyCallState, Result, StartScreenshare, StatisticsCollectorState, Telepathy,
 };
+#[cfg(not(target_family = "wasm"))]
 use cpal::Device;
-use cpal::traits::{DeviceTrait, HostTrait};
+use cpal::traits::DeviceTrait;
+#[cfg(not(target_family = "wasm"))]
+use cpal::traits::HostTrait;
 use flutter_rust_bridge::spawn_blocking_with;
 use kanal::{AsyncReceiver, AsyncSender, Sender, bounded, unbounded_async};
 use libp2p::PeerId;
-use log::{error, info, warn};
+use log::{error, info};
 use messages::{AudioHeader, Message};
 use nnnoiseless::DenoiseState;
 use sea_codec::ProcessorMessage;
@@ -19,11 +22,10 @@ use sea_codec::codec::file::SeaFileHeader;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
+#[cfg(not(target_family = "wasm"))]
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 use tokio::sync::Notify;
-
-use crate::telepathy::Result;
 
 impl Telepathy {
     /// helper method to set up audio input stack between the network and device layers
@@ -350,18 +352,21 @@ impl Telepathy {
     pub(crate) async fn load_ringtone(&self) -> Option<Vec<u8>> {
         #[cfg(not(target_family = "wasm"))]
         if self.send_custom_ringtone.load(Relaxed) {
-            if let Ok(mut file) = File::open("ringtone.sea").await {
-                let mut buffer = Vec::new();
+            match File::open("ringtone.sea").await {
+                Ok(mut file) => {
+                    let mut buffer = Vec::new();
 
-                if let Err(error) = file.read_to_end(&mut buffer).await {
-                    warn!("failed to read ringtone: {:?}", error);
-                    None
-                } else {
-                    Some(buffer)
+                    if let Err(error) = file.read_to_end(&mut buffer).await {
+                        error!("failed to read ringtone: {:?}", error);
+                        None
+                    } else {
+                        Some(buffer)
+                    }
                 }
-            } else {
-                warn!("failed to find ringtone");
-                None
+                Err(error) => {
+                    error!("failed to open ringtone: {:?}", error);
+                    None
+                }
             }
         } else {
             None

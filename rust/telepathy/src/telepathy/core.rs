@@ -1,3 +1,5 @@
+#[cfg(target_os = "ios")]
+use crate::audio::ios::{configure_audio_session, deactivate_audio_session};
 use crate::error::ErrorKind;
 use crate::flutter::{CallState, ChatMessage, Contact, DartNotify, SessionStatus, invoke, notify};
 use crate::overlay::CONNECTED;
@@ -19,14 +21,17 @@ use cpal::traits::StreamTrait;
 use flutter_rust_bridge::for_generated::futures::StreamExt;
 use libp2p::multiaddr::Protocol;
 use libp2p::swarm::SwarmEvent;
+#[cfg(not(target_family = "wasm"))]
+use libp2p::tcp;
 use libp2p::{
     Multiaddr, PeerId, Stream, autonat, dcutr, dcutr::Event as DcutrEvent, identify,
-    identify::Event as IdentifyEvent, noise, ping, tcp, yamux,
+    identify::Event as IdentifyEvent, noise, ping, yamux,
 };
 use libp2p_stream::Control;
 use log::{debug, error, info, trace, warn};
 use messages::Message;
 use std::collections::HashMap;
+#[cfg(not(target_family = "wasm"))]
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;

@@ -11,10 +11,8 @@ mod sockets;
 pub(crate) mod tests;
 pub(crate) mod utils;
 
-#[cfg(target_os = "ios")]
-use crate::audio::ios::{configure_audio_session, deactivate_audio_session};
 #[cfg(target_family = "wasm")]
-use crate::audio::web_audio::{WebAudioWrapper, WebInput};
+use crate::audio::web_audio::WebAudioWrapper;
 use crate::error::{DartError, Error};
 use crate::flutter::*;
 use crate::overlay::overlay::Overlay;
@@ -61,7 +59,7 @@ use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tokio_util::sync::CancellationToken;
 use utils::*;
 #[cfg(target_family = "wasm")]
-use wasmtimer::tokio::{Interval, interval, timeout};
+use wasmtimer::tokio::interval;
 
 type Result<T> = std::result::Result<T, Error>;
 pub(crate) type DeviceName = Arc<Mutex<Option<String>>>;
