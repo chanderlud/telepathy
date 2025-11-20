@@ -1,4 +1,4 @@
-use crate::api::telepathy::CHANNEL_SIZE;
+use crate::telepathy::CHANNEL_SIZE;
 use log::error;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;

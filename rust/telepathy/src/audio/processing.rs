@@ -241,7 +241,7 @@ mod tests {
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn MulVariants_DummyFrame_EqualOutputs() {
-        let frame = crate::api::telepathy::tests::dummy_frame();
+        let frame = crate::telepathy::tests::dummy_frame();
         let mut scalar_frame = frame.clone();
         let mut wide_frame = frame.clone();
 
@@ -274,7 +274,7 @@ mod tests {
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn IntConversion_DummyFrame_EqualOutputs() {
-        let frame = crate::api::telepathy::tests::dummy_int_frame();
+        let frame = crate::telepathy::tests::dummy_int_frame();
         let mut scalar_frame = [0_f32; FRAME_SIZE];
         let mut wide_frame = [0_f32; FRAME_SIZE];
         let scale = (1_f32 / i16::MAX as f32) * 2.0;
@@ -295,7 +295,7 @@ mod tests {
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn FloatConversion_DummyFrame_EqualOutputs() {
-        let frame = crate::api::telepathy::tests::dummy_frame();
+        let frame = crate::telepathy::tests::dummy_frame();
         let mut scalar_frame = frame.clone();
         let mut wide_frame = frame.clone();
 

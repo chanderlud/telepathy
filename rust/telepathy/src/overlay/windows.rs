@@ -2,8 +2,8 @@ use std::mem;
 use std::ptr::null_mut;
 use std::sync::atomic::Ordering::Relaxed;
 
-use crate::api::overlay::color::{BAD_COLOR, percent_to_color};
-use crate::api::overlay::{BACKGROUND_COLOR, CONNECTED, FONT_COLOR, FONT_HEIGHT, LATENCY, Result};
+use crate::overlay::color::{BAD_COLOR, percent_to_color};
+use crate::overlay::{BACKGROUND_COLOR, CONNECTED, FONT_COLOR, FONT_HEIGHT, LATENCY, Result};
 use log::{error, info};
 use widestring::U16CString;
 use windows::Win32::Foundation::{
@@ -32,7 +32,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{BOOL, PCWSTR};
 
 pub(crate) const CLASS_NAME: &str = "telepathy_overlay";
-const FONT_BYTES: &[u8] = include_bytes!("../../../../../assets/Inconsolata.ttf");
+const FONT_BYTES: &[u8] = include_bytes!("../../../../assets/Inconsolata.ttf");
 
 pub(crate) unsafe fn build_window(width: i32, height: i32, x: i32, y: i32) -> Result<HWND> {
     unsafe {

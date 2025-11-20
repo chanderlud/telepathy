@@ -7,11 +7,11 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart' hide Overlay;
 
 import 'package:telepathy/settings/view.dart';
-import 'package:telepathy/src/rust/api/telepathy.dart';
-import 'package:telepathy/src/rust/api/flutter.dart';
-import 'package:telepathy/src/rust/api/error.dart';
-import 'package:telepathy/src/rust/api/audio/player.dart';
-import 'package:telepathy/src/rust/api/overlay/overlay.dart';
+import 'package:telepathy/src/rust//telepathy.dart';
+import 'package:telepathy/src/rust//flutter.dart';
+import 'package:telepathy/src/rust//error.dart';
+import 'package:telepathy/src/rust//audio/player.dart';
+import 'package:telepathy/src/rust//overlay/overlay.dart';
 import 'package:telepathy/src/rust/frb_generated.dart';
 import 'package:telepathy/settings/controller.dart';
 import 'package:file_picker/file_picker.dart';

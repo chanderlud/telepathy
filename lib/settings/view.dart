@@ -4,7 +4,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart' show kIsWeb;
 
 import 'package:telepathy/settings/controller.dart';
-import 'package:telepathy/src/rust/api/audio/player.dart';
+import 'package:telepathy/src/rust//audio/player.dart';
 import 'package:collection/collection.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart' hide Overlay;
@@ -15,10 +15,10 @@ import 'package:flutter_svg/flutter_svg.dart';
 import '../audio_level.dart';
 import '../console.dart';
 import '../main.dart';
-import '../src/rust/api/telepathy.dart';
-import '../src/rust/api/flutter.dart';
-import '../src/rust/api/error.dart';
-import '../src/rust/api/overlay/overlay.dart';
+import '../src/rust//telepathy.dart';
+import '../src/rust//flutter.dart';
+import '../src/rust//error.dart';
+import '../src/rust//overlay/overlay.dart';
 
 class SettingsPage extends StatefulWidget {
   final SettingsController controller;

@@ -3,35 +3,35 @@
 
 // ignore_for_file: invalid_use_of_internal_member, unused_import, unnecessary_import
 
-import '../frb_generated.dart';
 import 'error.dart';
+import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 import 'telepathy.dart';
 part 'flutter.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `call_state`, `invoke`, `notify`, `session_status`
+// These functions are ignored because they are not marked as `pub`: `atomic_u32_deserialize`, `atomic_u32_serialize`, `call_state`, `invoke`, `notify`, `session_status`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `SEND_TO_DART_LOGGER_STREAM_SINK`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `deref`, `do_logs`, `fmt`, `fmt`, `fmt`, `initialize`
 
 Stream<String> createLogStream() =>
-    RustLib.instance.api.crateApiFlutterCreateLogStream();
+    RustLib.instance.api.crateFlutterCreateLogStream();
 
-void rustSetUp() => RustLib.instance.api.crateApiFlutterRustSetUp();
+void rustSetUp() => RustLib.instance.api.crateFlutterRustSetUp();
 
 (String, Uint8List) generateKeys() =>
-    RustLib.instance.api.crateApiFlutterGenerateKeys();
+    RustLib.instance.api.crateFlutterGenerateKeys();
 
 String roomHash({required List<String> peers}) =>
-    RustLib.instance.api.crateApiFlutterRoomHash(peers: peers);
+    RustLib.instance.api.crateFlutterRoomHash(peers: peers);
 
 bool validatePeerId({required String peerId}) =>
-    RustLib.instance.api.crateApiFlutterValidatePeerId(peerId: peerId);
+    RustLib.instance.api.crateFlutterValidatePeerId(peerId: peerId);
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Capabilities>>
 abstract class Capabilities implements RustOpaqueInterface {
   static Future<Capabilities> default_() =>
-      RustLib.instance.api.crateApiFlutterCapabilitiesDefault();
+      RustLib.instance.api.crateFlutterCapabilitiesDefault();
 
   List<String> devices();
 
@@ -59,7 +59,7 @@ abstract class CodecConfig implements RustOpaqueInterface {
           {required bool enabled,
           required bool vbr,
           required double residualBits}) =>
-      RustLib.instance.api.crateApiFlutterCodecConfigNew(
+      RustLib.instance.api.crateFlutterCodecConfigNew(
           enabled: enabled, vbr: vbr, residualBits: residualBits);
 
   void setEnabled({required bool enabled});
@@ -77,7 +77,7 @@ abstract class Contact implements RustOpaqueInterface {
           {required String id,
           required String nickname,
           required String peerId}) =>
-      RustLib.instance.api.crateApiFlutterContactFromParts(
+      RustLib.instance.api.crateFlutterContactFromParts(
           id: id, nickname: nickname, peerId: peerId);
 
   String id();
@@ -86,7 +86,7 @@ abstract class Contact implements RustOpaqueInterface {
 
   factory Contact({required String nickname, required String peerId}) =>
       RustLib.instance.api
-          .crateApiFlutterContactNew(nickname: nickname, peerId: peerId);
+          .crateFlutterContactNew(nickname: nickname, peerId: peerId);
 
   String nickname();
 
@@ -114,7 +114,7 @@ abstract class NetworkConfig implements RustOpaqueInterface {
 
   factory NetworkConfig(
           {required String relayAddress, required String relayId}) =>
-      RustLib.instance.api.crateApiFlutterNetworkConfigNew(
+      RustLib.instance.api.crateFlutterNetworkConfigNew(
           relayAddress: relayAddress, relayId: relayId);
 
   Future<void> setRelayAddress({required String relayAddress});
@@ -140,12 +140,12 @@ abstract class ScreenshareConfig implements RustOpaqueInterface {
   Future<Capabilities> capabilities();
 
   static Future<ScreenshareConfig> default_() =>
-      RustLib.instance.api.crateApiFlutterScreenshareConfigDefault();
+      RustLib.instance.api.crateFlutterScreenshareConfigDefault();
 
   // HINT: Make it `#[frb(sync)]` to let it become the default constructor of Dart class.
   static Future<ScreenshareConfig> newInstance({required String configStr}) =>
       RustLib.instance.api
-          .crateApiFlutterScreenshareConfigNew(configStr: configStr);
+          .crateFlutterScreenshareConfigNew(configStr: configStr);
 
   Future<RecordingConfig?> recordingConfig();
 
@@ -175,7 +175,7 @@ abstract class TelepathyCallbacks implements RustOpaqueInterface {
           required FutureOr<void> Function((bool, bool)) managerActive,
           required FutureOr<void> Function((DartNotify, bool))
               screenshareStarted}) =>
-      RustLib.instance.api.crateApiFlutterTelepathyCallbacksNew(
+      RustLib.instance.api.crateFlutterTelepathyCallbacksNew(
           acceptCall: acceptCall,
           getContact: getContact,
           callState: callState,
@@ -209,7 +209,7 @@ class SendToDartLogger {
   const SendToDartLogger();
 
   static Stream<String> setStreamSink() =>
-      RustLib.instance.api.crateApiFlutterSendToDartLoggerSetStreamSink();
+      RustLib.instance.api.crateFlutterSendToDartLoggerSetStreamSink();
 
   @override
   int get hashCode => 0;
@@ -258,7 +258,7 @@ class Statistics {
   });
 
   static Future<Statistics> default_() =>
-      RustLib.instance.api.crateApiFlutterStatisticsDefault();
+      RustLib.instance.api.crateFlutterStatisticsDefault();
 
   @override
   int get hashCode =>

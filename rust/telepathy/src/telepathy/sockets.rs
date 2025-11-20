@@ -1,5 +1,5 @@
-use crate::api::error::Error;
-use crate::api::telepathy::KEEP_ALIVE;
+use crate::error::Error;
+use crate::telepathy::KEEP_ALIVE;
 use kanal::{AsyncReceiver, AsyncSender};
 use libp2p::Stream;
 use libp2p::bytes::Bytes;

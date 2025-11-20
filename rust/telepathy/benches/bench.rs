@@ -2,7 +2,7 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use rand::Rng;
 use std::hint::black_box;
 
-include!("../src/api/audio/processing.rs");
+include!("../src/audio/processing.rs");
 
 pub fn bench_mul(c: &mut Criterion) {
     let mut frame = dummy_float_frame();

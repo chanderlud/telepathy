@@ -3,15 +3,15 @@
 
 // ignore_for_file: invalid_use_of_internal_member, unused_import, unnecessary_import
 
-import '../../frb_generated.dart';
 import '../error.dart';
+import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These functions are ignored because they are not marked as `pub`: `play_sound`, `processor`, `wav_to_sea`
 
 /// loads a ringtone into a sea file for future use in the backend
 Future<void> loadRingtone({required String path}) =>
-    RustLib.instance.api.crateApiAudioPlayerLoadRingtone(path: path);
+    RustLib.instance.api.crateAudioPlayerLoadRingtone(path: path);
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Arc < Host >>>
 abstract class ArcHost implements RustOpaqueInterface {}
@@ -26,7 +26,7 @@ abstract class SoundPlayer implements RustOpaqueInterface {
   ArcHost host();
 
   factory SoundPlayer({required double outputVolume}) => RustLib.instance.api
-      .crateApiAudioPlayerSoundPlayerNew(outputVolume: outputVolume);
+      .crateAudioPlayerSoundPlayerNew(outputVolume: outputVolume);
 
   /// Public play function
   Future<SoundHandle> play({required List<int> bytes});

@@ -3,14 +3,14 @@
 
 // ignore_for_file: invalid_use_of_internal_member, unused_import, unnecessary_import
 
-import '../frb_generated.dart';
 import 'audio/player.dart';
 import 'error.dart';
 import 'flutter.dart';
+import 'frb_generated.dart';
 import 'overlay/overlay.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `call_controller`, `call_handshake`, `call`, `codec_config`, `get_input_device`, `incoming_stream_handler`, `initialize_session`, `is_call_active`, `is_in_room`, `latencies_missing`, `load_ringtone`, `loopback`, `new`, `new`, `new`, `new`, `open_session`, `open_stream`, `receive_stream`, `relayed_only`, `room_controller`, `room_handshake`, `room_hash`, `send_start_screenshare`, `session_inner`, `session_manager`, `session_outer`, `setup_call`, `setup_input_stream`, `setup_input`, `setup_output`, `statistics_collector`, `stream_to_audio_transport`
+// These functions are ignored because they are not marked as `pub`: `codec_config`, `latencies_missing`, `loopback`, `new`, `new`, `new`, `new`, `open_stream`, `receive_stream`, `relayed_only`, `statistics_collector`, `stream_to_audio_transport`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `ConnectionState`, `EarlyCallState`, `OptionalCallArgs`, `PeerState`, `RoomConnection`, `RoomMessage`, `RoomState`, `SessionState`, `StartScreenshare`, `StatisticsCollectorState`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`
 
@@ -34,6 +34,7 @@ abstract class Telepathy implements RustOpaqueInterface {
   Future<(List<String>, List<String>)> listDevices();
 
   // HINT: Make it `#[frb(sync)]` to let it become the default constructor of Dart class.
+  /// main entry point to Telepathy. must be async to use `spawn`
   static Future<Telepathy> newInstance(
           {required List<int> identity,
           required ArcHost host,
@@ -42,7 +43,7 @@ abstract class Telepathy implements RustOpaqueInterface {
           required Overlay overlay,
           required CodecConfig codecConfig,
           required TelepathyCallbacks callbacks}) =>
-      RustLib.instance.api.crateApiTelepathyTelepathyNew(
+      RustLib.instance.api.crateTelepathyTelepathyNew(
           identity: identity,
           host: host,
           networkConfig: networkConfig,

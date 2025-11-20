@@ -77,9 +77,9 @@ impl From<other_windows::core::Error> for Error {
 mod tests {
     use tokio::time::sleep;
 
-    use crate::api::overlay::color::Color;
-    use crate::api::overlay::overlay::Overlay;
-    use crate::api::overlay::{CONNECTED, LATENCY, LOSS};
+    use crate::overlay::color::Color;
+    use crate::overlay::overlay::Overlay;
+    use crate::overlay::{CONNECTED, LATENCY, LOSS};
 
     #[ignore]
     #[tokio::test]

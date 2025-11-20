@@ -1,6 +1,6 @@
-use crate::api::error::{Error, ErrorKind};
-use crate::api::sockets::Transport;
-use crate::api::telepathy::DeviceName;
+use crate::error::{Error, ErrorKind};
+use crate::telepathy::DeviceName;
+use crate::telepathy::sockets::Transport;
 use bincode::config::standard;
 use bincode::{Decode, Encode, decode_from_slice, encode_to_vec};
 use cpal::traits::{DeviceTrait, HostTrait};
@@ -8,10 +8,7 @@ use cpal::{Device, Host, Stream};
 use flutter_rust_bridge::for_generated::futures::{Sink, SinkExt};
 use libp2p::bytes::Bytes;
 use libp2p::futures::StreamExt;
-use serde::Deserialize;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU32;
-use std::sync::atomic::Ordering::Relaxed;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 type Result<T> = std::result::Result<T, Error>;
@@ -93,55 +90,5 @@ pub(crate) async fn read_message<M: Decode<()>, R: AsyncRead + Unpin>(
         Ok(message)
     } else {
         Err(ErrorKind::TransportRecv.into())
-    }
-}
-
-pub(crate) fn atomic_u32_serialize<S>(
-    value: &Arc<AtomicU32>,
-    serializer: S,
-) -> std::result::Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    let value = value.load(Relaxed);
-    serializer.serialize_u32(value)
-}
-
-pub(crate) fn atomic_u32_deserialize<'de, D>(
-    deserializer: D,
-) -> std::result::Result<Arc<AtomicU32>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = u32::deserialize(deserializer)?;
-    Ok(Arc::new(AtomicU32::new(value)))
-}
-
-pub(crate) mod rwlock_option_recording_config {
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-    use std::sync::Arc;
-    use tokio::sync::RwLock;
-
-    use crate::api::flutter::RecordingConfig;
-
-    pub fn serialize<S>(
-        value: &Arc<RwLock<Option<RecordingConfig>>>,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let lock = value.blocking_read();
-        lock.serialize(serializer)
-    }
-
-    pub fn deserialize<'de, D>(
-        deserializer: D,
-    ) -> Result<Arc<RwLock<Option<RecordingConfig>>>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let inner = Option::<RecordingConfig>::deserialize(deserializer)?;
-        Ok(Arc::new(RwLock::new(inner)))
     }
 }

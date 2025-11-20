@@ -2,14 +2,14 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:collection/collection.dart';
-import 'package:telepathy/src/rust/api/error.dart';
+import 'package:telepathy/src/rust//error.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
 import '../console.dart';
-import '../src/rust/api/flutter.dart';
+import '../src/rust//flutter.dart';
 
 const defaultRelayAddress = '5.78.76.47:40142';
 const defaultRelayId = '12D3KooWSePyyLtTHJsTMqMUS5pbQtdt8oJJX7rrEYCwG8bURYBG';

@@ -1,9 +1,7 @@
-use crate::api::audio::processing::*;
-use crate::api::error::Error;
+use crate::audio::processing::*;
+use crate::error::Error;
 #[cfg(target_family = "wasm")]
-use crate::api::telepathy::CHANNEL_SIZE;
-#[cfg(test)]
-use crate::api::utils::db_to_multiplier;
+use crate::telepathy::CHANNEL_SIZE;
 use atomic_float::AtomicF32;
 use kanal::{Receiver, Sender};
 use log::{debug, warn};
@@ -41,22 +39,10 @@ const MINIMUM_SILENCE_LENGTH: u8 = 40;
 const TRANSITION_LENGTH: usize = 96;
 
 pub(crate) struct InputProcessorState {
-    input_volume: Arc<AtomicF32>,
-    rms_threshold: Arc<AtomicF32>,
-    muted: Arc<AtomicBool>,
-    rms_sender: Arc<AtomicF32>,
-}
-
-#[cfg(test)]
-impl Default for InputProcessorState {
-    fn default() -> Self {
-        Self {
-            input_volume: Arc::new(AtomicF32::new(1.0)),
-            rms_threshold: Arc::new(AtomicF32::new(db_to_multiplier(50_f32))),
-            muted: Arc::new(Default::default()),
-            rms_sender: Arc::new(Default::default()),
-        }
-    }
+    pub(crate) input_volume: Arc<AtomicF32>,
+    pub(crate) rms_threshold: Arc<AtomicF32>,
+    pub(crate) muted: Arc<AtomicBool>,
+    pub(crate) rms_sender: Arc<AtomicF32>,
 }
 
 impl InputProcessorState {
@@ -92,22 +78,10 @@ impl InputProcessorState {
 }
 
 pub(crate) struct OutputProcessorState {
-    output_volume: Arc<AtomicF32>,
-    rms_sender: Arc<AtomicF32>,
-    deafened: Arc<AtomicBool>,
-    loss_sender: Arc<AtomicUsize>,
-}
-
-#[cfg(test)]
-impl Default for OutputProcessorState {
-    fn default() -> Self {
-        Self {
-            output_volume: Arc::new(AtomicF32::new(1.0)),
-            rms_sender: Arc::new(Default::default()),
-            deafened: Arc::new(Default::default()),
-            loss_sender: Arc::new(Default::default()),
-        }
-    }
+    pub(crate) output_volume: Arc<AtomicF32>,
+    pub(crate) rms_sender: Arc<AtomicF32>,
+    pub(crate) deafened: Arc<AtomicBool>,
+    pub(crate) loss_sender: Arc<AtomicUsize>,
 }
 
 impl OutputProcessorState {

@@ -1,11 +1,8 @@
-use crate::api::error::{DartError, Error, ErrorKind};
-use crate::api::screenshare;
-use crate::api::screenshare::{Decoder, Encoder};
-use crate::api::telepathy::Telepathy;
-use crate::api::utils::{
-    atomic_u32_deserialize, atomic_u32_serialize, rwlock_option_recording_config,
-};
+use crate::error::{DartError, Error, ErrorKind};
 use crate::frb_generated::StreamSink;
+use crate::telepathy::Telepathy;
+use crate::telepathy::screenshare;
+use crate::telepathy::screenshare::{Decoder, Encoder};
 use atomic_float::AtomicF32;
 use chrono::{DateTime, Local};
 #[cfg(not(target_family = "wasm"))]
@@ -691,4 +688,49 @@ pub(crate) async fn notify<A>(void: &DartVoid<A>, args: A) {
 
 pub(crate) async fn invoke<A, R>(method: &DartMethod<A, R>, args: A) -> R {
     (method.lock().await)(args).await
+}
+
+fn atomic_u32_serialize<S>(value: &Arc<AtomicU32>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    let value = value.load(Relaxed);
+    serializer.serialize_u32(value)
+}
+
+fn atomic_u32_deserialize<'de, D>(deserializer: D) -> Result<Arc<AtomicU32>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = u32::deserialize(deserializer)?;
+    Ok(Arc::new(AtomicU32::new(value)))
+}
+
+mod rwlock_option_recording_config {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+
+    use crate::flutter::RecordingConfig;
+
+    pub fn serialize<S>(
+        value: &Arc<RwLock<Option<RecordingConfig>>>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let lock = value.blocking_read();
+        lock.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(
+        deserializer: D,
+    ) -> Result<Arc<RwLock<Option<RecordingConfig>>>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let inner = Option::<RecordingConfig>::deserialize(deserializer)?;
+        Ok(Arc::new(RwLock::new(inner)))
+    }
 }

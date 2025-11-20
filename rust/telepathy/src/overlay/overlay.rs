@@ -12,8 +12,8 @@ use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32};
 use std::time::Duration;
 
 #[cfg(windows)]
-use crate::api::overlay::windows;
-use crate::api::overlay::{BACKGROUND_COLOR, FONT_COLOR, FONT_HEIGHT};
+use crate::overlay::windows;
+use crate::overlay::{BACKGROUND_COLOR, FONT_COLOR, FONT_HEIGHT};
 use flutter_rust_bridge::frb;
 #[cfg(windows)]
 use kanal::Sender;

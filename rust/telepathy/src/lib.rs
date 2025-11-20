@@ -1,8 +1,12 @@
 use libp2p::swarm::NetworkBehaviour;
 use libp2p::{autonat, dcutr, identify, ping, relay};
 
-pub mod api;
-mod frb_generated; /* AUTO INJECTED BY flutter_rust_bridge. This line may not be accurate, and you can change it according to your needs. */
+pub mod audio;
+pub mod error;
+pub mod flutter;
+mod frb_generated;
+pub mod overlay;
+pub mod telepathy;
 
 // https://github.com/RustAudio/cpal/issues/720#issuecomment-1311813294
 #[cfg(target_os = "android")]
