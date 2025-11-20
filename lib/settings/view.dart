@@ -2,23 +2,21 @@ import 'dart:async';
 import 'dart:core';
 import 'dart:io';
 import 'package:flutter/foundation.dart' show kIsWeb;
-
 import 'package:telepathy/settings/controller.dart';
-import 'package:telepathy/src/rust//audio/player.dart';
+import 'package:telepathy/src/rust/audio/player.dart';
 import 'package:collection/collection.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart' hide Overlay;
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:flutter_colorpicker/flutter_colorpicker.dart';
 import 'package:flutter_svg/flutter_svg.dart';
-
-import '../audio_level.dart';
-import '../console.dart';
-import '../main.dart';
-import '../src/rust//telepathy.dart';
-import '../src/rust//flutter.dart';
-import '../src/rust//error.dart';
-import '../src/rust//overlay/overlay.dart';
+import 'package:telepathy/audio_level.dart';
+import 'package:telepathy/console.dart';
+import 'package:telepathy/main.dart';
+import 'package:telepathy/src/rust/telepathy.dart';
+import 'package:telepathy/src/rust/flutter.dart';
+import 'package:telepathy/src/rust/error.dart';
+import 'package:telepathy/src/rust/overlay/overlay.dart';
 
 class SettingsPage extends StatefulWidget {
   final SettingsController controller;
@@ -1639,6 +1637,7 @@ class AudioDevices extends ChangeNotifier {
   final ListEquality<String> _listEquality = const ListEquality<String>();
 
   List<String> get inputDevices => ['Default', ..._inputDevices];
+
   List<String> get outputDevices => ['Default', ..._outputDevices];
 
   AudioDevices({required this.telepathy}) {

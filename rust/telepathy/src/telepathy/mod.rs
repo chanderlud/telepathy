@@ -4,6 +4,7 @@ mod core;
 mod helpers;
 pub(crate) mod screenshare;
 /// networking code for live audio streams
+/// flutter_rust_bridge:ignore
 mod sockets;
 #[cfg(test)]
 #[cfg(not(target_family = "wasm"))]

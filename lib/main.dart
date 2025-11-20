@@ -7,11 +7,11 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart' hide Overlay;
 
 import 'package:telepathy/settings/view.dart';
-import 'package:telepathy/src/rust//telepathy.dart';
-import 'package:telepathy/src/rust//flutter.dart';
-import 'package:telepathy/src/rust//error.dart';
-import 'package:telepathy/src/rust//audio/player.dart';
-import 'package:telepathy/src/rust//overlay/overlay.dart';
+import 'package:telepathy/src/rust/telepathy.dart';
+import 'package:telepathy/src/rust/flutter.dart';
+import 'package:telepathy/src/rust/error.dart';
+import 'package:telepathy/src/rust/audio/player.dart';
+import 'package:telepathy/src/rust/overlay/overlay.dart';
 import 'package:telepathy/src/rust/frb_generated.dart';
 import 'package:telepathy/settings/controller.dart';
 import 'package:file_picker/file_picker.dart';
@@ -33,7 +33,14 @@ SoundHandle? outgoingSoundHandle;
 Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  await RustLib.init();
+  try {
+    await RustLib.init();
+  } catch (e, st) {
+    // print / log both error and stack
+    debugPrint('RustLib.init failed: $e');
+    debugPrint('$st');
+    rethrow; // or handle it
+  }
 
   // get logs from rust
   rustSetUp();
@@ -2158,8 +2165,7 @@ class CallDetailsWidget extends StatelessWidget {
               listenable: statisticsController,
               builder: (BuildContext context, Widget? child) {
                 return GradientMiniLineChart(
-                    values: statisticsController.lossWindow,
-                    strokeWidth: 2);
+                    values: statisticsController.lossWindow, strokeWidth: 2);
               }),
           const SizedBox(height: 6),
           const Spacer(),
