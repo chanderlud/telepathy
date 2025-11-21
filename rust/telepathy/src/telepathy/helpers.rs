@@ -24,6 +24,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
 #[cfg(not(target_family = "wasm"))]
 use tokio::fs::File;
+#[cfg(not(target_family = "wasm"))]
 use tokio::io::AsyncReadExt;
 use tokio::sync::Notify;
 

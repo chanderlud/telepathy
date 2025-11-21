@@ -4,6 +4,8 @@ use crate::error::ErrorKind;
 use crate::flutter::{CallState, ChatMessage, Contact, DartNotify, SessionStatus, invoke, notify};
 use crate::overlay::CONNECTED;
 use crate::telepathy::Result;
+#[cfg(not(target_family = "wasm"))]
+use crate::telepathy::screenshare;
 use crate::telepathy::sockets::{
     ConstSocket, SendingSockets, SharedSockets, Transport, TransportStream, audio_input,
     audio_output,
@@ -12,13 +14,13 @@ use crate::telepathy::utils::{read_message, write_message};
 use crate::telepathy::{
     CHAT_PROTOCOL, ConnectionState, EarlyCallState, HELLO_TIMEOUT, KEEP_ALIVE, OptionalCallArgs,
     PeerState, RoomConnection, RoomMessage, SessionState, StartScreenshare,
-    StatisticsCollectorState, Telepathy, loopback, screenshare, statistics_collector,
-    stream_to_audio_transport,
+    StatisticsCollectorState, Telepathy, loopback, statistics_collector, stream_to_audio_transport,
 };
 use crate::{Behaviour, BehaviourEvent};
 use chrono::Local;
 use cpal::traits::StreamTrait;
 use flutter_rust_bridge::for_generated::futures::StreamExt;
+use flutter_rust_bridge::spawn;
 use libp2p::multiaddr::Protocol;
 use libp2p::swarm::SwarmEvent;
 #[cfg(not(target_family = "wasm"))]
@@ -36,10 +38,10 @@ use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::{Duration, Instant};
+use tokio::select;
 use tokio::sync::Notify;
 use tokio::sync::mpsc::{Receiver as MReceiver, Sender as MSender, channel};
 use tokio::time::{Interval, interval, timeout};
-use tokio::{select, spawn};
 use tokio_util::codec::LengthDelimitedCodec;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tokio_util::sync::CancellationToken;
