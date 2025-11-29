@@ -262,7 +262,7 @@ jobs:
             distro: ubuntu22.04
             out: arm64
           - arch: aarch64
-            distro: ubuntu_latest
+            distro: ubuntu24.04
             out: arm64
           # - arch: riscv64
           #   distro: ubuntu22.04
@@ -342,7 +342,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-24.04
     permissions:
-      contents: write  # needed to create / update the release
+      contents: write
 
     steps:
       - name: Checkout
@@ -401,17 +401,56 @@ jobs:
           cd artifacts/telepathy_ubuntu-24.04_linux
           zip -r "../../dist/telepathy-${VER}-noble-x86_64.zip" telepathy
           cd ../../
+          
+          #
+          # LINUX x86_64 (built on ubuntu-22.04 -> jammy)
+          #
+          mv "artifacts/telepathy_ubuntu-22.04_linux/telepathy.deb" \
+             "dist/telepathy-${VER}-jammy-x86_64.deb"
+
+          mv "artifacts/telepathy_ubuntu-22.04_linux/telepathy.rpm" \
+             "dist/telepathy-${VER}-jammy-x86_64.rpm"
+
+          cd artifacts/telepathy_ubuntu-22.04_linux
+          zip -r "../../dist/telepathy-${VER}-jammy-x86_64.zip" telepathy
+          cd ../../
+          
+          #
+          # LINUX aarch64 (built on ubuntu-20.04 -> focal)
+          #
+          mv "artifacts/telepathy_ubuntu20.04_aarch64/telepathy.deb" \
+             "dist/telepathy-${VER}-focal-aarch64.deb"
+
+          mv "artifacts/telepathy_ubuntu20.04_aarch64/telepathy.rpm" \
+             "dist/telepathy-${VER}-focal-aarch64.rpm"
+
+          cd artifacts/telepathy_ubuntu20.04_aarch64
+          zip -r "../../dist/telepathy-${VER}-focal-aarch64.zip" telepathy
+          cd ../../
+          
+          #
+          # LINUX aarch64 (built on ubuntu-22.04 -> jammy)
+          #
+          mv "artifacts/telepathy_ubuntu22.04_aarch64/telepathy.deb" \
+             "dist/telepathy-${VER}-jammy-aarch64.deb"
+
+          mv "artifacts/telepathy_ubuntu22.04_aarch64/telepathy.rpm" \
+             "dist/telepathy-${VER}-jammy-aarch64.rpm"
+
+          cd artifacts/telepathy_ubuntu22.04_aarch64
+          zip -r "../../dist/telepathy-${VER}-jammy-aarch64.zip" telepathy
+          cd ../../
 
           #
-          # LINUX aarch64 (take the 'ubuntu_latest_aarch64' artifact as release)
+          # LINUX aarch64 (built on ubuntu-24.04 -> noble)
           #
-          mv "artifacts/telepathy_ubuntu_latest_aarch64/telepathy.deb" \
+          mv "artifacts/telepathy_ubuntu24.04_aarch64/telepathy.deb" \
              "dist/telepathy-${VER}-noble-aarch64.deb"
 
-          mv "artifacts/telepathy_ubuntu_latest_aarch64/telepathy.rpm" \
+          mv "artifacts/telepathy_ubuntu24.04_aarch64/telepathy.rpm" \
              "dist/telepathy-${VER}-noble-aarch64.rpm"
 
-          cd artifacts/telepathy_ubuntu_latest_aarch64
+          cd artifacts/telepathy_ubuntu24.04_aarch64
           zip -r "../../dist/telepathy-${VER}-noble-aarch64.zip" telepathy
           cd ../../
 
