@@ -18,8 +18,8 @@ import 'package:telepathy/src/rust/flutter.dart';
 import 'package:telepathy/src/rust/error.dart';
 import 'package:telepathy/src/rust/overlay/overlay.dart';
 import 'package:telepathy/settings/logs.dart';
-
-import 'menu.dart';
+import 'package:telepathy/settings/header.dart';
+import 'package:telepathy/settings/menu.dart';
 
 enum SettingsSection {
   audioVideo,
@@ -214,68 +214,30 @@ class SettingsPageState extends State<SettingsPage>
                   ),
                 ),
               ),
-            Align(
-              alignment: Alignment.topLeft,
-              child: Container(
-                  padding: const EdgeInsets.only(left: 5, top: 5, bottom: 5),
-                  decoration: BoxDecoration(
-                    color: (showMenu ?? true)
-                        ? null
-                        : Theme.of(context).colorScheme.tertiaryContainer,
-                    borderRadius: const BorderRadius.only(
-                      bottomLeft: Radius.circular(8),
-                      bottomRight: Radius.circular(8),
-                    ),
-                  ),
-                  child: Row(
-                    children: [
-                      IconButton(
-                        visualDensity: VisualDensity.comfortable,
-                        icon: SvgPicture.asset(
-                          'assets/icons/Back.svg',
-                          semanticsLabel: 'Close Settings',
-                          width: 30,
-                        ),
-                        onPressed: () async {
-                          if (_section == SettingsSection.networking &&
-                              (_key.currentState?.unsavedChanges ?? false)) {
-                            bool leave = await unsavedConfirmation(context);
+            SettingsHeader(
+              isNarrow: constraints.maxWidth < 600,
+              showMenu: showMenu ?? true,
+              onBack: () async {
+                if (_section == SettingsSection.networking &&
+                    (_key.currentState?.unsavedChanges ?? false)) {
+                  bool leave = await unsavedConfirmation(context);
+                  if (!leave) return;
+                }
 
-                            if (!leave) {
-                              return;
-                            }
-                          }
-
-                          if (context.mounted) {
-                            Navigator.of(context).pop();
-                          }
-                        },
-                      ),
-                      const SizedBox(width: 3),
-                      if (constraints.maxWidth < 600)
-                        IconButton(
-                          visualDensity: VisualDensity.comfortable,
-                          icon: SvgPicture.asset(
-                            showMenu ?? true
-                                ? 'assets/icons/HamburgerOpened.svg'
-                                : 'assets/icons/HamburgerClosed.svg',
-                            semanticsLabel: 'Menu',
-                            width: 30,
-                          ),
-                          onPressed: () {
-                            setState(() {
-                              if (showMenu ?? true) {
-                                _animationController.forward();
-                              } else {
-                                _animationController.reverse();
-                              }
-
-                              showMenu = !(showMenu ?? true);
-                            });
-                          },
-                        ),
-                    ],
-                  )),
+                if (context.mounted) {
+                  Navigator.of(context).pop();
+                }
+              },
+              onToggleMenu: () {
+                setState(() {
+                  if (showMenu ?? true) {
+                    _animationController.forward();
+                  } else {
+                    _animationController.reverse();
+                  }
+                  showMenu = !(showMenu ?? true);
+                });
+              },
             ),
           ],
         ));
