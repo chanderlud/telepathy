@@ -9,6 +9,9 @@ import 'package:telepathy/src/rust/error.dart';
 import 'package:telepathy/src/rust/flutter.dart';
 import 'package:telepathy/src/rust/telepathy.dart';
 
+const int minBitrate = 500000;
+const int maxBitrate = 10000000;
+
 class AVSettings extends StatefulWidget {
   final SettingsController controller;
   final Telepathy telepathy;
@@ -20,13 +23,13 @@ class AVSettings extends StatefulWidget {
 
   const AVSettings(
       {super.key,
-        required this.controller,
-        required this.telepathy,
-        required this.stateController,
-        required this.player,
-        required this.statisticsController,
-        required this.constraints,
-        required this.audioDevices});
+      required this.controller,
+      required this.telepathy,
+      required this.stateController,
+      required this.player,
+      required this.statisticsController,
+      required this.constraints,
+      required this.audioDevices});
 
   @override
   State<StatefulWidget> createState() => _AVSettingsState();
@@ -45,7 +48,7 @@ class _AVSettingsState extends State<AVSettings> {
 
     var capabilitiesFuture = widget.controller.screenshareConfig.capabilities();
     var recordingConfigFuture =
-    widget.controller.screenshareConfig.recordingConfig();
+        widget.controller.screenshareConfig.recordingConfig();
 
     Future.wait([capabilitiesFuture, recordingConfigFuture])
         .then((List<dynamic> results) {
@@ -105,6 +108,17 @@ class _AVSettingsState extends State<AVSettings> {
     double width = widget.constraints.maxWidth < 650
         ? widget.constraints.maxWidth
         : (widget.constraints.maxWidth - 20) / 2;
+
+    int currentBitrate = _temporaryConfig?.bitrate ??
+        _recordingConfig?.bitrate() ??
+        defaultBitrate();
+
+    double bitrateValue =
+        currentBitrate.clamp(minBitrate, maxBitrate).toDouble();
+
+    int currentFramerate = _temporaryConfig?.framerate ??
+        _recordingConfig?.framerate() ??
+        defaultFramerate();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -292,7 +306,7 @@ class _AVSettingsState extends State<AVSettings> {
                 text: 'Select custom ringtone file',
                 onPressed: () async {
                   FilePickerResult? result =
-                  await FilePicker.platform.pickFiles(
+                      await FilePicker.platform.pickFiles(
                     type: FileType.custom,
                     allowedExtensions: ['wav'],
                   );
@@ -329,7 +343,7 @@ class _AVSettingsState extends State<AVSettings> {
                   min: -20,
                   max: 20,
                   label:
-                  '${widget.controller.soundVolume.toStringAsFixed(2)} db');
+                      '${widget.controller.soundVolume.toStringAsFixed(2)} db');
             }),
         const SizedBox(height: 5),
         Row(
@@ -364,7 +378,7 @@ class _AVSettingsState extends State<AVSettings> {
               label: 'Encoder',
               items: encoders.map((d) => (d, d)).toList(),
               initialSelection:
-              _recordingConfig?.encoder() ?? encoders.firstOrNull,
+                  _recordingConfig?.encoder() ?? encoders.firstOrNull,
               onSelected: (String? value) {
                 if (value == null) {
                   return;
@@ -382,7 +396,7 @@ class _AVSettingsState extends State<AVSettings> {
               label: 'Capture Device',
               items: devices.map((d) => (d, d)).toList(),
               initialSelection:
-              _recordingConfig?.device() ?? devices.firstOrNull,
+                  _recordingConfig?.device() ?? devices.firstOrNull,
               onSelected: (String? value) {
                 if (value == null) {
                   return;
@@ -399,38 +413,93 @@ class _AVSettingsState extends State<AVSettings> {
           ],
         ),
         const SizedBox(height: 20),
+        DropDown(
+          label: 'Framerate (FPS)',
+          items: const [
+            ('15', '15 FPS'),
+            ('30', '30 FPS'),
+            ('60', '60 FPS'),
+            ('120', '120 FPS'),
+          ],
+          initialSelection: currentFramerate.toString(),
+          onSelected: (String? value) {
+            if (value == null) return;
+
+            final int fps = int.tryParse(value) ?? defaultFramerate();
+
+            if (_temporaryConfig == null) {
+              initTemporaryConfig(null, null, null, fps);
+            } else {
+              setState(() {
+                _temporaryConfig!.framerate = fps;
+              });
+            }
+          },
+          width: width,
+        ),
+        const SizedBox(height: 20),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Bitrate',
+              style: TextStyle(fontSize: 16),
+            ),
+            Slider(
+              min: minBitrate.toDouble(),
+              max: maxBitrate.toDouble(),
+              value: bitrateValue,
+              label: '${(bitrateValue / 1000000).round()}mbps',
+              onChanged: (double value) {
+                final int newBitrate = value.round();
+
+                if (_temporaryConfig == null) {
+                  initTemporaryConfig(null, null, newBitrate, null);
+                } else {
+                  setState(() {
+                    _temporaryConfig!.bitrate = newBitrate;
+                  });
+                }
+              },
+            ),
+          ],
+        ),
+        const SizedBox(height: 20),
         Button(
             text: _loading ? 'Verifying' : 'Save',
             disabled: _temporaryConfig == null || _loading,
             onPressed: () async {
+              if (_loading) return;
+
+              setState(() {
+                _loading = true;
+              });
+
               try {
-                if (_loading) return;
-
-                setState(() {
-                  _loading = true;
-                });
-
                 await widget.controller.screenshareConfig.updateRecordingConfig(
                     encoder: _temporaryConfig!.encoder,
                     device: _temporaryConfig!.device,
                     bitrate: _temporaryConfig!.bitrate,
                     framerate: _temporaryConfig!.framerate,
                     height: _temporaryConfig!.height);
-
-                widget.controller.saveScreenshareConfig();
-
-                setState(() {
-                  _temporaryConfig = null;
-                  _loading = false;
-                });
               } on DartError catch (e) {
                 setState(() {
                   _loading = false;
                 });
-                if (!context.mounted) return;
-                showErrorDialog(
-                    context, 'Error in Encoder Selection', e.message);
+
+                if (context.mounted) {
+                  showErrorDialog(
+                      context, 'Error in Encoder Selection', e.message);
+                }
+
+                return;
               }
+
+              widget.controller.saveScreenshareConfig();
+              setState(() {
+                _temporaryConfig = null;
+                _loading = false;
+              });
             }),
       ],
     );
@@ -446,8 +515,8 @@ class TemporaryConfig {
 
   TemporaryConfig(
       {required this.encoder,
-        required this.device,
-        required this.bitrate,
-        required this.framerate,
-        this.height});
+      required this.device,
+      required this.bitrate,
+      required this.framerate,
+      this.height});
 }
