@@ -2,6 +2,7 @@
 mod core;
 /// helper methods used by telepathy core
 mod helpers;
+pub(crate) mod messages;
 pub(crate) mod screenshare;
 /// networking code for live audio streams
 /// flutter_rust_bridge:ignore

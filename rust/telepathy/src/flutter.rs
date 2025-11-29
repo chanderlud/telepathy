@@ -1,6 +1,7 @@
 use crate::error::{DartError, Error, ErrorKind};
 use crate::frb_generated::StreamSink;
 use crate::telepathy::Telepathy;
+use crate::telepathy::messages::Attachment;
 use crate::telepathy::screenshare;
 use crate::telepathy::screenshare::{Decoder, Encoder};
 use atomic_float::AtomicF32;
@@ -14,7 +15,6 @@ use lazy_static::lazy_static;
 use libp2p::PeerId;
 use libp2p::identity::Keypair;
 use log::{LevelFilter, info, warn};
-use messages::Attachment;
 use serde::{Deserialize, Serialize};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::net::SocketAddr;

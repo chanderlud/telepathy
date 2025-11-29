@@ -2,6 +2,7 @@ use crate::audio::codec::{decoder, encoder};
 use crate::audio::{InputProcessorState, OutputProcessorState, input_processor, output_processor};
 use crate::error::ErrorKind;
 use crate::frb_generated::FLUTTER_RUST_BRIDGE_HANDLER;
+use crate::telepathy::messages::{AudioHeader, Message};
 use crate::telepathy::utils::{SendStream, get_output_device};
 use crate::telepathy::{
     CHANNEL_SIZE, EarlyCallState, Result, StartScreenshare, StatisticsCollectorState, Telepathy,
@@ -15,7 +16,6 @@ use flutter_rust_bridge::spawn_blocking_with;
 use kanal::{AsyncReceiver, AsyncSender, Sender, bounded, unbounded_async};
 use libp2p::PeerId;
 use log::{error, info};
-use messages::{AudioHeader, Message};
 use nnnoiseless::DenoiseState;
 use sea_codec::ProcessorMessage;
 use sea_codec::codec::file::SeaFileHeader;

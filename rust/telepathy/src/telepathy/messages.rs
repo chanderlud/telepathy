@@ -1,7 +1,7 @@
 use bincode::{Decode, Encode};
 
 #[derive(Debug, Decode, Encode, Clone)]
-pub enum Message {
+pub(crate) enum Message {
     Hello {
         ringtone: Option<Vec<u8>>,
         audio_header: AudioHeader,
@@ -26,25 +26,25 @@ pub enum Message {
 }
 
 #[derive(Debug, Decode, Encode, Clone, Default)]
-pub struct AudioHeader {
-    pub channels: u32,
-    pub sample_rate: u32,
-    pub sample_format: String,
-    pub codec_enabled: bool,
-    pub vbr: bool,
-    pub residual_bits: f64,
+pub(crate) struct AudioHeader {
+    pub(crate) channels: u32,
+    pub(crate) sample_rate: u32,
+    pub(crate) sample_format: String,
+    pub(crate) codec_enabled: bool,
+    pub(crate) vbr: bool,
+    pub(crate) residual_bits: f64,
 }
 
 impl AudioHeader {
-    pub fn is_valid(&self) -> bool {
+    pub(crate) fn is_valid(&self) -> bool {
         self.channels < 10 && self.sample_rate < 128_000 && self.sample_format != "unknown"
     }
 }
 
 #[derive(Debug, Decode, Encode, Clone)]
-pub struct Attachment {
-    pub name: String,
-    pub data: Vec<u8>,
+pub(crate) struct Attachment {
+    pub(crate) name: String,
+    pub(crate) data: Vec<u8>,
 }
 
 impl From<&[u8]> for AudioHeader {

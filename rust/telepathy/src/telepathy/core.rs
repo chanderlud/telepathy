@@ -4,6 +4,7 @@ use crate::error::ErrorKind;
 use crate::flutter::{CallState, ChatMessage, Contact, DartNotify, SessionStatus, invoke, notify};
 use crate::overlay::CONNECTED;
 use crate::telepathy::Result;
+use crate::telepathy::messages::Message;
 #[cfg(not(target_family = "wasm"))]
 use crate::telepathy::screenshare;
 use crate::telepathy::sockets::{
@@ -31,7 +32,6 @@ use libp2p::{
 };
 use libp2p_stream::Control;
 use log::{debug, error, info, trace, warn};
-use messages::Message;
 use std::collections::HashMap;
 #[cfg(not(target_family = "wasm"))]
 use std::net::Ipv4Addr;

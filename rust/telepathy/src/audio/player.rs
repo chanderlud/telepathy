@@ -3,6 +3,7 @@ use crate::audio::resampler_factory;
 use crate::error::{DartError, Error, ErrorKind};
 use crate::frb_generated::FLUTTER_RUST_BRIDGE_HANDLER;
 use crate::telepathy::DeviceName;
+use crate::telepathy::messages::AudioHeader;
 use crate::telepathy::utils::{SendStream, db_to_multiplier, get_output_device};
 use atomic_float::AtomicF32;
 use core::time::Duration;
@@ -14,7 +15,6 @@ use kanal::{Receiver, unbounded};
 #[cfg(not(target_family = "wasm"))]
 use kanal::{Sender, bounded};
 use log::error;
-use messages::AudioHeader;
 use nnnoiseless::FRAME_SIZE;
 use rubato::Resampler;
 use sea_codec::ProcessorMessage;

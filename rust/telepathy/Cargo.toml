@@ -1,6 +1,6 @@
 [package]
 name = "telepathy"
-version = "2.4.8"
+version = "2.4.11"
 edition = "2024"
 build = "build.rs"
 
@@ -10,7 +10,6 @@ build = "build.rs"
 crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
-messages = { path = "../messages" }
 sea-codec = { path = "../sea_codec" }
 tokio-util = { version = "0.7", features = ["codec", "compat"] }
 cpal = { version = "0.16", features = ["wasm-bindgen"] }
