@@ -22,7 +22,7 @@ class InterfaceSettingsState extends State<InterfaceSettings> {
   void initState() {
     super.initState();
     _primaryColorInput.text =
-    "#${widget.controller.primaryColor.toRadixString(16)}";
+        "#${widget.controller.primaryColor.toRadixString(16)}";
   }
 
   @override
@@ -46,7 +46,7 @@ class InterfaceSettingsState extends State<InterfaceSettings> {
                     controller: _primaryColorInput,
                     onChanged: (String value) {
                       int? color =
-                      int.tryParse(value.replaceAll('#', ''), radix: 16);
+                          int.tryParse(value.replaceAll('#', ''), radix: 16);
 
                       if (color == null) {
                         _primaryColorError = 'Invalid hex color';
@@ -58,7 +58,7 @@ class InterfaceSettingsState extends State<InterfaceSettings> {
                     error: _primaryColorError == null
                         ? null
                         : Text(_primaryColorError!,
-                        style: const TextStyle(color: Colors.red)),
+                            style: const TextStyle(color: Colors.red)),
                   )),
               Button(
                 text: 'Revert primary color to default',

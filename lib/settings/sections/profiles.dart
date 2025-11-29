@@ -13,9 +13,9 @@ class ProfileSettings extends StatefulWidget {
 
   const ProfileSettings(
       {super.key,
-        required this.controller,
-        required this.telepathy,
-        required this.stateController});
+      required this.controller,
+      required this.telepathy,
+      required this.stateController});
 
   @override
   ProfileSettingsState createState() => ProfileSettingsState();
@@ -53,15 +53,15 @@ class ProfileSettingsState extends State<ProfileSettings> {
                     itemCount: widget.controller.profiles.length,
                     itemBuilder: (BuildContext context, int index) {
                       Profile profile =
-                      widget.controller.profiles.values.elementAt(index);
+                          widget.controller.profiles.values.elementAt(index);
 
                       return Container(
                         decoration: BoxDecoration(
                           color: colorPicker(index),
                           borderRadius: index == 0
                               ? const BorderRadius.only(
-                              topLeft: Radius.circular(5),
-                              topRight: Radius.circular(5))
+                                  topLeft: Radius.circular(5),
+                                  topRight: Radius.circular(5))
                               : null,
                         ),
                         padding: const EdgeInsets.only(
@@ -78,15 +78,15 @@ class ProfileSettingsState extends State<ProfileSettings> {
                                 builder: (BuildContext context, Widget? child) {
                                   return Button(
                                     text: (widget.controller.activeProfile ==
-                                        profile.id)
+                                            profile.id)
                                         ? 'Active'
                                         : 'Set Active',
                                     width: 65,
                                     height: 25,
                                     disabled:
-                                    widget.stateController.isCallActive ||
-                                        widget.controller.activeProfile ==
-                                            profile.id,
+                                        widget.stateController.isCallActive ||
+                                            widget.controller.activeProfile ==
+                                                profile.id,
                                     onPressed: () {
                                       widget.controller
                                           .setActiveProfile(profile.id);
@@ -96,12 +96,12 @@ class ProfileSettingsState extends State<ProfileSettings> {
                                     },
                                     noSplash: true,
                                     disabledColor: widget
-                                        .controller.activeProfile ==
-                                        profile.id &&
-                                        widget.stateController.isCallActive
+                                                    .controller.activeProfile ==
+                                                profile.id &&
+                                            widget.stateController.isCallActive
                                         ? Theme.of(context)
-                                        .colorScheme
-                                        .tertiaryContainer
+                                            .colorScheme
+                                            .tertiaryContainer
                                         : null,
                                   );
                                 }),

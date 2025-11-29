@@ -12,9 +12,9 @@ class OverlaySettings extends StatefulWidget {
 
   const OverlaySettings(
       {super.key,
-        required this.overlay,
-        required this.controller,
-        required this.stateController});
+      required this.overlay,
+      required this.controller,
+      required this.stateController});
 
   @override
   OverlaySettingsState createState() => OverlaySettingsState();
@@ -182,10 +182,10 @@ class OverlayPositionWidget extends StatefulWidget {
 
   const OverlayPositionWidget(
       {super.key,
-        required this.overlay,
-        required this.realMaxX,
-        required this.realMaxY,
-        required this.controller});
+      required this.overlay,
+      required this.realMaxX,
+      required this.realMaxY,
+      required this.controller});
 
   @override
   OverlayPositionWidgetState createState() => OverlayPositionWidgetState();

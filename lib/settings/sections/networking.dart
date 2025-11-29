@@ -13,10 +13,10 @@ class NetworkSettings extends StatefulWidget {
 
   const NetworkSettings(
       {super.key,
-        required this.controller,
-        required this.telepathy,
-        required this.stateController,
-        required this.constraints});
+      required this.controller,
+      required this.telepathy,
+      required this.stateController,
+      required this.constraints});
 
   @override
   NetworkSettingsState createState() => NetworkSettingsState();
@@ -77,7 +77,7 @@ class NetworkSettingsState extends State<NetworkSettings> {
                     error: _relayAddressError == null
                         ? null
                         : Text(_relayAddressError!,
-                        style: const TextStyle(color: Colors.red)),
+                            style: const TextStyle(color: Colors.red)),
                   )),
               SizedBox(
                   width: width,
@@ -94,7 +94,7 @@ class NetworkSettingsState extends State<NetworkSettings> {
                     error: _relayPeerIdError == null
                         ? null
                         : Text(_relayPeerIdError!,
-                        style: const TextStyle(color: Colors.red)),
+                            style: const TextStyle(color: Colors.red)),
                   )),
             ],
           ),
