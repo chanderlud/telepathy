@@ -333,3 +333,101 @@ jobs:
         with:
           name: telepathy_${{ matrix.distro }}_${{ matrix.arch }}
           path: artifacts
+
+  publish_release:
+    name: Prepare & upload release assets
+    needs:
+      - build_flutter
+      - build_cross
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write  # needed to create / update the release
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          # each artifact ends up in artifacts/<artifact-name>/
+
+      - name: Compute version from tag
+        id: version
+        run: |
+          # Tag is something like "v2.4.8"
+          ref="${GITHUB_REF##*/}"
+          ver="${ref#v}"
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare dist directory
+        run: mkdir -p dist
+
+      - name: Rename and package files
+        run: |
+          set -eux
+          VER=${{ steps.version.outputs.version }}
+
+          ls -R artifacts
+
+          #
+          # ANDROID
+          #
+          mv "artifacts/telepathy_windows-2022_apk/telepathy.apk" \
+             "dist/telepathy-${VER}-android.apk"
+
+          #
+          # WINDOWS (installer + portable zip)
+          #
+          mv "artifacts/telepathy_windows-2022_windows/telepathy-windows-x64.exe" \
+             "dist/telepathy-${VER}-windows-installer-x86_64.exe"
+
+          # zip the Windows bundle directory
+          cd artifacts/telepathy_windows-2022_windows
+          zip -r "../../dist/telepathy-${VER}-windows-standalone-x86_64.zip" telepathy
+          cd ../../
+
+          #
+          # LINUX x86_64 (built on ubuntu-24.04 -> noble)
+          #
+          mv "artifacts/telepathy_ubuntu-24.04_linux/telepathy.deb" \
+             "dist/telepathy-${VER}-noble-x86_64.deb"
+
+          mv "artifacts/telepathy_ubuntu-24.04_linux/telepathy.rpm" \
+             "dist/telepathy-${VER}-noble-x86_64.rpm"
+
+          cd artifacts/telepathy_ubuntu-24.04_linux
+          zip -r "../../dist/telepathy-${VER}-noble-x86_64.zip" telepathy
+          cd ../../
+
+          #
+          # LINUX aarch64 (take the 'ubuntu_latest_aarch64' artifact as release)
+          #
+          mv "artifacts/telepathy_ubuntu_latest_aarch64/telepathy.deb" \
+             "dist/telepathy-${VER}-noble-aarch64.deb"
+
+          mv "artifacts/telepathy_ubuntu_latest_aarch64/telepathy.rpm" \
+             "dist/telepathy-${VER}-noble-aarch64.rpm"
+
+          cd artifacts/telepathy_ubuntu_latest_aarch64
+          zip -r "../../dist/telepathy-${VER}-noble-aarch64.zip" telepathy
+          cd ../../
+
+          #
+          # WEB bundle
+          #
+          cd artifacts/telepathy_ubuntu-24.04_web
+          zip -r "../../dist/telepathy-${VER}-web.zip" telepathy
+          cd ../../
+
+          echo "Final files:"
+          ls -lh dist
+
+      - name: Upload assets to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
