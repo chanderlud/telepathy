@@ -22,9 +22,8 @@ class SettingsHeader extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.only(left: 5, top: 5, bottom: 5),
         decoration: BoxDecoration(
-          color: showMenu
-              ? null
-              : Theme.of(context).colorScheme.tertiaryContainer,
+          color:
+              showMenu ? null : Theme.of(context).colorScheme.tertiaryContainer,
           borderRadius: const BorderRadius.only(
             bottomLeft: Radius.circular(8),
             bottomRight: Radius.circular(8),

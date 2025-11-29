@@ -13,8 +13,9 @@ class LogsSettings extends StatefulWidget {
 class _LogsSettingsState extends State<LogsSettings> {
   @override
   Widget build(BuildContext context) {
-    final filter =
-    widget.searchController.text.isEmpty ? null : widget.searchController.text;
+    final filter = widget.searchController.text.isEmpty
+        ? null
+        : widget.searchController.text;
     final logs = console.getLogs(filter);
 
     return Column(

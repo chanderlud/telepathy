@@ -41,11 +41,11 @@ class SettingsMenu extends StatelessWidget {
   }
 
   Widget _buildItem(
-      BuildContext context,
-      int index,
-      SettingsSection section,
-      String text,
-      ) {
+    BuildContext context,
+    int index,
+    SettingsSection section,
+    String text,
+  ) {
     return SettingsMenuItem(
       text: text,
       selected: selected == section,
@@ -105,4 +105,3 @@ class SettingsMenuItem extends StatelessWidget {
     );
   }
 }
-
