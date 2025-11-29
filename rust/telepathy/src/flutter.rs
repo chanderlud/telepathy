@@ -24,6 +24,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32};
 use std::sync::{Arc, Once};
 #[cfg(not(target_family = "wasm"))]
 use tokio::net::lookup_host;
+#[cfg(not(target_family = "wasm"))]
 use tokio::process::Command;
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 use tokio::spawn;
@@ -684,6 +685,10 @@ pub fn validate_peer_id(peer_id: String) -> bool {
 }
 
 pub async fn screenshare_available() -> bool {
+    #[cfg(target_family = "wasm")]
+    return false;
+
+    #[cfg(not(target_family = "wasm"))]
     if let Ok(status) = Command::new("ffmpeg").status().await {
         status.success()
     } else {
