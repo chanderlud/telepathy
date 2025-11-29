@@ -64,6 +64,7 @@ pub(crate) enum ErrorKind {
     InvalidEncoder,
     RoomStateMissing,
     StreamsEnded,
+    NoEncoderAvailable,
 }
 
 impl From<std::io::Error> for Error {
@@ -340,6 +341,7 @@ impl Display for Error {
                 ErrorKind::InvalidEncoder => "Invalid encoder".to_string(),
                 ErrorKind::RoomStateMissing => "Room state missing".to_string(),
                 ErrorKind::StreamsEnded => "Streams ended".to_string(),
+                ErrorKind::NoEncoderAvailable => "No encoder available".to_string(),
             }
         )
     }

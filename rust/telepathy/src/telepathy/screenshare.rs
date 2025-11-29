@@ -467,7 +467,10 @@ pub(crate) async fn playback(
 
     // TODO intelligently chose a decoder instead of using the first one
     let config = PlaybackConfig {
-        decoder: decoders.into_iter().next().unwrap(),
+        decoder: decoders
+            .into_iter()
+            .next()
+            .ok_or(ErrorKind::NoEncoderAvailable)?,
     };
 
     let mut command = config.make_command();

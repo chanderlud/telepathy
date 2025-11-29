@@ -3,15 +3,15 @@ import 'package:telepathy/settings/view.dart';
 
 class SettingsMenu extends StatelessWidget {
   final SettingsSection selected;
-  final int? hoveredIndex;
+  final SettingsSection? hovered;
   final void Function(SettingsSection) onSectionSelected;
-  final void Function(int, bool) onHoverChanged;
+  final void Function(SettingsSection, bool) onHoverChanged;
   final bool showOverlayItem;
 
   const SettingsMenu({
     super.key,
     required this.selected,
-    required this.hoveredIndex,
+    required this.hovered,
     required this.onSectionSelected,
     required this.onHoverChanged,
     required this.showOverlayItem,
@@ -23,18 +23,18 @@ class SettingsMenu extends StatelessWidget {
       mainAxisAlignment: MainAxisAlignment.start,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _buildItem(context, 0, SettingsSection.audioVideo, 'Audio & Video'),
+        _buildItem(context, SettingsSection.audioVideo, 'Audio & Video'),
         const SizedBox(height: 12),
-        _buildItem(context, 1, SettingsSection.profiles, 'Profiles'),
+        _buildItem(context, SettingsSection.profiles, 'Profiles'),
         const SizedBox(height: 12),
-        _buildItem(context, 2, SettingsSection.networking, 'Networking'),
+        _buildItem(context, SettingsSection.networking, 'Networking'),
         const SizedBox(height: 12),
-        _buildItem(context, 3, SettingsSection.interface, 'Interface'),
+        _buildItem(context, SettingsSection.interface, 'Interface'),
         const SizedBox(height: 12),
-        _buildItem(context, 4, SettingsSection.logs, 'View Log'),
+        _buildItem(context, SettingsSection.logs, 'View Log'),
         if (showOverlayItem) ...[
           const SizedBox(height: 12),
-          _buildItem(context, 5, SettingsSection.overlay, 'Overlay'),
+          _buildItem(context, SettingsSection.overlay, 'Overlay'),
         ],
       ],
     );
@@ -42,17 +42,16 @@ class SettingsMenu extends StatelessWidget {
 
   Widget _buildItem(
     BuildContext context,
-    int index,
     SettingsSection section,
     String text,
   ) {
     return SettingsMenuItem(
       text: text,
       selected: selected == section,
-      hovered: hoveredIndex == index,
+      hovered: hovered == section,
       onTap: () => onSectionSelected(section),
-      onEnter: () => onHoverChanged(index, true),
-      onExit: () => onHoverChanged(index, false),
+      onEnter: () => onHoverChanged(section, true),
+      onExit: () => onHoverChanged(section, false),
     );
   }
 }

@@ -41,7 +41,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.11.1";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1030898428;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1369624003;
 
 // Section: executor
 
@@ -4504,6 +4504,42 @@ fn wire__crate__flutter__rust_set_up_impl(
         },
     )
 }
+fn wire__crate__flutter__screenshare_available_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "screenshare_available",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            move |context| async move {
+                transform_result_sse::<_, ()>(
+                    (move || async move {
+                        let output_ok =
+                            Result::<_, ()>::Ok(crate::flutter::screenshare_available().await)?;
+                        Ok(output_ok)
+                    })()
+                    .await,
+                )
+            }
+        },
+    )
+}
 fn wire__crate__flutter__send_to_dart_logger_set_stream_sink_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -5694,13 +5730,14 @@ fn pde_ffi_dispatcher_primary_impl(
             wire__crate__telepathy__Telepathy_stop_session_impl(port, ptr, rust_vec_len, data_len)
         }
         85 => wire__crate__audio__player__load_ringtone_impl(port, ptr, rust_vec_len, data_len),
-        88 => wire__crate__flutter__send_to_dart_logger_set_stream_sink_impl(
+        88 => wire__crate__flutter__screenshare_available_impl(port, ptr, rust_vec_len, data_len),
+        89 => wire__crate__flutter__send_to_dart_logger_set_stream_sink_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        89 => wire__crate__flutter__statistics_default_impl(port, ptr, rust_vec_len, data_len),
+        90 => wire__crate__flutter__statistics_default_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -5788,7 +5825,7 @@ fn pde_ffi_dispatcher_sync_impl(
         84 => wire__crate__flutter__generate_keys_impl(ptr, rust_vec_len, data_len),
         86 => wire__crate__flutter__room_hash_impl(ptr, rust_vec_len, data_len),
         87 => wire__crate__flutter__rust_set_up_impl(ptr, rust_vec_len, data_len),
-        90 => wire__crate__flutter__validate_peer_id_impl(ptr, rust_vec_len, data_len),
+        91 => wire__crate__flutter__validate_peer_id_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }

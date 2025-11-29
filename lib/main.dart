@@ -23,9 +23,8 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:process_run/process_run.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:super_clipboard/super_clipboard.dart';
-
-import 'audio_level.dart';
-import 'console.dart';
+import 'package:telepathy/audio_level.dart';
+import 'package:telepathy/console.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 SoundHandle? outgoingSoundHandle;
@@ -36,10 +35,9 @@ Future<void> main(List<String> args) async {
   try {
     await RustLib.init();
   } catch (e, st) {
-    // print / log both error and stack
     debugPrint('RustLib.init failed: $e');
     debugPrint('$st');
-    rethrow; // or handle it
+    rethrow;
   }
 
   // get logs from rust
@@ -48,19 +46,19 @@ Future<void> main(List<String> args) async {
     DebugConsole.log(message);
   });
 
-  if (!kIsWeb) {
+  if (kIsWeb) {
+    PermissionStatus status = await Permission.microphone.request();
+
+    if (!status.isGranted) {
+      DebugConsole.error('Microphone permission not accepted');
+    }
+  } else {
     if (Platform.isAndroid || Platform.isIOS) {
       PermissionStatus status = await Permission.microphone.request();
 
       if (!status.isGranted) {
         DebugConsole.error('Microphone permission not accepted');
       }
-    }
-  } else {
-    PermissionStatus status = await Permission.microphone.request();
-
-    if (!status.isGranted) {
-      DebugConsole.error('Microphone permission not accepted');
     }
   }
 
@@ -248,7 +246,7 @@ Future<void> main(List<String> args) async {
   telepathy.setEfficiencyMode(enabled: settingsController.efficiencyMode);
 
   if (settingsController.denoiseModel != null) {
-    updateDenoiseModel(settingsController.denoiseModel!, telepathy);
+    updateDenoiseModel(settingsController.denoiseModel, telepathy);
   }
 
   final InterfaceController interfaceController =
@@ -1637,8 +1635,28 @@ class CallControls extends StatelessWidget {
                       listenable: stateController,
                       builder: (BuildContext context, Widget? child) =>
                           IconButton(
-                              onPressed: () {
+                              onPressed: () async {
                                 if (stateController.activeContact == null) {
+                                  return;
+                                }
+
+                                if (!(await screenshareAvailable())) {
+                                  if (context.mounted) {
+                                    showErrorDialog(
+                                        context,
+                                        'Screenshare Unavailable',
+                                        'ffmpeg must be installed to use the screenshare feature');
+                                  }
+
+                                  return;
+                                } else if ((await settingsController.screenshareConfig.recordingConfig()) == null) {
+                                  if (context.mounted) {
+                                    showErrorDialog(
+                                        context,
+                                        'Invalid Configuration',
+                                        'An invalid screenshare configuration is active, visit settings to select new options.');
+                                  }
+
                                   return;
                                 }
 
@@ -3185,7 +3203,7 @@ String roundToTotalDigits(double number) {
   int fractionalDigits = 3 - integerDigits;
   if (fractionalDigits < 0) {
     fractionalDigits =
-        0; // ff the total digits is less than the integer part, we round to the integer part
+        0; // if the total digits is less than the integer part, we round to the integer part
   }
 
   // round to the required number of fractional digits

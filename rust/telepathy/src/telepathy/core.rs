@@ -237,7 +237,7 @@ impl Telepathy {
                     break;
                 }
                 // events are handled outside the select to help with spagetification
-                event = swarm.select_next_some() => event,
+                Some(event) = swarm.next() => event,
                 // start a new session
                 Some(peer_id) = start.recv() => {
                     if peer_id == self.identity.read().await.public().to_peer_id() {
@@ -298,7 +298,7 @@ impl Telepathy {
                                 }
                             }
                         } else {
-                            // TODO this should be blocked from occurring via the frontend i think
+                            // the frontend blocks this case
                             warn!("screenshare started without recording configuration");
                         }
                     } else {
@@ -307,7 +307,10 @@ impl Telepathy {
 
                     continue;
                 }
-                else => unreachable!()
+                else => {
+                    warn!("session manager hit else");
+                    break;
+                },
             };
 
             match event {

@@ -28,6 +28,9 @@ String roomHash({required List<String> peers}) =>
 bool validatePeerId({required String peerId}) =>
     RustLib.instance.api.crateFlutterValidatePeerId(peerId: peerId);
 
+Future<bool> screenshareAvailable() =>
+    RustLib.instance.api.crateFlutterScreenshareAvailable();
+
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Capabilities>>
 abstract class Capabilities implements RustOpaqueInterface {
   static Future<Capabilities> default_() =>
