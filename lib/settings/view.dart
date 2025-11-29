@@ -17,6 +17,18 @@ import 'package:telepathy/src/rust/telepathy.dart';
 import 'package:telepathy/src/rust/flutter.dart';
 import 'package:telepathy/src/rust/error.dart';
 import 'package:telepathy/src/rust/overlay/overlay.dart';
+import 'package:telepathy/settings/logs.dart';
+
+import 'menu.dart';
+
+enum SettingsSection {
+  audioVideo,
+  profiles,
+  networking,
+  interface,
+  logs,
+  overlay,
+}
 
 class SettingsPage extends StatefulWidget {
   final SettingsController controller;
@@ -47,8 +59,7 @@ class SettingsPage extends StatefulWidget {
 
 class SettingsPageState extends State<SettingsPage>
     with SingleTickerProviderStateMixin {
-  /// 0 = audio, 1 = profiles, 2 = networking, 3 = interface, 4 = logs, 5 = overlay
-  int route = 0;
+  SettingsSection _section = SettingsSection.audioVideo;
   int? hovered;
   bool? showMenu;
 
@@ -92,9 +103,9 @@ class SettingsPageState extends State<SettingsPage>
     BoxConstraints constraints = widget.constraints;
     double width;
 
-    if (route == 5) {
+    if (_section == SettingsSection.overlay) {
       width = 1000;
-    } else if (route == 4) {
+    } else if (_section == SettingsSection.logs) {
       width = 2000;
     } else {
       width = 650;
@@ -127,17 +138,17 @@ class SettingsPageState extends State<SettingsPage>
                               left: 20,
                               right: 20,
                               top: constraints.maxWidth < 600
-                                  ? route == 0
+                                  ? _section == SettingsSection.audioVideo
                                       ? 55
                                       : 70
-                                  : route == 0
+                                  : _section == SettingsSection.audioVideo
                                       ? 10
                                       : 30),
                           child: SizedBox(
                             width: width,
                             child: LayoutBuilder(builder: (BuildContext context,
                                 BoxConstraints constraints) {
-                              if (route == 0) {
+                              if (_section == SettingsSection.audioVideo) {
                                 return AVSettings(
                                   controller: widget.controller,
                                   telepathy: widget.telepathy,
@@ -148,51 +159,25 @@ class SettingsPageState extends State<SettingsPage>
                                   constraints: constraints,
                                   audioDevices: widget.audioDevices,
                                 );
-                              } else if (route == 1) {
+                              } else if (_section == SettingsSection.profiles) {
                                 return ProfileSettings(
                                     controller: widget.controller,
                                     telepathy: widget.telepathy,
                                     stateController: widget.stateController);
-                              } else if (route == 2) {
+                              } else if (_section == SettingsSection.networking) {
                                 return NetworkSettings(
                                     key: _key,
                                     controller: widget.controller,
                                     telepathy: widget.telepathy,
                                     stateController: widget.stateController,
                                     constraints: constraints);
-                              } else if (route == 3) {
+                              } else if (_section == SettingsSection.interface) {
                                 return InterfaceSettings(
                                     controller: widget.interfaceController,
                                     constraints: constraints);
-                              } else if (route == 4) {
-                                String? filter = _searchController.text.isEmpty
-                                    ? null
-                                    : _searchController.text;
-                                List<Log> logs = console.getLogs(filter);
-
-                                return Column(
-                                  children: [
-                                    TextField(
-                                      controller: _searchController,
-                                      decoration: const InputDecoration(
-                                        labelText: 'Search',
-                                      ),
-                                      onChanged: (String value) {
-                                        setState(() {});
-                                      },
-                                    ),
-                                    const SizedBox(height: 20),
-                                    ListView.builder(
-                                        itemCount: logs.length,
-                                        shrinkWrap: true,
-                                        itemBuilder: (context, index) {
-                                          Log log = logs[index];
-                                          return SelectableText(
-                                              '${log.time} - ${log.type}: ${log.message}');
-                                        }),
-                                  ],
-                                );
-                              } else if (route == 5) {
+                              } else if (_section == SettingsSection.logs) {
+                                return LogsSettings(searchController: _searchController);
+                              } else if (_section == SettingsSection.overlay) {
                                 return OverlaySettings(
                                     overlay: widget.overlay,
                                     controller: widget.controller,
@@ -220,24 +205,12 @@ class SettingsPageState extends State<SettingsPage>
                     ),
                   ),
                   padding: const EdgeInsets.only(top: 60),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.start,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _buildMenuItem(0, 'Audio & Video'),
-                      const SizedBox(height: 12),
-                      _buildMenuItem(1, 'Profiles'),
-                      const SizedBox(height: 12),
-                      _buildMenuItem(2, 'Networking'),
-                      const SizedBox(height: 12),
-                      _buildMenuItem(3, 'Interface'),
-                      const SizedBox(height: 12),
-                      _buildMenuItem(4, 'View Log'),
-                      if (!kIsWeb && Platform.isWindows)
-                        const SizedBox(height: 12),
-                      if (!kIsWeb && Platform.isWindows)
-                        _buildMenuItem(5, 'Overlay'),
-                    ],
+                  child: SettingsMenu(
+                    selected: _section,
+                    hoveredIndex: hovered,
+                    onSectionSelected: (section) => tapHandler(section),
+                    onHoverChanged: (idx, isHovered) => hoverHandler(idx, isHovered),
+                    showOverlayItem: !kIsWeb && Platform.isWindows,
                   ),
                 ),
               ),
@@ -264,7 +237,7 @@ class SettingsPageState extends State<SettingsPage>
                           width: 30,
                         ),
                         onPressed: () async {
-                          if (route == 2 &&
+                          if (_section == SettingsSection.networking &&
                               (_key.currentState?.unsavedChanges ?? false)) {
                             bool leave = await unsavedConfirmation(context);
 
@@ -308,31 +281,8 @@ class SettingsPageState extends State<SettingsPage>
         ));
   }
 
-  Widget _buildMenuItem(int target, String text) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20),
-      child: InkWell(
-        onTap: () {
-          tapHandler(target);
-        },
-        onHover: (bool hover) {
-          hoverHandler(target, hover);
-        },
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 5, horizontal: 10),
-          width: 175,
-          decoration: BoxDecoration(
-            color: getColor(target),
-            borderRadius: BorderRadius.circular(5),
-          ),
-          child: Text(text, style: const TextStyle(fontSize: 18)),
-        ),
-      ),
-    );
-  }
-
-  Future<void> tapHandler(int target) async {
-    if (route == 2 && (_key.currentState?.unsavedChanges ?? false)) {
+  Future<void> tapHandler(SettingsSection target) async {
+    if (_section == SettingsSection.networking && (_key.currentState?.unsavedChanges ?? false)) {
       bool leave = await unsavedConfirmation(context);
 
       if (!leave) {
@@ -341,7 +291,7 @@ class SettingsPageState extends State<SettingsPage>
     }
 
     setState(() {
-      route = target;
+      _section = target;
     });
   }
 
@@ -355,10 +305,10 @@ class SettingsPageState extends State<SettingsPage>
     });
   }
 
-  Color getColor(int target) {
+  Color getColor(SettingsSection target) {
     if (target == hovered) {
       return Theme.of(context).colorScheme.secondary;
-    } else if (target == route) {
+    } else if (target == _section) {
       return Theme.of(context).colorScheme.primary;
     } else {
       return Theme.of(context).colorScheme.surfaceDim;
