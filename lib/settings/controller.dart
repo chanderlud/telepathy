@@ -314,6 +314,25 @@ class SettingsController with ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> updateCodecEnabled(bool enabled) async {
+    codecConfig.setEnabled(enabled: enabled);
+    await saveCodecConfig();
+    notifyListeners();
+  }
+
+  Future<void> updateCodecVbr(bool vbr) async {
+    codecConfig.setVbr(vbr: vbr);
+    await saveCodecConfig();
+    notifyListeners();
+  }
+
+  Future<void> updateCodecResidualBits(double residualBits) async {
+    final num clamped = residualBits.clamp(1.0, 8.0);
+    codecConfig.setResidualBits(residualBits: clamped.toDouble());
+    await saveCodecConfig();
+    notifyListeners();
+  }
+
   Future<String> createProfile(String nickname) async {
     String peerId;
     Uint8List keypair;

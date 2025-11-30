@@ -364,6 +364,67 @@ class _AVSettingsState extends State<AVSettings> {
                 }),
           ],
         ),
+        ListenableBuilder(
+          listenable: widget.controller,
+          builder: (BuildContext context, Widget? child) {
+            final values = widget.controller.codecConfig.toValues();
+            final bool codecEnabled = values.$1;
+            final bool codecVbr = values.$2;
+            final double residualBits = values.$3.clamp(1.0, 8.0).toDouble();
+
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const SizedBox(height: 12),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text('Enable Codec', style: TextStyle(fontSize: 18)),
+                    CustomSwitch(
+                      value: codecEnabled,
+                      onChanged: (enabled) {
+                        widget.controller.updateCodecEnabled(enabled);
+                      },
+                    ),
+                  ],
+                ),
+                if (codecEnabled) ...[
+                  const SizedBox(height: 12),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        'Variable Bitrate (VBR)',
+                        style: TextStyle(fontSize: 18),
+                      ),
+                      CustomSwitch(
+                        value: codecVbr,
+                        onChanged: (vbr) {
+                          widget.controller.updateCodecVbr(vbr);
+                        },
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  const Text(
+                    'Residual Bits',
+                    style: TextStyle(fontSize: 18),
+                  ),
+                  Slider(
+                    min: 1.0,
+                    max: 8.0,
+                    value: residualBits,
+                    label: residualBits.toStringAsFixed(1),
+                    onChanged: (value) {
+                      widget.controller.updateCodecResidualBits(value);
+                    },
+                  ),
+                ],
+              ],
+            );
+          },
+        ),
+        const SizedBox(height: 20),
         const Divider(),
         const Text(
           'Screenshare Options',
