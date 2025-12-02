@@ -690,7 +690,8 @@ pub async fn screenshare_available() -> bool {
 
     #[cfg(not(target_family = "wasm"))]
     if let Ok(status) = Command::new("ffmpeg").status().await {
-        status.success()
+        // ffmpeg with no arguments returns status 1
+        status.code() == Some(1)
     } else {
         false
     }
@@ -746,5 +747,17 @@ mod rwlock_option_recording_config {
     {
         let inner = Option::<RecordingConfig>::deserialize(deserializer)?;
         Ok(Arc::new(RwLock::new(inner)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[ignore]
+    #[tokio::test]
+    async fn screenshare_available_returns_true() {
+        let ffmpeg_available = screenshare_available().await;
+        assert!(ffmpeg_available);
     }
 }
