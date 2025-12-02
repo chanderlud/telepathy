@@ -1649,7 +1649,10 @@ class CallControls extends StatelessWidget {
                                   }
 
                                   return;
-                                } else if ((await settingsController.screenshareConfig.recordingConfig()) == null) {
+                                } else if ((await settingsController
+                                        .screenshareConfig
+                                        .recordingConfig()) ==
+                                    null) {
                                   if (context.mounted) {
                                     showErrorDialog(
                                         context,
