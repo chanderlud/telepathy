@@ -1,6 +1,6 @@
 /// implementations for core telepathy functionality
 /// flutter_rust_bridge:ignore
-mod core;
+pub mod core;
 /// helper methods used by telepathy core
 /// flutter_rust_bridge:ignore
 mod helpers;
@@ -18,10 +18,11 @@ pub(crate) mod utils;
 #[cfg(target_family = "wasm")]
 use crate::audio::web_audio::WebAudioWrapper;
 use crate::error::{DartError, Error};
-use crate::flutter::callbacks::{Callbacks, StatisticsCallback};
+use crate::flutter::callbacks::{FrbCallbacks, FrbStatisticsCallback};
 use crate::flutter::*;
 use crate::overlay::overlay::Overlay;
 use crate::overlay::{CONNECTED, LATENCY, LOSS};
+use crate::telepathy::core::TelepathyCore;
 use atomic_float::AtomicF32;
 use chrono::Local;
 #[cfg(not(target_family = "wasm"))]
@@ -63,7 +64,6 @@ use tokio_util::sync::CancellationToken;
 use utils::*;
 #[cfg(target_family = "wasm")]
 use wasmtimer::tokio::interval;
-use crate::telepathy::core::TelepathyCore;
 
 type Result<T> = std::result::Result<T, Error>;
 pub(crate) type DeviceName = Arc<Mutex<Option<String>>>;
@@ -79,10 +79,10 @@ pub(crate) const CHANNEL_SIZE: usize = 2_400;
 /// the protocol identifier for Telepathy
 const CHAT_PROTOCOL: StreamProtocol = StreamProtocol::new("/telepathy/0.0.1");
 
-#[derive(Clone)]
+/// the public API for flutter
 #[frb(opaque)]
 pub struct Telepathy {
-    inner: Arc<TelepathyCore<TelepathyCallbacks, TelepathyStatisticsCallback>>,
+    inner: TelepathyCore<FlutterCallbacks, FlutterStatisticsCallback>,
 }
 
 impl Telepathy {
@@ -93,21 +93,19 @@ impl Telepathy {
         screenshare_config: &ScreenshareConfig,
         overlay: &Overlay,
         codec_config: &CodecConfig,
-        callbacks: TelepathyCallbacks,
+        callbacks: FlutterCallbacks,
     ) -> Telepathy {
         let chat = Self {
-            inner: Arc::new(
-                TelepathyCore::new(
-                    identity,
-                    host,
-                    network_config,
-                    screenshare_config,
-                    overlay,
-                    codec_config,
-                    callbacks,
-                )
-                .await,
-            ),
+            inner: TelepathyCore::new(
+                identity,
+                host,
+                network_config,
+                screenshare_config,
+                overlay,
+                codec_config,
+                callbacks,
+            )
+            .await,
         };
 
         // start the sessions
@@ -615,7 +613,7 @@ impl SessionState {
     }
 }
 
-struct RoomState {
+pub(crate) struct RoomState {
     peers: Vec<PeerId>,
 
     sender: MSender<RoomMessage>,
@@ -712,7 +710,7 @@ async fn loopback(
 }
 
 /// Collects statistics from throughout the application, processes them, and provides them to the frontend
-async fn statistics_collector<C: StatisticsCallback>(
+async fn statistics_collector<C: FrbStatisticsCallback>(
     state: StatisticsCollectorState,
     callback: C,
     cancel: CancellationToken,

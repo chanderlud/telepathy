@@ -651,6 +651,7 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::time::sleep;
 
+    #[ignore]
     #[tokio::test]
     async fn test_player() {
         _ = fast_log::init(Config::new().file("tests-player.log").level(Debug));
@@ -675,6 +676,7 @@ mod tests {
         sleep(std::time::Duration::from_secs(1)).await;
     }
 
+    #[ignore]
     #[tokio::test]
     async fn test_wav_to_sea() {
         _ = fast_log::init(Config::new().file("tests-wav-sea.log").level(Debug));

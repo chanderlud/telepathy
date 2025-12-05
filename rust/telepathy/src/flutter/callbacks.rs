@@ -1,14 +1,18 @@
 use crate::flutter::{
-    CallState, ChatMessage, Contact, DartNotify, SessionStatus, Statistics, TelepathyCallbacks,
-    TelepathyStatisticsCallback, invoke, notify,
+    CallState, ChatMessage, Contact, DartNotify, FlutterCallbacks, FlutterStatisticsCallback,
+    SessionStatus, Statistics, invoke, notify,
 };
+use async_trait::async_trait;
 use libp2p::PeerId;
+use mockall::automock;
 use std::sync::Arc;
 use tokio::spawn;
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 
-pub(crate) trait Callbacks<S: StatisticsCallback> {
+#[automock]
+#[async_trait]
+pub trait FrbCallbacks<S: FrbStatisticsCallback> {
     fn session_status(
         &self,
         status: SessionStatus,
@@ -41,11 +45,13 @@ pub(crate) trait Callbacks<S: StatisticsCallback> {
     fn statistics_callback(&self) -> S;
 }
 
-pub(crate) trait StatisticsCallback {
+#[automock]
+#[async_trait]
+pub trait FrbStatisticsCallback {
     fn post(&self, stats: Statistics) -> impl Future<Output = ()> + Send;
 }
 
-impl Callbacks<TelepathyStatisticsCallback> for TelepathyCallbacks {
+impl FrbCallbacks<FlutterStatisticsCallback> for FlutterCallbacks {
     fn session_status(
         &self,
         status: SessionStatus,
@@ -94,14 +100,14 @@ impl Callbacks<TelepathyStatisticsCallback> for TelepathyCallbacks {
         invoke(&self.message_received, chat_message)
     }
 
-    fn statistics_callback(&self) -> TelepathyStatisticsCallback {
-        TelepathyStatisticsCallback {
+    fn statistics_callback(&self) -> FlutterStatisticsCallback {
+        FlutterStatisticsCallback {
             inner: Arc::clone(&self.statistics),
         }
     }
 }
 
-impl StatisticsCallback for TelepathyStatisticsCallback {
+impl FrbStatisticsCallback for FlutterStatisticsCallback {
     fn post(&self, stats: Statistics) -> impl Future<Output = ()> + Send {
         invoke(&self.inner, stats)
     }

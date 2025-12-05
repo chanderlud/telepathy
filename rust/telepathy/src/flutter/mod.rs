@@ -1,5 +1,5 @@
 /// flutter_rust_bridge:ignore
-pub(crate) mod callbacks;
+pub mod callbacks;
 
 use crate::error::{DartError, Error, ErrorKind};
 use crate::frb_generated::StreamSink;
@@ -51,8 +51,7 @@ pub(crate) type ScreenshareStartedArgs = (DartNotify, bool);
 pub(crate) type ManagerActiveArgs = (bool, bool);
 
 #[frb(opaque)]
-#[derive(Clone)]
-pub struct TelepathyCallbacks {
+pub struct FlutterCallbacks {
     /// Prompts the user to accept a call
     accept_call: DartMethod<AcceptCallArgs, bool>,
 
@@ -82,7 +81,7 @@ pub struct TelepathyCallbacks {
     screenshare_started: DartVoid<ScreenshareStartedArgs>,
 }
 
-impl TelepathyCallbacks {
+impl FlutterCallbacks {
     #[frb(sync)]
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -110,8 +109,7 @@ impl TelepathyCallbacks {
     }
 }
 
-#[derive(Clone)]
-pub(crate) struct TelepathyStatisticsCallback {
+pub(crate) struct FlutterStatisticsCallback {
     inner: DartVoid<Statistics>,
 }
 

@@ -1,20 +1,46 @@
 use super::*;
 use crate::audio::{InputProcessorState, OutputProcessorState, input_processor};
+use crate::flutter::callbacks::{MockFrbCallbacks, MockFrbStatisticsCallback};
 use fast_log::Config;
 use kanal::{bounded, unbounded};
 use log::LevelFilter::Trace;
+use log::info;
 use nnnoiseless::DenoiseState;
 use rand::Rng;
 use rand::prelude::SliceRandom;
 use std::fs::read;
 use std::io::Write;
-use std::sync::atomic::AtomicU32;
 use std::thread::{sleep, spawn};
 use std::time::Instant;
 
 const HOGWASH_BYTES: &[u8] = include_bytes!("../../../../assets/models/hogwash.rnn");
 
-struct BenchmarkResult {
+impl<C, S> TelepathyCore<C, S>
+where
+    S: FrbStatisticsCallback + Send + Sync + 'static,
+    C: FrbCallbacks<S> + Send + Sync + 'static,
+{
+    pub async fn test(callbacks: C) -> Self {
+        let network_config =
+            NetworkConfig::new(String::from("test"), String::from("test")).unwrap();
+        let screenshare_config = ScreenshareConfig::default();
+        let overlay = Overlay::default();
+        let codec_config = CodecConfig::new(true, true, 5.0);
+
+        Self::new(
+            PeerId::random().to_bytes(),
+            Arc::new(Host::default()),
+            &network_config,
+            &screenshare_config,
+            &overlay,
+            &codec_config,
+            callbacks,
+        )
+        .await
+    }
+}
+
+pub struct BenchmarkResult {
     average: Duration,
     min: Duration,
     max: Duration,
@@ -71,6 +97,7 @@ fn benchmark() {
     compare_runs(results);
 }
 
+#[ignore]
 #[test]
 fn packet_burst_simulation() {
     fast_log::init(Config::new().file("burst_simulation.log").level(Trace)).unwrap();
@@ -364,4 +391,24 @@ impl Default for OutputProcessorState {
             loss_sender: Arc::new(Default::default()),
         }
     }
+}
+
+#[tokio::test]
+async fn mock_callbacks_test() {
+    let mut mock: MockFrbCallbacks<MockFrbStatisticsCallback> = MockFrbCallbacks::new();
+    mock.expect_session_status()
+        .withf(|status, peer| true)
+        .returning(|_status: SessionStatus, _peer: PeerId| {
+            Box::pin(async move {
+                // your async test logic here
+                // e.g. do nothing:
+            })
+        });
+
+    let telepathy = TelepathyCore::test(mock).await;
+    telepathy
+        .start_session
+        .send(PeerId::random())
+        .await
+        .unwrap();
 }

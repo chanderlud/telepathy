@@ -37,7 +37,7 @@ use tokio::sync::Notify;
 use tokio::time::interval;
 
 #[frb(opaque)]
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct Overlay {
     /// the HWND of the overlay window
     #[cfg(windows)]

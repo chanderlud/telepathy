@@ -208,7 +208,7 @@ Future<void> main(List<String> args) async {
     return settingsController.contacts.values.map((c) => c.pubClone()).toList();
   }
 
-  TelepathyCallbacks callbacks = TelepathyCallbacks(
+  FlutterCallbacks callbacks = FlutterCallbacks(
       acceptCall: acceptCall,
       getContact: getContact,
       callState: callState,

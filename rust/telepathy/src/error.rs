@@ -366,6 +366,7 @@ impl Error {
     }
 }
 
+#[derive(Debug)]
 pub struct DartError {
     pub message: String,
 }

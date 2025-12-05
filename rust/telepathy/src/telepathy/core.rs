@@ -1,9 +1,14 @@
 #[cfg(target_os = "ios")]
 use crate::audio::ios::{configure_audio_session, deactivate_audio_session};
 use crate::error::ErrorKind;
-use crate::flutter::callbacks::{Callbacks, StatisticsCallback};
-use crate::flutter::{CallState, ChatMessage, CodecConfig, Contact, DartNotify, NetworkConfig, ScreenshareConfig, SessionStatus};
+use crate::flutter::callbacks::{FrbCallbacks, FrbStatisticsCallback};
+use crate::flutter::{
+    CallState, ChatMessage, CodecConfig, Contact, DartNotify, NetworkConfig, ScreenshareConfig,
+    SessionStatus,
+};
 use crate::overlay::CONNECTED;
+use crate::overlay::overlay::Overlay;
+use crate::telepathy::Result;
 use crate::telepathy::messages::Message;
 #[cfg(not(target_family = "wasm"))]
 use crate::telepathy::screenshare;
@@ -12,13 +17,20 @@ use crate::telepathy::sockets::{
     audio_output,
 };
 use crate::telepathy::utils::{read_message, write_message};
-use crate::telepathy::{CHAT_PROTOCOL, ConnectionState, EarlyCallState, HELLO_TIMEOUT, KEEP_ALIVE, OptionalCallArgs, PeerState, RoomConnection, RoomMessage, SessionState, StartScreenshare, StatisticsCollectorState, loopback, statistics_collector, stream_to_audio_transport, DeviceName, RoomState};
-use crate::telepathy::Result;
+use crate::telepathy::{
+    CHAT_PROTOCOL, ConnectionState, DeviceName, EarlyCallState, HELLO_TIMEOUT, KEEP_ALIVE,
+    OptionalCallArgs, PeerState, RoomConnection, RoomMessage, RoomState, SessionState,
+    StartScreenshare, StatisticsCollectorState, loopback, statistics_collector,
+    stream_to_audio_transport,
+};
 use crate::{Behaviour, BehaviourEvent};
+use atomic_float::AtomicF32;
 use chrono::Local;
+use cpal::Host;
 use cpal::traits::StreamTrait;
 use flutter_rust_bridge::for_generated::futures::StreamExt;
 use flutter_rust_bridge::spawn;
+use libp2p::identity::Keypair;
 use libp2p::multiaddr::Protocol;
 use libp2p::swarm::SwarmEvent;
 #[cfg(not(target_family = "wasm"))]
@@ -29,6 +41,7 @@ use libp2p::{
 };
 use libp2p_stream::Control;
 use log::{debug, error, info, trace, warn};
+use nnnoiseless::RnnModel;
 use std::collections::HashMap;
 use std::marker::PhantomData;
 #[cfg(not(target_family = "wasm"))]
@@ -37,25 +50,19 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::{Duration, Instant};
-use atomic_float::AtomicF32;
-use cpal::Host;
-use libp2p::identity::Keypair;
-use nnnoiseless::RnnModel;
 use tokio::select;
-use tokio::sync::{Mutex, Notify, RwLock};
 use tokio::sync::mpsc::{Receiver as MReceiver, Sender as MSender, channel};
-use tokio::time::{Interval, interval, timeout, sleep};
+use tokio::sync::{Mutex, Notify, RwLock};
+use tokio::time::{Interval, interval, sleep, timeout};
 use tokio_util::codec::LengthDelimitedCodec;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
-use crate::overlay::overlay::Overlay;
 
-#[derive(Clone)]
 pub(crate) struct TelepathyCore<C, S>
 where
-    S: StatisticsCallback + Clone + Send + Sync + 'static,
-    C: Callbacks<S> + Clone + Send + Sync + 'static,
+    S: FrbStatisticsCallback + Send + Sync + 'static,
+    C: FrbCallbacks<S> + Send + Sync + 'static,
 {
     /// The audio host
     pub(crate) host: Arc<Host>,
@@ -135,15 +142,15 @@ where
     pub(crate) web_input: Arc<Mutex<Option<crate::audio::web_audio::WebAudioWrapper>>>,
 
     /// callback methods provided by the flutter frontend
-    pub(crate) callbacks: C,
+    pub(crate) callbacks: Arc<C>,
 
-    phantom: PhantomData<S>,
+    phantom: PhantomData<Arc<S>>,
 }
 
 impl<C, S> TelepathyCore<C, S>
 where
-    S: StatisticsCallback + Clone + Send + Sync + 'static,
-    C: Callbacks<S> + Clone + Send + Sync + 'static,
+    S: FrbStatisticsCallback + Send + Sync + 'static,
+    C: FrbCallbacks<S> + Send + Sync + 'static,
 {
     /// main entry point to Telepathy. must be async to use `spawn`
     pub(crate) async fn new(
@@ -188,7 +195,7 @@ where
             codec_config: codec_config.clone(),
             #[cfg(target_family = "wasm")]
             web_input: Default::default(),
-            callbacks,
+            callbacks: Arc::new(callbacks),
             phantom: Default::default(),
         };
 
@@ -1553,5 +1560,45 @@ where
         // clean up sessions blocked by room
         end_sessions.cancel();
         Ok(())
+    }
+}
+
+impl<C, S> Clone for TelepathyCore<C, S>
+where
+    S: FrbStatisticsCallback + Send + Sync + 'static,
+    C: FrbCallbacks<S> + Send + Sync + 'static,
+{
+    fn clone(&self) -> Self {
+        Self {
+            host: Arc::clone(&self.host),
+            rms_threshold: Arc::clone(&self.rms_threshold),
+            input_volume: Arc::clone(&self.input_volume),
+            output_volume: Arc::clone(&self.output_volume),
+            denoise: Arc::clone(&self.denoise),
+            denoise_model: Arc::clone(&self.denoise_model),
+            input_device: self.input_device.clone(),
+            output_device: self.output_device.clone(),
+            identity: Arc::clone(&self.identity),
+            in_call: Arc::clone(&self.in_call),
+            end_audio_test: Arc::clone(&self.end_audio_test),
+            room_state: Arc::clone(&self.room_state),
+            deafened: Arc::clone(&self.deafened),
+            muted: Arc::clone(&self.muted),
+            play_custom_ringtones: Arc::clone(&self.play_custom_ringtones),
+            send_custom_ringtone: Arc::clone(&self.send_custom_ringtone),
+            efficiency_mode: Arc::clone(&self.efficiency_mode),
+            session_states: Arc::clone(&self.session_states),
+            start_session: self.start_session.clone(),
+            start_screenshare: self.start_screenshare.clone(),
+            restart_manager: Arc::clone(&self.restart_manager),
+            network_config: self.network_config.clone(),
+            screenshare_config: self.screenshare_config.clone(),
+            overlay: self.overlay.clone(),
+            codec_config: self.codec_config.clone(),
+            #[cfg(target_family = "wasm")]
+            web_input: Arc::clone(&self.web_input),
+            callbacks: Arc::clone(&self.callbacks),
+            phantom: self.phantom,
+        }
     }
 }

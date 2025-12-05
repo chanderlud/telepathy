@@ -10,8 +10,8 @@ import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'flutter.freezed.dart';
 
 // These functions are ignored because they are not marked as `pub`: `atomic_u32_deserialize`, `atomic_u32_serialize`, `invoke`, `new`, `notify`
-// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `SEND_TO_DART_LOGGER_STREAM_SINK`, `TelepathyStatisticsCallback`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `deref`, `do_logs`, `fmt`, `fmt`, `fmt`, `initialize`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `FlutterStatisticsCallback`, `SEND_TO_DART_LOGGER_STREAM_SINK`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `deref`, `do_logs`, `fmt`, `fmt`, `fmt`, `initialize`
 
 Stream<String> createLogStream() =>
     RustLib.instance.api.crateFlutterCreateLogStream();
@@ -108,6 +108,33 @@ abstract class DartNotify implements RustOpaqueInterface {
   void notify();
 }
 
+// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<FlutterCallbacks>>
+abstract class FlutterCallbacks implements RustOpaqueInterface {
+  factory FlutterCallbacks(
+          {required FutureOr<bool> Function((String, Uint8List?, DartNotify))
+              acceptCall,
+          required FutureOr<Contact?> Function(Uint8List) getContact,
+          required FutureOr<void> Function(CallState) callState,
+          required FutureOr<void> Function((String, SessionStatus))
+              sessionStatus,
+          required FutureOr<List<Contact>> Function(void) getContacts,
+          required FutureOr<void> Function(Statistics) statistics,
+          required FutureOr<void> Function(ChatMessage) messageReceived,
+          required FutureOr<void> Function((bool, bool)) managerActive,
+          required FutureOr<void> Function((DartNotify, bool))
+              screenshareStarted}) =>
+      RustLib.instance.api.crateFlutterFlutterCallbacksNew(
+          acceptCall: acceptCall,
+          getContact: getContact,
+          callState: callState,
+          sessionStatus: sessionStatus,
+          getContacts: getContacts,
+          statistics: statistics,
+          messageReceived: messageReceived,
+          managerActive: managerActive,
+          screenshareStarted: screenshareStarted);
+}
+
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<NetworkConfig>>
 abstract class NetworkConfig implements RustOpaqueInterface {
   Future<String> getRelayAddress();
@@ -160,33 +187,6 @@ abstract class ScreenshareConfig implements RustOpaqueInterface {
       required int bitrate,
       required int framerate,
       int? height});
-}
-
-// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<TelepathyCallbacks>>
-abstract class TelepathyCallbacks implements RustOpaqueInterface {
-  factory TelepathyCallbacks(
-          {required FutureOr<bool> Function((String, Uint8List?, DartNotify))
-              acceptCall,
-          required FutureOr<Contact?> Function(Uint8List) getContact,
-          required FutureOr<void> Function(CallState) callState,
-          required FutureOr<void> Function((String, SessionStatus))
-              sessionStatus,
-          required FutureOr<List<Contact>> Function(void) getContacts,
-          required FutureOr<void> Function(Statistics) statistics,
-          required FutureOr<void> Function(ChatMessage) messageReceived,
-          required FutureOr<void> Function((bool, bool)) managerActive,
-          required FutureOr<void> Function((DartNotify, bool))
-              screenshareStarted}) =>
-      RustLib.instance.api.crateFlutterTelepathyCallbacksNew(
-          acceptCall: acceptCall,
-          getContact: getContact,
-          callState: callState,
-          sessionStatus: sessionStatus,
-          getContacts: getContacts,
-          statistics: statistics,
-          messageReceived: messageReceived,
-          managerActive: managerActive,
-          screenshareStarted: screenshareStarted);
 }
 
 @freezed
