@@ -35,7 +35,7 @@ use libp2p::identity::Keypair;
 use libp2p::swarm::ConnectionId;
 use libp2p::{PeerId, Stream, StreamProtocol};
 use libp2p_stream::Control;
-use log::{debug, error, info, warn};
+use log::{debug, error, warn};
 use messages::{Attachment, AudioHeader, Message};
 use nnnoiseless::{FRAME_SIZE, RnnModel};
 use sea_codec::ProcessorMessage;
@@ -224,7 +224,7 @@ impl Telepathy {
         });
 
         // start the sessions
-        notify(&chat.callbacks.start_sessions, chat.clone()).await;
+        chat.callbacks.start_sessions(&chat).await;
         chat
     }
 
@@ -353,7 +353,7 @@ impl Telepathy {
                 .into())
         } else {
             self.restart_manager.notify_one();
-            notify(&self.callbacks.start_sessions, self.clone()).await;
+            self.callbacks.start_sessions(self).await;
             Ok(())
         }
     }
@@ -797,9 +797,9 @@ async fn loopback(
 /// Collects statistics from throughout the application, processes them, and provides them to the frontend
 async fn statistics_collector(
     state: StatisticsCollectorState,
-    callback: DartVoid<Statistics>,
+    callback: StatisticsCallback,
     cancel: CancellationToken,
-) -> Result<()> {
+) {
     // the interval for statistics updates
     let mut update_interval = interval(Duration::from_millis(100));
     // the interval for the input_max and output_max to decrease
@@ -815,7 +815,7 @@ async fn statistics_collector(
                 let latency = state.latency.load(Relaxed);
                 let loss = state.loss.swap(0, Relaxed);
 
-                invoke(&callback, Statistics {
+                callback.post(Statistics {
                     input_level: level_from_window(state.input_rms.swap(0_f32, Relaxed), &mut input_max),
                     output_level: level_from_window(state.output_rms.swap(0_f32, Relaxed), &mut output_max),
                     latency,
@@ -838,15 +838,11 @@ async fn statistics_collector(
     }
 
     // zero out the statistics when the collector ends
-    let statistics = Statistics::default();
-    invoke(&callback, statistics).await;
-
+    callback.post(Statistics::default()).await;
     LATENCY.store(0, Relaxed);
     LOSS.store(0, Relaxed);
     CONNECTED.store(false, Relaxed);
-
-    info!("statistics collector returning");
-    Ok(())
+    debug!("statistics collector returning");
 }
 
 fn stream_to_audio_transport(stream: Stream) -> Transport<TransportStream> {

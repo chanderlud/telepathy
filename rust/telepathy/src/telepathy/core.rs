@@ -1,7 +1,7 @@
 #[cfg(target_os = "ios")]
 use crate::audio::ios::{configure_audio_session, deactivate_audio_session};
 use crate::error::ErrorKind;
-use crate::flutter::{CallState, ChatMessage, Contact, DartNotify, SessionStatus, invoke, notify};
+use crate::flutter::{CallState, ChatMessage, Contact, DartNotify, SessionStatus};
 use crate::overlay::CONNECTED;
 use crate::telepathy::Result;
 use crate::telepathy::messages::Message;
@@ -213,7 +213,7 @@ impl Telepathy {
         swarm.listen_on(relay_address.clone())?;
 
         // alerts the UI that the manager is active
-        notify(&self.callbacks.manager_active, (true, true)).await;
+        self.callbacks.manager_active(true, true).await;
 
         // handle incoming streams
         let self_clone = self.clone();
@@ -280,7 +280,7 @@ impl Telepathy {
                                     let height = self.screenshare_config.height.load(Relaxed);
                                     let bandwidth = state.download_bandwidth.clone();
                                     spawn(screenshare::playback(stream, stop, bandwidth, encoder_name, width, height));
-                                    notify(&self.callbacks.screenshare_started, (dart_stop, false)).await;
+                                    self.callbacks.screenshare_started(dart_stop, false).await;
                                 }
                                 Err(error) => {
                                     error!("failed to open stream for screenshare playback {error}");
@@ -291,7 +291,7 @@ impl Telepathy {
                             match state.receive_stream().await {
                                 Ok(stream) => {
                                     spawn(screenshare::record(stream, stop, state.upload_bandwidth.clone(), config));
-                                    notify(&self.callbacks.screenshare_started, (dart_stop, true)).await;
+                                    self.callbacks.screenshare_started(dart_stop, true).await;
                                 }
                                 Err(error) => {
                                     error!("failed to receive sub-stream for screenshare broadcast {error}");
@@ -330,7 +330,7 @@ impl Telepathy {
                         continue;
                     }
 
-                    let contact = invoke(&self.callbacks.get_contact, peer_id.to_bytes()).await;
+                    let contact = self.callbacks.get_contact(peer_id.to_bytes()).await;
                     let relayed = endpoint.is_relayed();
                     let listener = endpoint.is_listener();
 
@@ -539,7 +539,7 @@ impl Telepathy {
         }
 
         debug!("tearing down old swarm");
-        notify(&self.callbacks.manager_active, (false, false)).await;
+        self.callbacks.manager_active(false, false).await;
         stop_handler.notify_one();
         stream_handler_handle.await??;
         debug!("joined stream handler");
@@ -621,7 +621,7 @@ impl Telepathy {
         control: Option<Control>,
         stream: Stream,
     ) {
-        let contact_option = invoke(&self.callbacks.get_contact, peer.to_bytes()).await;
+        let contact_option = self.callbacks.get_contact(peer.to_bytes()).await;
         // sends messages to the session from elsewhere in the program
         let message_channel = channel::<Message>(8);
         // create the state and a clone of it for the session
@@ -809,16 +809,9 @@ impl Telepathy {
                     write_message(transport, &Message::Busy).await?;
                     return Ok(true);
                 } else {
-                    let other_cancel_prompt = Arc::new(Notify::new());
-                    // a cancel Notify that can be used in the frontend
-                    let dart_cancel = DartNotify { inner: Arc::clone(&other_cancel_prompt) };
-                    cancel_prompt = Some(other_cancel_prompt);
-
-                    let accept_call_clone = Arc::clone(&self.callbacks.accept_call);
-                    let contact_id = contact.id.clone();
-                    accept_handle = Some(spawn(async move {
-                        invoke(&accept_call_clone, (contact_id, other_ringtone, dart_cancel)).await
-                    }));
+                    let cancel = Arc::new(Notify::new());
+                    accept_handle = Some(self.callbacks.get_accept_handle(&contact.id, other_ringtone, &cancel).await);
+                    cancel_prompt = Some(cancel);
                 }
 
                 state.in_call.store(true, Relaxed); // blocks the session from being restarted
@@ -1067,7 +1060,7 @@ impl Telepathy {
 
         spawn(statistics_collector(
             statistics_state,
-            Arc::clone(&self.callbacks.statistics),
+            self.callbacks.statistics_callback(),
             stop_io.clone(),
         ));
 
@@ -1176,7 +1169,7 @@ impl Telepathy {
                             break Ok((reason, true));
                         },
                         Message::Chat { text, attachments } => {
-                            invoke(&self.callbacks.message_received, ChatMessage {
+                            self.callbacks.message_received(ChatMessage {
                                 text,
                                 receiver: identity,
                                 timestamp: Local::now(),
@@ -1314,7 +1307,7 @@ impl Telepathy {
 
         spawn(statistics_collector(
             statistics_state.clone(),
-            Arc::clone(&self.callbacks.statistics),
+            self.callbacks.statistics_callback(),
             stop_io.clone(),
         ));
 

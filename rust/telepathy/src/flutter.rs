@@ -29,6 +29,7 @@ use tokio::process::Command;
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 use tokio::spawn;
 use tokio::sync::{Mutex, Notify, RwLock};
+use tokio::task::JoinHandle;
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 use tokio::time::Instant;
 use uuid::Uuid;
@@ -51,32 +52,32 @@ pub(crate) type ManagerActiveArgs = (bool, bool);
 #[derive(Clone)]
 pub struct TelepathyCallbacks {
     /// Prompts the user to accept a call
-    pub(crate) accept_call: DartMethod<AcceptCallArgs, bool>,
+    accept_call: DartMethod<AcceptCallArgs, bool>,
 
     /// Fetches a contact from the front end
-    pub(crate) get_contact: DartMethod<Vec<u8>, Option<Contact>>,
+    get_contact: DartMethod<Vec<u8>, Option<Contact>>,
 
     /// Notifies the frontend that the call has disconnected or reconnected
-    pub(crate) call_state: DartVoid<CallState>,
+    call_state: DartVoid<CallState>,
 
     /// Alerts the UI when the status of a session changes
-    pub(crate) session_status: DartVoid<SessionStatusArgs>,
+    session_status: DartVoid<SessionStatusArgs>,
 
     /// Starts a session for each of the UI's contacts
-    pub(crate) start_sessions: DartVoid<Telepathy>,
+    start_sessions: DartVoid<Telepathy>,
 
     /// Used to report statistics to the frontend
-    pub(crate) statistics: DartVoid<Statistics>,
+    statistics: DartVoid<Statistics>,
 
     /// Used to send chat messages to the frontend
-    pub(crate) message_received: DartVoid<ChatMessage>,
+    message_received: DartVoid<ChatMessage>,
 
     /// Alerts the UI when the manager is active and restartable
-    pub(crate) manager_active: DartVoid<ManagerActiveArgs>,
+    manager_active: DartVoid<ManagerActiveArgs>,
 
     /// Called when a screenshare starts
     #[allow(dead_code)]
-    pub(crate) screenshare_started: DartVoid<ScreenshareStartedArgs>,
+    screenshare_started: DartVoid<ScreenshareStartedArgs>,
 }
 
 impl TelepathyCallbacks {
@@ -112,6 +113,54 @@ impl TelepathyCallbacks {
 
     pub(crate) async fn call_state(&self, status: CallState) {
         invoke(&self.call_state, status).await;
+    }
+
+    pub(crate) async fn start_sessions(&self, telepathy: &Telepathy) {
+        invoke(&self.start_sessions, telepathy.clone()).await;
+    }
+
+    pub(crate) async fn manager_active(&self, active: bool, restartable: bool) {
+        notify(&self.manager_active, (active, restartable)).await;
+    }
+
+    pub(crate) async fn screenshare_started(&self, stop: DartNotify, sender: bool) {
+        notify(&self.screenshare_started, (stop, sender)).await;
+    }
+
+    pub(crate) async fn get_contact(&self, peer_id: Vec<u8>) -> Option<Contact> {
+        invoke(&self.get_contact, peer_id).await
+    }
+
+    pub(crate) async fn get_accept_handle(
+        &self,
+        contact_id: &str,
+        ringtone: Option<Vec<u8>>,
+        cancel: &Arc<Notify>,
+    ) -> JoinHandle<bool> {
+        let accept_call = self.accept_call.clone();
+        let contact_id = contact_id.to_owned();
+        let dart_cancel = DartNotify::new(cancel);
+        spawn(async move { invoke(&accept_call, (contact_id, ringtone, dart_cancel)).await })
+    }
+
+    pub(crate) async fn message_received(&self, chat_message: ChatMessage) {
+        invoke(&self.message_received, chat_message).await;
+    }
+
+    pub(crate) fn statistics_callback(&self) -> StatisticsCallback {
+        StatisticsCallback {
+            inner: Arc::clone(&self.statistics),
+        }
+    }
+}
+
+pub(crate) struct StatisticsCallback {
+    inner: DartVoid<Statistics>,
+}
+
+impl StatisticsCallback {
+    pub(crate) async fn post(&self, stats: Statistics) {
+        invoke(&self.inner, stats).await;
     }
 }
 
@@ -497,6 +546,14 @@ pub struct DartNotify {
 }
 
 impl DartNotify {
+    fn new(inner: &Arc<Notify>) -> Self {
+        Self {
+            inner: inner.clone(),
+        }
+    }
+}
+
+impl DartNotify {
     /// public notified function for dart
     pub async fn notified(&self) {
         self.inner.notified().await;
@@ -697,11 +754,11 @@ pub async fn screenshare_available() -> bool {
     }
 }
 
-pub(crate) async fn notify<A>(void: &DartVoid<A>, args: A) {
+async fn notify<A>(void: &DartVoid<A>, args: A) {
     (void.lock().await)(args).await
 }
 
-pub(crate) async fn invoke<A, R>(method: &DartMethod<A, R>, args: A) -> R {
+async fn invoke<A, R>(method: &DartMethod<A, R>, args: A) -> R {
     (method.lock().await)(args).await
 }
 
