@@ -1,9 +1,9 @@
 #[cfg(target_os = "ios")]
 use crate::audio::ios::{configure_audio_session, deactivate_audio_session};
 use crate::error::ErrorKind;
-use crate::flutter::{CallState, ChatMessage, Contact, DartNotify, SessionStatus};
+use crate::flutter::callbacks::{Callbacks, StatisticsCallback};
+use crate::flutter::{CallState, ChatMessage, CodecConfig, Contact, DartNotify, NetworkConfig, ScreenshareConfig, SessionStatus};
 use crate::overlay::CONNECTED;
-use crate::telepathy::Result;
 use crate::telepathy::messages::Message;
 #[cfg(not(target_family = "wasm"))]
 use crate::telepathy::screenshare;
@@ -12,11 +12,8 @@ use crate::telepathy::sockets::{
     audio_output,
 };
 use crate::telepathy::utils::{read_message, write_message};
-use crate::telepathy::{
-    CHAT_PROTOCOL, ConnectionState, EarlyCallState, HELLO_TIMEOUT, KEEP_ALIVE, OptionalCallArgs,
-    PeerState, RoomConnection, RoomMessage, SessionState, StartScreenshare,
-    StatisticsCollectorState, Telepathy, loopback, statistics_collector, stream_to_audio_transport,
-};
+use crate::telepathy::{CHAT_PROTOCOL, ConnectionState, EarlyCallState, HELLO_TIMEOUT, KEEP_ALIVE, OptionalCallArgs, PeerState, RoomConnection, RoomMessage, SessionState, StartScreenshare, StatisticsCollectorState, loopback, statistics_collector, stream_to_audio_transport, DeviceName, RoomState};
+use crate::telepathy::Result;
 use crate::{Behaviour, BehaviourEvent};
 use chrono::Local;
 use cpal::traits::StreamTrait;
@@ -33,21 +30,187 @@ use libp2p::{
 use libp2p_stream::Control;
 use log::{debug, error, info, trace, warn};
 use std::collections::HashMap;
+use std::marker::PhantomData;
 #[cfg(not(target_family = "wasm"))]
 use std::net::Ipv4Addr;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::{Duration, Instant};
+use atomic_float::AtomicF32;
+use cpal::Host;
+use libp2p::identity::Keypair;
+use nnnoiseless::RnnModel;
 use tokio::select;
-use tokio::sync::Notify;
+use tokio::sync::{Mutex, Notify, RwLock};
 use tokio::sync::mpsc::{Receiver as MReceiver, Sender as MSender, channel};
-use tokio::time::{Interval, interval, timeout};
+use tokio::time::{Interval, interval, timeout, sleep};
 use tokio_util::codec::LengthDelimitedCodec;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
+use crate::overlay::overlay::Overlay;
 
-impl Telepathy {
+#[derive(Clone)]
+pub(crate) struct TelepathyCore<C, S>
+where
+    S: StatisticsCallback + Clone + Send + Sync + 'static,
+    C: Callbacks<S> + Clone + Send + Sync + 'static,
+{
+    /// The audio host
+    pub(crate) host: Arc<Host>,
+
+    /// Controls the threshold for silence detection
+    pub(crate) rms_threshold: Arc<AtomicF32>,
+
+    /// The factor to adjust the input volume by
+    pub(crate) input_volume: Arc<AtomicF32>,
+
+    /// The factor to adjust the output volume by
+    pub(crate) output_volume: Arc<AtomicF32>,
+
+    /// Enables rnnoise denoising
+    pub(crate) denoise: Arc<AtomicBool>,
+
+    /// The rnnoise model
+    pub(crate) denoise_model: Arc<RwLock<RnnModel>>,
+
+    /// Manually set the input device
+    pub(crate) input_device: DeviceName,
+
+    /// Manually set the output device
+    pub(crate) output_device: DeviceName,
+
+    /// The current libp2p private key
+    pub(crate) identity: Arc<RwLock<Keypair>>,
+
+    /// Keeps track of whether the user is in a call
+    pub(crate) in_call: Arc<AtomicBool>,
+
+    /// used to end an audio test, if there is one
+    pub(crate) end_audio_test: Arc<Mutex<Option<Arc<Notify>>>>,
+
+    /// Tracks state for the current room
+    pub(crate) room_state: Arc<RwLock<Option<RoomState>>>,
+
+    /// Disables the output stream
+    pub(crate) deafened: Arc<AtomicBool>,
+
+    /// Disables the input stream
+    pub(crate) muted: Arc<AtomicBool>,
+
+    /// Disables the playback of custom ringtones
+    pub(crate) play_custom_ringtones: Arc<AtomicBool>,
+
+    /// Enables sending your custom ringtone
+    pub(crate) send_custom_ringtone: Arc<AtomicBool>,
+
+    pub(crate) efficiency_mode: Arc<AtomicBool>,
+
+    /// Keeps track of and controls the sessions
+    pub(crate) session_states: Arc<RwLock<HashMap<PeerId, Arc<SessionState>>>>,
+
+    /// Signals the session manager to start a new session
+    pub(crate) start_session: MSender<PeerId>,
+
+    /// Signals the session manager to start a screenshare
+    pub(crate) start_screenshare: MSender<StartScreenshare>,
+
+    /// Restarts the session manager when needed
+    pub(crate) restart_manager: Arc<Notify>,
+
+    /// Network configuration for p2p connections
+    pub(crate) network_config: NetworkConfig,
+
+    /// Configuration for the screenshare functionality
+    #[allow(dead_code)]
+    pub(crate) screenshare_config: ScreenshareConfig,
+
+    /// A reference to the object that controls the call overlay
+    pub(crate) overlay: Overlay,
+
+    pub(crate) codec_config: CodecConfig,
+
+    #[cfg(target_family = "wasm")]
+    pub(crate) web_input: Arc<Mutex<Option<crate::audio::web_audio::WebAudioWrapper>>>,
+
+    /// callback methods provided by the flutter frontend
+    pub(crate) callbacks: C,
+
+    phantom: PhantomData<S>,
+}
+
+impl<C, S> TelepathyCore<C, S>
+where
+    S: StatisticsCallback + Clone + Send + Sync + 'static,
+    C: Callbacks<S> + Clone + Send + Sync + 'static,
+{
+    /// main entry point to Telepathy. must be async to use `spawn`
+    pub(crate) async fn new(
+        identity: Vec<u8>,
+        host: Arc<Host>,
+        network_config: &NetworkConfig,
+        screenshare_config: &ScreenshareConfig,
+        overlay: &Overlay,
+        codec_config: &CodecConfig,
+        callbacks: C,
+    ) -> TelepathyCore<C, S> {
+        let (start_session, mut receive_session) = channel(8);
+        let (start_screenshare, mut receive_screenshare) = channel(8);
+
+        let chat = Self {
+            host,
+            rms_threshold: Default::default(),
+            input_volume: Default::default(),
+            output_volume: Default::default(),
+            denoise: Default::default(),
+            denoise_model: Default::default(),
+            input_device: Default::default(),
+            output_device: Default::default(),
+            identity: Arc::new(RwLock::new(
+                Keypair::from_protobuf_encoding(&identity).unwrap(),
+            )),
+            in_call: Default::default(),
+            end_audio_test: Default::default(),
+            room_state: Default::default(),
+            deafened: Default::default(),
+            muted: Default::default(),
+            play_custom_ringtones: Default::default(),
+            send_custom_ringtone: Default::default(),
+            efficiency_mode: Default::default(),
+            session_states: Default::default(),
+            start_session,
+            start_screenshare,
+            restart_manager: Default::default(),
+            network_config: network_config.clone(),
+            screenshare_config: screenshare_config.clone(),
+            overlay: overlay.clone(),
+            codec_config: codec_config.clone(),
+            #[cfg(target_family = "wasm")]
+            web_input: Default::default(),
+            callbacks,
+            phantom: Default::default(),
+        };
+
+        // start the session manager
+        let chat_clone = chat.clone();
+        spawn(async move {
+            loop {
+                if let Err(error) = chat_clone
+                    .session_manager(&mut receive_session, &mut receive_screenshare)
+                    .await
+                {
+                    error!("Session manager failed: {}", error);
+                }
+
+                // just for safety
+                sleep(Duration::from_millis(250)).await;
+            }
+        });
+
+        chat
+    }
+
     /// Starts new sessions
     pub(crate) async fn session_manager(
         &self,
@@ -810,7 +973,7 @@ impl Telepathy {
                     return Ok(true);
                 } else {
                     let cancel = Arc::new(Notify::new());
-                    accept_handle = Some(self.callbacks.get_accept_handle(&contact.id, other_ringtone, &cancel).await);
+                    accept_handle = Some(self.callbacks.get_accept_handle(&contact.id, other_ringtone, &cancel));
                     cancel_prompt = Some(cancel);
                 }
 

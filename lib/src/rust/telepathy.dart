@@ -34,7 +34,6 @@ abstract class Telepathy implements RustOpaqueInterface {
   Future<(List<String>, List<String>)> listDevices();
 
   // HINT: Make it `#[frb(sync)]` to let it become the default constructor of Dart class.
-  /// main entry point to Telepathy. must be async to use `spawn`
   static Future<Telepathy> newInstance(
           {required List<int> identity,
           required ArcHost host,

@@ -7,12 +7,11 @@ import 'error.dart';
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
-import 'telepathy.dart';
 part 'flutter.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `atomic_u32_deserialize`, `atomic_u32_serialize`, `call_state`, `invoke`, `notify`, `session_status`
-// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `SEND_TO_DART_LOGGER_STREAM_SINK`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `deref`, `do_logs`, `fmt`, `fmt`, `fmt`, `initialize`
+// These functions are ignored because they are not marked as `pub`: `atomic_u32_deserialize`, `atomic_u32_serialize`, `invoke`, `new`, `notify`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `SEND_TO_DART_LOGGER_STREAM_SINK`, `TelepathyStatisticsCallback`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `deref`, `do_logs`, `fmt`, `fmt`, `fmt`, `initialize`
 
 Stream<String> createLogStream() =>
     RustLib.instance.api.crateFlutterCreateLogStream();
@@ -172,7 +171,7 @@ abstract class TelepathyCallbacks implements RustOpaqueInterface {
           required FutureOr<void> Function(CallState) callState,
           required FutureOr<void> Function((String, SessionStatus))
               sessionStatus,
-          required FutureOr<void> Function(Telepathy) startSessions,
+          required FutureOr<List<Contact>> Function(void) getContacts,
           required FutureOr<void> Function(Statistics) statistics,
           required FutureOr<void> Function(ChatMessage) messageReceived,
           required FutureOr<void> Function((bool, bool)) managerActive,
@@ -183,7 +182,7 @@ abstract class TelepathyCallbacks implements RustOpaqueInterface {
           getContact: getContact,
           callState: callState,
           sessionStatus: sessionStatus,
-          startSessions: startSessions,
+          getContacts: getContacts,
           statistics: statistics,
           messageReceived: messageReceived,
           managerActive: managerActive,

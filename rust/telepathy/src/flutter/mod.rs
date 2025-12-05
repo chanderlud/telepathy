@@ -1,11 +1,14 @@
+/// flutter_rust_bridge:ignore
+pub(crate) mod callbacks;
+
 use crate::error::{DartError, Error, ErrorKind};
 use crate::frb_generated::StreamSink;
-use crate::telepathy::Telepathy;
 use crate::telepathy::messages::Attachment;
 use crate::telepathy::screenshare;
 use crate::telepathy::screenshare::{Decoder, Encoder};
 use atomic_float::AtomicF32;
 use chrono::{DateTime, Local};
+pub use cpal::Host;
 #[cfg(not(target_family = "wasm"))]
 use fast_log::Config;
 #[cfg(not(target_family = "wasm"))]
@@ -29,7 +32,6 @@ use tokio::process::Command;
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 use tokio::spawn;
 use tokio::sync::{Mutex, Notify, RwLock};
-use tokio::task::JoinHandle;
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 use tokio::time::Instant;
 use uuid::Uuid;
@@ -64,7 +66,7 @@ pub struct TelepathyCallbacks {
     session_status: DartVoid<SessionStatusArgs>,
 
     /// Starts a session for each of the UI's contacts
-    start_sessions: DartVoid<Telepathy>,
+    get_contacts: DartMethod<(), Vec<Contact>>,
 
     /// Used to report statistics to the frontend
     statistics: DartVoid<Statistics>,
@@ -88,7 +90,7 @@ impl TelepathyCallbacks {
         get_contact: impl Fn(Vec<u8>) -> DartFnFuture<Option<Contact>> + Send + 'static,
         call_state: impl Fn(CallState) -> DartFnFuture<()> + Send + 'static,
         session_status: impl Fn(SessionStatusArgs) -> DartFnFuture<()> + Send + 'static,
-        start_sessions: impl Fn(Telepathy) -> DartFnFuture<()> + Send + 'static,
+        get_contacts: impl Fn(()) -> DartFnFuture<Vec<Contact>> + Send + 'static,
         statistics: impl Fn(Statistics) -> DartFnFuture<()> + Send + 'static,
         message_received: impl Fn(ChatMessage) -> DartFnFuture<()> + Send + 'static,
         manager_active: impl Fn(ManagerActiveArgs) -> DartFnFuture<()> + Send + 'static,
@@ -99,69 +101,18 @@ impl TelepathyCallbacks {
             get_contact: Arc::new(Mutex::new(get_contact)),
             call_state: Arc::new(Mutex::new(call_state)),
             session_status: Arc::new(Mutex::new(session_status)),
-            start_sessions: Arc::new(Mutex::new(start_sessions)),
+            get_contacts: Arc::new(Mutex::new(get_contacts)),
             statistics: Arc::new(Mutex::new(statistics)),
             message_received: Arc::new(Mutex::new(message_received)),
             manager_active: Arc::new(Mutex::new(manager_active)),
             screenshare_started: Arc::new(Mutex::new(screenshare_started)),
         }
     }
-
-    pub(crate) async fn session_status(&self, status: SessionStatus, peer: PeerId) {
-        notify(&self.session_status, (peer.to_string(), status)).await;
-    }
-
-    pub(crate) async fn call_state(&self, status: CallState) {
-        invoke(&self.call_state, status).await;
-    }
-
-    pub(crate) async fn start_sessions(&self, telepathy: &Telepathy) {
-        invoke(&self.start_sessions, telepathy.clone()).await;
-    }
-
-    pub(crate) async fn manager_active(&self, active: bool, restartable: bool) {
-        notify(&self.manager_active, (active, restartable)).await;
-    }
-
-    pub(crate) async fn screenshare_started(&self, stop: DartNotify, sender: bool) {
-        notify(&self.screenshare_started, (stop, sender)).await;
-    }
-
-    pub(crate) async fn get_contact(&self, peer_id: Vec<u8>) -> Option<Contact> {
-        invoke(&self.get_contact, peer_id).await
-    }
-
-    pub(crate) async fn get_accept_handle(
-        &self,
-        contact_id: &str,
-        ringtone: Option<Vec<u8>>,
-        cancel: &Arc<Notify>,
-    ) -> JoinHandle<bool> {
-        let accept_call = self.accept_call.clone();
-        let contact_id = contact_id.to_owned();
-        let dart_cancel = DartNotify::new(cancel);
-        spawn(async move { invoke(&accept_call, (contact_id, ringtone, dart_cancel)).await })
-    }
-
-    pub(crate) async fn message_received(&self, chat_message: ChatMessage) {
-        invoke(&self.message_received, chat_message).await;
-    }
-
-    pub(crate) fn statistics_callback(&self) -> StatisticsCallback {
-        StatisticsCallback {
-            inner: Arc::clone(&self.statistics),
-        }
-    }
 }
 
-pub(crate) struct StatisticsCallback {
+#[derive(Clone)]
+pub(crate) struct TelepathyStatisticsCallback {
     inner: DartVoid<Statistics>,
-}
-
-impl StatisticsCallback {
-    pub(crate) async fn post(&self, stats: Statistics) {
-        invoke(&self.inner, stats).await;
-    }
 }
 
 pub enum CallState {

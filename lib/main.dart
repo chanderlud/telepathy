@@ -204,10 +204,8 @@ Future<void> main(List<String> args) async {
   }
 
   /// called when the backend wants to start sessions
-  void startSessions(Telepathy telepathy) {
-    for (Contact contact in settingsController.contacts.values) {
-      telepathy.startSession(contact: contact);
-    }
+  List<Contact> getContacts(_) {
+    return settingsController.contacts.values.map((c) => c.pubClone()).toList();
   }
 
   TelepathyCallbacks callbacks = TelepathyCallbacks(
@@ -215,7 +213,7 @@ Future<void> main(List<String> args) async {
       getContact: getContact,
       callState: callState,
       sessionStatus: stateController.updateSession,
-      startSessions: startSessions,
+      getContacts: getContacts,
       statistics: statisticsController.setStatistics,
       messageReceived: chatStateController.messageReceived,
       managerActive: stateController.setSessionManager,

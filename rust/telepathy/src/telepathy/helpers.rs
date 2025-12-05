@@ -1,11 +1,12 @@
 use crate::audio::codec::{decoder, encoder};
 use crate::audio::{InputProcessorState, OutputProcessorState, input_processor, output_processor};
 use crate::error::ErrorKind;
+use crate::flutter::callbacks::{Callbacks, StatisticsCallback};
 use crate::frb_generated::FLUTTER_RUST_BRIDGE_HANDLER;
 use crate::telepathy::messages::{AudioHeader, Message};
 use crate::telepathy::utils::{SendStream, get_output_device};
 use crate::telepathy::{
-    CHANNEL_SIZE, EarlyCallState, Result, StartScreenshare, StatisticsCollectorState, Telepathy,
+    CHANNEL_SIZE, EarlyCallState, Result, StartScreenshare, StatisticsCollectorState,
 };
 #[cfg(not(target_family = "wasm"))]
 use cpal::Device;
@@ -27,8 +28,13 @@ use tokio::fs::File;
 #[cfg(not(target_family = "wasm"))]
 use tokio::io::AsyncReadExt;
 use tokio::sync::Notify;
+use crate::telepathy::core::TelepathyCore;
 
-impl Telepathy {
+impl<C, S> TelepathyCore<C, S>
+where
+    S: StatisticsCallback + Clone + Send + Sync + 'static,
+    C: Callbacks<S> + Clone + Send + Sync + 'static,
+{
     /// helper method to set up audio input stack between the network and device layers
     pub(crate) async fn setup_input(
         &self,
