@@ -323,15 +323,14 @@ class _TelepathyAppState extends State<TelepathyApp>  with WindowListener {
 
   @override
   void onWindowClose() async {
-    final isPreventClose = await windowManager.isPreventClose();
-    if (!isPreventClose || _isClosing) {
+    if (_isClosing) {
       return;
     }
 
     _isClosing = true;
-    windowManager.hide();
     await widget.telepathy.shutdown();
-    await windowManager.destroy();
+    await windowManager.setPreventClose(false);
+    await windowManager.close();
   }
 
   @override
