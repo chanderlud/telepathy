@@ -40,7 +40,7 @@ use libp2p::identity::Keypair;
 use libp2p::swarm::ConnectionId;
 use libp2p::{PeerId, Stream, StreamProtocol};
 use libp2p_stream::Control;
-use log::{debug, error, warn};
+use log::{debug, error, info, warn};
 use messages::{Attachment, AudioHeader, Message};
 use nnnoiseless::{FRAME_SIZE, RnnModel};
 use sea_codec::ProcessorMessage;
@@ -83,11 +83,14 @@ const CHAT_PROTOCOL: StreamProtocol = StreamProtocol::new("/telepathy/0.0.1");
 #[frb(opaque)]
 pub struct Telepathy {
     inner: TelepathyCore<FlutterCallbacks, FlutterStatisticsCallback>,
+
+    /// contains handles to the manager thread & room managers
+    handles: Vec<JoinHandle<()>>,
 }
 
 impl Telepathy {
-    pub async fn new(
-        identity: Vec<u8>,
+    #[frb(sync)]
+    pub fn new(
         host: Arc<Host>,
         network_config: &NetworkConfig,
         screenshare_config: &ScreenshareConfig,
@@ -95,38 +98,31 @@ impl Telepathy {
         codec_config: &CodecConfig,
         callbacks: FlutterCallbacks,
     ) -> Telepathy {
-        let chat = Self {
+        Self {
             inner: TelepathyCore::new(
-                identity,
                 host,
                 network_config,
                 screenshare_config,
                 overlay,
                 codec_config,
                 callbacks,
-            )
-            .await,
-        };
-
-        // start the sessions
-        for contact in chat.inner.callbacks.get_contacts().await {
-            chat.start_session(&contact).await;
+            ),
+            handles: Vec::new(),
         }
+    }
 
-        chat
+    pub async fn start_manager(&mut self) {
+        if let Some(handle) = self.inner.start_manager().await {
+            self.handles.push(handle);
+        }
     }
 
     /// Tries to start a session for a contact
     pub async fn start_session(&self, contact: &Contact) {
         debug!("start_session called for {}", contact.peer_id);
 
-        if self
-            .inner
-            .start_session
-            .send(contact.peer_id)
-            .await
-            .is_err()
-        {
+        if let Some(ref sender) = self.inner.start_session
+            && sender.send(contact.peer_id).await.is_err() {
             error!("start_session channel is closed");
         }
     }
@@ -155,7 +151,7 @@ impl Telepathy {
 
     /// Ends the current audio test, room, or call in that order
     pub async fn end_call(&self) {
-        if let Some(end_audio_test) = self.inner.end_audio_test.lock().await.as_ref() {
+        if let Some(end_audio_test) = self.inner.core_state.end_audio_test.lock().await.as_ref() {
             debug!("ending audio test");
             end_audio_test.notify_one();
         } else if let Some(room_state) = self.inner.room_state.read().await.as_ref() {
@@ -178,7 +174,7 @@ impl Telepathy {
 
     /// The only entry point into participating in a room
     pub async fn join_room(
-        &self,
+        &mut self,
         member_strings: Vec<String>,
     ) -> std::result::Result<(), DartError> {
         if self.inner.is_call_active().await {
@@ -220,14 +216,14 @@ impl Telepathy {
         for member in members {
             if let Some(state) = self.inner.session_states.read().await.get(&member) {
                 state.start_call.notify_one();
-            } else {
+            } else if let Some(ref sender) = self.inner.start_session {
                 // when the session opens, start_call will be notified
-                _ = self.inner.start_session.send(member).await;
+                _ = sender.send(member).await;
             }
         }
 
         let self_clone = self.inner.clone();
-        spawn(async move {
+        self.handles.push(spawn(async move {
             let stop_io = Default::default();
             if let Err(error) = self_clone
                 .room_controller(receiver, cancel, call_state, &stop_io, end_call)
@@ -237,7 +233,7 @@ impl Telepathy {
             }
 
             stop_io.cancel();
-        });
+        }));
 
         Ok(())
     }
@@ -249,7 +245,13 @@ impl Telepathy {
                 .to_string()
                 .into())
         } else {
+            // reset sessions so manager can clean up
+            self.inner.reset_sessions().await;
+            // restart the manager
             self.inner.restart_manager.notify_one();
+            // wait for a new manager to start
+            self.inner.core_state.manager_active.notified().await;
+            // start a session for all contacts
             for contact in self.inner.callbacks.get_contacts().await {
                 self.start_session(&contact).await;
             }
@@ -257,10 +259,21 @@ impl Telepathy {
         }
     }
 
+    /// shuts down the entire rust backend
+    pub async fn shutdown(self) {
+        // stops sessions & manager
+        self.inner.shutdown().await;
+        // wait for manager & any room controllers to join
+        for handle in self.handles {
+            handle.await.unwrap();
+        }
+        info!("shutdown complete");
+    }
+
     /// Sets the signing key (called when the profile changes)
     pub async fn set_identity(&self, key: Vec<u8>) -> std::result::Result<(), DartError> {
-        *self.inner.identity.write().await =
-            Keypair::from_protobuf_encoding(&key).map_err(Error::from)?;
+        *self.inner.core_state.identity.write().await =
+            Some(Keypair::from_protobuf_encoding(&key).map_err(Error::from)?);
         Ok(())
     }
 
@@ -294,16 +307,16 @@ impl Telepathy {
         let stop_io = CancellationToken::new();
         let end_call = Arc::new(Notify::new());
 
-        self.inner.in_call.store(true, Relaxed);
-        *self.inner.end_audio_test.lock().await = Some(end_call.clone());
+        self.inner.core_state.in_call.store(true, Relaxed);
+        *self.inner.core_state.end_audio_test.lock().await = Some(end_call.clone());
         let result = self
             .inner
             .call(&stop_io, audio_config, &end_call, None)
             .await
             .map_err(Into::into);
         stop_io.cancel();
-        self.inner.end_audio_test.lock().await.take();
-        self.inner.in_call.store(false, Relaxed);
+        self.inner.core_state.end_audio_test.lock().await.take();
+        self.inner.core_state.in_call.store(false, Relaxed);
         result
     }
 
@@ -368,58 +381,76 @@ impl Telepathy {
     #[frb(sync)]
     pub fn set_rms_threshold(&self, decimal: f32) {
         let threshold = db_to_multiplier(decimal);
-        self.inner.rms_threshold.store(threshold, Relaxed);
+        self.inner
+            .core_state
+            .rms_threshold
+            .store(threshold, Relaxed);
     }
 
     #[frb(sync)]
     pub fn set_input_volume(&self, decibel: f32) {
         let multiplier = db_to_multiplier(decibel);
-        self.inner.input_volume.store(multiplier, Relaxed);
+        self.inner
+            .core_state
+            .input_volume
+            .store(multiplier, Relaxed);
     }
 
     #[frb(sync)]
     pub fn set_output_volume(&self, decibel: f32) {
         let multiplier = db_to_multiplier(decibel);
-        self.inner.output_volume.store(multiplier, Relaxed);
+        self.inner
+            .core_state
+            .output_volume
+            .store(multiplier, Relaxed);
     }
 
     #[frb(sync)]
     pub fn set_deafened(&self, deafened: bool) {
-        self.inner.deafened.store(deafened, Relaxed);
+        self.inner.core_state.deafened.store(deafened, Relaxed);
     }
 
     #[frb(sync)]
     pub fn set_muted(&self, muted: bool) {
-        self.inner.muted.store(muted, Relaxed);
+        self.inner.core_state.muted.store(muted, Relaxed);
     }
 
     /// Changing the denoise flag will not affect the current call
     #[frb(sync)]
     pub fn set_denoise(&self, denoise: bool) {
-        self.inner.denoise.store(denoise, Relaxed);
+        self.inner.core_state.denoise.store(denoise, Relaxed);
     }
 
     #[frb(sync)]
     pub fn set_play_custom_ringtones(&self, play: bool) {
-        self.inner.play_custom_ringtones.store(play, Relaxed);
+        self.inner
+            .core_state
+            .play_custom_ringtones
+            .store(play, Relaxed);
     }
 
     #[frb(sync)]
     pub fn set_send_custom_ringtone(&self, send: bool) {
-        self.inner.send_custom_ringtone.store(send, Relaxed);
+        self.inner
+            .core_state
+            .send_custom_ringtone
+            .store(send, Relaxed);
     }
 
     #[frb(sync)]
     pub fn set_efficiency_mode(&self, enabled: bool) {
-        self.inner.efficiency_mode.store(enabled, Relaxed);
+        self.inner
+            .core_state
+            .efficiency_mode
+            .store(enabled, Relaxed);
     }
 
     pub async fn set_input_device(&self, device: Option<String>) {
-        *self.inner.input_device.lock().await = device;
+        *self.inner.core_state.input_device.lock().await = device;
     }
 
     pub async fn set_output_device(&self, device: Option<String>) {
-        *self.inner.output_device.lock().await = device;
+        *self.inner.core_state.output_device.lock().await = device;
     }
 
     /// Lists the input and output devices
@@ -445,7 +476,7 @@ impl Telepathy {
             RnnModel::default()
         };
 
-        *self.inner.denoise_model.write().await = model;
+        *self.inner.core_state.denoise_model.write().await = model;
         Ok(())
     }
 }
@@ -529,6 +560,7 @@ impl ConnectionState {
 }
 
 /// shared values for a single session
+#[derive(Debug)]
 pub(crate) struct SessionState {
     /// signals the session to initiate a call
     start_call: Notify,
@@ -561,6 +593,8 @@ pub(crate) struct SessionState {
     wants_stream: Arc<AtomicBool>,
 
     end_call: Arc<Notify>,
+
+    stop_screenshare: Arc<Mutex<Option<Arc<Notify>>>>,
 }
 
 impl SessionState {
@@ -579,6 +613,7 @@ impl SessionState {
             download_bandwidth: Default::default(),
             wants_stream: Default::default(),
             end_call: Default::default(),
+            stop_screenshare: Default::default(),
         }
     }
 

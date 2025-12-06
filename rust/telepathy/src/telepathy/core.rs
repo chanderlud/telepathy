@@ -44,8 +44,6 @@ use log::{debug, error, info, trace, warn};
 use nnnoiseless::RnnModel;
 use std::collections::HashMap;
 use std::marker::PhantomData;
-#[cfg(not(target_family = "wasm"))]
-use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Relaxed;
@@ -53,7 +51,8 @@ use std::time::{Duration, Instant};
 use tokio::select;
 use tokio::sync::mpsc::{Receiver as MReceiver, Sender as MSender, channel};
 use tokio::sync::{Mutex, Notify, RwLock};
-use tokio::time::{Interval, interval, sleep, timeout};
+use tokio::task::JoinHandle;
+use tokio::time::{Interval, interval, timeout};
 use tokio_util::codec::LengthDelimitedCodec;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tokio_util::sync::CancellationToken;
@@ -67,77 +66,28 @@ where
     /// The audio host
     pub(crate) host: Arc<Host>,
 
-    /// Controls the threshold for silence detection
-    pub(crate) rms_threshold: Arc<AtomicF32>,
-
-    /// The factor to adjust the input volume by
-    pub(crate) input_volume: Arc<AtomicF32>,
-
-    /// The factor to adjust the output volume by
-    pub(crate) output_volume: Arc<AtomicF32>,
-
-    /// Enables rnnoise denoising
-    pub(crate) denoise: Arc<AtomicBool>,
-
-    /// The rnnoise model
-    pub(crate) denoise_model: Arc<RwLock<RnnModel>>,
-
-    /// Manually set the input device
-    pub(crate) input_device: DeviceName,
-
-    /// Manually set the output device
-    pub(crate) output_device: DeviceName,
-
-    /// The current libp2p private key
-    pub(crate) identity: Arc<RwLock<Keypair>>,
-
-    /// Keeps track of whether the user is in a call
-    pub(crate) in_call: Arc<AtomicBool>,
-
-    /// used to end an audio test, if there is one
-    pub(crate) end_audio_test: Arc<Mutex<Option<Arc<Notify>>>>,
+    /// Core state for telepathy
+    pub(crate) core_state: CoreState,
 
     /// Tracks state for the current room
     pub(crate) room_state: Arc<RwLock<Option<RoomState>>>,
-
-    /// Disables the output stream
-    pub(crate) deafened: Arc<AtomicBool>,
-
-    /// Disables the input stream
-    pub(crate) muted: Arc<AtomicBool>,
-
-    /// Disables the playback of custom ringtones
-    pub(crate) play_custom_ringtones: Arc<AtomicBool>,
-
-    /// Enables sending your custom ringtone
-    pub(crate) send_custom_ringtone: Arc<AtomicBool>,
-
-    pub(crate) efficiency_mode: Arc<AtomicBool>,
 
     /// Keeps track of and controls the sessions
     pub(crate) session_states: Arc<RwLock<HashMap<PeerId, Arc<SessionState>>>>,
 
     /// Signals the session manager to start a new session
-    pub(crate) start_session: MSender<PeerId>,
+    pub(crate) start_session: Option<MSender<PeerId>>,
 
     /// Signals the session manager to start a screenshare
-    pub(crate) start_screenshare: MSender<StartScreenshare>,
+    pub(crate) start_screenshare: Option<MSender<StartScreenshare>>,
 
     /// Restarts the session manager when needed
     pub(crate) restart_manager: Arc<Notify>,
 
-    /// Network configuration for p2p connections
-    pub(crate) network_config: NetworkConfig,
-
-    /// Configuration for the screenshare functionality
-    #[allow(dead_code)]
-    pub(crate) screenshare_config: ScreenshareConfig,
-
     /// A reference to the object that controls the call overlay
     pub(crate) overlay: Overlay,
 
-    pub(crate) codec_config: CodecConfig,
-
+    /// A wrapper to provide audio input on the web
     #[cfg(target_family = "wasm")]
     pub(crate) web_input: Arc<Mutex<Option<crate::audio::web_audio::WebAudioWrapper>>>,
 
@@ -152,9 +102,7 @@ where
     S: FrbStatisticsCallback + Send + Sync + 'static,
     C: FrbCallbacks<S> + Send + Sync + 'static,
 {
-    /// main entry point to Telepathy. must be async to use `spawn`
-    pub(crate) async fn new(
-        identity: Vec<u8>,
+    pub(crate) fn new(
         host: Arc<Host>,
         network_config: &NetworkConfig,
         screenshare_config: &ScreenshareConfig,
@@ -162,96 +110,107 @@ where
         codec_config: &CodecConfig,
         callbacks: C,
     ) -> TelepathyCore<C, S> {
-        let (start_session, mut receive_session) = channel(8);
-        let (start_screenshare, mut receive_screenshare) = channel(8);
-
-        let chat = Self {
+        Self {
             host,
-            rms_threshold: Default::default(),
-            input_volume: Default::default(),
-            output_volume: Default::default(),
-            denoise: Default::default(),
-            denoise_model: Default::default(),
-            input_device: Default::default(),
-            output_device: Default::default(),
-            identity: Arc::new(RwLock::new(
-                Keypair::from_protobuf_encoding(&identity).unwrap(),
-            )),
-            in_call: Default::default(),
-            end_audio_test: Default::default(),
+            core_state: CoreState {
+                network_config: network_config.clone(),
+                screenshare_config: screenshare_config.clone(),
+                codec_config: codec_config.clone(),
+                ..CoreState::default()
+            },
             room_state: Default::default(),
-            deafened: Default::default(),
-            muted: Default::default(),
-            play_custom_ringtones: Default::default(),
-            send_custom_ringtone: Default::default(),
-            efficiency_mode: Default::default(),
             session_states: Default::default(),
-            start_session,
-            start_screenshare,
+            start_session: None,
+            start_screenshare: None,
             restart_manager: Default::default(),
-            network_config: network_config.clone(),
-            screenshare_config: screenshare_config.clone(),
             overlay: overlay.clone(),
-            codec_config: codec_config.clone(),
             #[cfg(target_family = "wasm")]
             web_input: Default::default(),
             callbacks: Arc::new(callbacks),
             phantom: Default::default(),
-        };
-
-        // start the session manager
-        let chat_clone = chat.clone();
-        spawn(async move {
-            loop {
-                if let Err(error) = chat_clone
-                    .session_manager(&mut receive_session, &mut receive_screenshare)
-                    .await
-                {
-                    error!("Session manager failed: {}", error);
-                }
-
-                // just for safety
-                sleep(Duration::from_millis(250)).await;
-            }
-        });
-
-        chat
+        }
     }
 
-    /// Starts new sessions
+    /// Spawns the manager & returns the handle if no manager exists yet
+    pub(crate) async fn start_manager(&mut self) -> Option<JoinHandle<()>> {
+        // only allow one manager
+        if self.start_screenshare.is_some() || self.start_session.is_some() {
+            return None;
+        }
+
+        let (start_session, mut receive_session) = channel(8);
+        let (start_screenshare, mut receive_screenshare) = channel(8);
+
+        self.start_session = Some(start_session);
+        self.start_screenshare = Some(start_screenshare);
+
+        // start the session manager
+        let manager_clone = self.clone();
+        Some(spawn(async move {
+            // break when stop_manager==true
+            while !manager_clone.core_state.stop_manager.load(Relaxed) {
+                // emit as manager starts
+                manager_clone.core_state.manager_active.notify_waiters();
+                // run the session manager to completion
+                let result = manager_clone
+                    .session_manager(&mut receive_session, &mut receive_screenshare)
+                    .await;
+
+                if let Err(error) = result {
+                    error!("Session manager failed: {}", error);
+                }
+            }
+        }))
+    }
+
+    /// Ends all sessions & restores session_states to default
+    pub(crate) async fn reset_sessions(&self) {
+        for (_, session) in self.session_states.write().await.drain() {
+            // stops any call
+            session.end_call.notify_one();
+            // stops the session loop
+            session.stop_session.notify_one();
+            // stops any active screenshare threads
+            if let Some(notify) = session.stop_screenshare.lock().await.take() {
+                notify.notify_waiters();
+            }
+        }
+    }
+
+    /// Builds the libp2p swarm, handles session start requests, screenshare messages, and libp2p events.
+    /// spawns outgoing sessions & screenshare threads
     pub(crate) async fn session_manager(
         &self,
         start: &mut MReceiver<PeerId>,
         screenshare: &mut MReceiver<StartScreenshare>,
     ) -> Result<()> {
-        let builder =
-            libp2p::SwarmBuilder::with_existing_identity(self.identity.read().await.clone());
+        let identity = if let Some(keypair) = self.core_state.identity.read().await.as_ref() {
+            keypair.clone()
+        } else {
+            return Err(ErrorKind::NoIdentityAvailable.into());
+        };
 
-        let provider_phase;
+        let builder = libp2p::SwarmBuilder::with_existing_identity(identity);
 
         #[cfg(not(target_family = "wasm"))]
-        {
-            provider_phase = builder
-                .with_tokio()
-                .with_tcp(
-                    tcp::Config::default().nodelay(true),
-                    noise::Config::new,
-                    yamux::Config::default,
-                )
-                .map_err(|_| ErrorKind::SwarmBuild)?
-                .with_quic();
-        }
+        let provider_phase = builder
+            .with_tokio()
+            .with_tcp(
+                tcp::Config::default().nodelay(true),
+                noise::Config::new,
+                yamux::Config::default,
+            )
+            .map_err(|_| ErrorKind::SwarmBuild)?
+            .with_quic();
 
         #[cfg(target_family = "wasm")]
-        {
-            provider_phase = builder
-                .with_wasm_bindgen()
-                .with_other_transport(|id_keys| {
-                    Ok(libp2p_webtransport_websys::Transport::new(
-                        libp2p_webtransport_websys::Config::new(id_keys),
-                    ))
-                })?;
-        }
+        let provider_phase = builder
+            .with_wasm_bindgen()
+            .with_other_transport(|id_keys| {
+                Ok(libp2p_webtransport_websys::Transport::new(
+                    libp2p_webtransport_websys::Config::new(id_keys),
+                ))
+            })?;
 
         let mut swarm = provider_phase
             .with_relay_client(noise::Config::new, yamux::Config::default)
@@ -277,27 +236,27 @@ where
             .build();
 
         #[cfg(not(target_family = "wasm"))]
-        let listen_port = *self.network_config.listen_port.read().await;
+        {
+            let listen_port = self.core_state.network_config.listen_port.load(Relaxed);
 
-        #[cfg(not(target_family = "wasm"))]
-        let listen_addr_quic = Multiaddr::empty()
-            .with(Protocol::from(Ipv4Addr::UNSPECIFIED))
-            .with(Protocol::Udp(listen_port))
-            .with(Protocol::QuicV1);
+            for bind_address in &self.core_state.network_config.bind_addresses {
+                let listen_addr_quic = Multiaddr::empty()
+                    .with(Protocol::from(*bind_address))
+                    .with(Protocol::Udp(listen_port))
+                    .with(Protocol::QuicV1);
 
-        #[cfg(not(target_family = "wasm"))]
-        swarm.listen_on(listen_addr_quic)?;
+                swarm.listen_on(listen_addr_quic)?;
 
-        #[cfg(not(target_family = "wasm"))]
-        let listen_addr_tcp = Multiaddr::empty()
-            .with(Protocol::from(Ipv4Addr::UNSPECIFIED))
-            .with(Protocol::Tcp(listen_port));
+                let listen_addr_tcp = Multiaddr::empty()
+                    .with(Protocol::from(*bind_address))
+                    .with(Protocol::Tcp(listen_port));
 
-        #[cfg(not(target_family = "wasm"))]
-        swarm.listen_on(listen_addr_tcp)?;
+                swarm.listen_on(listen_addr_tcp)?;
+            }
+        }
 
-        let socket_address = *self.network_config.relay_address.read().await;
-        let relay_identity = *self.network_config.relay_id.read().await;
+        let socket_address = *self.core_state.network_config.relay_address.read().await;
+        let relay_identity = *self.core_state.network_config.relay_id.read().await;
 
         #[cfg(not(target_family = "wasm"))]
         let relay_address_udp = Multiaddr::from(socket_address.ip())
@@ -386,10 +345,10 @@ where
         self.callbacks.manager_active(true, true).await;
 
         // handle incoming streams
-        let self_clone = self.clone();
         let control = swarm.behaviour().stream.new_control();
         let stop_handler = Arc::new(Notify::new());
         let stop_handler_clone = stop_handler.clone();
+        let self_clone = self.clone();
         let stream_handler_handle = spawn(async move {
             self_clone
                 .incoming_stream_handler(control, stop_handler_clone)
@@ -399,6 +358,9 @@ where
         // handles the state needed for negotiating sessions
         // it is cleared each time a peer successfully connects
         let mut peer_states: HashMap<PeerId, PeerState> = HashMap::new();
+        // handles to threads spawned by the session manager
+        let mut handles = Vec::new();
+        let public_identity = self.peer_id().await;
 
         loop {
             let event = select! {
@@ -410,7 +372,7 @@ where
                 Some(event) = swarm.next() => event,
                 // start a new session
                 Some(peer_id) = start.recv() => {
-                    if peer_id == self.identity.read().await.public().to_peer_id() {
+                    if peer_id == public_identity {
                         // prevents dialing yourself
                         continue;
                     } else if swarm.is_connected(&peer_id) {
@@ -440,27 +402,28 @@ where
                     #[cfg(not(target_family = "wasm"))]
                     if let Some(state) = self.session_states.read().await.get(&message.peer) {
                         let stop = Arc::new(Notify::new());
+                        *state.stop_screenshare.lock().await = Some(stop.clone());
                         let dart_stop = DartNotify { inner: stop.clone() };
 
                         if let Some(Message::ScreenshareHeader { encoder_name }) = message.header {
                             let stream_result = swarm.behaviour().stream.new_control().open_stream(message.peer, CHAT_PROTOCOL).await;
                             match stream_result {
                                 Ok(stream) => {
-                                    let width = self.screenshare_config.width.load(Relaxed);
-                                    let height = self.screenshare_config.height.load(Relaxed);
+                                    let width = self.core_state.screenshare_config.width.load(Relaxed);
+                                    let height = self.core_state.screenshare_config.height.load(Relaxed);
                                     let bandwidth = state.download_bandwidth.clone();
-                                    spawn(screenshare::playback(stream, stop, bandwidth, encoder_name, width, height));
+                                    handles.push(spawn(screenshare::playback(stream, stop, bandwidth, encoder_name, width, height)));
                                     self.callbacks.screenshare_started(dart_stop, false).await;
                                 }
                                 Err(error) => {
                                     error!("failed to open stream for screenshare playback {error}");
                                 }
                             }
-                        } else if let Some(config) = self.screenshare_config.recording_config.read().await.clone() {
+                        } else if let Some(config) = self.core_state.screenshare_config.recording_config.read().await.clone() {
                             _ = state.message_sender.send(Message::ScreenshareHeader { encoder_name: config.encoder.to_string() }).await;
                             match state.receive_stream().await {
                                 Ok(stream) => {
-                                    spawn(screenshare::record(stream, stop, state.upload_bandwidth.clone(), config));
+                                    handles.push(spawn(screenshare::record(stream, stop, state.upload_bandwidth.clone(), config)));
                                     self.callbacks.screenshare_started(dart_stop, true).await;
                                 }
                                 Err(error) => {
@@ -490,7 +453,7 @@ where
                     connection_id,
                     ..
                 } => {
-                    if peer_id == *self.network_config.relay_id.read().await {
+                    if peer_id == *self.core_state.network_config.relay_id.read().await {
                         // ignore the relay connection
                         continue;
                     } else if self.session_states.read().await.contains_key(&peer_id) {
@@ -644,6 +607,7 @@ where
                                 swarm.behaviour().stream.new_control(),
                                 peer_state.connections.len(),
                                 &mut peer_states,
+                                &mut handles,
                             )
                             .await;
                         } else {
@@ -698,6 +662,7 @@ where
                             swarm.behaviour().stream.new_control(),
                             peer_state.connections.len(),
                             &mut peer_states,
+                            &mut handles,
                         )
                         .await;
                     }
@@ -710,22 +675,34 @@ where
 
         debug!("tearing down old swarm");
         self.callbacks.manager_active(false, false).await;
+        // reset room state
+        if let Some(state) = self.room_state.write().await.take() {
+            state.end_call.notify_one();
+            state.cancel.cancel();
+        }
+        debug!("stopped all sessions");
         stop_handler.notify_one();
+        // stream handler won't join until all sessions it created have finished
         stream_handler_handle.await??;
         debug!("joined stream handler");
+        for handle in handles {
+            handle.await??;
+        }
+        debug!("joined handles in session manager");
 
         Ok(())
     }
 
-    /// Handles incoming streams for the libp2p swarm
+    /// Handles incoming streams for the libp2p swarm. spawns incoming sessions
     pub(crate) async fn incoming_stream_handler(
         &self,
         mut control: Control,
         stop: Arc<Notify>,
     ) -> Result<()> {
         let mut incoming_streams = control.accept(CHAT_PROTOCOL)?;
+        let mut handles = Vec::new();
 
-        loop {
+        let result = loop {
             select! {
                 _ = stop.notified() => break Ok(()),
                 Some((peer, stream)) = incoming_streams.next() => {
@@ -750,11 +727,17 @@ where
                         info!("stream accepted for new session with {}", peer);
                     }
 
-                    self.initialize_session(peer, None, stream).await;
+                    handles.push(self.initialize_session(peer, None, stream).await);
                 }
                 else => break Err(ErrorKind::StreamsEnded.into())
             }
+        };
+
+        for handle in handles {
+            handle.await??;
         }
+
+        result
     }
 
     /// Called by the dialer to open a stream and session
@@ -764,13 +747,14 @@ where
         mut control: Control,
         connection_count: usize,
         peer_states: &mut HashMap<PeerId, PeerState>,
+        handles: &mut Vec<JoinHandle<Result<()>>>,
     ) {
         // it may take multiple tries to open the stream because the of the RNG in the stream handler
         for _ in 0..connection_count {
             match control.open_stream(peer, CHAT_PROTOCOL).await {
                 Ok(stream) => {
                     info!("opened stream with {}, starting new session", peer);
-                    self.initialize_session(peer, Some(control), stream).await;
+                    handles.push(self.initialize_session(peer, Some(control), stream).await);
                     // the peer state is no longer needed
                     peer_states.remove(&peer);
                     return;
@@ -790,7 +774,7 @@ where
         peer: PeerId,
         control: Option<Control>,
         stream: Stream,
-    ) {
+    ) -> JoinHandle<Result<()>> {
         let contact_option = self.callbacks.get_contact(peer.to_bytes()).await;
         // sends messages to the session from elsewhere in the program
         let message_channel = channel::<Message>(8);
@@ -832,10 +816,12 @@ where
             self_clone
                 .session_outer(peer, control, stream, state, contact, message_channel)
                 .await;
-        });
+
+            Ok(())
+        })
     }
 
-    /// Runs session inner as many times as needed, performs cleanup if needed
+    /// Runs session_inner as many times as needed, performs cleanup if needed
     pub(crate) async fn session_outer(
         &self,
         peer: PeerId,
@@ -953,7 +939,7 @@ where
                     Message::Hello { ringtone, audio_header, room_hash } => {
                         remote_audio_header = audio_header;
                         room_hash_option = room_hash;
-                        if self.play_custom_ringtones.load(Relaxed) {
+                        if self.core_state.play_custom_ringtones.load(Relaxed) {
                             other_ringtone = ringtone;
                         }
                     },
@@ -974,7 +960,7 @@ where
                     // the call is part of a room, but the client is not in the room
                     write_message(transport, &Message::Reject).await?;
                     return Ok(true);
-                } else if self.in_call.load(Relaxed) {
+                } else if self.core_state.in_call.load(Relaxed) {
                     // do not accept another call if already in one
                     write_message(transport, &Message::Busy).await?;
                     return Ok(true);
@@ -1113,7 +1099,7 @@ where
         }
     }
 
-    /// gets everything ready for the call
+    /// Gets everything ready for the call
     pub(crate) async fn call_handshake(
         &self,
         transport: &mut Transport<TransportStream>,
@@ -1125,7 +1111,7 @@ where
         let stream = state.open_stream(control, &call_state).await?;
 
         // change the app call state
-        self.in_call.store(true, Relaxed);
+        self.core_state.in_call.store(true, Relaxed);
         // show the overlay
         self.overlay.show();
 
@@ -1150,7 +1136,7 @@ where
         // ensure that all background i/o threads are stopped
         stop_io.cancel();
         // the call has ended
-        self.in_call.store(false, Relaxed);
+        self.core_state.in_call.store(false, Relaxed);
         // hide the overlay
         self.overlay.hide();
 
@@ -1170,7 +1156,7 @@ where
         }
     }
 
-    /// normal call & self-test logic
+    /// Normal call & self-test logic
     pub(crate) async fn call(
         &self,
         stop_io: &CancellationToken,
@@ -1228,7 +1214,7 @@ where
             return Err(ErrorKind::NoInputDevice.into());
         }
 
-        spawn(statistics_collector(
+        let statistics_handle = spawn(statistics_collector(
             statistics_state,
             self.callbacks.statistics_callback(),
             stop_io.clone(),
@@ -1311,10 +1297,11 @@ where
             *self.web_input.lock().await = None;
         }
 
+        statistics_handle.await?;
         Ok(())
     }
 
-    /// controller for normal calls
+    /// Controller for normal calls
     pub(crate) async fn call_controller(
         &self,
         transport: &mut Transport<TransportStream>,
@@ -1322,7 +1309,7 @@ where
         peer: PeerId,
         end_call: &Arc<Notify>,
     ) -> Result<(Option<String>, bool)> {
-        let identity = self.identity.read().await.public().to_peer_id();
+        let identity = self.peer_id().await;
 
         CONNECTED.store(true, Relaxed);
         self.callbacks.call_state(CallState::Connected).await;
@@ -1371,7 +1358,7 @@ where
         }
     }
 
-    /// manages connection with one room peer
+    /// Manages connection with one room peer
     pub(crate) async fn room_handshake(
         &self,
         transport: &mut Transport<TransportStream>,
@@ -1424,7 +1411,7 @@ where
         Ok(())
     }
 
-    /// the controller for rooms
+    /// The controller for rooms
     pub(crate) async fn room_controller(
         &self,
         mut receiver: MReceiver<RoomMessage>,
@@ -1475,7 +1462,7 @@ where
             statistics_state.upload_bandwidth.clone(),
         ));
 
-        spawn(statistics_collector(
+        let statistics_handle = spawn(statistics_collector(
             statistics_state.clone(),
             self.callbacks.statistics_callback(),
             stop_io.clone(),
@@ -1559,6 +1546,8 @@ where
         self.room_state.write().await.take();
         // clean up sessions blocked by room
         end_sessions.cancel();
+        // join statistics collector
+        statistics_handle.await?;
         Ok(())
     }
 }
@@ -1571,34 +1560,81 @@ where
     fn clone(&self) -> Self {
         Self {
             host: Arc::clone(&self.host),
-            rms_threshold: Arc::clone(&self.rms_threshold),
-            input_volume: Arc::clone(&self.input_volume),
-            output_volume: Arc::clone(&self.output_volume),
-            denoise: Arc::clone(&self.denoise),
-            denoise_model: Arc::clone(&self.denoise_model),
-            input_device: self.input_device.clone(),
-            output_device: self.output_device.clone(),
-            identity: Arc::clone(&self.identity),
-            in_call: Arc::clone(&self.in_call),
-            end_audio_test: Arc::clone(&self.end_audio_test),
+            core_state: self.core_state.clone(),
             room_state: Arc::clone(&self.room_state),
-            deafened: Arc::clone(&self.deafened),
-            muted: Arc::clone(&self.muted),
-            play_custom_ringtones: Arc::clone(&self.play_custom_ringtones),
-            send_custom_ringtone: Arc::clone(&self.send_custom_ringtone),
-            efficiency_mode: Arc::clone(&self.efficiency_mode),
             session_states: Arc::clone(&self.session_states),
             start_session: self.start_session.clone(),
             start_screenshare: self.start_screenshare.clone(),
             restart_manager: Arc::clone(&self.restart_manager),
-            network_config: self.network_config.clone(),
-            screenshare_config: self.screenshare_config.clone(),
             overlay: self.overlay.clone(),
-            codec_config: self.codec_config.clone(),
             #[cfg(target_family = "wasm")]
             web_input: Arc::clone(&self.web_input),
             callbacks: Arc::clone(&self.callbacks),
             phantom: self.phantom,
         }
     }
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct CoreState {
+    /// Controls the threshold for silence detection
+    pub(crate) rms_threshold: Arc<AtomicF32>,
+
+    /// The factor to adjust the input volume by
+    pub(crate) input_volume: Arc<AtomicF32>,
+
+    /// The factor to adjust the output volume by
+    pub(crate) output_volume: Arc<AtomicF32>,
+
+    /// Enables rnnoise denoising
+    pub(crate) denoise: Arc<AtomicBool>,
+
+    /// The rnnoise model
+    pub(crate) denoise_model: Arc<RwLock<RnnModel>>,
+
+    /// Manually set the input device
+    pub(crate) input_device: DeviceName,
+
+    /// Manually set the output device
+    pub(crate) output_device: DeviceName,
+
+    /// The current libp2p private key
+    pub(crate) identity: Arc<RwLock<Option<Keypair>>>,
+
+    /// Keeps track of whether the user is in a call
+    pub(crate) in_call: Arc<AtomicBool>,
+
+    /// used to end an audio test, if there is one
+    pub(crate) end_audio_test: Arc<Mutex<Option<Arc<Notify>>>>,
+
+    /// Disables the output stream
+    pub(crate) deafened: Arc<AtomicBool>,
+
+    /// Disables the input stream
+    pub(crate) muted: Arc<AtomicBool>,
+
+    /// Disables the playback of custom ringtones
+    pub(crate) play_custom_ringtones: Arc<AtomicBool>,
+
+    /// Enables sending your custom ringtone
+    pub(crate) send_custom_ringtone: Arc<AtomicBool>,
+
+    // TODO use efficiency mode for something again
+    pub(crate) efficiency_mode: Arc<AtomicBool>,
+
+    /// set to true at shutdown to break manager loop
+    pub(crate) stop_manager: Arc<AtomicBool>,
+
+    /// notifies when a manager starts
+    pub(crate) manager_active: Arc<Notify>,
+
+    /// Network configuration for p2p connections
+    pub(crate) network_config: NetworkConfig,
+
+    /// Configuration for the screenshare functionality
+    #[allow(dead_code)]
+    pub(crate) screenshare_config: ScreenshareConfig,
+
+    /// configuration for audio codec, or lack thereof
+    pub(crate) codec_config: CodecConfig,
 }

@@ -66,15 +66,15 @@ where
         let (encoded_input_sender, encoded_input_receiver) = unbounded_async::<ProcessorMessage>();
 
         let (codec_enabled, vbr, residual_bits) = codec_options;
-        let denoise = self.denoise.load(Relaxed);
+        let denoise = self.core_state.denoise.load(Relaxed);
         // the rnnoise denoiser
         let denoiser = denoise.then_some(DenoiseState::from_model(
-            self.denoise_model.read().await.clone(),
+            self.core_state.denoise_model.read().await.clone(),
         ));
         let state = InputProcessorState::new(
-            &self.input_volume,
-            &self.rms_threshold,
-            &self.muted,
+            &self.core_state.input_volume,
+            &self.core_state.rms_threshold,
+            &self.core_state.muted,
             statistics_state.input_rms.clone(),
         );
 
@@ -143,7 +143,7 @@ where
         let web_output = output_sender.clone();
 
         // get the output device and its default configuration
-        let output_device = get_output_device(&self.output_device, &self.host).await?;
+        let output_device = get_output_device(&self.core_state.output_device, &self.host).await?;
         let output_config = output_device.default_output_config()?;
         info!("output device: {:?}", output_device.name());
 
@@ -158,9 +158,9 @@ where
         // the ratio of the output sample rate to the remote input sample rate
         let ratio = output_config.sample_rate().0 as f64 / remote_sample_rate;
         let state = OutputProcessorState::new(
-            &self.output_volume,
+            &self.core_state.output_volume,
             statistics_state.output_rms.clone(),
-            &self.deafened,
+            &self.core_state.deafened,
             statistics_state.loss.clone(),
         );
 
@@ -300,9 +300,9 @@ where
         }
 
         // load the shared codec config values
-        let config_codec_enabled = self.codec_config.enabled.load(Relaxed);
-        let config_vbr = self.codec_config.vbr.load(Relaxed);
-        let config_residual_bits = self.codec_config.residual_bits.load(Relaxed);
+        let config_codec_enabled = self.core_state.codec_config.enabled.load(Relaxed);
+        let config_vbr = self.core_state.codec_config.vbr.load(Relaxed);
+        let config_residual_bits = self.core_state.codec_config.residual_bits.load(Relaxed);
 
         let mut local_configuration = AudioHeader {
             channels: input_channels as u32,
@@ -314,7 +314,7 @@ where
         };
 
         // rnnoise requires a 48kHz sample rate
-        if self.denoise.load(Relaxed) {
+        if self.core_state.denoise.load(Relaxed) {
             local_configuration.sample_rate = 48_000;
         }
 
@@ -332,7 +332,7 @@ where
     /// helper method to get the user specified device or default as fallback
     #[cfg(not(target_family = "wasm"))]
     pub(crate) async fn get_input_device(&self) -> Result<Device> {
-        match *self.input_device.lock().await {
+        match *self.core_state.input_device.lock().await {
             Some(ref name) => Ok(self
                 .host
                 .input_devices()?
@@ -358,7 +358,7 @@ where
     /// helper method to load pre-encoded ringtone bytes
     pub(crate) async fn load_ringtone(&self) -> Option<Vec<u8>> {
         #[cfg(not(target_family = "wasm"))]
-        if self.send_custom_ringtone.load(Relaxed) {
+        if self.core_state.send_custom_ringtone.load(Relaxed) {
             match File::open("ringtone.sea").await {
                 Ok(mut file) => {
                     let mut buffer = Vec::new();
@@ -409,18 +409,34 @@ where
     }
 
     pub(crate) async fn is_call_active(&self) -> bool {
-        self.in_call.load(Relaxed)
+        self.core_state.in_call.load(Relaxed)
             || self.room_state.read().await.is_some()
-            || self.end_audio_test.lock().await.is_some()
+            || self.core_state.end_audio_test.lock().await.is_some()
     }
 
     pub(crate) async fn send_start_screenshare(&self, peer: PeerId, header: Option<Message>) {
-        _ = self
-            .start_screenshare
-            .send(StartScreenshare { peer, header })
-            .await;
+        if let Some(ref sender) = self.start_screenshare {
+            _ = sender.send(StartScreenshare { peer, header }).await;
+        }
     }
 
+    pub(crate) async fn peer_id(&self) -> PeerId {
+        if let Some(keypair) = self.core_state.identity.read().await.as_ref() {
+            keypair.public().to_peer_id()
+        } else {
+            PeerId::random()
+        }
+    }
+
+    pub(crate) async fn shutdown(self) {
+        // guaranteed to end all sessions
+        self.reset_sessions().await;
+        // the manager will now stop & not run again
+        self.core_state.stop_manager.store(true, Relaxed);
+        // end the current manager
+        self.restart_manager.notify_one();
+    }
+    
     #[cfg(target_family = "wasm")]
     pub(crate) async fn init_web_audio(&self) -> Result<()> {
         let wrapper = crate::audio::web_audio::WebAudioWrapper::new().await?;

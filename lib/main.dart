@@ -25,12 +25,14 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:super_clipboard/super_clipboard.dart';
 import 'package:telepathy/audio_level.dart';
 import 'package:telepathy/console.dart';
+import 'package:window_manager/window_manager.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 SoundHandle? outgoingSoundHandle;
 
 Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
+  await windowManager.ensureInitialized();
 
   try {
     await RustLib.init();
@@ -219,14 +221,21 @@ Future<void> main(List<String> args) async {
       managerActive: stateController.setSessionManager,
       screenshareStarted: stateController.screenshareStarted);
 
-  final telepathy = await Telepathy.newInstance(
-      identity: settingsController.keypair,
+  final telepathy = Telepathy(
       host: host,
       networkConfig: settingsController.networkConfig,
       screenshareConfig: settingsController.screenshareConfig,
       overlay: overlay,
       codecConfig: settingsController.codecConfig,
       callbacks: callbacks);
+
+  await telepathy.setIdentity(key: settingsController.keypair);
+  await telepathy.startManager();
+
+  // attempt to open sessions with all contacts
+  for (Contact contact in settingsController.contacts.values) {
+    telepathy.startSession(contact: contact);
+  }
 
   final audioDevices = AudioDevices(telepathy: telepathy);
 
@@ -265,7 +274,7 @@ Future<void> main(List<String> args) async {
 }
 
 /// The main app
-class TelepathyApp extends StatelessWidget {
+class TelepathyApp extends StatefulWidget {
   final Telepathy telepathy;
   final SettingsController settingsController;
   final InterfaceController interfaceController;
@@ -289,9 +298,46 @@ class TelepathyApp extends StatelessWidget {
       required this.interfaceController});
 
   @override
+  State<StatefulWidget> createState() => _TelepathyAppState();
+}
+
+class _TelepathyAppState extends State<TelepathyApp>  with WindowListener {
+  bool _isClosing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    windowManager.addListener(this);
+    _initWindow();
+  }
+
+  Future<void> _initWindow() async {
+    await windowManager.setPreventClose(true);
+  }
+
+  @override
+  void dispose() {
+    windowManager.removeListener(this);
+    super.dispose();
+  }
+
+  @override
+  void onWindowClose() async {
+    final isPreventClose = await windowManager.isPreventClose();
+    if (!isPreventClose || _isClosing) {
+      return;
+    }
+
+    _isClosing = true;
+    windowManager.hide();
+    await widget.telepathy.shutdown();
+    await windowManager.destroy();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-        listenable: interfaceController,
+        listenable: widget.interfaceController,
         builder: (BuildContext context, Widget? child) {
           return MaterialApp(
             navigatorKey: navigatorKey,
@@ -304,13 +350,13 @@ class TelepathyApp extends StatelessWidget {
                 overlayColor: Colors.transparent,
                 trackShape: CustomTrackShape(),
                 inactiveTrackColor: const Color(0xFF121212),
-                activeTrackColor: Color(interfaceController.primaryColor),
+                activeTrackColor: Color(widget.interfaceController.primaryColor),
               ),
               colorScheme: ColorScheme.dark(
                 // primary: Color(0xFF7458ff),
                 // secondary: Color(0xFF6950e8),
-                primary: Color(interfaceController.primaryColor),
-                secondary: Color(interfaceController.secondaryColor),
+                primary: Color(widget.interfaceController.primaryColor),
+                secondary: Color(widget.interfaceController.secondaryColor),
                 brightness: Brightness.dark,
                 surface: const Color(0xFF222425),
                 secondaryContainer: const Color(0xFF191919),
@@ -327,22 +373,22 @@ class TelepathyApp extends StatelessWidget {
               dropdownMenuTheme: DropdownMenuThemeData(
                 menuStyle: MenuStyle(
                   backgroundColor:
-                      WidgetStateProperty.all(const Color(0xFF191919)),
+                  WidgetStateProperty.all(const Color(0xFF191919)),
                   surfaceTintColor:
-                      WidgetStateProperty.all(const Color(0xFF191919)),
+                  WidgetStateProperty.all(const Color(0xFF191919)),
                 ),
               ),
             ),
             home: HomePage(
-              telepathy: telepathy,
-              settingsController: settingsController,
-              interfaceController: interfaceController,
-              stateController: callStateController,
-              player: player,
-              chatStateController: chatStateController,
-              statisticsController: statisticsController,
-              overlay: overlay,
-              audioDevices: audioDevices,
+              telepathy: widget.telepathy,
+              settingsController: widget.settingsController,
+              interfaceController: widget.interfaceController,
+              stateController: widget.callStateController,
+              player: widget.player,
+              chatStateController: widget.chatStateController,
+              statisticsController: widget.statisticsController,
+              overlay: widget.overlay,
+              audioDevices: widget.audioDevices,
             ),
           );
         });

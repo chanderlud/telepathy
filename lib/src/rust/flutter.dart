@@ -11,7 +11,7 @@ part 'flutter.freezed.dart';
 
 // These functions are ignored because they are not marked as `pub`: `atomic_u32_deserialize`, `atomic_u32_serialize`, `invoke`, `new`, `notify`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `FlutterStatisticsCallback`, `SEND_TO_DART_LOGGER_STREAM_SINK`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `deref`, `do_logs`, `fmt`, `fmt`, `fmt`, `initialize`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `deref`, `do_logs`, `fmt`, `fmt`, `fmt`, `fmt`, `initialize`
 
 Stream<String> createLogStream() =>
     RustLib.instance.api.crateFlutterCreateLogStream();
@@ -57,6 +57,9 @@ abstract class ChatMessage implements RustOpaqueInterface {
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<CodecConfig>>
 abstract class CodecConfig implements RustOpaqueInterface {
+  static Future<CodecConfig> default_() =>
+      RustLib.instance.api.crateFlutterCodecConfigDefault();
+
   factory CodecConfig(
           {required bool enabled,
           required bool vbr,
@@ -137,6 +140,9 @@ abstract class FlutterCallbacks implements RustOpaqueInterface {
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<NetworkConfig>>
 abstract class NetworkConfig implements RustOpaqueInterface {
+  static Future<NetworkConfig> default_() =>
+      RustLib.instance.api.crateFlutterNetworkConfigDefault();
+
   Future<String> getRelayAddress();
 
   Future<String> getRelayId();

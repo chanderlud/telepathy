@@ -8,35 +8,43 @@ use log::info;
 use nnnoiseless::DenoiseState;
 use rand::Rng;
 use rand::prelude::SliceRandom;
+use relay_server::{RelayInfo, spawn_relay};
 use std::fs::read;
 use std::io::Write;
 use std::thread::{sleep, spawn};
 use std::time::Instant;
+use tokio::sync::OnceCell;
 
 const HOGWASH_BYTES: &[u8] = include_bytes!("../../../../assets/models/hogwash.rnn");
+
+static RELAY: OnceCell<RelayInfo> = OnceCell::const_new();
+
+async fn relay() -> &'static RelayInfo {
+    RELAY
+        .get_or_init(|| async {
+            // panic on error here is ok in tests
+            spawn_relay(true).await.expect("failed to start relay")
+        })
+        .await
+}
 
 impl<C, S> TelepathyCore<C, S>
 where
     S: FrbStatisticsCallback + Send + Sync + 'static,
     C: FrbCallbacks<S> + Send + Sync + 'static,
 {
-    pub async fn test(callbacks: C) -> Self {
-        let network_config =
-            NetworkConfig::new(String::from("test"), String::from("test")).unwrap();
+    fn mock(callbacks: C, network_config: &NetworkConfig, codec_config: &CodecConfig) -> Self {
         let screenshare_config = ScreenshareConfig::default();
         let overlay = Overlay::default();
-        let codec_config = CodecConfig::new(true, true, 5.0);
 
         Self::new(
-            PeerId::random().to_bytes(),
             Arc::new(Host::default()),
-            &network_config,
+            network_config,
             &screenshare_config,
             &overlay,
-            &codec_config,
+            codec_config,
             callbacks,
         )
-        .await
     }
 }
 
@@ -393,22 +401,171 @@ impl Default for OutputProcessorState {
     }
 }
 
-#[tokio::test]
-async fn mock_callbacks_test() {
+/// returns mock callbacks that will establish a telepathy instance with the provided contacts
+fn construct_mock_callbacks(
+    contacts: Vec<Contact>,
+    is_active: Arc<AtomicBool>,
+) -> MockFrbCallbacks<MockFrbStatisticsCallback> {
     let mut mock: MockFrbCallbacks<MockFrbStatisticsCallback> = MockFrbCallbacks::new();
+
+    // handle session status callbacks
     mock.expect_session_status()
-        .withf(|status, peer| true)
-        .returning(|_status: SessionStatus, _peer: PeerId| {
+        .withf(|status, peer| {
+            info!("session status got called {status:?} {peer}");
+            true
+        })
+        .returning(move |status, _| {
+            let is_active_clone = is_active.clone();
             Box::pin(async move {
-                // your async test logic here
-                // e.g. do nothing:
+                match status {
+                    SessionStatus::Connected => {
+                        is_active_clone.store(true, Relaxed);
+                    }
+                    _ => (),
+                }
             })
         });
 
-    let telepathy = TelepathyCore::test(mock).await;
-    telepathy
+    // ensure manager activates
+    mock.expect_manager_active()
+        .withf(|a, b| *a && *b)
+        .once()
+        .returning(|_, _| Box::pin(async move {}));
+
+    // ensure manager deactivates
+    mock.expect_manager_active()
+        .withf(|a, b| !a && !b)
+        .once()
+        .returning(|_, _| Box::pin(async move {}));
+
+    // return the contacts
+    let contacts_clone = contacts.clone();
+    mock.expect_get_contacts()
+        .withf(|| true)
+        .returning(move || {
+            let contacts_clone = contacts_clone.clone();
+            Box::pin(async move { contacts_clone })
+        });
+
+    mock.expect_get_contact()
+        .withf(|_peer_id| true)
+        .returning(move |peer_id| {
+            let contacts_clone = contacts.clone();
+            Box::pin(async move {
+                for contact in contacts_clone.iter() {
+                    if contact.peer_id.to_bytes() == peer_id {
+                        return Some(contact.clone());
+                    }
+                }
+
+                None
+            })
+        });
+
+    mock
+}
+
+#[tokio::test]
+async fn mock_callbacks_test() {
+    fast_log::init(Config::new().file("mock_callbacks.log").level(Trace)).unwrap();
+
+    // get local relay
+    let relay: &RelayInfo = relay().await;
+
+    // craft network config for the test instance
+    let network_config_a = NetworkConfig::mock(
+        "127.0.0.1:40142".parse().unwrap(),
+        relay.peer_id,
+        40143,
+        vec!["127.0.0.1".parse().unwrap()],
+    );
+
+    let network_config_b = NetworkConfig::mock(
+        "127.0.0.1:40142".parse().unwrap(),
+        relay.peer_id,
+        40144,
+        vec!["127.0.0.1".parse().unwrap()],
+    );
+
+    // default codec config
+    let codec_config = CodecConfig::new(true, true, 5.0);
+
+    let key_a = Keypair::generate_ed25519();
+    let contact_a = Contact {
+        id: "test_a".to_string(),
+        nickname: "test_a".to_string(),
+        peer_id: PeerId::from(key_a.public()),
+        is_room_only: false,
+    };
+
+    let key_b = Keypair::generate_ed25519();
+    let contact_b = Contact {
+        id: "test_b".to_string(),
+        nickname: "test_b".to_string(),
+        peer_id: PeerId::from(key_b.public()),
+        is_room_only: false,
+    };
+
+    let a_is_active = Arc::new(AtomicBool::new(false));
+    let mock_a = construct_mock_callbacks(vec![contact_b.clone()], a_is_active.clone());
+
+    let b_is_active = Arc::new(AtomicBool::new(false));
+    let mock_b = construct_mock_callbacks(vec![contact_a.clone()], b_is_active.clone());
+
+    let mut telepathy_a = TelepathyCore::mock(mock_a, &network_config_a, &codec_config);
+    *telepathy_a.core_state.identity.write().await = Some(key_a);
+    let handle_a = telepathy_a.start_manager().await;
+
+    let mut telepathy_b = TelepathyCore::mock(mock_b, &network_config_b, &codec_config);
+    *telepathy_b.core_state.identity.write().await = Some(key_b);
+    let handle_b = telepathy_b.start_manager().await;
+
+    // give both clients a chance to establish themselves with the relay server
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    telepathy_a
         .start_session
-        .send(PeerId::random())
+        .as_ref()
+        .unwrap()
+        .send(contact_b.peer_id)
         .await
         .unwrap();
+
+    // poll for the session status callback to become connected
+    let mut interval = interval(Duration::from_millis(100));
+    loop {
+        interval.tick().await;
+        let a_active = a_is_active.load(Relaxed);
+        let b_active = b_is_active.load(Relaxed);
+
+        if a_active && b_active {
+            info!("both clients got connected");
+            break;
+        }
+    }
+
+    // grab session states for inspection
+    let b_session = telepathy_a
+        .session_states
+        .read()
+        .await
+        .get(&contact_b.peer_id)
+        .cloned()
+        .unwrap();
+    let a_session = telepathy_b
+        .session_states
+        .read()
+        .await
+        .get(&contact_a.peer_id)
+        .cloned()
+        .unwrap();
+
+    info!("session state a: {:?}", a_session);
+    info!("session state b: {:?}", b_session);
+
+    telepathy_a.shutdown().await;
+    telepathy_b.shutdown().await;
+
+    handle_a.unwrap().await.unwrap();
+    handle_b.unwrap().await.unwrap();
 }

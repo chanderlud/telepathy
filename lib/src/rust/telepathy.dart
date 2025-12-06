@@ -12,7 +12,7 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These functions are ignored because they are not marked as `pub`: `codec_config`, `latencies_missing`, `loopback`, `new`, `new`, `new`, `new`, `open_stream`, `receive_stream`, `relayed_only`, `statistics_collector`, `stream_to_audio_transport`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `ConnectionState`, `EarlyCallState`, `OptionalCallArgs`, `PeerState`, `RoomConnection`, `RoomMessage`, `RoomState`, `SessionState`, `StartScreenshare`, `StatisticsCollectorState`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `fmt`, `fmt`, `fmt`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Telepathy>>
 abstract class Telepathy implements RustOpaqueInterface {
@@ -33,17 +33,14 @@ abstract class Telepathy implements RustOpaqueInterface {
   /// Lists the input and output devices
   Future<(List<String>, List<String>)> listDevices();
 
-  // HINT: Make it `#[frb(sync)]` to let it become the default constructor of Dart class.
-  static Future<Telepathy> newInstance(
-          {required List<int> identity,
-          required ArcHost host,
+  factory Telepathy(
+          {required ArcHost host,
           required NetworkConfig networkConfig,
           required ScreenshareConfig screenshareConfig,
           required Overlay overlay,
           required CodecConfig codecConfig,
           required FlutterCallbacks callbacks}) =>
       RustLib.instance.api.crateTelepathyTelepathyNew(
-          identity: identity,
           host: host,
           networkConfig: networkConfig,
           screenshareConfig: screenshareConfig,
@@ -85,8 +82,13 @@ abstract class Telepathy implements RustOpaqueInterface {
 
   void setSendCustomRingtone({required bool send});
 
+  /// shuts down the entire rust backend
+  Future<void> shutdown();
+
   /// Attempts to start a call through an existing session
   Future<void> startCall({required Contact contact});
+
+  Future<void> startManager();
 
   Future<void> startScreenshare({required Contact contact});
 

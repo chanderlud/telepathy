@@ -85,6 +85,7 @@ fast_log = "1.7"
 [dev-dependencies]
 rand = "0.8"
 criterion = "0.7"
+relay_server = { path = "../relay_server" }
 
 [[bench]]
 name = "bench"

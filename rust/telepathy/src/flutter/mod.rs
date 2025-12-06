@@ -20,10 +20,10 @@ use libp2p::identity::Keypair;
 use log::{LevelFilter, info, warn};
 use serde::{Deserialize, Serialize};
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4};
 use std::str::FromStr;
 use std::sync::atomic::Ordering::Relaxed;
-use std::sync::atomic::{AtomicBool, AtomicU32};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32};
 use std::sync::{Arc, Once};
 #[cfg(not(target_family = "wasm"))]
 use tokio::net::lookup_host;
@@ -121,6 +121,7 @@ pub enum CallState {
     CallEnded(String, bool),
 }
 
+#[derive(Debug)]
 pub enum SessionStatus {
     Connecting,
     Connected,
@@ -206,7 +207,10 @@ pub struct NetworkConfig {
     pub(crate) relay_id: Arc<RwLock<PeerId>>,
 
     /// the libp2p port for the swarm
-    pub(crate) listen_port: Arc<RwLock<u16>>,
+    pub(crate) listen_port: Arc<AtomicU16>,
+
+    /// the addresses libp2p will listen on
+    pub(crate) bind_addresses: Vec<IpAddr>,
 }
 
 impl NetworkConfig {
@@ -217,8 +221,27 @@ impl NetworkConfig {
             relay_id: Arc::new(RwLock::new(
                 PeerId::from_str(&relay_id).map_err(Error::from)?,
             )),
-            listen_port: Arc::new(RwLock::new(0)),
+            listen_port: Arc::new(AtomicU16::new(0)),
+            bind_addresses: vec![
+                IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+                IpAddr::V6(Ipv6Addr::UNSPECIFIED),
+            ],
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn mock(
+        relay_address: SocketAddr,
+        relay_id: PeerId,
+        port: u16,
+        bind_addresses: Vec<IpAddr>,
+    ) -> Self {
+        Self {
+            relay_address: Arc::new(RwLock::new(relay_address)),
+            relay_id: Arc::new(RwLock::new(relay_id)),
+            listen_port: Arc::new(AtomicU16::new(port)),
+            bind_addresses,
+        }
     }
 
     #[cfg(not(target_family = "wasm"))]
@@ -253,6 +276,20 @@ impl NetworkConfig {
 
     pub async fn get_relay_id(&self) -> String {
         self.relay_id.read().await.to_string()
+    }
+}
+
+impl Default for NetworkConfig {
+    fn default() -> Self {
+        Self {
+            relay_address: Arc::new(RwLock::new(SocketAddr::V4(SocketAddrV4::new(
+                Ipv4Addr::UNSPECIFIED,
+                0,
+            )))),
+            relay_id: Arc::new(RwLock::new(PeerId::random())),
+            listen_port: Arc::new(Default::default()),
+            bind_addresses: vec![IpAddr::V4(Ipv4Addr::UNSPECIFIED)],
+        }
     }
 }
 
@@ -441,7 +478,7 @@ impl RecordingConfig {
 }
 
 #[frb(opaque)]
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct CodecConfig {
     /// whether to use the codec
     pub(crate) enabled: Arc<AtomicBool>,
