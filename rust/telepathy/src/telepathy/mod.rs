@@ -122,7 +122,8 @@ impl Telepathy {
         debug!("start_session called for {}", contact.peer_id);
 
         if let Some(ref sender) = self.inner.start_session
-            && sender.send(contact.peer_id).await.is_err() {
+            && sender.send(contact.peer_id).await.is_err()
+        {
             error!("start_session channel is closed");
         }
     }
@@ -505,9 +506,9 @@ impl EarlyCallState {
 }
 
 /// a state used for session negotiation
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(crate) struct PeerState {
-    /// when true the peer's identity addresses will not be dialed
+    /// set to true after dialing peer's identity addresses
     dialed: bool,
 
     /// when true the peer is the dialer
@@ -515,17 +516,25 @@ pub(crate) struct PeerState {
 
     /// a map of connections and their latencies
     connections: HashMap<ConnectionId, ConnectionState>,
+
+    selected_connection: bool,
+
+    ductr_failed: bool,
 }
 
 impl PeerState {
-    fn new(dialer: bool, connection_id: ConnectionId, relayed: bool) -> Self {
-        let mut connections = HashMap::new();
-        connections.insert(connection_id, ConnectionState::new(relayed));
-
+    fn dialer() -> Self {
         Self {
-            dialed: false,
-            dialer,
-            connections,
+            dialer: true,
+            ..Default::default()
+        }
+    }
+
+    fn non_dialer(connection_id: ConnectionId, relayed: bool) -> Self {
+        Self {
+            dialer: false,
+            connections: HashMap::from([(connection_id, ConnectionState::new(relayed))]),
+            ..Default::default()
         }
     }
 
@@ -595,10 +604,12 @@ pub(crate) struct SessionState {
     end_call: Arc<Notify>,
 
     stop_screenshare: Arc<Mutex<Option<Arc<Notify>>>>,
+
+    relayed: Arc<AtomicBool>,
 }
 
 impl SessionState {
-    fn new(message_sender: &MSender<Message>) -> Self {
+    fn new(message_sender: &MSender<Message>, relayed: bool) -> Self {
         let stream_channel = unbounded_async();
 
         Self {
@@ -614,6 +625,7 @@ impl SessionState {
             wants_stream: Default::default(),
             end_call: Default::default(),
             stop_screenshare: Default::default(),
+            relayed: Arc::new(AtomicBool::new(relayed)),
         }
     }
 

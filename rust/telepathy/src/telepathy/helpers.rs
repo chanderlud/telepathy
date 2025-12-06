@@ -436,7 +436,7 @@ where
         // end the current manager
         self.restart_manager.notify_one();
     }
-    
+
     #[cfg(target_family = "wasm")]
     pub(crate) async fn init_web_audio(&self) -> Result<()> {
         let wrapper = crate::audio::web_audio::WebAudioWrapper::new().await?;

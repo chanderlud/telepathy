@@ -149,8 +149,6 @@ where
         Some(spawn(async move {
             // break when stop_manager==true
             while !manager_clone.core_state.stop_manager.load(Relaxed) {
-                // emit as manager starts
-                manager_clone.core_state.manager_active.notify_waiters();
                 // run the session manager to completion
                 let result = manager_clone
                     .session_manager(&mut receive_session, &mut receive_screenshare)
@@ -355,14 +353,47 @@ where
                 .await
         });
 
-        // handles the state needed for negotiating sessions
-        // it is cleared each time a peer successfully connects
+        // contains the state needed for negotiating sessions
         let mut peer_states: HashMap<PeerId, PeerState> = HashMap::new();
         // handles to threads spawned by the session manager
         let mut handles = Vec::new();
+        // load public identity
         let public_identity = self.peer_id().await;
+        // the manager is about to start processing events
+        self.core_state.manager_active.notify_waiters();
 
         loop {
+            // extract peers with single connection session states
+            let single_connections: Vec<_> = peer_states
+                .iter()
+                .filter(|(_, s)| s.connections.len() == 1)
+                .filter_map(|(p, s)| {
+                    s.connections
+                        .iter()
+                        .next()
+                        .map(|(_, c)| (*p, s.selected_connection, c.relayed))
+                })
+                .collect();
+
+            for (peer, selected, relayed) in single_connections {
+                if selected {
+                    // open a session control stream and start the session controller
+                    self.open_session(
+                        peer,
+                        swarm.behaviour().stream.new_control(),
+                        &mut peer_states,
+                        &mut handles,
+                        relayed,
+                    )
+                    .await;
+                } else if let Some(session) = self.session_states.read().await.get(&peer) {
+                    // this peer state is no longer needed
+                    _ = peer_states.remove(&peer);
+                    // set the real relayed status for the session
+                    session.relayed.store(relayed, Relaxed);
+                }
+            }
+
             let event = select! {
                 // restart the manager
                 _ = self.restart_manager.notified() => {
@@ -389,6 +420,8 @@ where
                         error!("dial error for {}: {}", peer_id, error);
                         SessionStatus::Inactive
                     } else {
+                        // insert a dialer peer state right away
+                        peer_states.insert(peer_id, PeerState::dialer());
                         SessionStatus::Connecting
                     };
 
@@ -473,27 +506,29 @@ where
                             warn!("unknown peer was no longer connected");
                         }
                     } else if let Some(peer_state) = peer_states.get_mut(&peer_id) {
-                        // insert the new connection
+                        // if two clients dial each other at the same time, one switches to non-dialer
+                        if listener && peer_state.dialer {
+                            debug!("dialer got incoming listener connection");
+                            if peer_id < public_identity {
+                                info!("one client switching to non-dialer");
+                                peer_state.dialer = false;
+                            }
+                        }
+
+                        // track the new connection
                         peer_state
                             .connections
                             .insert(connection_id, ConnectionState::new(relayed));
+                    } else if listener {
+                        info!("non-dialer established first connection with {peer_id}");
+                        // insert initial non-dialer state
+                        peer_states.insert(peer_id, PeerState::non_dialer(connection_id, relayed));
+                        // alert the frontend that the session is connecting
+                        self.callbacks
+                            .session_status(SessionStatus::Connecting, peer_id)
+                            .await;
                     } else {
-                        info!(
-                            "connection {} established with {} endpoint={:?} relayed={}",
-                            connection_id, peer_id, endpoint, relayed
-                        );
-
-                        // insert the new state and new connection
-                        peer_states
-                            .insert(peer_id, PeerState::new(!listener, connection_id, relayed));
-
-                        if listener {
-                            // a stream will be established by the other client
-                            // the dialer already has the connecting status set
-                            self.callbacks
-                                .session_status(SessionStatus::Connecting, peer_id)
-                                .await;
-                        }
+                        warn!("potential edge case; unreachable branch");
                     }
                 }
                 SwarmEvent::OutgoingConnectionError {
@@ -501,15 +536,28 @@ where
                     error,
                     connection_id,
                 } => {
-                    warn!("outgoing connection failed for {peer_id} because {error}",);
-
-                    if let Some(peer_state) = peer_states.get_mut(&peer_id) {
+                    let has_session = self.session_states.read().await.contains_key(&peer_id);
+                    let remove_state = if let Some(peer_state) = peer_states.get_mut(&peer_id) {
                         peer_state.connections.remove(&connection_id);
-                    } else if !self.session_states.read().await.contains_key(&peer_id) {
-                        // if an outgoing error occurs when no connection is active, the session initialization failed
+                        peer_state.connections.is_empty()
+                    } else {
+                        false
+                    };
+
+                    warn!(
+                        "outgoing connection failed for {peer_id} because {error} has_session={has_session} remove_state={remove_state}"
+                    );
+
+                    // session initialization failed
+                    if !has_session {
                         self.callbacks
                             .session_status(SessionStatus::Inactive, peer_id)
                             .await;
+                    }
+
+                    // clean up peer states
+                    if remove_state {
+                        peer_states.remove(&peer_id);
                     }
                 }
                 SwarmEvent::ConnectionClosed {
@@ -518,16 +566,24 @@ where
                     connection_id,
                     ..
                 } => {
-                    warn!("connection {connection_id} closed with {peer_id} cause={cause:?}",);
-
-                    // if there is no connection to the peer, the session initialization failed
-                    if !swarm.is_connected(&peer_id) {
-                        peer_states.remove(&peer_id);
+                    let remove_state = if !swarm.is_connected(&peer_id) {
+                        // if there is no connection to the peer, the session initialization failed
                         self.callbacks
                             .session_status(SessionStatus::Inactive, peer_id)
                             .await;
+                        true
                     } else if let Some(peer_state) = peer_states.get_mut(&peer_id) {
+                        // untrack the connection
                         peer_state.connections.remove(&connection_id);
+                        peer_state.connections.is_empty()
+                    } else {
+                        warn!("unexpected ConnectionClosed id={connection_id}: {cause:?}");
+                        continue;
+                    };
+
+                    if remove_state {
+                        info!("removing unused peer state for {peer_id}");
+                        peer_states.remove(&peer_id);
                     }
                 }
                 SwarmEvent::Behaviour(BehaviourEvent::Ping(event)) => {
@@ -539,80 +595,62 @@ where
                         continue; // the remaining logic is not needed while a session is active
                     }
 
-                    // if the session is still connecting, update the latency and try to choose a connection
-                    if let Some(peer_state) = peer_states.get_mut(&event.peer) {
-                        // the dialer chooses the connection
-                        if !peer_state.dialer {
-                            continue;
+                    // if we are the dialer & the session is still connecting, update the latency and try to choose a connection
+                    let peer_state = if let Some(state) = peer_states.get_mut(&event.peer)
+                        && state.dialer
+                    {
+                        state
+                    } else {
+                        continue;
+                    };
+
+                    // update the latency for the peer's connections
+                    if let Some(state) = peer_state.connections.get_mut(&event.connection) {
+                        state.latency = latency;
+                    } else {
+                        warn!(
+                            "received ping for untracked connection: {}",
+                            event.connection
+                        );
+                    }
+
+                    info!("connection states: {:?}", peer_state.connections);
+
+                    if peer_state.latencies_missing() {
+                        // only start a session if all connections have latency
+                        debug!("{} waiting for all latencies", event.peer);
+                        continue;
+                    } else if peer_state.relayed_only() && !peer_state.ductr_failed {
+                        // only start a session if there is a non-relayed connection
+                        // if ductr fails, fall back to relayed
+                        debug!("{} is all relayed", event.peer);
+                        continue;
+                    }
+
+                    // choose the connection with the lowest latency, prioritizing non-relay connections
+                    let connection = peer_state
+                        .connections
+                        .iter()
+                        .min_by(|a, b| {
+                            match (a.1.relayed, b.1.relayed) {
+                                (false, true) => std::cmp::Ordering::Less, // prioritize non-relay connections
+                                (true, false) => std::cmp::Ordering::Greater, // prioritize non-relay connections
+                                _ => a.1.latency.cmp(&b.1.latency), // compare latencies if both have the same relay status
+                            }
+                        })
+                        .map(|(id, _)| id);
+
+                    if let Some(connection_id) = connection {
+                        info!("using connection id={connection_id} for {}", event.peer);
+                        peer_state.selected_connection = true;
+                        // close the other connections
+                        for id in peer_state.connections.keys() {
+                            if id != connection_id {
+                                swarm.close_connection(*id);
+                            }
                         }
-
-                        // update the latency for the peer's connections
-                        if let Some(connection_latency) =
-                            peer_state.connections.get_mut(&event.connection)
-                        {
-                            connection_latency.latency = latency;
-                        } else {
-                            warn!(
-                                "received a ping for an unknown connection id={}",
-                                event.connection
-                            );
-                        }
-
-                        info!("connection states: {:?}", peer_state.connections);
-
-                        if peer_state.latencies_missing() {
-                            // only start a session if all connections have latency
-                            debug!(
-                                "not trying to establish a session with {} because not all connections have latency",
-                                event.peer
-                            );
-                            continue;
-                        } else if peer_state.relayed_only() {
-                            // only start a session if there is a non-relayed connection
-                            debug!(
-                                "not trying to establish a session with {} because all connections are relayed",
-                                event.peer
-                            );
-                            continue;
-                        }
-
-                        // choose the connection with the lowest latency, prioritizing non-relay connections
-                        let connection = peer_state
-                            .connections
-                            .iter()
-                            .min_by(|a, b| {
-                                match (a.1.relayed, b.1.relayed) {
-                                    (false, true) => std::cmp::Ordering::Less, // prioritize non-relay connections
-                                    (true, false) => std::cmp::Ordering::Greater, // prioritize non-relay connections
-                                    _ => a.1.latency.cmp(&b.1.latency), // compare latencies if both have the same relay status
-                                }
-                            })
-                            .map(|(id, _)| id);
-
-                        if let Some(connection_id) = connection {
-                            info!("using connection id={} for {}", connection_id, event.peer);
-
-                            // close the other connections
-                            peer_state
-                                .connections
-                                .keys()
-                                .filter(|id| id != &connection_id)
-                                .for_each(|id| {
-                                    swarm.close_connection(*id);
-                                });
-
-                            // open a session control stream and start the session controller
-                            self.open_session(
-                                event.peer,
-                                swarm.behaviour().stream.new_control(),
-                                peer_state.connections.len(),
-                                &mut peer_states,
-                                &mut handles,
-                            )
-                            .await;
-                        } else {
-                            warn!("no connection available for {}", event.peer);
-                        }
+                    } else {
+                        warn!("no connection available for {}", event.peer);
                     }
                 }
                 SwarmEvent::Behaviour(BehaviourEvent::Identify(IdentifyEvent::Received {
@@ -640,31 +678,25 @@ where
                         }
 
                         // dials the non-relayed addresses to attempt direct connections
+                        info!("dialing {} from identify event", address);
                         if let Err(error) = swarm.dial(address) {
                             error!("Error dialing {}: {}", peer_id, error);
                         }
                     }
                 }
-                // TODO validate that this logic successfully handles cases where the relay is the only available connection
                 SwarmEvent::Behaviour(BehaviourEvent::Dcutr(DcutrEvent {
                     remote_peer_id,
                     result,
                 })) => {
-                    debug!("ductr event with {}: {:?}", remote_peer_id, result);
-
-                    if let Some(peer_state) = peer_states.get(&remote_peer_id)
-                        && peer_state.relayed_only()
-                        && result.is_err()
-                    {
-                        info!("ductr failed while relayed_only, falling back to relay");
-                        self.open_session(
-                            remote_peer_id,
-                            swarm.behaviour().stream.new_control(),
-                            peer_state.connections.len(),
-                            &mut peer_states,
-                            &mut handles,
-                        )
-                        .await;
+                    if let Some(state) = peer_states.get_mut(&remote_peer_id) {
+                        info!(
+                            "setting ductr_failed to {} for {}",
+                            result.is_err(),
+                            remote_peer_id
+                        );
+                        state.ductr_failed = result.is_err();
+                    } else {
+                        debug!("ductr event with {}: {:?}", remote_peer_id, result);
                     }
                 }
                 event => {
@@ -727,7 +759,7 @@ where
                         info!("stream accepted for new session with {}", peer);
                     }
 
-                    handles.push(self.initialize_session(peer, None, stream).await);
+                    handles.push(self.initialize_session(peer, None, stream, false).await);
                 }
                 else => break Err(ErrorKind::StreamsEnded.into())
             }
@@ -745,27 +777,24 @@ where
         &self,
         peer: PeerId,
         mut control: Control,
-        connection_count: usize,
         peer_states: &mut HashMap<PeerId, PeerState>,
         handles: &mut Vec<JoinHandle<Result<()>>>,
+        relayed: bool,
     ) {
-        // it may take multiple tries to open the stream because the of the RNG in the stream handler
-        for _ in 0..connection_count {
-            match control.open_stream(peer, CHAT_PROTOCOL).await {
-                Ok(stream) => {
-                    info!("opened stream with {}, starting new session", peer);
-                    handles.push(self.initialize_session(peer, Some(control), stream).await);
-                    // the peer state is no longer needed
-                    peer_states.remove(&peer);
-                    return;
-                }
-                Err(error) => {
-                    warn!("OpenStreamError for {peer}: {error}");
-                }
+        match control.open_stream(peer, CHAT_PROTOCOL).await {
+            Ok(stream) => {
+                info!("opened stream with {}, starting new session", peer);
+                handles.push(
+                    self.initialize_session(peer, Some(control), stream, relayed)
+                        .await,
+                );
+                // the peer state is no longer needed
+                peer_states.remove(&peer);
+            }
+            Err(error) => {
+                warn!("OpenStreamError for {peer}: {error}");
             }
         }
-
-        error!("failed to open stream for {peer} after {connection_count} tries");
     }
 
     /// Entry point to a session that sets up state and spawns session outer
@@ -774,12 +803,13 @@ where
         peer: PeerId,
         control: Option<Control>,
         stream: Stream,
+        relayed: bool,
     ) -> JoinHandle<Result<()>> {
         let contact_option = self.callbacks.get_contact(peer.to_bytes()).await;
         // sends messages to the session from elsewhere in the program
         let message_channel = channel::<Message>(8);
         // create the state and a clone of it for the session
-        let state = Arc::new(SessionState::new(&message_channel.0));
+        let state = Arc::new(SessionState::new(&message_channel.0, relayed));
         // insert the new state
         let old_state_option = self
             .session_states
@@ -860,7 +890,10 @@ where
                 // the session was stopped
                 (Ok(false), _) => break Ok(false),
                 // room only sessions never continue
-                (Ok(true), true) => break Ok(true),
+                (Ok(true), true) => {
+                    info!("session for {} was room only", contact.peer_id);
+                    break Ok(true);
+                }
                 // normal session continue
                 (Ok(true), false) => {
                     // the session is not in a call

@@ -3,15 +3,14 @@ use crate::audio::{InputProcessorState, OutputProcessorState, input_processor};
 use crate::flutter::callbacks::{MockFrbCallbacks, MockFrbStatisticsCallback};
 use fast_log::Config;
 use kanal::{bounded, unbounded};
-use log::LevelFilter::Trace;
-use log::info;
+use log::{LevelFilter, info};
 use nnnoiseless::DenoiseState;
 use rand::Rng;
 use rand::prelude::SliceRandom;
 use relay_server::{RelayInfo, spawn_relay};
 use std::fs::read;
 use std::io::Write;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr};
 use std::thread::{sleep, spawn};
 use std::time::Instant;
 use tokio::sync::OnceCell;
@@ -50,15 +49,18 @@ impl Default for OutputProcessorState {
 }
 
 impl Contact {
-    fn mock(is_room_only: bool) -> (Self, Keypair) {
+    fn mock(is_room_only: bool, nickname: &str) -> (Self, Keypair) {
         let key = Keypair::generate_ed25519();
         let peer_id = key.public().to_peer_id();
-        (Self {
-            id: peer_id.to_string(),
-            nickname: "test-contact".to_string(),
-            peer_id,
-            is_room_only,
-        }, key)
+        (
+            Self {
+                id: peer_id.to_string(),
+                nickname: nickname.to_string(),
+                peer_id,
+                is_room_only,
+            },
+            key,
+        )
     }
 }
 
@@ -84,7 +86,12 @@ where
 
 #[tokio::test]
 async fn mock_callbacks_test() {
-    fast_log::init(Config::new().file("mock_callbacks.log").level(Trace)).unwrap();
+    fast_log::init(
+        Config::new()
+            .file("mock_callbacks.log")
+            .level(LevelFilter::Debug),
+    )
+    .unwrap();
 
     // get local relay
     let relay: &RelayInfo = relay().await;
@@ -108,8 +115,8 @@ async fn mock_callbacks_test() {
     let codec_config = CodecConfig::new(true, true, 5.0);
 
     // create contacts & identities
-    let (contact_a, key_a) = Contact::mock(false);
-    let (contact_b, key_b) = Contact::mock(true);
+    let (contact_a, key_a) = Contact::mock(false, "client-a");
+    let (contact_b, key_b) = Contact::mock(false, "client-b");
 
     // set up client a
     let a_is_active = Arc::new(AtomicBool::new(false));
@@ -117,6 +124,7 @@ async fn mock_callbacks_test() {
     let mut telepathy_a = TelepathyCore::mock(mock_a, &network_config_a, &codec_config);
     *telepathy_a.core_state.identity.write().await = Some(key_a);
     let handle_a = telepathy_a.start_manager().await;
+    telepathy_a.core_state.manager_active.notified().await;
 
     // set up client b
     let b_is_active = Arc::new(AtomicBool::new(false));
@@ -124,9 +132,7 @@ async fn mock_callbacks_test() {
     let mut telepathy_b = TelepathyCore::mock(mock_b, &network_config_b, &codec_config);
     *telepathy_b.core_state.identity.write().await = Some(key_b);
     let handle_b = telepathy_b.start_manager().await;
-
-    // give both clients a chance to establish themselves with the relay server
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    telepathy_b.core_state.manager_active.notified().await;
 
     // a starts session with b
     telepathy_a
@@ -134,6 +140,15 @@ async fn mock_callbacks_test() {
         .as_ref()
         .unwrap()
         .send(contact_b.peer_id)
+        .await
+        .unwrap();
+
+    // b starts session with a
+    telepathy_b
+        .start_session
+        .as_ref()
+        .unwrap()
+        .send(contact_a.peer_id)
         .await
         .unwrap();
 
@@ -149,6 +164,8 @@ async fn mock_callbacks_test() {
             break;
         }
     }
+
+    tokio::time::sleep(Duration::from_secs(1)).await;
 
     // grab session states for inspection
     let b_session = telepathy_a
@@ -253,7 +270,7 @@ async fn relay() -> &'static RelayInfo {
 #[ignore]
 #[test]
 fn benchmark() {
-    fast_log::init(Config::new().file("bench.log").level(Trace)).unwrap();
+    fast_log::init(Config::new().file("bench.log").level(LevelFilter::Trace)).unwrap();
 
     let sample_rate = 44_100;
 
@@ -303,7 +320,12 @@ fn benchmark() {
 #[ignore]
 #[test]
 fn packet_burst_simulation() {
-    fast_log::init(Config::new().file("burst_simulation.log").level(Trace)).unwrap();
+    fast_log::init(
+        Config::new()
+            .file("burst_simulation.log")
+            .level(LevelFilter::Trace),
+    )
+    .unwrap();
 
     let sample_rate = 44_100;
     let codec_enabled = true;
