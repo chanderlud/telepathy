@@ -1,6 +1,8 @@
 use super::*;
 use crate::audio::{InputProcessorState, OutputProcessorState, input_processor};
-use crate::flutter::callbacks::{FrbStatisticsCallback, MockFrbCallbacks, MockFrbStatisticsCallback};
+use crate::flutter::callbacks::{
+    FrbStatisticsCallback, MockFrbCallbacks, MockFrbStatisticsCallback,
+};
 use fast_log::Config;
 use kanal::{bounded, unbounded};
 use log::{LevelFilter, info};
