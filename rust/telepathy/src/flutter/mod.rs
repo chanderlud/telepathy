@@ -1,5 +1,5 @@
 /// flutter_rust_bridge:ignore
-pub mod callbacks;
+pub(crate) mod callbacks;
 
 use crate::error::{DartError, Error, ErrorKind};
 use crate::frb_generated::StreamSink;

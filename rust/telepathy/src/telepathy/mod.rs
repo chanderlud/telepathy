@@ -37,29 +37,21 @@ use flutter_rust_bridge::{frb, spawn};
 use kanal::AsyncReceiver;
 use kanal::{AsyncSender, unbounded_async};
 use libp2p::identity::Keypair;
-use libp2p::swarm::ConnectionId;
 use libp2p::{PeerId, Stream, StreamProtocol};
 use libp2p_stream::Control;
 use log::{debug, error, info, warn};
 use messages::{Attachment, AudioHeader, Message};
 use nnnoiseless::{FRAME_SIZE, RnnModel};
-use sea_codec::ProcessorMessage;
 use sockets::{Transport, TransportStream};
-use std::collections::HashMap;
 use std::mem;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::time::Duration;
-use tokio::select;
 use tokio::sync::mpsc::{Receiver as MReceiver, Sender as MSender, channel};
 use tokio::sync::{Mutex, Notify};
 #[cfg(not(target_family = "wasm"))]
 use tokio::task::JoinHandle;
-#[cfg(not(target_family = "wasm"))]
-use tokio::time::interval;
-use tokio_util::codec::LengthDelimitedCodec;
-use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tokio_util::sync::CancellationToken;
 use utils::*;
 #[cfg(target_family = "wasm")]
@@ -505,69 +497,6 @@ impl EarlyCallState {
     }
 }
 
-/// a state used for session negotiation
-#[derive(Debug, Default)]
-pub(crate) struct PeerState {
-    /// set to true after dialing peer's identity addresses
-    dialed: bool,
-
-    /// when true the peer is the dialer
-    dialer: bool,
-
-    /// a map of connections and their latencies
-    connections: HashMap<ConnectionId, ConnectionState>,
-
-    selected_connection: bool,
-
-    ductr_failed: bool,
-}
-
-impl PeerState {
-    fn dialer() -> Self {
-        Self {
-            dialer: true,
-            ..Default::default()
-        }
-    }
-
-    fn non_dialer(connection_id: ConnectionId, relayed: bool) -> Self {
-        Self {
-            dialer: false,
-            connections: HashMap::from([(connection_id, ConnectionState::new(relayed))]),
-            ..Default::default()
-        }
-    }
-
-    fn relayed_only(&self) -> bool {
-        self.connections.iter().all(|(_, state)| state.relayed)
-    }
-
-    fn latencies_missing(&self) -> bool {
-        self.connections
-            .iter()
-            .any(|(_, state)| state.latency.is_none())
-    }
-}
-
-/// the state of a single connection during session negotiation
-#[derive(Debug)]
-struct ConnectionState {
-    /// the latency is ms when available
-    latency: Option<u128>,
-
-    /// whether the connection is relayed
-    relayed: bool,
-}
-
-impl ConnectionState {
-    fn new(relayed: bool) -> Self {
-        Self {
-            latency: None,
-            relayed,
-        }
-    }
-}
-
 /// shared values for a single session
 #[derive(Debug)]
 pub(crate) struct SessionState {
@@ -726,90 +655,4 @@ impl StatisticsCollectorState {
 pub(crate) struct StartScreenshare {
     peer: PeerId,
     header: Option<Message>,
-}
-
-/// Used for audio tests, plays the input into the output
-async fn loopback(
-    input_receiver: AsyncReceiver<ProcessorMessage>,
-    output_sender: AsyncSender<ProcessorMessage>,
-    cancel: &CancellationToken,
-    end_call: &Arc<Notify>,
-) {
-    loop {
-        select! {
-            message = input_receiver.recv() => {
-                if let Ok(message) = message {
-                    if output_sender.try_send(message).is_err() {
-                        break;
-                    }
-                } else {
-                    break;
-                }
-            },
-            _ = end_call.notified() => {
-                break;
-            }
-            _ = cancel.cancelled() => {
-                break;
-            },
-        }
-    }
-}
-
-/// Collects statistics from throughout the application, processes them, and provides them to the frontend
-async fn statistics_collector<C: FrbStatisticsCallback>(
-    state: StatisticsCollectorState,
-    callback: C,
-    cancel: CancellationToken,
-) {
-    // the interval for statistics updates
-    let mut update_interval = interval(Duration::from_millis(100));
-    // the interval for the input_max and output_max to decrease
-    let mut reset_interval = interval(Duration::from_secs(5));
-    // max input RMS
-    let mut input_max = 0_f32;
-    // max output RMS
-    let mut output_max = 0_f32;
-
-    loop {
-        select! {
-            _ = update_interval.tick() => {
-                let latency = state.latency.load(Relaxed);
-                let loss = state.loss.swap(0, Relaxed);
-
-                callback.post(Statistics {
-                    input_level: level_from_window(state.input_rms.swap(0_f32, Relaxed), &mut input_max),
-                    output_level: level_from_window(state.output_rms.swap(0_f32, Relaxed), &mut output_max),
-                    latency,
-                    upload_bandwidth: state.upload_bandwidth.load(Relaxed),
-                    download_bandwidth: state.download_bandwidth.load(Relaxed),
-                    loss,
-                }).await;
-
-                LATENCY.store(latency, Relaxed);
-                LOSS.store(loss, Relaxed);
-            }
-            _ = reset_interval.tick() => {
-                input_max /= 2_f32;
-                output_max /= 2_f32;
-            }
-            _ = cancel.cancelled() => {
-                break;
-            }
-        }
-    }
-
-    // zero out the statistics when the collector ends
-    callback.post(Statistics::default()).await;
-    LATENCY.store(0, Relaxed);
-    LOSS.store(0, Relaxed);
-    CONNECTED.store(false, Relaxed);
-    debug!("statistics collector returning");
-}
-
-fn stream_to_audio_transport(stream: Stream) -> Transport<TransportStream> {
-    LengthDelimitedCodec::builder()
-        .max_frame_length(TRANSFER_BUFFER_SIZE)
-        .length_field_type::<u16>()
-        .new_framed(stream.compat())
 }

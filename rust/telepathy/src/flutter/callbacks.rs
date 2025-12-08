@@ -12,7 +12,7 @@ use tokio::task::JoinHandle;
 
 #[automock]
 #[async_trait]
-pub trait FrbCallbacks<S: FrbStatisticsCallback> {
+pub(crate) trait FrbCallbacks<S: FrbStatisticsCallback> {
     fn session_status(
         &self,
         status: SessionStatus,
@@ -47,7 +47,7 @@ pub trait FrbCallbacks<S: FrbStatisticsCallback> {
 
 #[automock]
 #[async_trait]
-pub trait FrbStatisticsCallback {
+pub(crate) trait FrbStatisticsCallback {
     fn post(&self, stats: Statistics) -> impl Future<Output = ()> + Send;
 }
 

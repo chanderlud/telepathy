@@ -10,9 +10,9 @@ import 'frb_generated.dart';
 import 'overlay/overlay.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `codec_config`, `latencies_missing`, `loopback`, `new`, `new`, `new`, `new`, `open_stream`, `receive_stream`, `relayed_only`, `statistics_collector`, `stream_to_audio_transport`
-// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `ConnectionState`, `EarlyCallState`, `OptionalCallArgs`, `PeerState`, `RoomConnection`, `RoomMessage`, `RoomState`, `SessionState`, `StartScreenshare`, `StatisticsCollectorState`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`
+// These functions are ignored because they are not marked as `pub`: `codec_config`, `new`, `new`, `open_stream`, `receive_stream`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `EarlyCallState`, `OptionalCallArgs`, `RoomConnection`, `RoomMessage`, `RoomState`, `SessionState`, `StartScreenshare`, `StatisticsCollectorState`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `fmt`, `fmt`
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Telepathy>>
 abstract class Telepathy implements RustOpaqueInterface {

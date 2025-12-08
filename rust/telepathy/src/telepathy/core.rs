@@ -16,23 +16,24 @@ use crate::telepathy::sockets::{
     ConstSocket, SendingSockets, SharedSockets, Transport, TransportStream, audio_input,
     audio_output,
 };
-use crate::telepathy::utils::{read_message, write_message};
+use crate::telepathy::utils::{loopback, read_message, statistics_collector, stream_to_audio_transport, write_message};
 use crate::telepathy::{
-    CHAT_PROTOCOL, ConnectionState, DeviceName, EarlyCallState, HELLO_TIMEOUT, KEEP_ALIVE,
-    OptionalCallArgs, PeerState, RoomConnection, RoomMessage, RoomState, SessionState,
-    StartScreenshare, StatisticsCollectorState, loopback, statistics_collector,
-    stream_to_audio_transport,
+    CHAT_PROTOCOL, DeviceName, EarlyCallState, HELLO_TIMEOUT, KEEP_ALIVE,
+    OptionalCallArgs, RoomConnection, RoomMessage, RoomState, SessionState,
+    StartScreenshare, StatisticsCollectorState
 };
 use crate::{Behaviour, BehaviourEvent};
 use atomic_float::AtomicF32;
 use chrono::Local;
 use cpal::Host;
 use cpal::traits::StreamTrait;
+#[cfg(target_family = "wasm")]
+use flutter_rust_bridge::JoinHandle;
 use flutter_rust_bridge::for_generated::futures::StreamExt;
 use flutter_rust_bridge::spawn;
 use libp2p::identity::Keypair;
 use libp2p::multiaddr::Protocol;
-use libp2p::swarm::SwarmEvent;
+use libp2p::swarm::{ConnectionId, SwarmEvent};
 #[cfg(not(target_family = "wasm"))]
 use libp2p::tcp;
 use libp2p::{
@@ -51,6 +52,7 @@ use std::time::{Duration, Instant};
 use tokio::select;
 use tokio::sync::mpsc::{Receiver as MReceiver, Sender as MSender, channel};
 use tokio::sync::{Mutex, Notify, RwLock};
+#[cfg(not(target_family = "wasm"))]
 use tokio::task::JoinHandle;
 use tokio::time::{Interval, interval, timeout};
 use tokio_util::codec::LengthDelimitedCodec;
@@ -217,16 +219,14 @@ where
                 relay_client: relay_behaviour,
                 ping: ping::Behaviour::new(ping::Config::new()),
                 identify: identify::Behaviour::new(identify::Config::new(
-                    "/telepathy/0.0.1".to_string(),
+                    CHAT_PROTOCOL.to_string(),
                     keypair.public(),
                 )),
                 dcutr: dcutr::Behaviour::new(keypair.public().to_peer_id()),
                 stream: libp2p_stream::Behaviour::new(),
                 auto_nat: autonat::Behaviour::new(
                     keypair.public().to_peer_id(),
-                    autonat::Config {
-                        ..Default::default()
-                    },
+                    autonat::Config::default(),
                 ),
             })
             .map_err(|_| ErrorKind::SwarmBuild)?
@@ -1670,4 +1670,67 @@ pub(crate) struct CoreState {
 
     /// configuration for audio codec, or lack thereof
     pub(crate) codec_config: CodecConfig,
+}
+
+/// a state used for session negotiation
+#[derive(Debug, Default)]
+struct PeerState {
+    /// set to true after dialing peer's identity addresses
+    dialed: bool,
+
+    /// when true the peer is the dialer
+    dialer: bool,
+
+    /// a map of connections and their latencies
+    connections: HashMap<ConnectionId, ConnectionState>,
+
+    selected_connection: bool,
+
+    ductr_failed: bool,
+}
+
+impl PeerState {
+    fn dialer() -> Self {
+        Self {
+            dialer: true,
+            ..Default::default()
+        }
+    }
+
+    fn non_dialer(connection_id: ConnectionId, relayed: bool) -> Self {
+        Self {
+            dialer: false,
+            connections: HashMap::from([(connection_id, ConnectionState::new(relayed))]),
+            ..Default::default()
+        }
+    }
+
+    fn relayed_only(&self) -> bool {
+        self.connections.iter().all(|(_, state)| state.relayed)
+    }
+
+    fn latencies_missing(&self) -> bool {
+        self.connections
+            .iter()
+            .any(|(_, state)| state.latency.is_none())
+    }
+}
+
+/// the state of a single connection during session negotiation
+#[derive(Debug)]
+struct ConnectionState {
+    /// the latency is ms when available
+    latency: Option<u128>,
+
+    /// whether the connection is relayed
+    relayed: bool,
+}
+
+impl ConnectionState {
+    fn new(relayed: bool) -> Self {
+        Self {
+            latency: None,
+            relayed,
+        }
+    }
 }
