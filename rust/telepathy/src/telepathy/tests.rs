@@ -1,7 +1,6 @@
-use std::collections::HashMap;
 use super::*;
 use crate::audio::{InputProcessorState, OutputProcessorState, input_processor};
-use crate::flutter::callbacks::{MockFrbCallbacks, MockFrbStatisticsCallback};
+use crate::flutter::callbacks::{FrbStatisticsCallback, MockFrbCallbacks, MockFrbStatisticsCallback};
 use fast_log::Config;
 use kanal::{bounded, unbounded};
 use log::{LevelFilter, info};
@@ -9,6 +8,8 @@ use nnnoiseless::DenoiseState;
 use rand::Rng;
 use rand::prelude::SliceRandom;
 use relay_server::{RelayInfo, spawn_relay};
+use sea_codec::ProcessorMessage;
+use std::collections::HashMap;
 use std::fs::read;
 use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr};
@@ -16,7 +17,6 @@ use std::thread::{sleep, spawn};
 use std::time::Instant;
 use tokio::sync::OnceCell;
 use tokio::time::interval;
-use sea_codec::ProcessorMessage;
 
 const HOGWASH_BYTES: &[u8] = include_bytes!("../../../../assets/models/hogwash.rnn");
 

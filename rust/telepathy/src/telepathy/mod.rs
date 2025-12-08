@@ -18,10 +18,9 @@ pub(crate) mod utils;
 #[cfg(target_family = "wasm")]
 use crate::audio::web_audio::WebAudioWrapper;
 use crate::error::{DartError, Error};
-use crate::flutter::callbacks::{FrbCallbacks, FrbStatisticsCallback};
+use crate::flutter::callbacks::FrbCallbacks;
 use crate::flutter::*;
 use crate::overlay::overlay::Overlay;
-use crate::overlay::{CONNECTED, LATENCY, LOSS};
 use crate::telepathy::core::TelepathyCore;
 use atomic_float::AtomicF32;
 use chrono::Local;

@@ -1,18 +1,22 @@
 use crate::error::{Error, ErrorKind};
-use crate::telepathy::{DeviceName, StatisticsCollectorState, TRANSFER_BUFFER_SIZE};
+use crate::flutter::Statistics;
+use crate::flutter::callbacks::FrbStatisticsCallback;
+use crate::overlay::{CONNECTED, LATENCY, LOSS};
 use crate::telepathy::sockets::{Transport, TransportStream};
+use crate::telepathy::{DeviceName, StatisticsCollectorState, TRANSFER_BUFFER_SIZE};
 use bincode::config::standard;
 use bincode::{Decode, Encode, decode_from_slice, encode_to_vec};
 use cpal::traits::{DeviceTrait, HostTrait};
 use cpal::{Device, Host, Stream};
 use flutter_rust_bridge::for_generated::futures::{Sink, SinkExt};
+use kanal::{AsyncReceiver, AsyncSender};
 use libp2p::bytes::Bytes;
 use libp2p::futures::StreamExt;
+use log::debug;
+use sea_codec::ProcessorMessage;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::Duration;
-use kanal::{AsyncReceiver, AsyncSender};
-use log::debug;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::select;
 use tokio::sync::Notify;
@@ -20,10 +24,6 @@ use tokio::time::interval;
 use tokio_util::codec::LengthDelimitedCodec;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tokio_util::sync::CancellationToken;
-use sea_codec::ProcessorMessage;
-use crate::flutter::callbacks::FrbStatisticsCallback;
-use crate::flutter::Statistics;
-use crate::overlay::{CONNECTED, LATENCY, LOSS};
 
 type Result<T> = std::result::Result<T, Error>;
 

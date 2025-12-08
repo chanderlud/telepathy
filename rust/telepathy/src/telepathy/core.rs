@@ -16,11 +16,13 @@ use crate::telepathy::sockets::{
     ConstSocket, SendingSockets, SharedSockets, Transport, TransportStream, audio_input,
     audio_output,
 };
-use crate::telepathy::utils::{loopback, read_message, statistics_collector, stream_to_audio_transport, write_message};
+use crate::telepathy::utils::{
+    loopback, read_message, statistics_collector, stream_to_audio_transport, write_message,
+};
 use crate::telepathy::{
-    CHAT_PROTOCOL, DeviceName, EarlyCallState, HELLO_TIMEOUT, KEEP_ALIVE,
-    OptionalCallArgs, RoomConnection, RoomMessage, RoomState, SessionState,
-    StartScreenshare, StatisticsCollectorState
+    CHAT_PROTOCOL, DeviceName, EarlyCallState, HELLO_TIMEOUT, KEEP_ALIVE, OptionalCallArgs,
+    RoomConnection, RoomMessage, RoomState, SessionState, StartScreenshare,
+    StatisticsCollectorState,
 };
 use crate::{Behaviour, BehaviourEvent};
 use atomic_float::AtomicF32;
@@ -773,7 +775,7 @@ where
     }
 
     /// Called by the dialer to open a stream and session
-    pub(crate) async fn open_session(
+    async fn open_session(
         &self,
         peer: PeerId,
         mut control: Control,
