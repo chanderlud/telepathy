@@ -1,6 +1,6 @@
 [package]
 name = "telepathy"
-version = "2.4.13"
+version = "2.4.14"
 edition = "2024"
 build = "build.rs"
 
