@@ -22,10 +22,10 @@
 
 ## History
 
-- Began as Audio Chat, a Python Tkinter app with simple UDP networking and AES cryptography
-- Moved to the current Rust audio processing stack with improved stability
-- Upgraded from a custom networking and cryptography stack to libp2p for improved security, p2p networking without port forwarding, and p2p networking in web browsers
-
+- Began in 2023 as Audio Chat, a Python Tkinter app with simple UDP networking and AES cryptography
+- Moved to the current Rust audio processing stack & Flutter UI for improved stability in 2024
+- Soon after, the custom networking and cryptography stack was replaced with libp2p for improved security, p2p networking without port forwarding, and p2p networking in web browsers
+- In 2025, performance improvements were made, SEA codec support was added, and many bugs were fixed
 ## UI Screenshots
 ![screenshot of telepathy main user interface](https://chanchan.dev/static/images/telepathy.png)
 ![screenshot of telepathy settings user interface](https://chanchan.dev/static/images/telepathy-settings.png)
