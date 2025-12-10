@@ -166,7 +166,7 @@ impl Telepathy {
 
     /// The only entry point into participating in a room
     pub async fn join_room(
-        &mut self,
+        &self,
         member_strings: Vec<String>,
     ) -> std::result::Result<(), DartError> {
         if self.inner.is_call_active().await {
@@ -195,14 +195,18 @@ impl Telepathy {
         // the same early call state is used throughout the room, the real peer ids are set later
         let call_state = self.inner.setup_call(PeerId::random()).await?;
         // set room state
-        self.inner.room_state.write().await.replace(RoomState {
+        let old_state_option = self.inner.room_state.write().await.replace(RoomState {
             peers: members.clone(),
             sender,
             cancel: cancel.clone(),
             end_call: end_call.clone(),
             early_state: call_state.clone(),
         });
-
+        // clean up old state
+        if let Some(old_state) = old_state_option {
+            old_state.cancel.cancel();
+            old_state.end_call.notify_one();
+        }
         // tries to connect to every member of the room using existing sessions, or new ones if needed
         // note: sending your own identity to start_session is safe
         for member in members {
@@ -213,7 +217,7 @@ impl Telepathy {
                 _ = sender.send(member).await;
             }
         }
-
+        // spawn room controller
         let self_clone = self.inner.clone();
         self.handles.lock().await.push(spawn(async move {
             let stop_io = Default::default();
@@ -223,7 +227,6 @@ impl Telepathy {
             {
                 error!("error in room controller: {:?}", error);
             }
-
             stop_io.cancel();
         }));
 
