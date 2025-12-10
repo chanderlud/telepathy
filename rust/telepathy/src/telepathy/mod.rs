@@ -76,7 +76,7 @@ pub struct Telepathy {
     inner: TelepathyCore<FlutterCallbacks, FlutterStatisticsCallback>,
 
     /// contains handles to the manager thread & room managers
-    handles: Vec<JoinHandle<()>>,
+    handles: Arc<Mutex<Vec<JoinHandle<()>>>>,
 }
 
 impl Telepathy {
@@ -98,13 +98,13 @@ impl Telepathy {
                 codec_config,
                 callbacks,
             ),
-            handles: Vec::new(),
+            handles: Default::default(),
         }
     }
 
     pub async fn start_manager(&mut self) {
         if let Some(handle) = self.inner.start_manager().await {
-            self.handles.push(handle);
+            self.handles.lock().await.push(handle);
         }
     }
 
@@ -215,7 +215,7 @@ impl Telepathy {
         }
 
         let self_clone = self.inner.clone();
-        self.handles.push(spawn(async move {
+        self.handles.lock().await.push(spawn(async move {
             let stop_io = Default::default();
             if let Err(error) = self_clone
                 .room_controller(receiver, cancel, call_state, &stop_io, end_call)
@@ -252,11 +252,11 @@ impl Telepathy {
     }
 
     /// shuts down the entire rust backend
-    pub async fn shutdown(self) {
+    pub async fn shutdown(&self) {
         // stops sessions & manager
         self.inner.shutdown().await;
         // wait for manager & any room controllers to join
-        for handle in self.handles {
+        for handle in self.handles.lock().await.drain(..) {
             handle.await.unwrap();
         }
         info!("shutdown complete");

@@ -323,12 +323,12 @@ class _TelepathyAppState extends State<TelepathyApp>  with WindowListener {
 
   @override
   void onWindowClose() async {
-    if (_isClosing) {
-      return;
+    // second click (or more): force close, ignore whatever shutdown is doing
+    if (!_isClosing) {
+      _isClosing = true;
+      await widget.telepathy.shutdown();
     }
 
-    _isClosing = true;
-    await widget.telepathy.shutdown();
     await windowManager.setPreventClose(false);
     await windowManager.close();
   }
