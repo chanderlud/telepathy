@@ -317,7 +317,7 @@ pub(crate) fn output_processor(
     #[cfg(target_family = "wasm")]
     let is_full = || {
         if let Ok(lock) = web_output.lock() {
-            lock.len() == CHANNEL_SIZE
+            lock.len() >= CHANNEL_SIZE
         } else {
             false
         }
@@ -378,6 +378,8 @@ pub(crate) fn output_processor(
             .map(|mut data| {
                 if data.len() < CHANNEL_SIZE {
                     data.extend(float_samples)
+                } else {
+                    state.send_loss(float_samples.len());
                 }
             })
             .unwrap();
