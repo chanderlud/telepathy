@@ -29,6 +29,12 @@
 
 ## Architecture
 
+### High Level Design
+- Flutter to Rust (and back) is enabled by [Flutter Rust Bridge](https://pub.dev/packages/flutter_rust_bridge)
+- This design enables the same codebase to target desktop, mobile, and web
+
+![a diagram explaining the high level structure of the telepathy app](assets/diagrams/telepathy-design.svg)
+
 ### Audio Processing Stack
 - Denoising runs on the sending side; each participant in a call decides if they want to use their compute resources to denoise their audio input
 - Every participant in a call must agree on the same audio codec options for sending & receiving
