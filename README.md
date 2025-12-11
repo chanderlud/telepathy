@@ -41,6 +41,7 @@
 - If a frame's RMS is below the input sensitivity threshold, no audio is sent (keep-alive packets are used during silence)
 - In a classic two-way call, each client runs a sending stack and a receiving stack
 - In a Telepathy room, certain parts of each stack are duplicated to support more participants
+
 ![a diagram describing the telepathy audio processing stack](assets/diagrams/audio-processing-stack.svg)
 
 ## UI Screenshots
