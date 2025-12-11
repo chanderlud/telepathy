@@ -19,6 +19,7 @@
 
 - Lossless audio codec support
 - QUIC datagrams for live audio streams
+- p2p updates for desktop clients
 
 ## History
 
