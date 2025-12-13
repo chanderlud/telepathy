@@ -498,4 +498,358 @@ class _$CallState_CallEndedCopyWithImpl<$Res>
   }
 }
 
+/// @nodoc
+mixin _$SessionStatus {
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType && other is SessionStatus);
+  }
+
+  @override
+  int get hashCode => runtimeType.hashCode;
+
+  @override
+  String toString() {
+    return 'SessionStatus()';
+  }
+}
+
+/// @nodoc
+class $SessionStatusCopyWith<$Res> {
+  $SessionStatusCopyWith(SessionStatus _, $Res Function(SessionStatus) __);
+}
+
+/// Adds pattern-matching-related methods to [SessionStatus].
+extension SessionStatusPatterns on SessionStatus {
+  /// A variant of `map` that fallback to returning `orElse`.
+  ///
+  /// It is equivalent to doing:
+  /// ```dart
+  /// switch (sealedClass) {
+  ///   case final Subclass value:
+  ///     return ...;
+  ///   case _:
+  ///     return orElse();
+  /// }
+  /// ```
+
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(SessionStatus_Connecting value)? connecting,
+    TResult Function(SessionStatus_Connected value)? connected,
+    TResult Function(SessionStatus_Inactive value)? inactive,
+    TResult Function(SessionStatus_Unknown value)? unknown,
+    required TResult orElse(),
+  }) {
+    final _that = this;
+    switch (_that) {
+      case SessionStatus_Connecting() when connecting != null:
+        return connecting(_that);
+      case SessionStatus_Connected() when connected != null:
+        return connected(_that);
+      case SessionStatus_Inactive() when inactive != null:
+        return inactive(_that);
+      case SessionStatus_Unknown() when unknown != null:
+        return unknown(_that);
+      case _:
+        return orElse();
+    }
+  }
+
+  /// A `switch`-like method, using callbacks.
+  ///
+  /// Callbacks receives the raw object, upcasted.
+  /// It is equivalent to doing:
+  /// ```dart
+  /// switch (sealedClass) {
+  ///   case final Subclass value:
+  ///     return ...;
+  ///   case final Subclass2 value:
+  ///     return ...;
+  /// }
+  /// ```
+
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(SessionStatus_Connecting value) connecting,
+    required TResult Function(SessionStatus_Connected value) connected,
+    required TResult Function(SessionStatus_Inactive value) inactive,
+    required TResult Function(SessionStatus_Unknown value) unknown,
+  }) {
+    final _that = this;
+    switch (_that) {
+      case SessionStatus_Connecting():
+        return connecting(_that);
+      case SessionStatus_Connected():
+        return connected(_that);
+      case SessionStatus_Inactive():
+        return inactive(_that);
+      case SessionStatus_Unknown():
+        return unknown(_that);
+    }
+  }
+
+  /// A variant of `map` that fallback to returning `null`.
+  ///
+  /// It is equivalent to doing:
+  /// ```dart
+  /// switch (sealedClass) {
+  ///   case final Subclass value:
+  ///     return ...;
+  ///   case _:
+  ///     return null;
+  /// }
+  /// ```
+
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(SessionStatus_Connecting value)? connecting,
+    TResult? Function(SessionStatus_Connected value)? connected,
+    TResult? Function(SessionStatus_Inactive value)? inactive,
+    TResult? Function(SessionStatus_Unknown value)? unknown,
+  }) {
+    final _that = this;
+    switch (_that) {
+      case SessionStatus_Connecting() when connecting != null:
+        return connecting(_that);
+      case SessionStatus_Connected() when connected != null:
+        return connected(_that);
+      case SessionStatus_Inactive() when inactive != null:
+        return inactive(_that);
+      case SessionStatus_Unknown() when unknown != null:
+        return unknown(_that);
+      case _:
+        return null;
+    }
+  }
+
+  /// A variant of `when` that fallback to an `orElse` callback.
+  ///
+  /// It is equivalent to doing:
+  /// ```dart
+  /// switch (sealedClass) {
+  ///   case Subclass(:final field):
+  ///     return ...;
+  ///   case _:
+  ///     return orElse();
+  /// }
+  /// ```
+
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function()? connecting,
+    TResult Function(bool relayed)? connected,
+    TResult Function()? inactive,
+    TResult Function()? unknown,
+    required TResult orElse(),
+  }) {
+    final _that = this;
+    switch (_that) {
+      case SessionStatus_Connecting() when connecting != null:
+        return connecting();
+      case SessionStatus_Connected() when connected != null:
+        return connected(_that.relayed);
+      case SessionStatus_Inactive() when inactive != null:
+        return inactive();
+      case SessionStatus_Unknown() when unknown != null:
+        return unknown();
+      case _:
+        return orElse();
+    }
+  }
+
+  /// A `switch`-like method, using callbacks.
+  ///
+  /// As opposed to `map`, this offers destructuring.
+  /// It is equivalent to doing:
+  /// ```dart
+  /// switch (sealedClass) {
+  ///   case Subclass(:final field):
+  ///     return ...;
+  ///   case Subclass2(:final field2):
+  ///     return ...;
+  /// }
+  /// ```
+
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function() connecting,
+    required TResult Function(bool relayed) connected,
+    required TResult Function() inactive,
+    required TResult Function() unknown,
+  }) {
+    final _that = this;
+    switch (_that) {
+      case SessionStatus_Connecting():
+        return connecting();
+      case SessionStatus_Connected():
+        return connected(_that.relayed);
+      case SessionStatus_Inactive():
+        return inactive();
+      case SessionStatus_Unknown():
+        return unknown();
+    }
+  }
+
+  /// A variant of `when` that fallback to returning `null`
+  ///
+  /// It is equivalent to doing:
+  /// ```dart
+  /// switch (sealedClass) {
+  ///   case Subclass(:final field):
+  ///     return ...;
+  ///   case _:
+  ///     return null;
+  /// }
+  /// ```
+
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function()? connecting,
+    TResult? Function(bool relayed)? connected,
+    TResult? Function()? inactive,
+    TResult? Function()? unknown,
+  }) {
+    final _that = this;
+    switch (_that) {
+      case SessionStatus_Connecting() when connecting != null:
+        return connecting();
+      case SessionStatus_Connected() when connected != null:
+        return connected(_that.relayed);
+      case SessionStatus_Inactive() when inactive != null:
+        return inactive();
+      case SessionStatus_Unknown() when unknown != null:
+        return unknown();
+      case _:
+        return null;
+    }
+  }
+}
+
+/// @nodoc
+
+class SessionStatus_Connecting extends SessionStatus {
+  const SessionStatus_Connecting() : super._();
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType && other is SessionStatus_Connecting);
+  }
+
+  @override
+  int get hashCode => runtimeType.hashCode;
+
+  @override
+  String toString() {
+    return 'SessionStatus.connecting()';
+  }
+}
+
+/// @nodoc
+
+class SessionStatus_Connected extends SessionStatus {
+  const SessionStatus_Connected({required this.relayed}) : super._();
+
+  final bool relayed;
+
+  /// Create a copy of SessionStatus
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @pragma('vm:prefer-inline')
+  $SessionStatus_ConnectedCopyWith<SessionStatus_Connected> get copyWith =>
+      _$SessionStatus_ConnectedCopyWithImpl<SessionStatus_Connected>(
+          this, _$identity);
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is SessionStatus_Connected &&
+            (identical(other.relayed, relayed) || other.relayed == relayed));
+  }
+
+  @override
+  int get hashCode => Object.hash(runtimeType, relayed);
+
+  @override
+  String toString() {
+    return 'SessionStatus.connected(relayed: $relayed)';
+  }
+}
+
+/// @nodoc
+abstract mixin class $SessionStatus_ConnectedCopyWith<$Res>
+    implements $SessionStatusCopyWith<$Res> {
+  factory $SessionStatus_ConnectedCopyWith(SessionStatus_Connected value,
+          $Res Function(SessionStatus_Connected) _then) =
+      _$SessionStatus_ConnectedCopyWithImpl;
+  @useResult
+  $Res call({bool relayed});
+}
+
+/// @nodoc
+class _$SessionStatus_ConnectedCopyWithImpl<$Res>
+    implements $SessionStatus_ConnectedCopyWith<$Res> {
+  _$SessionStatus_ConnectedCopyWithImpl(this._self, this._then);
+
+  final SessionStatus_Connected _self;
+  final $Res Function(SessionStatus_Connected) _then;
+
+  /// Create a copy of SessionStatus
+  /// with the given fields replaced by the non-null parameter values.
+  @pragma('vm:prefer-inline')
+  $Res call({
+    Object? relayed = null,
+  }) {
+    return _then(SessionStatus_Connected(
+      relayed: null == relayed
+          ? _self.relayed
+          : relayed // ignore: cast_nullable_to_non_nullable
+              as bool,
+    ));
+  }
+}
+
+/// @nodoc
+
+class SessionStatus_Inactive extends SessionStatus {
+  const SessionStatus_Inactive() : super._();
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType && other is SessionStatus_Inactive);
+  }
+
+  @override
+  int get hashCode => runtimeType.hashCode;
+
+  @override
+  String toString() {
+    return 'SessionStatus.inactive()';
+  }
+}
+
+/// @nodoc
+
+class SessionStatus_Unknown extends SessionStatus {
+  const SessionStatus_Unknown() : super._();
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType && other is SessionStatus_Unknown);
+  }
+
+  @override
+  int get hashCode => runtimeType.hashCode;
+
+  @override
+  String toString() {
+    return 'SessionStatus.unknown()';
+  }
+}
+
 // dart format on

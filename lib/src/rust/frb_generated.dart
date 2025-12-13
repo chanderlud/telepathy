@@ -4304,7 +4304,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @protected
   SessionStatus dco_decode_session_status(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
-    return SessionStatus.values[raw as int];
+    switch (raw[0]) {
+      case 0:
+        return SessionStatus_Connecting();
+      case 1:
+        return SessionStatus_Connected(
+          relayed: dco_decode_bool(raw[1]),
+        );
+      case 2:
+        return SessionStatus_Inactive();
+      case 3:
+        return SessionStatus_Unknown();
+      default:
+        throw Exception("unreachable");
+    }
   }
 
   @protected
@@ -5051,8 +5064,21 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @protected
   SessionStatus sse_decode_session_status(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    var inner = sse_decode_i_32(deserializer);
-    return SessionStatus.values[inner];
+
+    var tag_ = sse_decode_i_32(deserializer);
+    switch (tag_) {
+      case 0:
+        return SessionStatus_Connecting();
+      case 1:
+        var var_relayed = sse_decode_bool(deserializer);
+        return SessionStatus_Connected(relayed: var_relayed);
+      case 2:
+        return SessionStatus_Inactive();
+      case 3:
+        return SessionStatus_Unknown();
+      default:
+        throw UnimplementedError('');
+    }
   }
 
   @protected
@@ -5893,7 +5919,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @protected
   void sse_encode_session_status(SessionStatus self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_i_32(self.index, serializer);
+    switch (self) {
+      case SessionStatus_Connecting():
+        sse_encode_i_32(0, serializer);
+      case SessionStatus_Connected(relayed: final relayed):
+        sse_encode_i_32(1, serializer);
+        sse_encode_bool(relayed, serializer);
+      case SessionStatus_Inactive():
+        sse_encode_i_32(2, serializer);
+      case SessionStatus_Unknown():
+        sse_encode_i_32(3, serializer);
+    }
   }
 
   @protected

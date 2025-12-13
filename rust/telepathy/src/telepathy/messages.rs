@@ -1,3 +1,4 @@
+use crate::error::Error;
 use bincode::{Decode, Encode};
 
 #[derive(Debug, Decode, Encode, Clone)]
@@ -23,6 +24,21 @@ pub(crate) enum Message {
     ScreenshareHeader {
         encoder_name: String,
     },
+}
+
+impl Message {
+    pub(crate) fn error_goodbye(error: &Error) -> Self {
+        Self::Goodbye {
+            reason: Some(
+                if error.is_audio_error() {
+                    "audio device error"
+                } else {
+                    "an error occurred"
+                }
+                .to_string(),
+            ),
+        }
+    }
 }
 
 #[derive(Debug, Decode, Encode, Clone, Default)]

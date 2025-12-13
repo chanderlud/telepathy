@@ -301,7 +301,7 @@ class TelepathyApp extends StatefulWidget {
   State<StatefulWidget> createState() => _TelepathyAppState();
 }
 
-class _TelepathyAppState extends State<TelepathyApp>  with WindowListener {
+class _TelepathyAppState extends State<TelepathyApp> with WindowListener {
   bool _isClosing = false;
 
   @override
@@ -349,7 +349,8 @@ class _TelepathyAppState extends State<TelepathyApp>  with WindowListener {
                 overlayColor: Colors.transparent,
                 trackShape: CustomTrackShape(),
                 inactiveTrackColor: const Color(0xFF121212),
-                activeTrackColor: Color(widget.interfaceController.primaryColor),
+                activeTrackColor:
+                    Color(widget.interfaceController.primaryColor),
               ),
               colorScheme: ColorScheme.dark(
                 // primary: Color(0xFF7458ff),
@@ -372,9 +373,9 @@ class _TelepathyAppState extends State<TelepathyApp>  with WindowListener {
               dropdownMenuTheme: DropdownMenuThemeData(
                 menuStyle: MenuStyle(
                   backgroundColor:
-                  WidgetStateProperty.all(const Color(0xFF191919)),
+                      WidgetStateProperty.all(const Color(0xFF191919)),
                   surfaceTintColor:
-                  WidgetStateProperty.all(const Color(0xFF191919)),
+                      WidgetStateProperty.all(const Color(0xFF191919)),
                 ),
               ),
             ),
@@ -466,13 +467,17 @@ class HomePage extends StatelessWidget {
 
                               if (aStatus == bStatus) {
                                 return a.nickname().compareTo(b.nickname());
-                              } else if (aStatus == SessionStatus.connected) {
+                              } else if (aStatus.runtimeType ==
+                                  SessionStatus_Connected) {
                                 return -1;
-                              } else if (bStatus == SessionStatus.connected) {
+                              } else if (bStatus.runtimeType ==
+                                  SessionStatus_Connected) {
                                 return 1;
-                              } else if (aStatus == SessionStatus.connecting) {
+                              } else if (aStatus.runtimeType ==
+                                  SessionStatus_Connecting) {
                                 return -1;
-                              } else if (bStatus == SessionStatus.connecting) {
+                              } else if (bStatus.runtimeType ==
+                                  SessionStatus_Connecting) {
                                 return 1;
                               } else {
                                 return 0;
@@ -1139,7 +1144,9 @@ class ContactWidgetState extends State<ContactWidget> {
   Widget build(BuildContext context) {
     bool active = widget.stateController.isActiveContact(widget.contact);
     SessionStatus status = widget.stateController.sessionStatus(widget.contact);
-    bool online = status == SessionStatus.connected;
+    bool online = status.runtimeType == SessionStatus_Connected;
+    bool connecting = status.runtimeType == SessionStatus_Connecting;
+    bool inactive = status.runtimeType == SessionStatus_Inactive;
 
     return InkWell(
       onHover: (hover) {
@@ -1268,15 +1275,16 @@ class ContactWidgetState extends State<ContactWidget> {
             Text(widget.contact.nickname(),
                 style: const TextStyle(fontSize: 16)),
             const Spacer(),
-            if (status == SessionStatus.inactive)
+            if (inactive) ...[
               IconButton(
                   onPressed: () {
                     widget.telepathy.startSession(contact: widget.contact);
                   },
                   icon: SvgPicture.asset('assets/icons/Restart.svg',
                       semanticsLabel: 'Retry the session initiation')),
-            if (status == SessionStatus.inactive) const SizedBox(width: 4),
-            if (status == SessionStatus.connecting)
+              const SizedBox(width: 4)
+            ],
+            if (connecting) ...[
               const Padding(
                 padding: EdgeInsets.symmetric(vertical: 10),
                 child: SizedBox(
@@ -1284,8 +1292,9 @@ class ContactWidgetState extends State<ContactWidget> {
                     height: 20,
                     child: CircularProgressIndicator(strokeWidth: 3)),
               ),
-            if (status == SessionStatus.connecting) const SizedBox(width: 10),
-            if (!online && status != SessionStatus.connecting)
+              const SizedBox(width: 10)
+            ],
+            if (!online && !connecting)
               Padding(
                   padding: const EdgeInsets.only(left: 7, right: 10),
                   child: SvgPicture.asset(
@@ -1293,6 +1302,10 @@ class ContactWidgetState extends State<ContactWidget> {
                     semanticsLabel: 'Offline icon',
                     width: 26,
                   )),
+            if (online)
+              Text((status as SessionStatus_Connected).relayed
+                  ? "relayed"
+                  : "direct"),
             if (active)
               IconButton(
                 visualDensity: VisualDensity.comfortable,
@@ -2798,7 +2811,7 @@ class StateController extends ChangeNotifier {
   }
 
   bool isOnlineContact(Contact contact) {
-    return sessionStatus(contact) == SessionStatus.connected;
+    return sessionStatus(contact).runtimeType == SessionStatus_Connected;
   }
 
   /// called when a session changes status
@@ -2808,7 +2821,7 @@ class StateController extends ChangeNotifier {
   }
 
   SessionStatus sessionStatus(Contact contact) {
-    return sessions[contact.peerId()] ?? SessionStatus.unknown;
+    return sessions[contact.peerId()] ?? SessionStatus.unknown();
   }
 
   void deafen() {

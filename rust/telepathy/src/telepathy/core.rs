@@ -361,6 +361,7 @@ where
         let mut handles = Vec::new();
         // load public identity
         let public_identity = self.peer_id().await;
+        let relay_identity = *self.core_state.network_config.relay_id.read().await;
         // the manager is about to start processing events
         self.core_state.manager_active.notify_waiters();
 
@@ -389,10 +390,15 @@ where
                     )
                     .await;
                 } else if let Some(session) = self.session_states.read().await.get(&peer) {
+                    // only the non-dialing peer will reach this branch
                     // this peer state is no longer needed
-                    _ = peer_states.remove(&peer);
+                    peer_states.remove(&peer);
                     // set the real relayed status for the session
                     session.relayed.store(relayed, Relaxed);
+                    // update the relayed status in the frontend
+                    self.callbacks
+                        .session_status(SessionStatus::Connected { relayed }, peer)
+                        .await;
                 }
             }
 
@@ -488,7 +494,7 @@ where
                     connection_id,
                     ..
                 } => {
-                    if peer_id == *self.core_state.network_config.relay_id.read().await {
+                    if peer_id == relay_identity {
                         // ignore the relay connection
                         continue;
                     } else if self.session_states.read().await.contains_key(&peer_id) {
@@ -671,7 +677,7 @@ where
                         continue;
                     }
 
-                    info!("Received first identify event from {}", peer_id);
+                    info!("Identify event from {peer_id}: {info:?}");
 
                     for address in info.listen_addrs {
                         // checks for relayed addresses which are not useful
@@ -830,7 +836,7 @@ where
         let contact = if let Some(contact) = contact_option {
             // alert the UI that this session is now connected
             self.callbacks
-                .session_status(SessionStatus::Connected, peer)
+                .session_status(SessionStatus::Connected { relayed }, peer)
                 .await;
             contact
         } else {
@@ -903,7 +909,7 @@ where
                 }
                 (Err(error), room_only) => {
                     // if an error occurred during a non-room call, it is ended now
-                    if state.in_call.load(Relaxed)
+                    if state.in_call.swap(false, Relaxed)
                         && !room_only
                         && !self.is_in_room(&contact.peer_id).await
                     {
@@ -919,8 +925,6 @@ where
                         break Err(error);
                     } else {
                         warn!("recoverable session failure: {:?}", error);
-                        // the session is not in a call
-                        state.in_call.store(false, Relaxed);
                     }
                 }
             }
@@ -1017,9 +1021,14 @@ where
 
                 select! {
                     accepted = accept_future => {
-                        if accepted? {
+                        if !accepted? {
+                            // reject the call if not accepted
+                            write_message(transport, &Message::Reject).await?;
+                            return Ok(true);
+                        }
+
+                        if let Ok(mut call_state) = self.setup_call(contact.peer_id).await {
                             // respond with hello ack containing audio header
-                            let mut call_state = self.setup_call(contact.peer_id).await?;
                             call_state.remote_configuration = remote_audio_header;
                             write_message(transport, &Message::HelloAck { audio_header: call_state.local_configuration.clone() }).await?;
 
@@ -1032,8 +1041,10 @@ where
 
                             keep_alive.reset(); // start sending normal keep alive messages
                         } else {
-                            // reject the call if not accepted
-                            write_message(transport, &Message::Reject).await?;
+                            // if the audio input setup fails, other client will be left hanging
+                            write_message(transport, &Message::Goodbye {
+                                reason: Some("audio device error".to_string())
+                            }).await?;
                         }
                     }
                     result = read_message::<Message, _>(transport) => {
@@ -1090,8 +1101,11 @@ where
                                     keep_alive.reset(); // start sending normal keep alive messages
                                     None
                                 }
+                                Message::Goodbye { reason: Some(m) } => {
+                                    Some(format!("{} did not accept the call because of {m}", contact.nickname))
+                                }
                                 Message::Reject | Message::Busy if is_in_room => None,
-                                Message::Reject => {
+                                Message::Goodbye { .. } | Message::Reject => {
                                     Some(format!("{} did not accept the call", contact.nickname))
                                 },
                                 Message::Busy => {
@@ -1174,21 +1188,13 @@ where
         self.core_state.in_call.store(false, Relaxed);
         // hide the overlay
         self.overlay.hide();
-
-        match result {
-            Ok(()) => Ok(()),
-            Err(error) => {
-                let message = Message::Goodbye {
-                    reason: Some(if error.is_audio_error() {
-                        "Audio device error".to_string()
-                    } else {
-                        error.to_string()
-                    }),
-                };
-                write_message(transport, &message).await?;
-                Err(error)
-            }
+        // send a goodbye message on errors
+        if let Err(error) = result.as_ref() {
+            let message = Message::error_goodbye(error);
+            write_message(transport, &message).await?;
         }
+
+        result
     }
 
     /// Normal call & self-test logic

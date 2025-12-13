@@ -113,6 +113,7 @@ pub(crate) struct FlutterStatisticsCallback {
     inner: DartVoid<Statistics>,
 }
 
+#[derive(Debug)]
 pub enum CallState {
     Connected,
     Waiting,
@@ -124,7 +125,7 @@ pub enum CallState {
 #[derive(Debug)]
 pub enum SessionStatus {
     Connecting,
-    Connected,
+    Connected { relayed: bool },
     Inactive,
     Unknown,
 }

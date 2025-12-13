@@ -5746,14 +5746,27 @@ impl SseDecode for crate::flutter::SendToDartLogger {
 impl SseDecode for crate::flutter::SessionStatus {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
-        let mut inner = <i32>::sse_decode(deserializer);
-        return match inner {
-            0 => crate::flutter::SessionStatus::Connecting,
-            1 => crate::flutter::SessionStatus::Connected,
-            2 => crate::flutter::SessionStatus::Inactive,
-            3 => crate::flutter::SessionStatus::Unknown,
-            _ => unreachable!("Invalid variant for SessionStatus: {}", inner),
-        };
+        let mut tag_ = <i32>::sse_decode(deserializer);
+        match tag_ {
+            0 => {
+                return crate::flutter::SessionStatus::Connecting;
+            }
+            1 => {
+                let mut var_relayed = <bool>::sse_decode(deserializer);
+                return crate::flutter::SessionStatus::Connected {
+                    relayed: var_relayed,
+                };
+            }
+            2 => {
+                return crate::flutter::SessionStatus::Inactive;
+            }
+            3 => {
+                return crate::flutter::SessionStatus::Unknown;
+            }
+            _ => {
+                unimplemented!("");
+            }
+        }
     }
 }
 
@@ -6320,11 +6333,15 @@ impl flutter_rust_bridge::IntoIntoDart<crate::flutter::SendToDartLogger>
 impl flutter_rust_bridge::IntoDart for crate::flutter::SessionStatus {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         match self {
-            Self::Connecting => 0.into_dart(),
-            Self::Connected => 1.into_dart(),
-            Self::Inactive => 2.into_dart(),
-            Self::Unknown => 3.into_dart(),
-            _ => unreachable!(),
+            crate::flutter::SessionStatus::Connecting => [0.into_dart()].into_dart(),
+            crate::flutter::SessionStatus::Connected { relayed } => {
+                [1.into_dart(), relayed.into_into_dart().into_dart()].into_dart()
+            }
+            crate::flutter::SessionStatus::Inactive => [2.into_dart()].into_dart(),
+            crate::flutter::SessionStatus::Unknown => [3.into_dart()].into_dart(),
+            _ => {
+                unimplemented!("");
+            }
         }
     }
 }
@@ -6865,18 +6882,24 @@ impl SseEncode for crate::flutter::SendToDartLogger {
 impl SseEncode for crate::flutter::SessionStatus {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
-        <i32>::sse_encode(
-            match self {
-                crate::flutter::SessionStatus::Connecting => 0,
-                crate::flutter::SessionStatus::Connected => 1,
-                crate::flutter::SessionStatus::Inactive => 2,
-                crate::flutter::SessionStatus::Unknown => 3,
-                _ => {
-                    unimplemented!("");
-                }
-            },
-            serializer,
-        );
+        match self {
+            crate::flutter::SessionStatus::Connecting => {
+                <i32>::sse_encode(0, serializer);
+            }
+            crate::flutter::SessionStatus::Connected { relayed } => {
+                <i32>::sse_encode(1, serializer);
+                <bool>::sse_encode(relayed, serializer);
+            }
+            crate::flutter::SessionStatus::Inactive => {
+                <i32>::sse_encode(2, serializer);
+            }
+            crate::flutter::SessionStatus::Unknown => {
+                <i32>::sse_encode(3, serializer);
+            }
+            _ => {
+                unimplemented!("");
+            }
+        }
     }
 }
 

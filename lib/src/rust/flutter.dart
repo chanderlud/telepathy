@@ -228,12 +228,16 @@ class SendToDartLogger {
       other is SendToDartLogger && runtimeType == other.runtimeType;
 }
 
-enum SessionStatus {
-  connecting,
-  connected,
-  inactive,
-  unknown,
-  ;
+@freezed
+sealed class SessionStatus with _$SessionStatus {
+  const SessionStatus._();
+
+  const factory SessionStatus.connecting() = SessionStatus_Connecting;
+  const factory SessionStatus.connected({
+    required bool relayed,
+  }) = SessionStatus_Connected;
+  const factory SessionStatus.inactive() = SessionStatus_Inactive;
+  const factory SessionStatus.unknown() = SessionStatus_Unknown;
 }
 
 /// processed statistics for the frontend

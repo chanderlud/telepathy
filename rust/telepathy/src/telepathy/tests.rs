@@ -125,7 +125,12 @@ async fn mock_callbacks_test() {
 
     // set up client a
     let a_is_active = Arc::new(AtomicBool::new(false));
-    let mock_a = construct_mock_callbacks(vec![contact_b.clone()], a_is_active.clone());
+    let a_is_relayed = Arc::new(AtomicBool::new(false));
+    let mock_a = construct_mock_callbacks(
+        vec![contact_b.clone()],
+        a_is_active.clone(),
+        a_is_relayed.clone(),
+    );
     let mut telepathy_a = TelepathyCore::mock(mock_a, &network_config_a, &codec_config);
     *telepathy_a.core_state.identity.write().await = Some(key_a);
     let handle_a = telepathy_a.start_manager().await;
@@ -133,7 +138,12 @@ async fn mock_callbacks_test() {
 
     // set up client b
     let b_is_active = Arc::new(AtomicBool::new(false));
-    let mock_b = construct_mock_callbacks(vec![contact_a.clone()], b_is_active.clone());
+    let b_is_relayed = Arc::new(AtomicBool::new(false));
+    let mock_b = construct_mock_callbacks(
+        vec![contact_a.clone()],
+        b_is_active.clone(),
+        b_is_relayed.clone(),
+    );
     let mut telepathy_b = TelepathyCore::mock(mock_b, &network_config_b, &codec_config);
     *telepathy_b.core_state.identity.write().await = Some(key_b);
     let handle_b = telepathy_b.start_manager().await;
@@ -191,6 +201,16 @@ async fn mock_callbacks_test() {
     info!("session state a: {:?}", a_session);
     info!("session state b: {:?}", b_session);
 
+    // direct connections should have been established
+    assert!(!a_is_relayed.load(Relaxed));
+    assert!(!b_is_relayed.load(Relaxed));
+
+    // each client starts a call with the other at the same time
+    a_session.start_call.notify_one();
+    b_session.start_call.notify_one();
+
+    tokio::time::sleep(Duration::from_secs(5)).await;
+
     // ensure shutdown is a success
     telepathy_a.shutdown().await;
     telepathy_b.shutdown().await;
@@ -203,26 +223,25 @@ async fn mock_callbacks_test() {
 fn construct_mock_callbacks(
     contacts: Vec<Contact>,
     is_active: Arc<AtomicBool>,
+    is_relayed: Arc<AtomicBool>,
 ) -> MockFrbCallbacks<MockFrbStatisticsCallback> {
     let mut mock: MockFrbCallbacks<MockFrbStatisticsCallback> = MockFrbCallbacks::new();
 
     // handle session status callbacks
-    mock.expect_session_status()
-        .withf(|status, peer| {
-            info!("session status got called {status:?} {peer}");
-            true
-        })
-        .returning(move |status, _| {
-            let is_active_clone = is_active.clone();
-            Box::pin(async move {
-                match status {
-                    SessionStatus::Connected => {
-                        is_active_clone.store(true, Relaxed);
-                    }
-                    _ => (),
+    mock.expect_session_status().returning(move |status, peer| {
+        info!("session status got called {status:?} {peer}");
+        let is_active_clone = is_active.clone();
+        let is_relayed_clone = is_relayed.clone();
+        Box::pin(async move {
+            match status {
+                SessionStatus::Connected { relayed } => {
+                    is_active_clone.store(true, Relaxed);
+                    is_relayed_clone.store(relayed, Relaxed);
                 }
-            })
-        });
+                _ => (),
+            }
+        })
+    });
 
     // ensure manager activates
     mock.expect_manager_active()
@@ -238,27 +257,34 @@ fn construct_mock_callbacks(
 
     // return the contacts
     let contacts_clone = contacts.clone();
-    mock.expect_get_contacts()
-        .withf(|| true)
-        .returning(move || {
-            let contacts_clone = contacts_clone.clone();
-            Box::pin(async move { contacts_clone })
-        });
+    mock.expect_get_contacts().returning(move || {
+        let contacts_clone = contacts_clone.clone();
+        Box::pin(async move { contacts_clone })
+    });
 
-    mock.expect_get_contact()
-        .withf(|_peer_id| true)
-        .returning(move |peer_id| {
-            let contacts_clone = contacts.clone();
-            Box::pin(async move {
-                for contact in contacts_clone.iter() {
-                    if contact.peer_id.to_bytes() == peer_id {
-                        return Some(contact.clone());
-                    }
+    mock.expect_get_contact().returning(move |peer_id| {
+        let contacts_clone = contacts.clone();
+        Box::pin(async move {
+            for contact in contacts_clone.iter() {
+                if contact.peer_id.to_bytes() == peer_id {
+                    return Some(contact.clone());
                 }
+            }
 
-                None
-            })
-        });
+            None
+        })
+    });
+
+    // immediately accepts prompt for calls
+    mock.expect_get_accept_handle().returning(move |_, _, _| {
+        info!("accept call called");
+        tokio::spawn(async move { true })
+    });
+
+    mock.expect_call_state().returning(|state| {
+        info!("got call state: {state:?}");
+        Box::pin(async move {})
+    });
 
     mock
 }
