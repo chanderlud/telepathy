@@ -90,7 +90,7 @@ impl SoundPlayer {
             }
         });
 
-        SoundHandle { cancel, handle }
+        SoundHandle { cancel, _handle: handle }
     }
 
     #[frb(sync)]
@@ -106,7 +106,7 @@ impl SoundPlayer {
 #[frb(opaque)]
 pub struct SoundHandle {
     cancel: Arc<Notify>,
-    handle: JoinHandle<()>,
+    _handle: JoinHandle<()>,
 }
 
 impl SoundHandle {
