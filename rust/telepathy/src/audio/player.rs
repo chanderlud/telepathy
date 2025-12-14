@@ -90,7 +90,10 @@ impl SoundPlayer {
             }
         });
 
-        SoundHandle { cancel, _handle: handle }
+        SoundHandle {
+            cancel,
+            _handle: handle,
+        }
     }
 
     #[frb(sync)]
