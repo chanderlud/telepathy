@@ -157,7 +157,7 @@ pub(crate) fn input_processor(
 
     // the position in pre_buf
     let mut position = 0;
-    // a counter user for short silence detection
+    // a counter for short silence detection
     let mut silence_length = 0_u8;
 
     loop {

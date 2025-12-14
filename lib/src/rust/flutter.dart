@@ -11,7 +11,7 @@ part 'flutter.freezed.dart';
 
 // These functions are ignored because they are not marked as `pub`: `atomic_u32_deserialize`, `atomic_u32_serialize`, `invoke`, `new`, `notify`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `FlutterStatisticsCallback`, `SEND_TO_DART_LOGGER_STREAM_SINK`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `deref`, `do_logs`, `fmt`, `fmt`, `fmt`, `fmt`, `initialize`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `deref`, `do_logs`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `initialize`
 
 Stream<String> createLogStream() =>
     RustLib.instance.api.crateFlutterCreateLogStream();

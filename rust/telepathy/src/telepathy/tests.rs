@@ -90,7 +90,17 @@ where
 }
 
 #[tokio::test]
-async fn mock_callbacks_test() {
+async fn mock_callbacks_test_network_matrix() {
+    for profile in PROFILES {
+        // pick ports (include relay if you want it impaired too)
+        let _net = NetemGuard::apply(profile, &[40143, 40144]).expect("netem setup failed");
+
+        // run your existing test logic with timeouts
+        run_test(profile).await;
+    }
+}
+
+async fn run_test(profile: &NetProfile) {
     fast_log::init(
         Config::new()
             .file("mock_callbacks.log")
@@ -626,3 +636,112 @@ pub(crate) fn dummy_int_frame() -> [i16; FRAME_SIZE] {
     rng.fill(&mut frame[..]);
     frame
 }
+
+struct NetemGuard;
+
+impl NetemGuard {
+    fn apply(profile: &NetProfile, ports: &[u16]) -> std::io::Result<Self> {
+        // Always start clean
+        let _ = Command::new("tc")
+            .args(["qdisc", "del", "dev", "lo", "root"])
+            .status();
+
+        if profile.netem_args.is_empty() {
+            return Ok(Self);
+        }
+
+        // Root prio with 3 bands, netem attached to band 3
+        cmd(["qdisc", "add", "dev", "lo", "root", "handle", "1:", "prio"])?;
+        cmd([
+            "qdisc", "add", "dev", "lo", "parent", "1:3", "handle", "30:", "netem",
+        ]
+        .into_iter()
+        .chain(profile.netem_args.iter().copied())
+        .collect::<Vec<_>>()
+        .as_slice())?;
+
+        // Filters: UDP protocol (17) + dest port -> band 3
+        for p in ports {
+            cmd(&[
+                "filter",
+                "add",
+                "dev",
+                "lo",
+                "protocol",
+                "ip",
+                "parent",
+                "1:",
+                "prio",
+                "3",
+                "u32",
+                "match",
+                "ip",
+                "protocol",
+                "17",
+                "0xff",
+                "match",
+                "ip",
+                "dport",
+                &p.to_string(),
+                "0xffff",
+                "flowid",
+                "1:3",
+            ])?;
+        }
+
+        Ok(Self)
+    }
+}
+
+impl Drop for NetemGuard {
+    fn drop(&mut self) {
+        let _ = Command::new("tc")
+            .args(["qdisc", "del", "dev", "lo", "root"])
+            .status();
+    }
+}
+
+fn cmd(args: &[&str]) -> std::io::Result<()> {
+    let st = Command::new("tc").args(args).status()?;
+    if st.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::new(std::io::ErrorKind::Other, "tc failed"))
+    }
+}
+
+#[derive(Clone)]
+struct NetProfile {
+    name: &'static str,
+    // tc netem args, like: ["delay","120ms","30ms","loss","5%"]
+    netem_args: &'static [&'static str],
+}
+
+// keep this curated and explicit; you can go full property-testing later.
+static PROFILES: &[NetProfile] = &[
+    NetProfile {
+        name: "clean",
+        netem_args: &[],
+    },
+    NetProfile {
+        name: "wifi_jitter",
+        netem_args: &["delay", "40ms", "20ms", "loss", "0.2%"],
+    },
+    NetProfile {
+        name: "cellular",
+        netem_args: &["delay", "120ms", "40ms", "loss", "1%"],
+    },
+    NetProfile {
+        name: "satellite-ish",
+        netem_args: &["delay", "600ms", "80ms", "loss", "0.5%"],
+    },
+    NetProfile {
+        name: "reorder",
+        netem_args: &["delay", "80ms", "20ms", "reorder", "15%", "50%"],
+    },
+    // burst loss: Gilbert-Elliott “gemodel” exists in netem
+    NetProfile {
+        name: "bursty_loss",
+        netem_args: &["loss", "gemodel", "2%", "20%", "10%", "10%"],
+    },
+];

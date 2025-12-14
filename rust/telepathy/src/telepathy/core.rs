@@ -1,5 +1,7 @@
 #[cfg(target_os = "ios")]
 use crate::audio::ios::{configure_audio_session, deactivate_audio_session};
+#[cfg(target_family = "wasm")]
+use crate::audio::web_audio::WebAudioWrapper;
 use crate::error::ErrorKind;
 use crate::flutter::callbacks::{FrbCallbacks, FrbStatisticsCallback};
 use crate::flutter::{
@@ -56,11 +58,14 @@ use tokio::sync::mpsc::{Receiver as MReceiver, Sender as MSender, channel};
 use tokio::sync::{Mutex, Notify, RwLock};
 #[cfg(not(target_family = "wasm"))]
 use tokio::task::JoinHandle;
+#[cfg(not(target_family = "wasm"))]
 use tokio::time::{Interval, interval, timeout};
 use tokio_util::codec::LengthDelimitedCodec;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
+#[cfg(target_family = "wasm")]
+use wasmtimer::tokio::{Interval, interval, timeout};
 
 pub(crate) struct TelepathyCore<C, S>
 where
@@ -93,7 +98,7 @@ where
 
     /// A wrapper to provide audio input on the web
     #[cfg(target_family = "wasm")]
-    pub(crate) web_input: Arc<Mutex<Option<crate::audio::web_audio::WebAudioWrapper>>>,
+    pub(crate) web_input: Arc<Mutex<Option<WebAudioWrapper>>>,
 
     /// callback methods provided by the flutter frontend
     pub(crate) callbacks: Arc<C>,
@@ -1224,7 +1229,7 @@ where
         // the two clients agree on these codec options
         let codec_config = call_state.codec_config();
 
-        let input_channel = self
+        let mut input_helper = self
             .setup_input(
                 call_state.local_configuration.sample_rate as f64,
                 codec_config,
@@ -1233,7 +1238,7 @@ where
             )
             .await?;
 
-        let (output_sender, output_stream) = self
+        let mut output_helper = self
             .setup_output(
                 call_state.remote_configuration.sample_rate as f64,
                 codec_config.0,
@@ -1245,10 +1250,8 @@ where
 
         #[cfg(not(target_family = "wasm"))]
         let input_stream =
-            self.setup_input_stream(&call_state, input_channel.1, end_call.clone())?;
+            self.setup_input_stream(&call_state, input_helper.sender(), end_call.clone())?;
 
-        // play the output stream
-        output_stream.stream.play()?;
         // play the input stream (non web)
         #[cfg(not(target_family = "wasm"))]
         input_stream.stream.play()?;
@@ -1270,14 +1273,14 @@ where
             let (write, read) = o.audio_transport.split();
 
             let input_handle = spawn(audio_input(
-                input_channel.0,
+                input_helper.receiver(),
                 ConstSocket::new(write),
                 stop_io.clone(),
                 upload_bandwidth,
             ));
 
             let output_handle = spawn(audio_output(
-                output_sender,
+                output_helper.sender(),
                 read,
                 stop_io.clone(),
                 download_bandwidth,
@@ -1330,7 +1333,14 @@ where
 
             info!("call controller returned and was handled, call returning");
         } else {
-            loopback(input_channel.0, output_sender, stop_io, end_call).await;
+            loopback(
+                input_helper.receiver(),
+                output_helper.sender(),
+                stop_io,
+                end_call,
+            )
+            .await;
+            stop_io.cancel();
         }
 
         // on ios the audio session must be deactivated
@@ -1339,11 +1349,16 @@ where
 
         #[cfg(target_family = "wasm")]
         {
-            // drop the web input to free resources & stop input processor
+            // drop the web input to free resources and stop the input processor
             *self.web_input.lock().await = None;
         }
 
+        debug!("starting call teardown");
         statistics_handle.await?;
+        input_helper.join().await?;
+        output_helper.join().await?;
+        debug!("finished call teardown");
+
         Ok(())
     }
 
@@ -1477,7 +1492,7 @@ where
         // tracks connection state for peers
         let mut connections = HashMap::new();
 
-        let input_channel = self
+        let mut input_helper = self
             .setup_input(
                 call_state.local_configuration.sample_rate as f64,
                 (true, true, 5_f32), // hard coded room codec options
@@ -1488,7 +1503,7 @@ where
 
         #[cfg(not(target_family = "wasm"))]
         let input_stream =
-            self.setup_input_stream(&call_state, input_channel.1, end_call.clone())?;
+            self.setup_input_stream(&call_state, input_helper.sender(), end_call.clone())?;
 
         // play the input stream (non web)
         #[cfg(not(target_family = "wasm"))]
@@ -1502,7 +1517,7 @@ where
         }
 
         let input_handle = spawn(audio_input(
-            input_channel.0,
+            input_helper.receiver(),
             SendingSockets::new(new_sockets.clone()),
             stop_io.clone(),
             statistics_state.upload_bandwidth.clone(),
@@ -1534,7 +1549,7 @@ where
                             // this unwrap is safe because audio_input never panics
                             new_sockets.lock().unwrap().push((write, Instant::now()));
                             // setup output stack
-                            let (output_sender, output_stream) = self
+                            let mut helper = self
                                 .setup_output(
                                     state.remote_configuration.sample_rate as f64,
                                     true,
@@ -1543,11 +1558,9 @@ where
                                     end_call.clone(),
                                 )
                                 .await?;
-                            // begin playing audio
-                            output_stream.stream.play()?;
                             // begin sending
                             let handle = spawn(audio_output(
-                                output_sender,
+                                helper.sender(),
                                 read,
                                 stop_io.clone(),
                                 statistics_state.download_bandwidth.clone(),
@@ -1555,7 +1568,7 @@ where
                             ));
 
                             connections.insert(state.peer, RoomConnection {
-                                stream: output_stream,
+                                output: helper,
                                 handle,
                             });
                             self.callbacks.call_state(CallState::RoomJoin(state.peer.to_string())).await;
@@ -1581,19 +1594,22 @@ where
         // tear down processing stack
         debug!("starting to tear down room processing stack");
         stop_io.cancel();
+        // join input IO task
         input_handle.await??;
+        // join output tasks
         for connection in connections.into_values() {
             connection.handle.await??;
-            drop(connection.stream);
+            connection.output.join().await?;
         }
         debug!("finished tearing down room processing stack");
-
-        // clean up room state
+        // cleanup room state
         self.room_state.write().await.take();
-        // clean up sessions blocked by room
+        // cleanup sessions blocked by room
         end_sessions.cancel();
         // join statistics collector
         statistics_handle.await?;
+        // join input tasks
+        input_helper.join().await?;
         Ok(())
     }
 }

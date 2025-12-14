@@ -20,10 +20,13 @@ use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::select;
 use tokio::sync::Notify;
+#[cfg(not(target_family = "wasm"))]
 use tokio::time::interval;
 use tokio_util::codec::LengthDelimitedCodec;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tokio_util::sync::CancellationToken;
+#[cfg(target_family = "wasm")]
+use wasmtimer::tokio::interval;
 
 type Result<T> = std::result::Result<T, Error>;
 
@@ -124,6 +127,9 @@ pub(crate) async fn statistics_collector<C: FrbStatisticsCallback>(
 
     loop {
         select! {
+            _ = cancel.cancelled() => {
+                break;
+            }
             _ = update_interval.tick() => {
                 let latency = state.latency.load(Relaxed);
                 let loss = state.loss.swap(0, Relaxed);
@@ -143,9 +149,6 @@ pub(crate) async fn statistics_collector<C: FrbStatisticsCallback>(
             _ = reset_interval.tick() => {
                 input_max /= 2_f32;
                 output_max /= 2_f32;
-            }
-            _ = cancel.cancelled() => {
-                break;
             }
         }
     }
@@ -167,6 +170,12 @@ pub(crate) async fn loopback(
 ) {
     loop {
         select! {
+            _ = end_call.notified() => {
+                break;
+            }
+            _ = cancel.cancelled() => {
+                break;
+            },
             message = input_receiver.recv() => {
                 if let Ok(message) = message {
                     if output_sender.try_send(message).is_err() {
@@ -175,12 +184,6 @@ pub(crate) async fn loopback(
                 } else {
                     break;
                 }
-            },
-            _ = end_call.notified() => {
-                break;
-            }
-            _ = cancel.cancelled() => {
-                break;
             },
         }
     }

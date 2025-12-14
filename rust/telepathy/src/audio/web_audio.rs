@@ -123,7 +123,24 @@ impl WebAudioWrapper {
 
 impl Drop for WebAudioWrapper {
     fn drop(&mut self) {
+        // stop JS from ever calling the Rust closure again
+        if let Ok(port) = self._worklet_node.port() {
+            port.set_onmessage(None);
+            port.close();
+        }
+        // disconnect the audio graph
+        let _ = self._source.disconnect();
+        let _ = self._worklet_node.disconnect();
+        // stop mic tracks (releases the device and stops producing audio frames)
+        let tracks = self._stream.get_tracks();
+        for i in 0..tracks.length() {
+            if let Ok(t) = tracks.get(i).dyn_into::<web_sys::MediaStreamTrack>() {
+                t.stop();
+            }
+        }
+        // close context
         let _ = self.audio_ctx.close();
+        // cleans up shared state
         self.finished.store(true, Relaxed);
         self.pair.1.notify_all();
     }

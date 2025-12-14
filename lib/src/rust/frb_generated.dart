@@ -2083,7 +2083,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
-        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSoundPlayer(
+        sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSoundPlayer(
             that, serializer);
         sse_encode_list_prim_u_8_loose(bytes, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
@@ -3705,6 +3705,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  SoundPlayer
+      dco_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSoundPlayer(
+          dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return SoundPlayerImpl.frbInternalDcoDecode(raw as List<dynamic>);
+  }
+
+  @protected
   Telepathy
       dco_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
           dynamic raw) {
@@ -4512,6 +4520,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  SoundPlayer
+      sse_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSoundPlayer(
+          SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return SoundPlayerImpl.frbInternalSseDecode(
+        sse_decode_usize(deserializer), sse_decode_i_32(deserializer));
+  }
+
+  @protected
   Telepathy
       sse_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
           SseDeserializer deserializer) {
@@ -5277,6 +5294,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_usize(
         (self as ContactImpl).frbInternalSseEncode(move: false), serializer);
+  }
+
+  @protected
+  void
+      sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSoundPlayer(
+          SoundPlayer self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_usize(
+        (self as SoundPlayerImpl).frbInternalSseEncode(move: false),
+        serializer);
   }
 
   @protected
@@ -6273,7 +6300,7 @@ class OverlayImpl extends RustOpaque implements Overlay {
       RustLib.instance.api.crateOverlayOverlayOverlayMoveOverlay(
           that: this, x: x, y: y, width: width, height: height);
 
-  /// access the screen resolution for overlay positioning in the front end
+  /// non-windows platforms don't have an overlay
   (int, int) screenResolution() =>
       RustLib.instance.api.crateOverlayOverlayOverlayScreenResolution(
         that: this,

@@ -9,6 +9,7 @@ use atomic_float::AtomicF32;
 use core::time::Duration;
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{Host, SampleFormat};
+use flutter_rust_bridge::JoinHandle;
 use flutter_rust_bridge::spawn;
 use flutter_rust_bridge::{frb, spawn_blocking_with};
 use kanal::{Receiver, unbounded};
@@ -73,7 +74,7 @@ impl SoundPlayer {
     }
 
     /// Public play function
-    pub async fn play(&self, bytes: Vec<u8>) -> SoundHandle {
+    pub async fn play(&mut self, bytes: Vec<u8>) -> SoundHandle {
         let cancel = Arc::new(Notify::new());
         let cancel_clone = cancel.clone();
 
@@ -81,7 +82,7 @@ impl SoundPlayer {
         let host = self.host.clone();
         let output_device = self.output_device.clone();
 
-        spawn(async move {
+        let handle = spawn(async move {
             if let Err(error) =
                 play_sound(bytes, cancel_clone, host, output_volume, output_device).await
             {
@@ -89,7 +90,7 @@ impl SoundPlayer {
             }
         });
 
-        SoundHandle { cancel }
+        SoundHandle { cancel, handle }
     }
 
     #[frb(sync)]
@@ -105,6 +106,7 @@ impl SoundPlayer {
 #[frb(opaque)]
 pub struct SoundHandle {
     cancel: Arc<Notify>,
+    handle: JoinHandle<()>,
 }
 
 impl SoundHandle {
@@ -177,6 +179,7 @@ async fn play_sound(
     // parse the input spec
     let mut spec = AudioHeader::from(&bytes[0..44]);
     let mut samples = None;
+    let mut decoder_handle = None;
 
     let sample_format = if spec.is_valid() {
         // match the correct sample format
@@ -197,19 +200,22 @@ async fn play_sound(
             .send(ProcessorMessage::Data(Bytes::copy_from_slice(&bytes[..14])))
             .await?;
 
-        let decoder_handle = spawn_blocking_with(
+        let decoder_future = spawn_blocking_with(
             move || SeaDecoder::new(input_receiver, output_sender, None).unwrap(),
             FLUTTER_RUST_BRIDGE_HANDLER.thread_pool(),
         );
 
-        let mut decoder = decoder_handle.await?;
+        let mut decoder = decoder_future.await?;
         let header = decoder.get_header();
         let sample_count =
             (bytes.len() - 14) / header.chunk_size as usize * FRAME_SIZE / header.channels as usize;
         spec.sample_rate = header.sample_rate;
         spec.channels = header.channels as u32;
 
-        std::thread::spawn(move || while decoder.decode_frame().is_ok() {});
+        decoder_handle = Some(spawn_blocking_with(
+            move || while decoder.decode_frame().is_ok() {},
+            FLUTTER_RUST_BRIDGE_HANDLER.thread_pool(),
+        ));
 
         for chunk in bytes[14..].chunks(header.chunk_size as usize) {
             input_sender
@@ -244,9 +250,9 @@ async fn play_sound(
     let output_channels = output_config.channels() as usize;
     // keep track of the last samples played
     let mut last_samples = vec![0_f32; output_channels];
-    // a counter used for fading out the last samples when the sound is cancelled
+    // a counter used for fading out the last samples when the sound is canceled
     let mut i = 0;
-    // used to provide a fade to 0 when the sound is cancelled
+    // used to provide a fade to 0 when the sound is canceled
     let f32_sample_rate = output_config.sample_rate().0 as f32;
 
     let output_stream = SendStream {
@@ -311,7 +317,8 @@ async fn play_sound(
     // the sender used by the processor
     let sender = processed_sender.clone();
 
-    let processor_future = spawn_blocking_with(
+    let mut processor_join: Option<_> = None;
+    let mut processor_future = spawn_blocking_with(
         move || {
             processor(
                 (samples.is_none().then_some(bytes), samples),
@@ -339,7 +346,9 @@ async fn play_sound(
             // we sleep to prevent the stream from being closed while fading
             sleep(Duration::from_secs(1)).await;
         }
-        _ = processor_future => {
+        result = &mut processor_future => {
+            // keep track of the return value
+            processor_join = Some(result);
             #[cfg(target_family = "wasm")]
             {
                 // on web, we need to wait for the output to finish playing before continuing
@@ -350,6 +359,18 @@ async fn play_sound(
         }
     }
 
+    // join the decoder task if there was one
+    if let Some(handle) = decoder_handle {
+        handle.await?;
+    }
+
+    // join the processor task
+    let result = match processor_join {
+        Some(result) => result,
+        None => processor_future.await,
+    };
+
+    result??;
     Ok(())
 }
 

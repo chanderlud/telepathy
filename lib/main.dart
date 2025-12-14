@@ -29,6 +29,7 @@ import 'package:window_manager/window_manager.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 SoundHandle? outgoingSoundHandle;
+SoundHandle? otherSoundHandle;
 
 Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -204,7 +205,7 @@ Future<void> main(List<String> args) async {
         }
     }
 
-    await soundPlayer.play(bytes: bytes);
+    otherSoundHandle = await soundPlayer.play(bytes: bytes);
   }
 
   /// called when the backend wants to start sessions
@@ -1325,7 +1326,7 @@ class ContactWidgetState extends State<ContactWidget> {
                   widget.stateController.endOfCall();
 
                   List<int> bytes = await readSeaBytes('call_ended');
-                  await widget.player.play(bytes: bytes);
+                  otherSoundHandle = await widget.player.play(bytes: bytes);
                 },
               ),
             if (!active && online)
@@ -1626,7 +1627,7 @@ class CallControls extends StatelessWidget {
                               List<int> bytes = stateController.isMuted
                                   ? await readSeaBytes('unmute')
                                   : await readSeaBytes('mute');
-                              player.play(bytes: bytes);
+                              otherSoundHandle = await player.play(bytes: bytes);
 
                               stateController.mute();
                               telepathy.setMuted(
@@ -1647,7 +1648,7 @@ class CallControls extends StatelessWidget {
                               List<int> bytes = stateController.isDeafened
                                   ? await readSeaBytes('deafen')
                                   : await readSeaBytes('undeafen');
-                              player.play(bytes: bytes);
+                              otherSoundHandle = await player.play(bytes: bytes);
 
                               stateController.deafen();
                               telepathy.setDeafened(
@@ -2382,7 +2383,7 @@ class RoomDetailsWidget extends StatelessWidget {
               stateController.endOfCall();
 
               List<int> bytes = await readSeaBytes('call_ended');
-              await player.play(bytes: bytes);
+              otherSoundHandle = await player.play(bytes: bytes);
             },
           ),
           Text("Online: ${online.map(getNickname).join(" ")}"),
@@ -3000,7 +3001,7 @@ class ChatStateController extends ChangeNotifier {
 
     // TODO there is no message received sound asset
     // // play the received sound
-    // soundPlayer.play(bytes: await readSeaBytes(''));
+    // otherSoundHandle = await soundPlayer.play(bytes: await readSeaBytes(''));
   }
 
   /// adds a file to the list of attachments

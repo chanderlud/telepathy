@@ -6,7 +6,7 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `_disable`, `_enable`, `_hide`, `_move_overlay`, `_show`, `controller`, `redraw`, `start_overlay`
+// These functions are ignored because they are not marked as `pub`: `_disable`, `_enable`, `_hide`, `_move_overlay`, `_show`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Overlay>>
@@ -31,6 +31,7 @@ abstract class Overlay implements RustOpaqueInterface {
       required int height});
 
   // HINT: Make it `#[frb(sync)]` to let it become the default constructor of Dart class.
+  /// non-windows platforms don't have an overlay
   static Future<Overlay> newInstance(
           {required bool enabled,
           required int x,
@@ -50,7 +51,7 @@ abstract class Overlay implements RustOpaqueInterface {
           backgroundColor: backgroundColor,
           fontColor: fontColor);
 
-  /// access the screen resolution for overlay positioning in the front end
+  /// non-windows platforms don't have an overlay
   (int, int) screenResolution();
 
   /// change the background color of the overlay

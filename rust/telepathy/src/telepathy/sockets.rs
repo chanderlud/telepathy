@@ -13,11 +13,14 @@ use std::sync::atomic::Ordering::Relaxed;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::select;
+#[cfg(not(target_family = "wasm"))]
 use tokio::time::timeout;
 use tokio_util::bytes::{Buf, BufMut, BytesMut};
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 use tokio_util::compat::Compat;
 use tokio_util::sync::CancellationToken;
+#[cfg(target_family = "wasm")]
+use wasmtimer::tokio::timeout;
 
 pub(crate) type SharedSockets = Arc<Mutex<Vec<(AudioSocket, Instant)>>>;
 pub(crate) type TransportStream = Compat<Stream>;

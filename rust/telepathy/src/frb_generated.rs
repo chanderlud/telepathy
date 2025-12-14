@@ -1778,28 +1778,28 @@ fn wire__crate__overlay__overlay__Overlay_new_impl(
             };
             let mut deserializer =
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
-            let api_enabled = <bool>::sse_decode(&mut deserializer);
-            let api_x = <i32>::sse_decode(&mut deserializer);
-            let api_y = <i32>::sse_decode(&mut deserializer);
-            let api_width = <i32>::sse_decode(&mut deserializer);
-            let api_height = <i32>::sse_decode(&mut deserializer);
-            let api_font_height = <i32>::sse_decode(&mut deserializer);
-            let api_background_color = <u32>::sse_decode(&mut deserializer);
-            let api_font_color = <u32>::sse_decode(&mut deserializer);
+            let api__enabled = <bool>::sse_decode(&mut deserializer);
+            let api__x = <i32>::sse_decode(&mut deserializer);
+            let api__y = <i32>::sse_decode(&mut deserializer);
+            let api__width = <i32>::sse_decode(&mut deserializer);
+            let api__height = <i32>::sse_decode(&mut deserializer);
+            let api__font_height = <i32>::sse_decode(&mut deserializer);
+            let api__background_color = <u32>::sse_decode(&mut deserializer);
+            let api__font_color = <u32>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, ()>(
                     (move || async move {
                         let output_ok = Result::<_, ()>::Ok(
                             crate::overlay::overlay::Overlay::new(
-                                api_enabled,
-                                api_x,
-                                api_y,
-                                api_width,
-                                api_height,
-                                api_font_height,
-                                api_background_color,
-                                api_font_color,
+                                api__enabled,
+                                api__x,
+                                api__y,
+                                api__width,
+                                api__height,
+                                api__font_height,
+                                api__background_color,
+                                api__font_color,
                             )
                             .await,
                         )?;
@@ -2775,22 +2775,25 @@ fn wire__crate__audio__player__SoundPlayer_play_impl(
                         let decode_indices_ =
                             flutter_rust_bridge::for_generated::lockable_compute_decode_order(
                                 vec![flutter_rust_bridge::for_generated::LockableOrderInfo::new(
-                                    &api_that, 0, false,
+                                    &api_that, 0, true,
                                 )],
                             );
                         for i in decode_indices_ {
                             match i {
                                 0 => {
                                     api_that_guard =
-                                        Some(api_that.lockable_decode_async_ref().await)
+                                        Some(api_that.lockable_decode_async_ref_mut().await)
                                 }
                                 _ => unreachable!(),
                             }
                         }
-                        let api_that_guard = api_that_guard.unwrap();
+                        let mut api_that_guard = api_that_guard.unwrap();
                         let output_ok = Result::<_, ()>::Ok(
-                            crate::audio::player::SoundPlayer::play(&*api_that_guard, api_bytes)
-                                .await,
+                            crate::audio::player::SoundPlayer::play(
+                                &mut *api_that_guard,
+                                api_bytes,
+                            )
+                            .await,
                         )?;
                         Ok(output_ok)
                     })()

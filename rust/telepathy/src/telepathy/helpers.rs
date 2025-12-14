@@ -1,4 +1,6 @@
 use crate::audio::codec::{decoder, encoder};
+#[cfg(target_family = "wasm")]
+use crate::audio::web_audio::{WebAudioWrapper, WebInput};
 use crate::audio::{InputProcessorState, OutputProcessorState, input_processor, output_processor};
 use crate::error::ErrorKind;
 use crate::flutter::callbacks::{FrbCallbacks, FrbStatisticsCallback};
@@ -11,10 +13,10 @@ use crate::telepathy::{
 };
 #[cfg(not(target_family = "wasm"))]
 use cpal::Device;
-use cpal::traits::DeviceTrait;
 #[cfg(not(target_family = "wasm"))]
 use cpal::traits::HostTrait;
-use flutter_rust_bridge::spawn_blocking_with;
+use cpal::traits::{DeviceTrait, StreamTrait};
+use flutter_rust_bridge::{JoinHandle, spawn_blocking_with};
 use kanal::{AsyncReceiver, AsyncSender, Sender, bounded, unbounded_async};
 use libp2p::PeerId;
 use log::{error, info};
@@ -42,7 +44,7 @@ where
         codec_options: (bool, bool, f32),
         statistics_state: &StatisticsCollectorState,
         is_room: bool,
-    ) -> Result<(AsyncReceiver<ProcessorMessage>, Sender<f32>)> {
+    ) -> Result<InputHelper> {
         // input stream -> input processor
         let (input_sender, input_receiver) = bounded::<f32>(CHANNEL_SIZE);
 
@@ -52,7 +54,7 @@ where
             drop(input_receiver);
 
             if let Some(web_input) = self.web_input.lock().await.as_ref() {
-                crate::audio::web_audio::WebInput::from(web_input)
+                WebInput::from(web_input)
             } else {
                 return Err(ErrorKind::NoInputDevice.into());
             }
@@ -79,7 +81,7 @@ where
         );
 
         // spawn the input processor thread
-        spawn_blocking_with(
+        let processor_handle = spawn_blocking_with(
             move || {
                 input_processor(
                     input_receiver,
@@ -95,7 +97,7 @@ where
 
         if codec_enabled {
             // if using codec, spawn extra encoder thread
-            spawn_blocking_with(
+            let encoder_handle = spawn_blocking_with(
                 move || {
                     encoder(
                         processed_input_receiver.to_sync(),
@@ -109,9 +111,19 @@ where
                 FLUTTER_RUST_BRIDGE_HANDLER.thread_pool(),
             );
 
-            Ok((encoded_input_receiver, input_sender))
+            Ok(InputHelper {
+                receiver: Some(encoded_input_receiver),
+                sender: Some(input_sender),
+                processor_handle,
+                encoder_handle: Some(encoder_handle),
+            })
         } else {
-            Ok((processed_input_receiver, input_sender))
+            Ok(InputHelper {
+                receiver: Some(processed_input_receiver),
+                sender: Some(input_sender),
+                processor_handle,
+                encoder_handle: None,
+            })
         }
     }
 
@@ -123,7 +135,7 @@ where
         statistics_state: &StatisticsCollectorState,
         is_room: bool,
         end_call: Arc<Notify>,
-    ) -> Result<(AsyncSender<ProcessorMessage>, SendStream)> {
+    ) -> Result<OutputHelper> {
         // receiving socket -> output processor or decoder
         let (network_output_sender, network_output_receiver) =
             unbounded_async::<ProcessorMessage>();
@@ -164,9 +176,10 @@ where
             statistics_state.loss.clone(),
         );
 
+        let mut decoder_handle = None;
         let output_processor_receiver = if codec_enabled {
             // if codec enabled, spawn extra decoder thread
-            spawn_blocking_with(
+            decoder_handle = Some(spawn_blocking_with(
                 move || {
                     decoder(
                         network_output_receiver.to_sync(),
@@ -175,7 +188,7 @@ where
                     );
                 },
                 FLUTTER_RUST_BRIDGE_HANDLER.thread_pool(),
-            );
+            ));
 
             decoded_output_receiver.to_sync()
         } else {
@@ -183,7 +196,7 @@ where
         };
 
         // spawn the output processor thread
-        spawn_blocking_with(
+        let processor_handle = spawn_blocking_with(
             move || output_processor(output_processor_receiver, output_sender, ratio, state),
             FLUTTER_RUST_BRIDGE_HANDLER.thread_pool(),
         );
@@ -191,7 +204,7 @@ where
         // get the output channels for chunking the output
         let output_channels = output_config.channels() as usize;
 
-        let output_stream = SendStream {
+        let stream = SendStream {
             stream: output_device.build_output_stream(
                 &output_config.into(),
                 move |output: &mut [f32], _: &_| {
@@ -222,8 +235,14 @@ where
                 None,
             )?,
         };
+        stream.stream.play()?;
 
-        Ok((network_output_sender, output_stream))
+        Ok(OutputHelper {
+            sender: Some(network_output_sender),
+            stream,
+            processor_handle,
+            decoder_handle,
+        })
     }
 
     /// helper method to set up non-web audio input stream
@@ -439,8 +458,64 @@ where
 
     #[cfg(target_family = "wasm")]
     pub(crate) async fn init_web_audio(&self) -> Result<()> {
-        let wrapper = crate::audio::web_audio::WebAudioWrapper::new().await?;
+        let wrapper = WebAudioWrapper::new().await?;
         *self.web_input.lock().await = Some(wrapper);
+        Ok(())
+    }
+}
+
+pub(crate) struct OutputHelper {
+    sender: Option<AsyncSender<ProcessorMessage>>,
+    stream: SendStream,
+    processor_handle: JoinHandle<Result<()>>,
+    decoder_handle: Option<JoinHandle<()>>,
+}
+
+impl OutputHelper {
+    pub(crate) fn sender(&mut self) -> AsyncSender<ProcessorMessage> {
+        self.sender.take().unwrap()
+    }
+
+    pub(crate) async fn join(self) -> Result<()> {
+        self.processor_handle.await??;
+        if let Some(handle) = self.decoder_handle {
+            handle.await?;
+        }
+        drop(self.stream);
+        Ok(())
+    }
+}
+
+pub(crate) struct InputHelper {
+    receiver: Option<AsyncReceiver<ProcessorMessage>>,
+    sender: Option<Sender<f32>>,
+    processor_handle: JoinHandle<Result<()>>,
+    encoder_handle: Option<JoinHandle<()>>,
+}
+
+impl InputHelper {
+    pub(crate) fn receiver(&mut self) -> AsyncReceiver<ProcessorMessage> {
+        self.receiver.take().unwrap()
+    }
+
+    pub(crate) fn sender(&mut self) -> Sender<f32> {
+        self.sender.take().unwrap()
+    }
+
+    pub(crate) async fn join(self) -> Result<()> {
+        match self.processor_handle.await? {
+            Ok(()) => (),
+            Err(error) => match error.kind {
+                // input processor may end when channels close
+                ErrorKind::KanalSend(_) => (),
+                // propagate other errors
+                _ => return Err(error),
+            },
+        }
+
+        if let Some(handle) = self.encoder_handle {
+            handle.await?;
+        }
         Ok(())
     }
 }

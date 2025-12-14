@@ -15,13 +15,12 @@ mod sockets;
 pub(crate) mod tests;
 pub(crate) mod utils;
 
-#[cfg(target_family = "wasm")]
-use crate::audio::web_audio::WebAudioWrapper;
 use crate::error::{DartError, Error};
 use crate::flutter::callbacks::FrbCallbacks;
 use crate::flutter::*;
 use crate::overlay::overlay::Overlay;
 use crate::telepathy::core::TelepathyCore;
+use crate::telepathy::helpers::OutputHelper;
 use atomic_float::AtomicF32;
 use chrono::Local;
 #[cfg(not(target_family = "wasm"))]
@@ -103,6 +102,7 @@ impl Telepathy {
     }
 
     pub async fn start_manager(&mut self) {
+        #[cfg(not(target_family = "wasm"))]
         if let Some(handle) = self.inner.start_manager().await {
             self.handles.lock().await.push(handle);
         }
@@ -615,7 +615,7 @@ pub(crate) enum RoomMessage {
 }
 
 struct RoomConnection {
-    stream: SendStream,
+    output: OutputHelper,
     handle: JoinHandle<Result<()>>,
 }
 
