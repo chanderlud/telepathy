@@ -33,7 +33,6 @@ use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::select;
 use tokio::sync::Notify;
-use tokio::task::spawn_blocking;
 #[cfg(not(target_family = "wasm"))]
 use tokio::time::sleep;
 use tokio_util::bytes::Bytes;
@@ -198,8 +197,10 @@ async fn play_sound(
             .send(ProcessorMessage::Data(Bytes::copy_from_slice(&bytes[..14])))
             .await?;
 
-        let decoder_handle =
-            spawn_blocking(move || SeaDecoder::new(input_receiver, output_sender, None).unwrap());
+        let decoder_handle = spawn_blocking_with(
+            move || SeaDecoder::new(input_receiver, output_sender, None).unwrap(),
+            FLUTTER_RUST_BRIDGE_HANDLER.thread_pool(),
+        );
 
         let mut decoder = decoder_handle.await?;
         let header = decoder.get_header();
@@ -584,25 +585,28 @@ async fn wav_to_sea(bytes: &[u8], residual_bits: f32) -> Result<Vec<u8>, Error> 
     let input_sender = input_sender.to_async();
     let output_receiver = output_receiver.to_async();
 
-    spawn_blocking(move || {
-        let settings = EncoderSettings {
-            frames_per_chunk: FRAME_SIZE as u16 / channels as u16,
-            vbr: true,
-            residual_bits,
-            ..Default::default()
-        };
+    spawn_blocking_with(
+        move || {
+            let settings = EncoderSettings {
+                frames_per_chunk: FRAME_SIZE as u16 / channels as u16,
+                vbr: true,
+                residual_bits,
+                ..Default::default()
+            };
 
-        let mut encoder = SeaEncoder::new(
-            channels as u8,
-            sample_rate,
-            settings,
-            input_receiver,
-            output_sender,
-        )
-        .unwrap();
-        while encoder.encode_frame().is_ok() {}
-        encoder
-    });
+            let mut encoder = SeaEncoder::new(
+                channels as u8,
+                sample_rate,
+                settings,
+                input_receiver,
+                output_sender,
+            )
+            .unwrap();
+            while encoder.encode_frame().is_ok() {}
+            encoder
+        },
+        FLUTTER_RUST_BRIDGE_HANDLER.thread_pool(),
+    );
 
     let mut buffer = [0; FRAME_SIZE];
 

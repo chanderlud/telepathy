@@ -32,7 +32,9 @@ SoundHandle? outgoingSoundHandle;
 
 Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
-  await windowManager.ensureInitialized();
+  if (!kIsWeb) {
+    await windowManager.ensureInitialized();
+  }
 
   try {
     await RustLib.init();
@@ -312,7 +314,9 @@ class _TelepathyAppState extends State<TelepathyApp> with WindowListener {
   }
 
   Future<void> _initWindow() async {
-    await windowManager.setPreventClose(true);
+    if (!kIsWeb) {
+      await windowManager.setPreventClose(true);
+    }
   }
 
   @override
