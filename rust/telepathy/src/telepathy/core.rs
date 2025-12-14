@@ -1027,24 +1027,29 @@ where
                             return Ok(true);
                         }
 
-                        if let Ok(mut call_state) = self.setup_call(contact.peer_id).await {
-                            // respond with hello ack containing audio header
-                            call_state.remote_configuration = remote_audio_header;
-                            write_message(transport, &Message::HelloAck { audio_header: call_state.local_configuration.clone() }).await?;
+                        match self.setup_call(contact.peer_id).await {
+                            Ok(mut call_state) => {
+                                // respond with hello ack containing audio header
+                                call_state.remote_configuration = remote_audio_header;
+                                write_message(transport, &Message::HelloAck { audio_header: call_state.local_configuration.clone() }).await?;
 
-                            if is_in_room {
-                                self.room_handshake(transport, control, state, call_state).await?;
-                            } else {
-                                // normal call handshake
-                                self.call_handshake(transport, control, &mut message_channel.1, state, call_state).await?;
+                                if is_in_room {
+                                    self.room_handshake(transport, control, state, call_state).await?;
+                                } else {
+                                    // normal call handshake
+                                    self.call_handshake(transport, control, &mut message_channel.1, state, call_state).await?;
+                                }
+
+                                keep_alive.reset(); // start sending normal keep alive messages
                             }
-
-                            keep_alive.reset(); // start sending normal keep alive messages
-                        } else {
-                            // if the audio input setup fails, other client will be left hanging
-                            write_message(transport, &Message::Goodbye {
-                                reason: Some("audio device error".to_string())
-                            }).await?;
+                            Err(error) => {
+                                // if the audio input setup fails, other client will be left hanging
+                                write_message(transport, &Message::Goodbye {
+                                    reason: Some("audio device error".to_string())
+                                }).await?;
+                                // still propagate the error
+                                return Err(error);
+                            }
                         }
                     }
                     result = read_message::<Message, _>(transport) => {
