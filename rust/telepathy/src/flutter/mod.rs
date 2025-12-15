@@ -655,13 +655,11 @@ pub fn create_log_stream(s: StreamSink<String>) {
 pub fn rust_set_up() {
     // https://stackoverflow.com/questions/30177845/how-to-initialize-the-logger-for-integration-tests
     INIT_LOGGER_ONCE.call_once(|| {
-        // let level = if cfg!(debug_assertions) {
-        //     LevelFilter::Debug
-        // } else {
-        //     LevelFilter::Warn
-        // };
-
-        let level = LevelFilter::Debug;
+        let level = if cfg!(debug_assertions) {
+            LevelFilter::Debug
+        } else {
+            LevelFilter::Warn
+        };
 
         assert!(
             level <= log::STATIC_MAX_LEVEL,
