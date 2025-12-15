@@ -1263,6 +1263,11 @@ where
 
         loop {
             select! {
+                _ = cancel.cancelled() => {
+                    // try to say goodbye
+                    _ = write_message(transport, &Message::Goodbye { reason: None }).await;
+                    break
+                }
                 result = read_message::<Message, _>(transport) => {
                     match result {
                         Ok(Message::Goodbye { .. }) | Err(_) => {
@@ -1273,11 +1278,6 @@ where
                         }
                         _ => ()
                     }
-                }
-                _ = cancel.cancelled() => {
-                    // try to say goodbye
-                    _ = write_message(transport, &Message::Goodbye { reason: None }).await;
-                    break
                 }
             }
         }
