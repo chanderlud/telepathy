@@ -1,5 +1,7 @@
 use super::*;
-use crate::audio::{InputProcessorState, OutputProcessorState, input_processor, ChannelInput, ChannelOutput};
+use crate::audio::{
+    ChannelInput, ChannelOutput, InputProcessorState, OutputProcessorState, input_processor,
+};
 use crate::flutter::callbacks::{
     FrbStatisticsCallback, MockFrbCallbacks, MockFrbStatisticsCallback,
 };
