@@ -1,4 +1,5 @@
 use crate::audio::processing::*;
+use crate::audio::traits::{AudioInput, AudioOutput};
 use crate::error::Error;
 #[cfg(target_family = "wasm")]
 use crate::telepathy::CHANNEL_SIZE;
@@ -31,12 +32,30 @@ pub(crate) mod ios;
 pub mod player;
 pub(crate) mod processing;
 /// flutter_rust_bridge:ignore
+mod traits;
+/// flutter_rust_bridge:ignore
 #[cfg(target_family = "wasm")]
 pub(crate) mod web_audio;
 
 /// silences of less than this many frames aren't silence
 const MINIMUM_SILENCE_LENGTH: u8 = 40;
 const TRANSITION_LENGTH: usize = 96;
+
+#[cfg(not(target_family = "wasm"))]
+pub(crate) struct ChannelInput {
+    receiver: Receiver<f32>,
+}
+
+#[cfg(not(target_family = "wasm"))]
+pub(crate) struct ChannelOutput {
+    sender: Sender<f32>,
+}
+
+#[cfg(target_family = "wasm")]
+#[derive(Default)]
+pub(crate) struct WebOutput {
+    pub(crate) buf: Arc<wasm_sync::Mutex<Vec<f32>>>,
+}
 
 pub(crate) struct InputProcessorState {
     pub(crate) input_volume: Arc<AtomicF32>,
@@ -117,10 +136,9 @@ impl OutputProcessorState {
 }
 
 /// Processes the audio input and sends it to the sending socket
-pub(crate) fn input_processor(
-    #[cfg(not(target_family = "wasm"))] receiver: Receiver<f32>,
-    #[cfg(target_family = "wasm")] web_input: web_audio::WebInput,
-    sender: Sender<ProcessorMessage>,
+pub(crate) fn input_processor<I: AudioInput>(
+    mut input: I,
+    output: Sender<ProcessorMessage>,
     sample_rate: f64,
     mut denoiser: Option<Box<DenoiseState>>,
     codec_enabled: bool,
@@ -161,42 +179,12 @@ pub(crate) fn input_processor(
     let mut silence_length = 0_u8;
 
     loop {
-        #[cfg(not(target_family = "wasm"))]
-        {
-            if let Ok(sample) = receiver.recv() {
-                pre_buf[0][position] = sample;
-                position += 1;
-            } else {
-                break;
-            }
+        let read = input.read_into(&mut pre_buf[0][position..in_len])?;
+        if read == 0 {
+            debug!("Input processor ended (EOF)");
+            break;
         }
-
-        #[cfg(target_family = "wasm")]
-        {
-            if web_input.finished.load(Relaxed) {
-                break;
-            }
-
-            if let Ok(mut data) = web_input.pair.0.lock() {
-                if data.is_empty() {
-                    let c = |i: &mut Vec<f32>| i.is_empty() && !web_input.finished.load(Relaxed);
-
-                    if let Ok(d) = web_input.pair.1.wait_while(data, c) {
-                        data = d;
-                    } else {
-                        break;
-                    }
-                }
-
-                let data_len = data.len();
-                for sample in data.drain(..(in_len - position).min(data_len)) {
-                    pre_buf[0][position] = sample;
-                    position += 1;
-                }
-            } else {
-                break;
-            }
-        }
+        position += read;
 
         if state.is_muted() {
             position = 0;
@@ -245,7 +233,7 @@ pub(crate) fn input_processor(
                 silence_length += 1; // short silences are ignored
             } else if silence_length == MINIMUM_SILENCE_LENGTH {
                 // insert frame to cleanly transition down to silence
-                sender.send(ProcessorMessage::samples(make_transition_down(
+                output.send(ProcessorMessage::samples(make_transition_down(
                     TRANSITION_LENGTH,
                     out_buf[0] as i16,
                 )))?;
@@ -259,7 +247,7 @@ pub(crate) fn input_processor(
             let first_sample = out_buf[0] as i16;
             if silence_length > 0 && first_sample > 0 {
                 // insert frame to transition up from silence to the audio
-                sender.send(ProcessorMessage::samples(make_transition_up(
+                output.send(ProcessorMessage::samples(make_transition_up(
                     TRANSITION_LENGTH,
                     first_sample,
                 )))?;
@@ -272,7 +260,7 @@ pub(crate) fn input_processor(
         int_buffer = out_buf.map(|x| x as i16);
 
         if codec_enabled {
-            sender.send(ProcessorMessage::samples(int_buffer))?;
+            output.send(ProcessorMessage::samples(int_buffer))?;
         } else {
             // convert the i16 samples to bytes
             let bytes = unsafe {
@@ -282,7 +270,7 @@ pub(crate) fn input_processor(
                 )
             };
 
-            sender.send(ProcessorMessage::slice(bytes))?;
+            output.send(ProcessorMessage::slice(bytes))?;
         }
     }
 
@@ -291,10 +279,9 @@ pub(crate) fn input_processor(
 }
 
 /// Processes the audio data and sends it to the output stream
-pub(crate) fn output_processor(
-    receiver: Receiver<ProcessorMessage>,
-    #[cfg(target_family = "wasm")] web_output: Arc<wasm_sync::Mutex<Vec<f32>>>,
-    #[cfg(not(target_family = "wasm"))] sender: Sender<f32>,
+pub(crate) fn output_processor<O: AudioOutput>(
+    input: Receiver<ProcessorMessage>,
+    mut output: O,
     ratio: f64,
     state: OutputProcessorState,
 ) -> Result<(), Error> {
@@ -312,21 +299,10 @@ pub(crate) fn output_processor(
     // the output for the resampler
     let mut post_buf = [vec![0_f32; post_len]];
 
-    #[cfg(not(target_family = "wasm"))]
-    let is_full = || sender.is_full();
-    #[cfg(target_family = "wasm")]
-    let is_full = || {
-        if let Ok(lock) = web_output.lock() {
-            lock.len() >= CHANNEL_SIZE
-        } else {
-            false
-        }
-    };
-
-    while let Ok(message) = receiver.recv() {
+    while let Ok(message) = input.recv() {
         if state.is_deafened() {
-            continue; // ignore frames while deafened
-        } else if is_full() {
+            continue;
+        } else if output.is_full() {
             state.send_loss(FRAME_SIZE);
             continue; // ignore frames while output is full
         }
@@ -361,28 +337,10 @@ pub(crate) fn output_processor(
             &*pre_buf[0]
         };
 
-        #[cfg(not(target_family = "wasm"))]
-        {
-            let mut failed = 0;
-            for sample in float_samples {
-                if !sender.try_send(*sample)? {
-                    failed += 1;
-                }
-            }
-            state.send_loss(failed);
+        let lost = output.write_samples(float_samples)?;
+        if lost > 0 {
+            state.send_loss(lost);
         }
-
-        #[cfg(target_family = "wasm")]
-        web_output
-            .lock()
-            .map(|mut data| {
-                if data.len() < CHANNEL_SIZE {
-                    data.extend(float_samples)
-                } else {
-                    state.send_loss(float_samples.len());
-                }
-            })
-            .unwrap();
     }
 
     debug!("Output processor ended");

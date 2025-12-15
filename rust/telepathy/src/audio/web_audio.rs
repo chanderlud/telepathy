@@ -1,3 +1,5 @@
+use crate::audio::AudioInput;
+use crate::error::Error;
 use crate::telepathy::CHANNEL_SIZE;
 use log::error;
 use std::sync::Arc;
@@ -150,16 +152,48 @@ unsafe impl Send for WebAudioWrapper {}
 
 unsafe impl Sync for WebAudioWrapper {}
 
-pub(crate) struct WebInput {
-    pub(crate) pair: Arc<(Mutex<Vec<f32>>, Condvar)>,
-    pub(crate) finished: Arc<AtomicBool>,
+pub(crate) struct WebAudioInput {
+    pair: Arc<(Mutex<Vec<f32>>, Condvar)>,
+    finished: Arc<AtomicBool>,
 }
 
-impl From<&WebAudioWrapper> for WebInput {
+impl From<&WebAudioWrapper> for WebAudioInput {
     fn from(value: &WebAudioWrapper) -> Self {
         Self {
             pair: Arc::clone(&value.pair),
             finished: Arc::clone(&value.finished),
         }
+    }
+}
+
+impl AudioInput for WebAudioInput {
+    fn read_into(&mut self, dst: &mut [f32]) -> Result<usize, Error> {
+        let mut written = 0;
+
+        while written < dst.len() {
+            let mut data = self.pair.0.lock().unwrap();
+            // if producer is done and there's no more buffered audio, we're done
+            if self.finished.load(Relaxed) && data.is_empty() {
+                return Ok(written);
+            }
+
+            if data.is_empty() {
+                let cond = |v: &mut Vec<f32>| v.is_empty() && !self.finished.load(Relaxed);
+
+                data = self.pair.1.wait_while(data, cond).unwrap();
+
+                // if we woke up finished and still empty, we're done
+                if data.is_empty() && self.finished.load(Relaxed) {
+                    return Ok(written);
+                }
+            }
+
+            let take = (dst.len() - written).min(data.len());
+            dst[written..written + take].copy_from_slice(&data[..take]);
+            data.drain(..take);
+            written += take;
+        }
+
+        Ok(written)
     }
 }
