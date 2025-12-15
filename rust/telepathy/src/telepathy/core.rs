@@ -464,17 +464,18 @@ where
                         }
                     });
 
-                    if let Some((id, state)) = connection {
-                        info!("using connection {state:?} [id:{id}] for {}", event.peer);
-                        peer_state.selected_connection = true;
-                        // close the other connections
-                        for other_id in peer_state.connections.keys() {
-                            if id != other_id {
-                                swarm.close_connection(*other_id);
-                            }
-                        }
-                    } else {
+                    let Some((id, state)) = connection else {
                         warn!("no connection available for {}", event.peer);
+                        continue;
+                    };
+
+                    info!("using connection {state:?} [id:{id}] for {}", event.peer);
+                    peer_state.selected_connection = true;
+                    // close the other connections
+                    for other_id in peer_state.connections.keys() {
+                        if id != other_id {
+                            swarm.close_connection(*other_id);
+                        }
                     }
                 }
                 SwarmEvent::Behaviour(BehaviourEvent::Identify(IdentifyEvent::Received {
@@ -482,15 +483,15 @@ where
                     info,
                     ..
                 })) => {
-                    if let Some(peer_state) = peer_states.get_mut(&peer_id) {
-                        if peer_state.dialed || !peer_state.dialer {
-                            continue;
-                        } else {
-                            peer_state.dialed = true;
-                        }
-                    } else {
+                    let Some(peer_state) = peer_states.get_mut(&peer_id) else {
                         // the relay server sends identity events which will be caught here
                         continue;
+                    };
+
+                    if peer_state.dialed || !peer_state.dialer {
+                        continue;
+                    } else {
+                        peer_state.dialed = true;
                     }
 
                     info!("Identify event from {peer_id}: {info:?}");
@@ -512,16 +513,14 @@ where
                     remote_peer_id,
                     result,
                 })) => {
-                    if let Some(state) = peer_states.get_mut(&remote_peer_id) {
-                        info!(
-                            "setting ductr_failed to {} for {}",
-                            result.is_err(),
-                            remote_peer_id
-                        );
-                        state.ductr_failed = result.is_err();
-                    } else {
-                        debug!("ductr event with {}: {:?}", remote_peer_id, result);
-                    }
+                    let Some(state) = peer_states.get_mut(&remote_peer_id) else {
+                        warn!("ductr event with unknown peer {remote_peer_id}: {result:?}");
+                        continue;
+                    };
+
+                    let failed = result.is_err();
+                    info!("setting ductr_failed to {failed} for {remote_peer_id}");
+                    state.ductr_failed = failed;
                 }
                 event => {
                     trace!("other swarm event: {:?}", event);

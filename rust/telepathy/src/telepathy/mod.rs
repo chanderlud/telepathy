@@ -337,35 +337,41 @@ impl Telepathy {
 
     /// Sends a chat message
     pub async fn send_chat(&self, message: &mut ChatMessage) -> std::result::Result<(), DartError> {
-        if let Some(state) = self
+        let Some(state) = self
             .inner
             .session_states
             .read()
             .await
             .get(&message.receiver)
-        {
-            // take the data out of each attachment. the frontend doesn't need it
-            let attachments = message
-                .attachments
-                .iter_mut()
-                .map(|attachment| Attachment {
-                    name: attachment.name.clone(),
-                    data: mem::take(&mut attachment.data),
-                })
-                .collect();
+            .cloned()
+        else {
+            warn!(
+                "send_chat called for peer with no session {}",
+                message.receiver
+            );
+            return Ok(());
+        };
 
-            let message = Message::Chat {
-                text: message.text.clone(),
-                attachments,
-            };
+        // take the data out of each attachment. the frontend doesn't need it
+        let attachments = message
+            .attachments
+            .iter_mut()
+            .map(|attachment| Attachment {
+                name: attachment.name.clone(),
+                data: mem::take(&mut attachment.data),
+            })
+            .collect();
 
-            state
-                .message_sender
-                .send(message)
-                .await
-                .map_err(|_| "channel closed".to_string())?;
-        }
+        let message = Message::Chat {
+            text: message.text.clone(),
+            attachments,
+        };
 
+        state
+            .message_sender
+            .send(message)
+            .await
+            .map_err(|_| "channel closed".to_string())?;
         Ok(())
     }
 
