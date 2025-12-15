@@ -1,6 +1,10 @@
+#[cfg(target_family = "wasm")]
+use crate::audio::WebOutput;
 use crate::audio::codec::{decoder, encoder};
 #[cfg(target_family = "wasm")]
-use crate::audio::web_audio::{WebAudioWrapper, WebInput};
+use crate::audio::web_audio::{WebAudioInput, WebAudioWrapper};
+#[cfg(not(target_family = "wasm"))]
+use crate::audio::{ChannelInput, ChannelOutput};
 use crate::audio::{InputProcessorState, OutputProcessorState, input_processor, output_processor};
 use crate::error::ErrorKind;
 use crate::flutter::DartNotify;
@@ -25,7 +29,9 @@ use kanal::{AsyncReceiver, AsyncSender, Sender, bounded, unbounded_async};
 use libp2p::futures::StreamExt;
 use libp2p::multiaddr::Protocol;
 use libp2p::swarm::SwarmEvent;
-use libp2p::{Multiaddr, PeerId, Swarm, dcutr, identify, noise, ping, tcp, yamux};
+#[cfg(not(target_family = "wasm"))]
+use libp2p::tcp;
+use libp2p::{Multiaddr, PeerId, Swarm, dcutr, identify, noise, ping, yamux};
 use libp2p_stream::Control;
 use log::{error, info, warn};
 use nnnoiseless::DenoiseState;
@@ -294,13 +300,15 @@ where
         // input stream -> input processor
         let (input_sender, input_receiver) = bounded::<f32>(CHANNEL_SIZE);
 
+        #[cfg(not(target_family = "wasm"))]
+        let processor_input = ChannelInput::from(input_receiver);
         #[cfg(target_family = "wasm")]
-        let input_receiver = {
+        let processor_input = {
             // normal channel is unused on the web
             drop(input_receiver);
 
             if let Some(web_input) = self.web_input.lock().await.as_ref() {
-                WebInput::from(web_input)
+                WebAudioInput::from(web_input)
             } else {
                 return Err(ErrorKind::NoInputDevice.into());
             }
@@ -330,7 +338,7 @@ where
         let processor_handle = spawn_blocking_with(
             move || {
                 input_processor(
-                    input_receiver,
+                    processor_input,
                     processed_input_sender.to_sync(),
                     sample_rate,
                     denoiser,
@@ -393,12 +401,14 @@ where
         // output processor -> output stream
         #[cfg(not(target_family = "wasm"))]
         let (output_sender, output_receiver) = bounded::<f32>(CHANNEL_SIZE * 4);
+        #[cfg(not(target_family = "wasm"))]
+        let processor_input = ChannelOutput::from(output_sender);
 
         // output processor -> output stream
         #[cfg(target_family = "wasm")]
-        let output_sender = Arc::new(wasm_sync::Mutex::new(Vec::new()));
+        let processor_input = WebOutput::default();
         #[cfg(target_family = "wasm")]
-        let web_output = output_sender.clone();
+        let web_output = processor_input.buf.clone();
 
         // get the output device and its default configuration
         let output_device = get_output_device(&self.core_state.output_device, &self.host).await?;
@@ -443,7 +453,7 @@ where
 
         // spawn the output processor thread
         let processor_handle = spawn_blocking_with(
-            move || output_processor(output_processor_receiver, output_sender, ratio, state),
+            move || output_processor(output_processor_receiver, processor_input, ratio, state),
             FLUTTER_RUST_BRIDGE_HANDLER.thread_pool(),
         );
 
@@ -504,7 +514,7 @@ where
         Ok(SendStream {
             stream: call_state.input_device.build_input_stream(
                 &call_state.input_config.clone().into(),
-                move |input, _: &_| {
+                move |input, _| {
                     for frame in input.chunks(input_channels) {
                         _ = input_sender.try_send(frame[0]);
                     }
