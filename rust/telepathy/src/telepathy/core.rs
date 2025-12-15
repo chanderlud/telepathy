@@ -221,11 +221,11 @@ where
                     s.connections
                         .iter()
                         .next()
-                        .map(|(_, c)| (*p, s.selected_connection, c.relayed))
+                        .map(|(_, c)| (*p, s.selected_connection, c.clone()))
                 })
                 .collect();
 
-            for (peer, selected, relayed) in single_connections {
+            for (peer, selected, state) in single_connections {
                 if selected {
                     // open a session control stream and start the session controller
                     self.open_session(
@@ -233,18 +233,24 @@ where
                         swarm.behaviour().stream.new_control(),
                         &mut peer_states,
                         &mut handles,
-                        relayed,
+                        state.relayed,
                     )
                     .await;
                 } else if let Some(session) = self.session_states.read().await.get(&peer) {
+                    debug!("(listener) using connection: {state:?}");
                     // only the non-dialing peer will reach this branch
                     // this peer state is no longer needed
                     peer_states.remove(&peer);
                     // set the real relayed status for the session
-                    session.relayed.store(relayed, Relaxed);
+                    session.relayed.store(state.relayed, Relaxed);
                     // update the relayed status in the frontend
                     self.callbacks
-                        .session_status(SessionStatus::Connected { relayed }, peer)
+                        .session_status(
+                            SessionStatus::Connected {
+                                relayed: state.relayed,
+                            },
+                            peer,
+                        )
                         .await;
                 }
             }
@@ -1558,7 +1564,7 @@ impl PeerState {
 }
 
 /// the state of a single connection during session negotiation
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct ConnectionState {
     /// the latency is ms when available
     latency: Option<u128>,
