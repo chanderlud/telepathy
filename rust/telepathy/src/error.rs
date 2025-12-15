@@ -3,7 +3,6 @@ use std::fmt::{Display, Formatter};
 use std::net::AddrParseError;
 
 use cpal::{BuildStreamError, DefaultStreamConfigError, DevicesError, PlayStreamError};
-use flutter_rust_bridge::for_generated::futures::channel::oneshot::Canceled;
 use libp2p::identity::{DecodingError, ParseError};
 use libp2p::swarm::{DialError, SwarmEvent};
 use libp2p::{TransportBuilderError, TransportError};
@@ -45,7 +44,6 @@ pub(crate) enum ErrorKind {
     IdentityParse(ParseError),
     Transport(TransportError<std::io::Error>),
     AlreadyRegistered(AlreadyRegistered),
-    Canceled(Canceled),
     TransportBuildError(TransportBuilderError),
     #[cfg(target_family = "wasm")]
     JsError(Option<String>),
@@ -66,6 +64,7 @@ pub(crate) enum ErrorKind {
     StreamsEnded,
     NoEncoderAvailable,
     NoIdentityAvailable,
+    NoStream,
 }
 
 impl From<std::io::Error> for Error {
@@ -252,14 +251,6 @@ impl From<AlreadyRegistered> for Error {
     }
 }
 
-impl From<Canceled> for Error {
-    fn from(err: Canceled) -> Self {
-        Self {
-            kind: ErrorKind::Canceled(err),
-        }
-    }
-}
-
 impl From<TransportBuilderError> for Error {
     fn from(err: TransportBuilderError) -> Self {
         Self {
@@ -323,7 +314,6 @@ impl Display for Error {
                 ErrorKind::IdentityParse(ref err) => format!("Identity parse error: {}", err),
                 ErrorKind::Transport(ref err) => format!("Transport error: {}", err),
                 ErrorKind::AlreadyRegistered(ref err) => format!("Already registered: {}", err),
-                ErrorKind::Canceled(ref err) => format!("Canceled: {}", err),
                 ErrorKind::TransportBuildError(ref err) =>
                     format!("Transport build error: {}", err),
                 #[cfg(target_family = "wasm")]
@@ -344,6 +334,7 @@ impl Display for Error {
                 ErrorKind::StreamsEnded => "Streams ended".to_string(),
                 ErrorKind::NoEncoderAvailable => "No encoder available".to_string(),
                 ErrorKind::NoIdentityAvailable => "No identity available".to_string(),
+                ErrorKind::NoStream => "Did not get a stream".to_string(),
             }
         )
     }

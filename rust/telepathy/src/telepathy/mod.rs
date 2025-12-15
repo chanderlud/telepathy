@@ -15,7 +15,7 @@ mod sockets;
 pub(crate) mod tests;
 pub(crate) mod utils;
 
-use crate::error::{DartError, Error};
+use crate::error::{DartError, Error, ErrorKind};
 use crate::flutter::callbacks::FrbCallbacks;
 use crate::flutter::*;
 use crate::overlay::overlay::Overlay;
@@ -46,10 +46,12 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::time::Duration;
+use tokio::select;
 use tokio::sync::mpsc::{Receiver as MReceiver, Sender as MSender, channel};
 use tokio::sync::{Mutex, Notify};
 #[cfg(not(target_family = "wasm"))]
 use tokio::task::JoinHandle;
+use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use utils::*;
 #[cfg(target_family = "wasm")]
@@ -281,7 +283,7 @@ impl Telepathy {
             .await
             .remove(&contact.peer_id)
         {
-            state.stop_session.notify_one();
+            state.stop_session.cancel();
         }
     }
 
@@ -505,8 +507,8 @@ pub(crate) struct SessionState {
     /// signals the session to initiate a call
     start_call: Notify,
 
-    /// stops the session normally
-    stop_session: Notify,
+    /// notifies during shutdown & manager restarts
+    stop_session: CancellationToken,
 
     /// if the session is in a call
     in_call: AtomicBool,
@@ -545,7 +547,7 @@ impl SessionState {
 
         Self {
             start_call: Notify::new(),
-            stop_session: Notify::new(),
+            stop_session: Default::default(),
             in_call: AtomicBool::new(false),
             message_sender: message_sender.clone(),
             stream_sender: stream_channel.0,
@@ -568,19 +570,27 @@ impl SessionState {
         // change the session state to accept incoming audio streams
         self.wants_stream.store(true, Relaxed);
 
-        let stream_result = if let Some(control) = control.as_mut() {
-            // if dialer, open stream
-            control
-                .open_stream(call_state.peer, CHAT_PROTOCOL)
-                .await
-                .map_err(Error::from)
-        } else {
-            // if listener, receive stream
-            self.stream_receiver.recv().await.map_err(Error::from)
+        let stream_future = async {
+            if let Some(control) = control.as_mut() {
+                // if dialer, open stream
+                control
+                    .open_stream(call_state.peer, CHAT_PROTOCOL)
+                    .await
+                    .map_err(Error::from)
+            } else {
+                // if listener, receive stream
+                self.stream_receiver.recv().await.map_err(Error::from)
+            }
+        };
+
+        let stream_result = select! {
+            _ = self.end_call.notified() => Ok(Err(ErrorKind::NoStream.into())),
+            _ = self.stop_session.cancelled() => Ok(Err(ErrorKind::NoStream.into())),
+            result = timeout(HELLO_TIMEOUT, stream_future) => result,
         };
 
         self.wants_stream.store(false, Relaxed);
-        stream_result
+        stream_result?
     }
 
     async fn receive_stream(&self) -> Result<Stream> {

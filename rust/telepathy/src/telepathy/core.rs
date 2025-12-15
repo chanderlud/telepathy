@@ -169,7 +169,7 @@ where
             // stops any call
             session.end_call.notify_one();
             // stops the session loop
-            session.stop_session.notify_one();
+            session.stop_session.cancel();
             // stops any active screenshare threads
             if let Some(notify) = session.stop_screenshare.lock().await.take() {
                 notify.notify_waiters();
@@ -646,7 +646,7 @@ where
             // if the session was in a call, end it so the session can end
             old_state.end_call.notify_one();
             // stop the session
-            old_state.stop_session.notify_one();
+            old_state.stop_session.cancel();
         }
 
         let contact = if let Some(contact) = contact_option {
@@ -783,6 +783,10 @@ where
         info!("[{}] session waiting for event", contact.nickname);
 
         select! {
+            _ = state.stop_session.cancelled() => {
+                info!("session for {} stopped", contact.nickname);
+                Ok(false)
+            },
             result = read_message::<Message, _>(transport) => {
                 let mut other_ringtone = None;
                 let remote_audio_header;
@@ -836,6 +840,13 @@ where
                 };
 
                 select! {
+                    _ = state.stop_session.cancelled() => {
+                        info!("session for {} stopped during accept prompt", contact.nickname);
+                        if let Some(cancel) = cancel_prompt {
+                            cancel.notify_one();
+                        }
+                        return Ok(false);
+                    }
                     accepted = accept_future => {
                         if !accepted? {
                             // reject the call if not accepted
@@ -869,29 +880,22 @@ where
                         }
                     }
                     result = read_message::<Message, _>(transport) => {
-                        info!("received message while accept call was pending");
-
-                        match result {
-                            Ok(Message::Goodbye { .. }) => {
-                                info!("received goodbye from {} while prompting for call", contact.nickname);
-                                if let Some(cancel) = cancel_prompt {
-                                    cancel.notify_one();
-                                }
-                            }
-                            Ok(message) => {
-                                warn!("received unexpected {:?} from {} while prompting for call", message, contact.nickname);
-                            }
-                            Err(error) => {
-                                error!("Error reading message while prompting for call from {}: {}", contact.nickname, error);
-                            }
+                        // always cancel prompt because there is no chance of the call succeeding now
+                        if let Some(cancel) = cancel_prompt {
+                            cancel.notify_one();
                         }
+                        // propagate errors for handling
+                        let message = result?;
+                        // log message
+                        warn!("received {message:?} from {} while accept call was pending", contact.nickname);
                     }
                 }
 
                 Ok(true)
             }
             _ = state.start_call.notified() => {
-                state.in_call.store(true, Relaxed); // blocks the session from being restarted
+                // limits session restarts
+                state.in_call.store(true, Relaxed);
 
                 let room_hash = self.room_hash().await;
                 let is_in_room = room_hash.is_some();
@@ -906,6 +910,16 @@ where
 
                 loop {
                     select! {
+                        _ = state.stop_session.cancelled() => {
+                            info!("session for {} stopped while waiting for HelloAck", contact.nickname);
+                            return Ok(false);
+                        }
+                        _ = state.end_call.notified() => {
+                            // gracefully end the call & continue the session
+                            info!("end call notified while waiting for hello ack");
+                            write_message(transport, &Message::Goodbye { reason: None }).await?;
+                            break;
+                        }
                         result = timeout(hello_timeout, read_message(transport)) => {
                             // handles a variety of outcomes in response to Hello
                             let message_option = match result?? {
@@ -947,20 +961,11 @@ where
 
                             break;
                         }
-                        _ = state.end_call.notified() => {
-                            info!("end call notified while waiting for hello ack");
-                            write_message(transport, &Message::Goodbye { reason: None }).await?;
-                        }
                     }
                 }
 
                 Ok(true)
             }
-            // state will never notify while a call is active
-            _ = state.stop_session.notified() => {
-                info!("session state stop notified for {}", contact.nickname);
-                Ok(false)
-            },
             _ = keep_alive.tick() => {
                 debug!("sending keep alive to {}", contact.nickname);
                 write_message(transport, &Message::KeepAlive).await?;
