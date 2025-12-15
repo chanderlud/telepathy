@@ -1,5 +1,5 @@
 use super::*;
-use crate::audio::{InputProcessorState, OutputProcessorState, input_processor};
+use crate::audio::{InputProcessorState, OutputProcessorState, input_processor, ChannelInput, ChannelOutput};
 use crate::flutter::callbacks::{
     FrbStatisticsCallback, MockFrbCallbacks, MockFrbStatisticsCallback,
 };
@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::fs::read;
 use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr};
+use std::process::Command;
 use std::thread::{sleep, spawn};
 use std::time::Instant;
 use tokio::sync::OnceCell;
@@ -435,6 +436,7 @@ fn simulate_input_stack(
 ) -> (Vec<Duration>, Duration, Vec<ProcessorMessage>) {
     // input stream -> input processor
     let (input_sender, input_receiver) = bounded(channel_size);
+    let processor_input = ChannelInput::from(input_receiver);
 
     // input processor -> encoder or dummy
     let (processed_input_sender, processed_input_receiver) = unbounded::<ProcessorMessage>();
@@ -447,7 +449,7 @@ fn simulate_input_stack(
 
     spawn(move || {
         let result = input_processor(
-            input_receiver,
+            processor_input,
             processed_input_sender,
             sample_rate as f64,
             denoiser,
@@ -515,6 +517,7 @@ fn simulate_output_stack(
 
     // output processor -> dummy output stream
     let (output_sender, output_receiver) = bounded::<f32>(channel_size * 4);
+    let processor_output = ChannelOutput::from(output_sender);
 
     let output_processor_receiver = if codec_enabled {
         spawn(move || {
@@ -533,7 +536,7 @@ fn simulate_output_stack(
     spawn(move || {
         crate::audio::output_processor(
             output_processor_receiver,
-            output_sender,
+            processor_output,
             ratio,
             OutputProcessorState::default(),
         )
@@ -651,7 +654,7 @@ impl NetemGuard {
         }
 
         // Root prio with 3 bands, netem attached to band 3
-        cmd(["qdisc", "add", "dev", "lo", "root", "handle", "1:", "prio"])?;
+        cmd(&["qdisc", "add", "dev", "lo", "root", "handle", "1:", "prio"])?;
         cmd([
             "qdisc", "add", "dev", "lo", "parent", "1:3", "handle", "30:", "netem",
         ]

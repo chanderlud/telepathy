@@ -514,7 +514,7 @@ where
         Ok(SendStream {
             stream: call_state.input_device.build_input_stream(
                 &call_state.input_config.clone().into(),
-                move |input, _: &_| {
+                move |input, _| {
                     for frame in input.chunks(input_channels) {
                         _ = input_sender.try_send(frame[0]);
                     }
