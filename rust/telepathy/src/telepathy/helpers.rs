@@ -25,7 +25,9 @@ use kanal::{AsyncReceiver, AsyncSender, Sender, bounded, unbounded_async};
 use libp2p::futures::StreamExt;
 use libp2p::multiaddr::Protocol;
 use libp2p::swarm::SwarmEvent;
-use libp2p::{Multiaddr, PeerId, Swarm, dcutr, identify, noise, ping, tcp, yamux};
+use libp2p::{Multiaddr, PeerId, Swarm, dcutr, identify, noise, ping, yamux};
+#[cfg(not(target_family = "wasm"))]
+use libp2p::tcp;
 use libp2p_stream::Control;
 use log::{error, info, warn};
 use nnnoiseless::DenoiseState;

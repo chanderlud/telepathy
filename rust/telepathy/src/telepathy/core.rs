@@ -36,7 +36,6 @@ use libp2p::core::ConnectedPoint;
 use libp2p::identity::Keypair;
 use libp2p::multiaddr::Protocol;
 use libp2p::swarm::{ConnectionId, SwarmEvent};
-#[cfg(not(target_family = "wasm"))]
 use libp2p::{PeerId, Stream, dcutr::Event as DcutrEvent, identify::Event as IdentifyEvent};
 use libp2p_stream::Control;
 use log::{debug, error, info, trace, warn};
