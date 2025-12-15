@@ -47,7 +47,7 @@ objc2-foundation = "*"
 uuid = { version = "1", features = ["v4", "js"] }
 getrandom = { version = "0.3", features = ["wasm_js"] }
 tokio = { version = "1", features = ["time", "io-util", "macros", "rt"] }
-libp2p = { version = "0.56", features = ["quic", "ping", "dcutr", "identify", "macros", "noise", "yamux", "autonat", "relay", "wasm-bindgen"] }
+libp2p = { version = "0.56", features = ["quic", "ping", "dcutr", "identify", "macros", "noise", "yamux", "relay", "wasm-bindgen"] }
 libp2p-webtransport-websys = "0.5"
 wasm-logger = "0.2.0"
 wasmtimer = "0.4"
@@ -80,7 +80,7 @@ wasm_sync = "0.1"
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 uuid = { version = "1", features = ["v4"] }
 tokio = { version = "1", features = ["time", "io-util", "macros", "process", "net", "rt-multi-thread", "fs"] }
-libp2p = { version = "0.56", features = ["tokio", "quic", "tcp", "ping", "dcutr", "identify", "macros", "noise", "yamux", "autonat", "relay"] }
+libp2p = { version = "0.56", features = ["tokio", "quic", "tcp", "ping", "dcutr", "identify", "macros", "noise", "yamux", "relay"] }
 fast_log = "1.7"
 
 [dev-dependencies]

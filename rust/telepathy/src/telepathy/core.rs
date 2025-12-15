@@ -1,3 +1,4 @@
+use crate::BehaviourEvent;
 #[cfg(target_os = "ios")]
 use crate::audio::ios::{configure_audio_session, deactivate_audio_session};
 #[cfg(target_family = "wasm")]
@@ -5,15 +6,12 @@ use crate::audio::web_audio::WebAudioWrapper;
 use crate::error::ErrorKind;
 use crate::flutter::callbacks::{FrbCallbacks, FrbStatisticsCallback};
 use crate::flutter::{
-    CallState, ChatMessage, CodecConfig, Contact, DartNotify, NetworkConfig, ScreenshareConfig,
-    SessionStatus,
+    CallState, ChatMessage, CodecConfig, Contact, NetworkConfig, ScreenshareConfig, SessionStatus,
 };
 use crate::overlay::CONNECTED;
 use crate::overlay::overlay::Overlay;
 use crate::telepathy::Result;
 use crate::telepathy::messages::Message;
-#[cfg(not(target_family = "wasm"))]
-use crate::telepathy::screenshare;
 use crate::telepathy::sockets::{
     ConstSocket, SendingSockets, SharedSockets, Transport, TransportStream, audio_input,
     audio_output,
@@ -26,7 +24,6 @@ use crate::telepathy::{
     RoomConnection, RoomMessage, RoomState, SessionState, StartScreenshare,
     StatisticsCollectorState,
 };
-use crate::{Behaviour, BehaviourEvent};
 use atomic_float::AtomicF32;
 use chrono::Local;
 use cpal::Host;
@@ -35,15 +32,12 @@ use cpal::traits::StreamTrait;
 use flutter_rust_bridge::JoinHandle;
 use flutter_rust_bridge::for_generated::futures::StreamExt;
 use flutter_rust_bridge::spawn;
+use libp2p::core::ConnectedPoint;
 use libp2p::identity::Keypair;
 use libp2p::multiaddr::Protocol;
 use libp2p::swarm::{ConnectionId, SwarmEvent};
 #[cfg(not(target_family = "wasm"))]
-use libp2p::tcp;
-use libp2p::{
-    Multiaddr, PeerId, Stream, autonat, dcutr, dcutr::Event as DcutrEvent, identify,
-    identify::Event as IdentifyEvent, noise, ping, yamux,
-};
+use libp2p::{PeerId, Stream, dcutr::Event as DcutrEvent, identify::Event as IdentifyEvent};
 use libp2p_stream::Control;
 use log::{debug, error, info, trace, warn};
 use nnnoiseless::RnnModel;
@@ -191,163 +185,16 @@ where
         start: &mut MReceiver<PeerId>,
         screenshare: &mut MReceiver<StartScreenshare>,
     ) -> Result<()> {
-        let identity = if let Some(keypair) = self.core_state.identity.read().await.as_ref() {
-            keypair.clone()
-        } else {
-            return Err(ErrorKind::NoIdentityAvailable.into());
-        };
-
-        let builder = libp2p::SwarmBuilder::with_existing_identity(identity);
-
-        #[cfg(not(target_family = "wasm"))]
-        let provider_phase = builder
-            .with_tokio()
-            .with_tcp(
-                tcp::Config::default().nodelay(true),
-                noise::Config::new,
-                yamux::Config::default,
-            )
-            .map_err(|_| ErrorKind::SwarmBuild)?
-            .with_quic();
-
-        #[cfg(target_family = "wasm")]
-        let provider_phase = builder
-            .with_wasm_bindgen()
-            .with_other_transport(|id_keys| {
-                Ok(libp2p_webtransport_websys::Transport::new(
-                    libp2p_webtransport_websys::Config::new(id_keys),
-                ))
-            })?;
-
-        let mut swarm = provider_phase
-            .with_relay_client(noise::Config::new, yamux::Config::default)
-            .map_err(|_| ErrorKind::SwarmBuild)?
-            .with_behaviour(|keypair, relay_behaviour| Behaviour {
-                relay_client: relay_behaviour,
-                ping: ping::Behaviour::new(ping::Config::new()),
-                identify: identify::Behaviour::new(identify::Config::new(
-                    CHAT_PROTOCOL.to_string(),
-                    keypair.public(),
-                )),
-                dcutr: dcutr::Behaviour::new(keypair.public().to_peer_id()),
-                stream: libp2p_stream::Behaviour::new(),
-                auto_nat: autonat::Behaviour::new(
-                    keypair.public().to_peer_id(),
-                    autonat::Config::default(),
-                ),
-            })
-            .map_err(|_| ErrorKind::SwarmBuild)?
-            .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(30)))
-            .build();
-
-        #[cfg(not(target_family = "wasm"))]
-        {
-            let listen_port = self.core_state.network_config.listen_port.load(Relaxed);
-
-            for bind_address in &self.core_state.network_config.bind_addresses {
-                let listen_addr_quic = Multiaddr::empty()
-                    .with(Protocol::from(*bind_address))
-                    .with(Protocol::Udp(listen_port))
-                    .with(Protocol::QuicV1);
-
-                swarm.listen_on(listen_addr_quic)?;
-
-                let listen_addr_tcp = Multiaddr::empty()
-                    .with(Protocol::from(*bind_address))
-                    .with(Protocol::Tcp(listen_port));
-
-                swarm.listen_on(listen_addr_tcp)?;
-            }
-        }
-
-        let socket_address = *self.core_state.network_config.relay_address.read().await;
+        // build the swarm & connect to relay
+        let (mut swarm, relay_address) = self.setup_swarm().await?;
+        // contains the state needed for negotiating sessions
+        let mut peer_states: HashMap<PeerId, PeerState> = HashMap::new();
+        // handles to threads spawned by the session manager
+        let mut handles = Vec::new();
+        // preload public identity
+        let public_identity = self.peer_id().await;
+        // preload the relay identity
         let relay_identity = *self.core_state.network_config.relay_id.read().await;
-
-        #[cfg(not(target_family = "wasm"))]
-        let relay_address_udp = Multiaddr::from(socket_address.ip())
-            .with(Protocol::Udp(socket_address.port()))
-            .with(Protocol::QuicV1)
-            .with_p2p(relay_identity)
-            .map_err(|_| ErrorKind::SwarmBuild)?;
-
-        #[cfg(not(target_family = "wasm"))]
-        let relay_address_tcp = Multiaddr::from(socket_address.ip())
-            .with(Protocol::Tcp(socket_address.port()))
-            .with_p2p(relay_identity)
-            .map_err(|_| ErrorKind::SwarmBuild)?;
-
-        // TODO the relay currently does not support WebTransport
-        #[cfg(target_family = "wasm")]
-        let relay_address_web = Multiaddr::from(socket_address.ip())
-            .with(Protocol::Udp(socket_address.port()))
-            .with(Protocol::QuicV1)
-            .with(Protocol::WebTransport)
-            .with_p2p(relay_identity)
-            .map_err(|_| ErrorKind::SwarmBuild)?;
-
-        let relay_address;
-
-        #[cfg(not(target_family = "wasm"))]
-        if swarm.dial(relay_address_udp.clone()).is_err() {
-            if let Err(error) = swarm.dial(relay_address_tcp.clone()) {
-                return Err(error.into());
-            } else {
-                info!("connected to relay with tcp");
-                relay_address = relay_address_tcp.with(Protocol::P2pCircuit);
-            }
-        } else {
-            info!("connected to relay with udp");
-            relay_address = relay_address_udp.with(Protocol::P2pCircuit);
-        }
-
-        #[cfg(target_family = "wasm")]
-        if let Err(error) = swarm.dial(relay_address_web.clone()) {
-            return Err(error.into());
-        } else {
-            info!("connected to relay with webtransport");
-            relay_address = relay_address_web.with(Protocol::P2pCircuit);
-        }
-
-        let mut learned_observed_addr = false;
-        let mut told_relay_observed_addr = false;
-
-        loop {
-            match swarm.next().await.ok_or(ErrorKind::SwarmEnded)? {
-                SwarmEvent::NewListenAddr { .. } => (),
-                SwarmEvent::Dialing { .. } => (),
-                SwarmEvent::ConnectionEstablished { .. } => (),
-                SwarmEvent::Behaviour(BehaviourEvent::Ping(_)) => (),
-                SwarmEvent::NewExternalAddrCandidate { .. } => (),
-                SwarmEvent::NewExternalAddrOfPeer { .. } => (),
-                SwarmEvent::Behaviour(BehaviourEvent::Identify(identify::Event::Sent {
-                    ..
-                })) => {
-                    info!("Told relay its public address");
-                    told_relay_observed_addr = true;
-                }
-                SwarmEvent::Behaviour(BehaviourEvent::Identify(identify::Event::Received {
-                    info: identify::Info { .. },
-                    ..
-                })) => {
-                    info!("Relay told us our observed address");
-                    learned_observed_addr = true;
-                }
-                // no other event occurs during a successful initialization
-                event => {
-                    error!("Unexpected event during initialization {:?}", event);
-                    return Err(ErrorKind::UnexpectedSwarmEvent.into());
-                }
-            }
-
-            if learned_observed_addr && told_relay_observed_addr {
-                break;
-            }
-        }
-
-        swarm.listen_on(relay_address.clone())?;
-
-        // alerts the UI that the manager is active
-        self.callbacks.manager_active(true, true).await;
 
         // handle incoming streams
         let control = swarm.behaviour().stream.new_control();
@@ -360,13 +207,8 @@ where
                 .await
         });
 
-        // contains the state needed for negotiating sessions
-        let mut peer_states: HashMap<PeerId, PeerState> = HashMap::new();
-        // handles to threads spawned by the session manager
-        let mut handles = Vec::new();
-        // load public identity
-        let public_identity = self.peer_id().await;
-        let relay_identity = *self.core_state.network_config.relay_id.read().await;
+        // alerts the UI that the manager is active
+        self.callbacks.manager_active(true, true).await;
         // the manager is about to start processing events
         self.core_state.manager_active.notify_waiters();
 
@@ -446,42 +288,17 @@ where
                     info!("starting screenshare for {message:?}");
 
                     #[cfg(not(target_family = "wasm"))]
-                    if let Some(state) = self.session_states.read().await.get(&message.peer) {
-                        let stop = Arc::new(Notify::new());
-                        *state.stop_screenshare.lock().await = Some(stop.clone());
-                        let dart_stop = DartNotify { inner: stop.clone() };
-
-                        if let Some(Message::ScreenshareHeader { encoder_name }) = message.header {
-                            let stream_result = swarm.behaviour().stream.new_control().open_stream(message.peer, CHAT_PROTOCOL).await;
-                            match stream_result {
-                                Ok(stream) => {
-                                    let width = self.core_state.screenshare_config.width.load(Relaxed);
-                                    let height = self.core_state.screenshare_config.height.load(Relaxed);
-                                    let bandwidth = state.download_bandwidth.clone();
-                                    handles.push(spawn(screenshare::playback(stream, stop, bandwidth, encoder_name, width, height)));
-                                    self.callbacks.screenshare_started(dart_stop, false).await;
-                                }
-                                Err(error) => {
-                                    error!("failed to open stream for screenshare playback {error}");
-                                }
+                    {
+                        // when the header is some, a control is required to open the stream
+                        let control_option = message.header.is_some()
+                            .then(|| swarm.behaviour().stream.new_control());
+                        let self_clone = self.clone();
+                        spawn(async move {
+                            let result = self_clone.start_screenshare(message, control_option).await;
+                            if let Err(error) = result {
+                                error!("failed to start screenshare: {error:?}");
                             }
-                        } else if let Some(config) = self.core_state.screenshare_config.recording_config.read().await.clone() {
-                            _ = state.message_sender.send(Message::ScreenshareHeader { encoder_name: config.encoder.to_string() }).await;
-                            match state.receive_stream().await {
-                                Ok(stream) => {
-                                    handles.push(spawn(screenshare::record(stream, stop, state.upload_bandwidth.clone(), config)));
-                                    self.callbacks.screenshare_started(dart_stop, true).await;
-                                }
-                                Err(error) => {
-                                    error!("failed to receive sub-stream for screenshare broadcast {error}");
-                                }
-                            }
-                        } else {
-                            // the frontend blocks this case
-                            warn!("screenshare started without recording configuration");
-                        }
-                    } else {
-                        warn!("screenshare started for a peer without a session: {}", message.peer);
+                        });
                     }
 
                     continue;
@@ -510,7 +327,6 @@ where
                     }
 
                     let contact = self.callbacks.get_contact(peer_id.to_bytes()).await;
-                    let relayed = endpoint.is_relayed();
                     let listener = endpoint.is_listener();
 
                     if contact.is_none() && !self.is_in_room(&peer_id).await {
@@ -531,11 +347,11 @@ where
                         // track the new connection
                         peer_state
                             .connections
-                            .insert(connection_id, ConnectionState::new(relayed));
+                            .insert(connection_id, endpoint.into());
                     } else if listener {
                         info!("non-dialer established first connection with {peer_id}");
                         // insert initial non-dialer state
-                        peer_states.insert(peer_id, PeerState::non_dialer(connection_id, relayed));
+                        peer_states.insert(peer_id, PeerState::non_dialer(endpoint, connection_id));
                         // alert the frontend that the session is connecting
                         self.callbacks
                             .session_status(SessionStatus::Connecting, peer_id)
@@ -641,25 +457,21 @@ where
                     }
 
                     // choose the connection with the lowest latency, prioritizing non-relay connections
-                    let connection = peer_state
-                        .connections
-                        .iter()
-                        .min_by(|a, b| {
-                            match (a.1.relayed, b.1.relayed) {
-                                (false, true) => std::cmp::Ordering::Less, // prioritize non-relay connections
-                                (true, false) => std::cmp::Ordering::Greater, // prioritize non-relay connections
-                                _ => a.1.latency.cmp(&b.1.latency), // compare latencies if both have the same relay status
-                            }
-                        })
-                        .map(|(id, _)| id);
+                    let connection = peer_state.connections.iter().min_by(|a, b| {
+                        match (a.1.relayed, b.1.relayed) {
+                            (false, true) => std::cmp::Ordering::Less, // prioritize non-relay connections
+                            (true, false) => std::cmp::Ordering::Greater, // prioritize non-relay connections
+                            _ => a.1.latency.cmp(&b.1.latency), // compare latencies if both have the same relay status
+                        }
+                    });
 
-                    if let Some(connection_id) = connection {
-                        info!("using connection id={connection_id} for {}", event.peer);
+                    if let Some((id, state)) = connection {
+                        info!("using connection {state:?} [id:{id}] for {}", event.peer);
                         peer_state.selected_connection = true;
                         // close the other connections
-                        for id in peer_state.connections.keys() {
-                            if id != connection_id {
-                                swarm.close_connection(*id);
+                        for other_id in peer_state.connections.keys() {
+                            if id != other_id {
+                                swarm.close_connection(*other_id);
                             }
                         }
                     } else {
@@ -684,18 +496,18 @@ where
 
                     info!("Identify event from {peer_id}: {info:?}");
 
-                    for address in info.listen_addrs {
-                        // checks for relayed addresses which are not useful
-                        if address.ends_with(&Protocol::P2p(peer_id).into()) {
-                            continue;
-                        }
-
-                        // dials the non-relayed addresses to attempt direct connections
-                        info!("dialing {} from identify event", address);
-                        if let Err(error) = swarm.dial(address) {
-                            error!("Error dialing {}: {}", peer_id, error);
-                        }
-                    }
+                    // for address in info.listen_addrs {
+                    //     // checks for relayed addresses which are not useful
+                    //     if address.ends_with(&Protocol::P2p(peer_id).into()) {
+                    //         continue;
+                    //     }
+                    //
+                    //     // dials the non-relayed addresses to attempt direct connections
+                    //     info!("dialing {} from identify event", address);
+                    //     if let Err(error) = swarm.dial(address) {
+                    //         error!("Error dialing {}: {}", peer_id, error);
+                    //     }
+                    // }
                 }
                 SwarmEvent::Behaviour(BehaviourEvent::Dcutr(DcutrEvent {
                     remote_peer_id,
@@ -720,21 +532,21 @@ where
 
         debug!("tearing down old swarm");
         self.callbacks.manager_active(false, false).await;
+        // stop the stream handler
+        stop_handler.notify_one();
         // reset room state
         if let Some(state) = self.room_state.write().await.take() {
             state.end_call.notify_one();
             state.cancel.cancel();
         }
-        debug!("stopped all sessions");
-        stop_handler.notify_one();
         // stream handler won't join until all sessions it created have finished
         stream_handler_handle.await??;
         debug!("joined stream handler");
+        // join all sessions created in manager
         for handle in handles {
             handle.await??;
         }
         debug!("joined handles in session manager");
-
         Ok(())
     }
 
@@ -1726,10 +1538,10 @@ impl PeerState {
         }
     }
 
-    fn non_dialer(connection_id: ConnectionId, relayed: bool) -> Self {
+    fn non_dialer(endpoint: ConnectedPoint, connection_id: ConnectionId) -> Self {
         Self {
             dialer: false,
-            connections: HashMap::from([(connection_id, ConnectionState::new(relayed))]),
+            connections: HashMap::from([(connection_id, endpoint.into())]),
             ..Default::default()
         }
     }
@@ -1753,13 +1565,17 @@ struct ConnectionState {
 
     /// whether the connection is relayed
     relayed: bool,
+
+    /// the underlying connection details
+    _endpoint: ConnectedPoint,
 }
 
-impl ConnectionState {
-    fn new(relayed: bool) -> Self {
+impl From<ConnectedPoint> for ConnectionState {
+    fn from(endpoint: ConnectedPoint) -> Self {
         Self {
             latency: None,
-            relayed,
+            relayed: endpoint.is_relayed(),
+            _endpoint: endpoint,
         }
     }
 }

@@ -1,5 +1,5 @@
 use libp2p::swarm::NetworkBehaviour;
-use libp2p::{autonat, dcutr, identify, ping, relay};
+use libp2p::{dcutr, identify, ping, relay};
 
 pub mod audio;
 pub mod error;
@@ -28,5 +28,4 @@ pub(crate) struct Behaviour {
     identify: identify::Behaviour,
     dcutr: dcutr::Behaviour,
     stream: libp2p_stream::Behaviour,
-    auto_nat: autonat::Behaviour,
 }

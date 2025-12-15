@@ -3,14 +3,18 @@ use crate::audio::codec::{decoder, encoder};
 use crate::audio::web_audio::{WebAudioWrapper, WebInput};
 use crate::audio::{InputProcessorState, OutputProcessorState, input_processor, output_processor};
 use crate::error::ErrorKind;
+use crate::flutter::DartNotify;
 use crate::flutter::callbacks::{FrbCallbacks, FrbStatisticsCallback};
 use crate::frb_generated::FLUTTER_RUST_BRIDGE_HANDLER;
 use crate::telepathy::core::TelepathyCore;
 use crate::telepathy::messages::{AudioHeader, Message};
+#[cfg(not(target_family = "wasm"))]
+use crate::telepathy::screenshare;
 use crate::telepathy::utils::{SendStream, get_output_device};
 use crate::telepathy::{
-    CHANNEL_SIZE, EarlyCallState, Result, StartScreenshare, StatisticsCollectorState,
+    CHANNEL_SIZE, CHAT_PROTOCOL, EarlyCallState, Result, StartScreenshare, StatisticsCollectorState,
 };
+use crate::{Behaviour, BehaviourEvent};
 #[cfg(not(target_family = "wasm"))]
 use cpal::Device;
 #[cfg(not(target_family = "wasm"))]
@@ -18,14 +22,19 @@ use cpal::traits::HostTrait;
 use cpal::traits::{DeviceTrait, StreamTrait};
 use flutter_rust_bridge::{JoinHandle, spawn_blocking_with};
 use kanal::{AsyncReceiver, AsyncSender, Sender, bounded, unbounded_async};
-use libp2p::PeerId;
-use log::{error, info};
+use libp2p::futures::StreamExt;
+use libp2p::multiaddr::Protocol;
+use libp2p::swarm::SwarmEvent;
+use libp2p::{Multiaddr, PeerId, Swarm, dcutr, identify, noise, ping, tcp, yamux};
+use libp2p_stream::Control;
+use log::{error, info, warn};
 use nnnoiseless::DenoiseState;
 use sea_codec::ProcessorMessage;
 use sea_codec::codec::file::SeaFileHeader;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
+use std::time::Duration;
 #[cfg(not(target_family = "wasm"))]
 use tokio::fs::File;
 #[cfg(not(target_family = "wasm"))]
@@ -37,6 +46,243 @@ where
     S: FrbStatisticsCallback + Send + Sync + 'static,
     C: FrbCallbacks<S> + Send + Sync + 'static,
 {
+    /// builds a p2p swarm & connects to the relay server
+    pub(crate) async fn setup_swarm(&self) -> Result<(Swarm<Behaviour>, Multiaddr)> {
+        let identity = if let Some(keypair) = self.core_state.identity.read().await.as_ref() {
+            keypair.clone()
+        } else {
+            return Err(ErrorKind::NoIdentityAvailable.into());
+        };
+
+        let builder = libp2p::SwarmBuilder::with_existing_identity(identity);
+
+        #[cfg(not(target_family = "wasm"))]
+        let provider_phase = builder
+            .with_tokio()
+            .with_tcp(
+                tcp::Config::default().nodelay(true),
+                noise::Config::new,
+                yamux::Config::default,
+            )
+            .map_err(|_| ErrorKind::SwarmBuild)?
+            .with_quic();
+
+        #[cfg(target_family = "wasm")]
+        let provider_phase = builder
+            .with_wasm_bindgen()
+            .with_other_transport(|id_keys| {
+                Ok(libp2p_webtransport_websys::Transport::new(
+                    libp2p_webtransport_websys::Config::new(id_keys),
+                ))
+            })?;
+
+        let mut swarm = provider_phase
+            .with_relay_client(noise::Config::new, yamux::Config::default)
+            .map_err(|_| ErrorKind::SwarmBuild)?
+            .with_behaviour(|keypair, relay_behaviour| Behaviour {
+                relay_client: relay_behaviour,
+                ping: ping::Behaviour::new(ping::Config::new()),
+                identify: identify::Behaviour::new(identify::Config::new(
+                    CHAT_PROTOCOL.to_string(),
+                    keypair.public(),
+                )),
+                dcutr: dcutr::Behaviour::new(keypair.public().to_peer_id()),
+                stream: libp2p_stream::Behaviour::new(),
+            })
+            .map_err(|_| ErrorKind::SwarmBuild)?
+            .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(30)))
+            .build();
+
+        let listen_port = self.core_state.network_config.listen_port.load(Relaxed);
+        for bind_address in &self.core_state.network_config.bind_addresses {
+            #[cfg(not(target_family = "wasm"))]
+            {
+                let listen_addr_quic = Multiaddr::empty()
+                    .with(Protocol::from(*bind_address))
+                    .with(Protocol::Udp(listen_port))
+                    .with(Protocol::QuicV1);
+
+                swarm.listen_on(listen_addr_quic)?;
+
+                let listen_addr_tcp = Multiaddr::empty()
+                    .with(Protocol::from(*bind_address))
+                    .with(Protocol::Tcp(listen_port));
+
+                swarm.listen_on(listen_addr_tcp)?;
+            }
+
+            #[cfg(target_family = "wasm")]
+            {
+                let listen_addr = Multiaddr::empty()
+                    .with(Protocol::from(*bind_address))
+                    .with(Protocol::Udp(listen_port))
+                    .with(Protocol::QuicV1)
+                    .with(Protocol::WebTransport);
+
+                swarm.listen_on(listen_addr)?;
+            }
+        }
+
+        let socket_address = *self.core_state.network_config.relay_address.read().await;
+        let relay_identity = *self.core_state.network_config.relay_id.read().await;
+
+        #[cfg(not(target_family = "wasm"))]
+        let relay_address = {
+            let relay_address_udp = Multiaddr::from(socket_address.ip())
+                .with(Protocol::Udp(socket_address.port()))
+                .with(Protocol::QuicV1)
+                .with_p2p(relay_identity)
+                .map_err(|_| ErrorKind::SwarmBuild)?;
+
+            let relay_address_tcp = Multiaddr::from(socket_address.ip())
+                .with(Protocol::Tcp(socket_address.port()))
+                .with_p2p(relay_identity)
+                .map_err(|_| ErrorKind::SwarmBuild)?;
+
+            if swarm.dial(relay_address_udp.clone()).is_err() {
+                swarm.dial(relay_address_tcp.clone())?;
+                info!("connected to relay with tcp");
+                relay_address_tcp.with(Protocol::P2pCircuit)
+            } else {
+                info!("connected to relay with udp");
+                relay_address_udp.with(Protocol::P2pCircuit)
+            }
+        };
+
+        #[cfg(target_family = "wasm")]
+        let relay_address = {
+            // TODO the relay currently does not support WebTransport
+            let address = Multiaddr::from(socket_address.ip())
+                .with(Protocol::Udp(socket_address.port()))
+                .with(Protocol::QuicV1)
+                .with(Protocol::WebTransport)
+                .with_p2p(relay_identity)
+                .map_err(|_| ErrorKind::SwarmBuild)?;
+
+            swarm.dial(address.clone())?;
+            info!("connected to relay with webtransport");
+            address.with(Protocol::P2pCircuit)
+        };
+
+        let mut learned_observed_addr = false;
+        let mut told_relay_observed_addr = false;
+
+        loop {
+            match swarm.next().await.ok_or(ErrorKind::SwarmEnded)? {
+                SwarmEvent::NewListenAddr { .. } => (),
+                SwarmEvent::Dialing { .. } => (),
+                SwarmEvent::ConnectionEstablished { .. } => (),
+                SwarmEvent::Behaviour(BehaviourEvent::Ping(_)) => (),
+                SwarmEvent::NewExternalAddrCandidate { .. } => (),
+                SwarmEvent::NewExternalAddrOfPeer { .. } => (),
+                SwarmEvent::Behaviour(BehaviourEvent::Identify(identify::Event::Sent {
+                    ..
+                })) => {
+                    info!("Told relay its public address");
+                    told_relay_observed_addr = true;
+                }
+                SwarmEvent::Behaviour(BehaviourEvent::Identify(identify::Event::Received {
+                    info: identify::Info { .. },
+                    ..
+                })) => {
+                    info!("Relay told us our observed address");
+                    learned_observed_addr = true;
+                }
+                // no other event occurs during a successful initialization
+                event => {
+                    error!("Unexpected event during initialization {:?}", event);
+                    return Err(ErrorKind::UnexpectedSwarmEvent.into());
+                }
+            }
+
+            if learned_observed_addr && told_relay_observed_addr {
+                break;
+            }
+        }
+
+        swarm.listen_on(relay_address.clone())?;
+        Ok((swarm, relay_address))
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) async fn start_screenshare(
+        &self,
+        message: StartScreenshare,
+        control_option: Option<Control>,
+    ) -> Result<()> {
+        let state = if let Some(s) = self.session_states.read().await.get(&message.peer) {
+            s.clone()
+        } else {
+            warn!(
+                "screenshare started for a peer without a session: {}",
+                message.peer
+            );
+            return Ok(());
+        };
+
+        let stop = Arc::new(Notify::new());
+        *state.stop_screenshare.lock().await = Some(stop.clone());
+        let dart_stop = DartNotify {
+            inner: stop.clone(),
+        };
+
+        if let Some(Message::ScreenshareHeader { encoder_name }) = message.header
+            && let Some(mut control) = control_option
+        {
+            // the other peer is waiting for a stream
+            let stream = control.open_stream(message.peer, CHAT_PROTOCOL).await?;
+            // alert the frontend
+            self.callbacks.screenshare_started(dart_stop, false).await;
+            // start playing back the screenshare
+            screenshare::playback(
+                stream,
+                stop,
+                state.download_bandwidth.clone(),
+                encoder_name,
+                self.core_state.screenshare_config.width.load(Relaxed),
+                self.core_state.screenshare_config.height.load(Relaxed),
+            )
+            .await?;
+        } else {
+            let config = if let Some(c) = self
+                .core_state
+                .screenshare_config
+                .recording_config
+                .read()
+                .await
+                .as_ref()
+            {
+                c.clone()
+            } else {
+                // the frontend blocks this case
+                warn!("screenshare started without recording configuration");
+                return Ok(());
+            };
+
+            // send the peer a screenshare header
+            // the peer will open a stream after receiving it
+            let result = state
+                .message_sender
+                .send(Message::ScreenshareHeader {
+                    encoder_name: config.encoder.to_string(),
+                })
+                .await;
+
+            if result.is_ok() {
+                // wait for the other peer to open a stream
+                let stream = state.receive_stream().await?;
+                // alert the frontend & provide the stop object
+                self.callbacks.screenshare_started(dart_stop, true).await;
+                // start recording the screenshare
+                screenshare::record(stream, stop, state.upload_bandwidth.clone(), config).await?;
+            } else {
+                warn!("giving up on screenshare start, state closed");
+            }
+        }
+
+        Ok(())
+    }
+
     /// helper method to set up audio input stack between the network and device layers
     pub(crate) async fn setup_input(
         &self,
