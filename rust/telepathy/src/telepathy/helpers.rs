@@ -41,6 +41,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::Duration;
+use cpal::SampleFormat;
 #[cfg(not(target_family = "wasm"))]
 use tokio::fs::File;
 #[cfg(not(target_family = "wasm"))]
@@ -413,6 +414,9 @@ where
         // get the output device and its default configuration
         let output_device = get_output_device(&self.core_state.output_device, &self.host).await?;
         let output_config = output_device.default_output_config()?;
+        if output_config.sample_format() != SampleFormat::F32 {
+            return Err(ErrorKind::UnsupportedSampleFormat.into());
+        }
         info!("output device: {:?}", output_device.name());
 
         // in rooms, the SEA header is hard coded
@@ -556,6 +560,9 @@ where
             // get the input device and its default configuration
             input_device = self.get_input_device().await?;
             input_config = input_device.default_input_config()?;
+            if input_config.sample_format() != SampleFormat::F32 {
+                return Err(ErrorKind::UnsupportedSampleFormat.into());
+            }
             info!("input_device: {:?}", input_device.name());
             input_sample_rate = input_config.sample_rate().0;
             input_sample_format = input_config.sample_format().to_string();

@@ -69,6 +69,7 @@ pub(crate) enum ErrorKind {
     NoEncoderAvailable,
     NoIdentityAvailable,
     NoStream,
+    UnsupportedSampleFormat,
 }
 
 impl From<std::io::Error> for Error {
@@ -350,6 +351,7 @@ impl Display for Error {
                 ErrorKind::NoEncoderAvailable => "No encoder available".to_string(),
                 ErrorKind::NoIdentityAvailable => "No identity available".to_string(),
                 ErrorKind::NoStream => "Did not get a stream".to_string(),
+                ErrorKind::UnsupportedSampleFormat => "Only 32 bit float samples are supported".to_string(),
             }
         )
     }
