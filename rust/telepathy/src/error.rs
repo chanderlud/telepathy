@@ -3,6 +3,8 @@ use std::fmt::{Display, Formatter};
 use std::net::AddrParseError;
 
 use cpal::{BuildStreamError, DefaultStreamConfigError, DevicesError, PlayStreamError};
+#[cfg(target_family = "wasm")]
+use flutter_rust_bridge::for_generated::futures::channel::oneshot::Canceled;
 use libp2p::identity::{DecodingError, ParseError};
 use libp2p::swarm::{DialError, SwarmEvent};
 use libp2p::{TransportBuilderError, TransportError};
@@ -44,6 +46,8 @@ pub(crate) enum ErrorKind {
     IdentityParse(ParseError),
     Transport(TransportError<std::io::Error>),
     AlreadyRegistered(AlreadyRegistered),
+    #[cfg(target_family = "wasm")]
+    Canceled(Canceled),
     TransportBuildError(TransportBuilderError),
     #[cfg(target_family = "wasm")]
     JsError(Option<String>),
@@ -251,6 +255,15 @@ impl From<AlreadyRegistered> for Error {
     }
 }
 
+#[cfg(target_family = "wasm")]
+impl From<Canceled> for Error {
+    fn from(err: Canceled) -> Self {
+        Self {
+            kind: ErrorKind::Canceled(err),
+        }
+    }
+}
+
 impl From<TransportBuilderError> for Error {
     fn from(err: TransportBuilderError) -> Self {
         Self {
@@ -314,6 +327,8 @@ impl Display for Error {
                 ErrorKind::IdentityParse(ref err) => format!("Identity parse error: {}", err),
                 ErrorKind::Transport(ref err) => format!("Transport error: {}", err),
                 ErrorKind::AlreadyRegistered(ref err) => format!("Already registered: {}", err),
+                #[cfg(target_family = "wasm")]
+                ErrorKind::Canceled(ref err) => format!("Canceled: {}", err),
                 ErrorKind::TransportBuildError(ref err) =>
                     format!("Transport build error: {}", err),
                 #[cfg(target_family = "wasm")]
