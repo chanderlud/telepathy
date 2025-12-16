@@ -3,7 +3,7 @@ use std::ptr::null_mut;
 use std::sync::atomic::Ordering::Relaxed;
 
 use crate::overlay::color::{BAD_COLOR, percent_to_color};
-use crate::overlay::{BACKGROUND_COLOR, CONNECTED, FONT_COLOR, FONT_HEIGHT, LATENCY, Result};
+use crate::overlay::{BACKGROUND_COLOR, CONNECTED, FONT_COLOR, FONT_HEIGHT, LATENCY, LOSS, Result};
 use log::{error, info};
 use widestring::U16CString;
 use windows::Win32::Foundation::{
@@ -220,26 +220,25 @@ unsafe fn draw_overlay(hwnd: HWND) {
             string_format,
         );
 
-        // TODO re-enable loss in the overlay
-        // bounding = draw_text(
-        //     "Loss:",
-        //     (bounding.X + bounding.Width + 30.0, 0.0),
-        //     FONT_COLOR.load(Relaxed),
-        //     graphics,
-        //     font,
-        //     string_format,
-        // );
-        //
-        // let loss = LOSS.load(Relaxed);
-        // let color = percent_to_color(loss);
-        // bounding = draw_text(
-        //     &format!("{:.2}%", loss * 100.0),
-        //     (bounding.X + bounding.Width, 0.0),
-        //     color.argb(),
-        //     graphics,
-        //     font,
-        //     string_format,
-        // );
+        bounding = draw_text(
+            "Loss:",
+            (bounding.X + bounding.Width + 30.0, 0.0),
+            FONT_COLOR.load(Relaxed),
+            graphics,
+            font,
+            string_format,
+        );
+
+        let loss = LOSS.load(Relaxed);
+        let color = percent_to_color((loss as f64 / 1000.0).min(1_f64));
+        bounding = draw_text(
+            &loss.to_string(),
+            (bounding.X + bounding.Width, 0.0),
+            color.argb(),
+            graphics,
+            font,
+            string_format,
+        );
 
         if !CONNECTED.load(Relaxed) {
             _ = draw_text(

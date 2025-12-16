@@ -37,6 +37,21 @@ impl SeaResidualSize {
     }
 
     #[inline(always)]
+    pub fn try_from_u8(len: u8) -> Option<Self> {
+        match len {
+            1 => Some(SeaResidualSize::One),
+            2 => Some(SeaResidualSize::Two),
+            3 => Some(SeaResidualSize::Three),
+            4 => Some(SeaResidualSize::Four),
+            5 => Some(SeaResidualSize::Five),
+            6 => Some(SeaResidualSize::Six),
+            7 => Some(SeaResidualSize::Seven),
+            8 => Some(SeaResidualSize::Eight),
+            _ => None,
+        }
+    }
+
+    #[inline(always)]
     pub fn to_binary_combinations(self) -> usize {
         match self {
             SeaResidualSize::One => 2,

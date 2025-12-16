@@ -67,7 +67,12 @@ impl SeaChunk {
     }
 
     pub fn from_slice(encoded: &[u8], file_header: &SeaFileHeader) -> Result<Self, SeaError> {
-        assert!(encoded.len() <= file_header.chunk_size as usize);
+        if encoded.len() > file_header.chunk_size as usize {
+            return Err(SeaError::InvalidFrame);
+        }
+        if encoded.len() < 4 {
+            return Err(SeaError::InvalidFrame);
+        }
 
         let chunk_type: SeaChunkType = match encoded[0] {
             0x01 => SeaChunkType::Cbr,
@@ -76,24 +81,36 @@ impl SeaChunk {
         };
 
         let scale_factor_bits = encoded[1] >> 4;
+        if scale_factor_bits == 0 || scale_factor_bits > 8 {
+            return Err(SeaError::InvalidFrame);
+        }
 
-        let residual_size = SeaResidualSize::from(encoded[1] & 0b1111);
+        let residual_size =
+            SeaResidualSize::try_from_u8(encoded[1] & 0b1111).ok_or(SeaError::InvalidFrame)?;
         let scale_factor_frames = encoded[2];
+        if scale_factor_frames == 0 {
+            return Err(SeaError::InvalidFrame);
+        }
         let _reserved = encoded[3];
 
         let mut encoded_index = 4;
 
         let mut lms: Vec<SeaLMS> = vec![];
         for _ in 0..file_header.channels as usize {
-            lms.push(SeaLMS::from_bytes(
-                &encoded[encoded_index..encoded_index + LMS_LEN * 4]
-                    .try_into()
-                    .unwrap(),
-            ));
+            let needed = LMS_LEN * 4;
+            if encoded_index + needed > encoded.len() {
+                return Err(SeaError::InvalidFrame);
+            }
+            let mut lms_bytes = [0u8; LMS_LEN * 4];
+            lms_bytes.copy_from_slice(&encoded[encoded_index..encoded_index + needed]);
+            lms.push(SeaLMS::from_bytes(&lms_bytes));
             encoded_index += LMS_LEN * 4;
         }
 
         let frames_in_this_chunk = file_header.frames_per_chunk as usize;
+        if !frames_in_this_chunk.is_multiple_of(scale_factor_frames as usize) {
+            return Err(SeaError::InvalidFrame);
+        }
 
         let scale_factor_items = frames_in_this_chunk.div_ceil(scale_factor_frames as usize)
             * file_header.channels as usize;
@@ -102,6 +119,9 @@ impl SeaChunk {
             let packed_scale_factor_bytes =
                 (scale_factor_items * scale_factor_bits as usize).div_ceil(8);
 
+            if encoded_index + packed_scale_factor_bytes > encoded.len() {
+                return Err(SeaError::InvalidFrame);
+            }
             let packed_scale_factors =
                 &encoded[encoded_index..encoded_index + packed_scale_factor_bytes];
             encoded_index += packed_scale_factor_bytes;
@@ -115,6 +135,9 @@ impl SeaChunk {
 
         let vbr_residual_sizes: Vec<u8> = if matches!(chunk_type, SeaChunkType::Vbr) {
             let packed_vbr_residual_sizes_bytes = (scale_factor_items * 2).div_ceil(8);
+            if encoded_index + packed_vbr_residual_sizes_bytes > encoded.len() {
+                return Err(SeaError::InvalidFrame);
+            }
             let packed_vbr_residual_sizes =
                 &encoded[encoded_index..encoded_index + packed_vbr_residual_sizes_bytes];
             encoded_index += packed_vbr_residual_sizes_bytes;
@@ -177,6 +200,9 @@ impl SeaChunk {
                     .div_ceil(8)
             };
 
+            if encoded_index + packed_residuals_bytes > encoded.len() {
+                return Err(SeaError::InvalidFrame);
+            }
             let packed_residuals = &encoded[encoded_index..encoded_index + packed_residuals_bytes];
 
             unpacker.process_bytes(packed_residuals);

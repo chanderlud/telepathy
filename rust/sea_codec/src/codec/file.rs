@@ -22,11 +22,18 @@ pub struct SeaFileHeader {
 }
 
 impl SeaFileHeader {
-    fn validate(&self) -> bool {
-        self.channels > 0
-            && self.chunk_size >= 16
-            && self.frames_per_chunk > 0
-            && self.sample_rate > 0
+    fn validate(&self) -> Result<(), SeaError> {
+        if self.version != 1 {
+            return Err(SeaError::UnsupportedVersion);
+        }
+        if self.channels == 0
+            || self.chunk_size < 16
+            || self.frames_per_chunk == 0
+            || self.sample_rate == 0
+        {
+            return Err(SeaError::InvalidFile);
+        }
+        Ok(())
     }
 
     pub fn from_reader(receiver: &Receiver<ProcessorMessage>) -> Result<Self, SeaError> {
@@ -55,10 +62,7 @@ impl SeaFileHeader {
             sample_rate,
         };
 
-        if !res.validate() {
-            return Err(SeaError::InvalidFile);
-        }
-
+        res.validate()?;
         Ok(res)
     }
 
@@ -115,10 +119,16 @@ impl SeaFile {
         receiver: &Receiver<ProcessorMessage>,
         header: Option<SeaFileHeader>,
     ) -> Result<Self, SeaError> {
-        let header = header.or(SeaFileHeader::from_reader(receiver).ok());
+        let header = match header {
+            Some(h) => {
+                h.validate()?;
+                h
+            }
+            None => SeaFileHeader::from_reader(receiver)?,
+        };
 
         Ok(SeaFile {
-            header: header.ok_or(SeaError::InvalidFrame)?,
+            header,
             decoder: None,
             encoder: None,
             encoder_settings: None,
@@ -148,10 +158,6 @@ impl SeaFile {
             encoded.residuals,
         );
         let output = chunk.serialize();
-
-        if self.header.chunk_size == 0 {
-            self.header.chunk_size = output.len() as u16;
-        }
 
         let full_samples_len =
             self.header.frames_per_chunk as usize * self.header.channels as usize;
@@ -186,7 +192,8 @@ impl SeaFile {
             SeaChunkType::Vbr => decoder.decode_vbr(&chunk),
         };
 
-        if decoded.len() != 480 {
+        let expected_len = self.header.frames_per_chunk as usize * self.header.channels as usize;
+        if decoded.len() != expected_len {
             Err(SeaError::InvalidFrame)
         } else {
             Ok(ProcessorMessage::Samples(decoded.try_into().unwrap()))

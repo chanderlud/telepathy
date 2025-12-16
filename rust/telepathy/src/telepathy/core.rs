@@ -1083,6 +1083,7 @@ where
             statistics_state,
             self.callbacks.statistics_callback(),
             stop_io.clone(),
+            self.core_state.efficiency_mode.load(Relaxed),
         ));
 
         if let Some(o) = optional {
@@ -1343,6 +1344,7 @@ where
             statistics_state.clone(),
             self.callbacks.statistics_callback(),
             stop_io.clone(),
+            self.core_state.efficiency_mode.load(Relaxed),
         ));
 
         // kick the UI out of connecting mode
@@ -1497,7 +1499,7 @@ pub(crate) struct CoreState {
     /// Enables sending your custom ringtone
     pub(crate) send_custom_ringtone: Arc<AtomicBool>,
 
-    // TODO use efficiency mode for something again
+    /// Decreases the statistics update rate
     pub(crate) efficiency_mode: Arc<AtomicBool>,
 
     /// set to true at shutdown to break manager loop

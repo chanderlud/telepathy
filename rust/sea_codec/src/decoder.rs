@@ -31,7 +31,7 @@ impl SeaDecoder {
     pub fn decode_frame(&mut self) -> Result<(), SeaError> {
         let message = self.file.samples_from_reader(&self.receiver)?;
 
-        self.frames_read += 480;
+        self.frames_read += self.file.header.frames_per_chunk as usize;
         self.sender.send(message)?;
         Ok(())
     }

@@ -25,7 +25,7 @@ pub struct EncoderSettings {
 impl Default for EncoderSettings {
     fn default() -> Self {
         Self {
-            frames_per_chunk: 5120,
+            frames_per_chunk: 480,
             scale_factor_bits: 4,
             scale_factor_frames: 20,
             residual_bits: 3.0,

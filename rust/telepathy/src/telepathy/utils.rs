@@ -102,7 +102,6 @@ pub(crate) async fn read_message<M: Decode<()>, R: AsyncRead + Unpin>(
     transport: &mut Transport<R>,
 ) -> Result<M> {
     if let Some(Ok(buffer)) = transport.next().await {
-        // TODO could decode from slice borrowed be used here to potentially avoid copying
         let (message, _) = decode_from_slice(&buffer[..], standard())?; // decode the message
         Ok(message)
     } else {
@@ -115,9 +114,10 @@ pub(crate) async fn statistics_collector<C: FrbStatisticsCallback>(
     state: StatisticsCollectorState,
     callback: C,
     cancel: CancellationToken,
+    efficient: bool,
 ) {
     // the interval for statistics updates
-    let mut update_interval = interval(Duration::from_millis(100));
+    let mut update_interval = interval(Duration::from_millis(if efficient { 500 } else { 100 }));
     // the interval for the input_max and output_max to decrease
     let mut reset_interval = interval(Duration::from_secs(5));
     // max input RMS

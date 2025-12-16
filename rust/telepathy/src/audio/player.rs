@@ -684,20 +684,12 @@ mod tests {
     async fn test_player() {
         _ = fast_log::init(Config::new().file("tests-player.log").level(Debug));
 
-        let mut wav_bytes = Vec::new();
-        let mut wav_file = File::open("../../assets/wav-sounds/incoming.wav")
-            .await
-            .unwrap();
-        wav_file.read_to_end(&mut wav_bytes).await.unwrap();
+        let mut sea_bytes = Vec::new();
+        let mut sea_file = File::open("../../assets/sounds/mute.sea").await.unwrap();
+        sea_file.read_to_end(&mut sea_bytes).await.unwrap();
 
-        let now = Instant::now();
-        let other_data = wav_to_sea(&wav_bytes, 5.0).await.unwrap();
-        info!("wav to sea took {:?}", now.elapsed());
-
-        info!("{}%", other_data.len() as f32 / wav_bytes.len() as f32);
-
-        let player = super::SoundPlayer::new(0.5);
-        let handle = player.play(other_data).await;
+        let mut player = super::SoundPlayer::new(0.1);
+        let handle = player.play(sea_bytes).await;
 
         sleep(std::time::Duration::from_secs(2)).await;
         handle.cancel();
