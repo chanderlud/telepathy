@@ -1307,10 +1307,13 @@ class ContactWidgetState extends State<ContactWidget> {
                     semanticsLabel: 'Offline icon',
                     width: 26,
                   )),
-            if (online)
+            if (online) ...[
               Text((status as SessionStatus_Connected).relayed
                   ? "relayed"
                   : "direct"),
+              const SizedBox(width: 5),
+              Text(status.remoteAddress),
+            ],
             if (active)
               IconButton(
                 visualDensity: VisualDensity.comfortable,

@@ -21,6 +21,7 @@ use crate::telepathy::{
 use crate::{Behaviour, BehaviourEvent};
 #[cfg(not(target_family = "wasm"))]
 use cpal::Device;
+use cpal::SampleFormat;
 #[cfg(not(target_family = "wasm"))]
 use cpal::traits::HostTrait;
 use cpal::traits::{DeviceTrait, StreamTrait};
@@ -41,7 +42,6 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::Duration;
-use cpal::SampleFormat;
 #[cfg(not(target_family = "wasm"))]
 use tokio::fs::File;
 #[cfg(not(target_family = "wasm"))]

@@ -4,8 +4,8 @@ pub(crate) mod callbacks;
 use crate::error::{DartError, Error, ErrorKind};
 use crate::frb_generated::StreamSink;
 use crate::telepathy::messages::Attachment;
-use crate::telepathy::screenshare;
 use crate::telepathy::screenshare::{Decoder, Encoder};
+use crate::telepathy::{ConnectionState, screenshare};
 use atomic_float::AtomicF32;
 use chrono::{DateTime, Local};
 pub use cpal::Host;
@@ -17,6 +17,7 @@ use flutter_rust_bridge::{DartFnFuture, frb};
 use lazy_static::lazy_static;
 use libp2p::PeerId;
 use libp2p::identity::Keypair;
+use libp2p::multiaddr::Protocol;
 use log::{LevelFilter, info, warn};
 use serde::{Deserialize, Serialize};
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -125,9 +126,29 @@ pub enum CallState {
 #[derive(Debug)]
 pub enum SessionStatus {
     Connecting,
-    Connected { relayed: bool },
+    Connected {
+        relayed: bool,
+        remote_address: String,
+    },
     Inactive,
     Unknown,
+}
+
+impl From<ConnectionState> for SessionStatus {
+    fn from(value: ConnectionState) -> Self {
+        let remote_address = value.endpoint.get_remote_address();
+
+        let remote_ip = remote_address.iter().find_map(|p| match p {
+            Protocol::Ip4(ip) => Some(ip.to_string()),
+            Protocol::Ip6(ip) => Some(ip.to_string()),
+            _ => None,
+        });
+
+        Self::Connected {
+            relayed: value.relayed,
+            remote_address: remote_ip.unwrap_or_else(|| remote_address.to_string()),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

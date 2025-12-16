@@ -10,7 +10,6 @@ use crate::flutter::{
 };
 use crate::overlay::CONNECTED;
 use crate::overlay::overlay::Overlay;
-use crate::telepathy::Result;
 use crate::telepathy::messages::Message;
 use crate::telepathy::sockets::{
     ConstSocket, SendingSockets, SharedSockets, Transport, TransportStream, audio_input,
@@ -24,6 +23,7 @@ use crate::telepathy::{
     RoomConnection, RoomMessage, RoomState, SessionState, StartScreenshare,
     StatisticsCollectorState,
 };
+use crate::telepathy::{ConnectionState, Result};
 use atomic_float::AtomicF32;
 use chrono::Local;
 use cpal::Host;
@@ -224,7 +224,7 @@ where
                 })
                 .collect();
 
-            for (peer, selected, state) in single_connections {
+            for (peer, selected, details) in single_connections {
                 if selected {
                     // open a session control stream and start the session controller
                     self.open_session(
@@ -232,24 +232,17 @@ where
                         swarm.behaviour().stream.new_control(),
                         &mut peer_states,
                         &mut handles,
-                        state.relayed,
+                        details,
                     )
                     .await;
-                } else if let Some(session) = self.session_states.read().await.get(&peer) {
-                    debug!("(listener) using connection: {state:?}");
+                } else if self.session_states.read().await.get(&peer).is_some() {
+                    debug!("(listener) using connection: {details:?}");
                     // only the non-dialing peer will reach this branch
                     // this peer state is no longer needed
                     peer_states.remove(&peer);
-                    // set the real relayed status for the session
-                    session.relayed.store(state.relayed, Relaxed);
-                    // update the relayed status in the frontend
+                    // update the connection details in the frontend
                     self.callbacks
-                        .session_status(
-                            SessionStatus::Connected {
-                                relayed: state.relayed,
-                            },
-                            peer,
-                        )
+                        .session_status(SessionStatus::from(details), peer)
                         .await;
                 }
             }
@@ -588,7 +581,7 @@ where
                         info!("stream accepted for new session with {}", peer);
                     }
 
-                    handles.push(self.initialize_session(peer, None, stream, false).await);
+                    handles.push(self.initialize_session(peer, None, stream, None).await);
                 }
                 else => break Err(ErrorKind::StreamsEnded.into())
             }
@@ -608,13 +601,13 @@ where
         mut control: Control,
         peer_states: &mut HashMap<PeerId, PeerState>,
         handles: &mut Vec<JoinHandle<Result<()>>>,
-        relayed: bool,
+        state: ConnectionState,
     ) {
         match control.open_stream(peer, CHAT_PROTOCOL).await {
             Ok(stream) => {
                 info!("opened stream with {}, starting new session", peer);
                 handles.push(
-                    self.initialize_session(peer, Some(control), stream, relayed)
+                    self.initialize_session(peer, Some(control), stream, Some(state))
                         .await,
                 );
                 // the peer state is no longer needed
@@ -632,13 +625,13 @@ where
         peer: PeerId,
         control: Option<Control>,
         stream: Stream,
-        relayed: bool,
+        connection: Option<ConnectionState>,
     ) -> JoinHandle<Result<()>> {
         let contact_option = self.callbacks.get_contact(peer.to_bytes()).await;
         // sends messages to the session from elsewhere in the program
         let message_channel = channel::<Message>(8);
         // create the state and a clone of it for the session
-        let state = Arc::new(SessionState::new(&message_channel.0, relayed));
+        let state = Arc::new(SessionState::new(&message_channel.0));
         // insert the new state
         let old_state_option = self
             .session_states
@@ -655,10 +648,12 @@ where
         }
 
         let contact = if let Some(contact) = contact_option {
-            // alert the UI that this session is now connected
-            self.callbacks
-                .session_status(SessionStatus::Connected { relayed }, peer)
-                .await;
+            // if we have details now, let the frontend know
+            if let Some(details) = connection {
+                self.callbacks
+                    .session_status(SessionStatus::from(details), peer)
+                    .await;
+            }
             contact
         } else {
             // there may be no contact for members of a group
@@ -1563,28 +1558,5 @@ impl PeerState {
         self.connections
             .iter()
             .any(|(_, state)| state.latency.is_none())
-    }
-}
-
-/// the state of a single connection during session negotiation
-#[derive(Debug, Clone)]
-struct ConnectionState {
-    /// the latency is ms when available
-    latency: Option<u128>,
-
-    /// whether the connection is relayed
-    relayed: bool,
-
-    /// the underlying connection details
-    _endpoint: ConnectedPoint,
-}
-
-impl From<ConnectedPoint> for ConnectionState {
-    fn from(endpoint: ConnectedPoint) -> Self {
-        Self {
-            latency: None,
-            relayed: endpoint.is_relayed(),
-            _endpoint: endpoint,
-        }
     }
 }

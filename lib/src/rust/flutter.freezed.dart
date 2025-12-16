@@ -639,7 +639,7 @@ extension SessionStatusPatterns on SessionStatus {
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>({
     TResult Function()? connecting,
-    TResult Function(bool relayed)? connected,
+    TResult Function(bool relayed, String remoteAddress)? connected,
     TResult Function()? inactive,
     TResult Function()? unknown,
     required TResult orElse(),
@@ -649,7 +649,7 @@ extension SessionStatusPatterns on SessionStatus {
       case SessionStatus_Connecting() when connecting != null:
         return connecting();
       case SessionStatus_Connected() when connected != null:
-        return connected(_that.relayed);
+        return connected(_that.relayed, _that.remoteAddress);
       case SessionStatus_Inactive() when inactive != null:
         return inactive();
       case SessionStatus_Unknown() when unknown != null:
@@ -675,7 +675,7 @@ extension SessionStatusPatterns on SessionStatus {
   @optionalTypeArgs
   TResult when<TResult extends Object?>({
     required TResult Function() connecting,
-    required TResult Function(bool relayed) connected,
+    required TResult Function(bool relayed, String remoteAddress) connected,
     required TResult Function() inactive,
     required TResult Function() unknown,
   }) {
@@ -684,7 +684,7 @@ extension SessionStatusPatterns on SessionStatus {
       case SessionStatus_Connecting():
         return connecting();
       case SessionStatus_Connected():
-        return connected(_that.relayed);
+        return connected(_that.relayed, _that.remoteAddress);
       case SessionStatus_Inactive():
         return inactive();
       case SessionStatus_Unknown():
@@ -707,7 +707,7 @@ extension SessionStatusPatterns on SessionStatus {
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>({
     TResult? Function()? connecting,
-    TResult? Function(bool relayed)? connected,
+    TResult? Function(bool relayed, String remoteAddress)? connected,
     TResult? Function()? inactive,
     TResult? Function()? unknown,
   }) {
@@ -716,7 +716,7 @@ extension SessionStatusPatterns on SessionStatus {
       case SessionStatus_Connecting() when connecting != null:
         return connecting();
       case SessionStatus_Connected() when connected != null:
-        return connected(_that.relayed);
+        return connected(_that.relayed, _that.remoteAddress);
       case SessionStatus_Inactive() when inactive != null:
         return inactive();
       case SessionStatus_Unknown() when unknown != null:
@@ -750,9 +750,12 @@ class SessionStatus_Connecting extends SessionStatus {
 /// @nodoc
 
 class SessionStatus_Connected extends SessionStatus {
-  const SessionStatus_Connected({required this.relayed}) : super._();
+  const SessionStatus_Connected(
+      {required this.relayed, required this.remoteAddress})
+      : super._();
 
   final bool relayed;
+  final String remoteAddress;
 
   /// Create a copy of SessionStatus
   /// with the given fields replaced by the non-null parameter values.
@@ -767,15 +770,17 @@ class SessionStatus_Connected extends SessionStatus {
     return identical(this, other) ||
         (other.runtimeType == runtimeType &&
             other is SessionStatus_Connected &&
-            (identical(other.relayed, relayed) || other.relayed == relayed));
+            (identical(other.relayed, relayed) || other.relayed == relayed) &&
+            (identical(other.remoteAddress, remoteAddress) ||
+                other.remoteAddress == remoteAddress));
   }
 
   @override
-  int get hashCode => Object.hash(runtimeType, relayed);
+  int get hashCode => Object.hash(runtimeType, relayed, remoteAddress);
 
   @override
   String toString() {
-    return 'SessionStatus.connected(relayed: $relayed)';
+    return 'SessionStatus.connected(relayed: $relayed, remoteAddress: $remoteAddress)';
   }
 }
 
@@ -786,7 +791,7 @@ abstract mixin class $SessionStatus_ConnectedCopyWith<$Res>
           $Res Function(SessionStatus_Connected) _then) =
       _$SessionStatus_ConnectedCopyWithImpl;
   @useResult
-  $Res call({bool relayed});
+  $Res call({bool relayed, String remoteAddress});
 }
 
 /// @nodoc
@@ -802,12 +807,17 @@ class _$SessionStatus_ConnectedCopyWithImpl<$Res>
   @pragma('vm:prefer-inline')
   $Res call({
     Object? relayed = null,
+    Object? remoteAddress = null,
   }) {
     return _then(SessionStatus_Connected(
       relayed: null == relayed
           ? _self.relayed
           : relayed // ignore: cast_nullable_to_non_nullable
               as bool,
+      remoteAddress: null == remoteAddress
+          ? _self.remoteAddress
+          : remoteAddress // ignore: cast_nullable_to_non_nullable
+              as String,
     ));
   }
 }

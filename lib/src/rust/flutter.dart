@@ -235,6 +235,7 @@ sealed class SessionStatus with _$SessionStatus {
   const factory SessionStatus.connecting() = SessionStatus_Connecting;
   const factory SessionStatus.connected({
     required bool relayed,
+    required String remoteAddress,
   }) = SessionStatus_Connected;
   const factory SessionStatus.inactive() = SessionStatus_Inactive;
   const factory SessionStatus.unknown() = SessionStatus_Unknown;

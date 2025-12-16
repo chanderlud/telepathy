@@ -1778,28 +1778,28 @@ fn wire__crate__overlay__overlay__Overlay_new_impl(
             };
             let mut deserializer =
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
-            let api__enabled = <bool>::sse_decode(&mut deserializer);
-            let api__x = <i32>::sse_decode(&mut deserializer);
-            let api__y = <i32>::sse_decode(&mut deserializer);
-            let api__width = <i32>::sse_decode(&mut deserializer);
-            let api__height = <i32>::sse_decode(&mut deserializer);
-            let api__font_height = <i32>::sse_decode(&mut deserializer);
-            let api__background_color = <u32>::sse_decode(&mut deserializer);
-            let api__font_color = <u32>::sse_decode(&mut deserializer);
+            let api_enabled = <bool>::sse_decode(&mut deserializer);
+            let api_x = <i32>::sse_decode(&mut deserializer);
+            let api_y = <i32>::sse_decode(&mut deserializer);
+            let api_width = <i32>::sse_decode(&mut deserializer);
+            let api_height = <i32>::sse_decode(&mut deserializer);
+            let api_font_height = <i32>::sse_decode(&mut deserializer);
+            let api_background_color = <u32>::sse_decode(&mut deserializer);
+            let api_font_color = <u32>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, ()>(
                     (move || async move {
                         let output_ok = Result::<_, ()>::Ok(
                             crate::overlay::overlay::Overlay::new(
-                                api__enabled,
-                                api__x,
-                                api__y,
-                                api__width,
-                                api__height,
-                                api__font_height,
-                                api__background_color,
-                                api__font_color,
+                                api_enabled,
+                                api_x,
+                                api_y,
+                                api_width,
+                                api_height,
+                                api_font_height,
+                                api_background_color,
+                                api_font_color,
                             )
                             .await,
                         )?;
@@ -5756,8 +5756,10 @@ impl SseDecode for crate::flutter::SessionStatus {
             }
             1 => {
                 let mut var_relayed = <bool>::sse_decode(deserializer);
+                let mut var_remoteAddress = <String>::sse_decode(deserializer);
                 return crate::flutter::SessionStatus::Connected {
                     relayed: var_relayed,
+                    remote_address: var_remoteAddress,
                 };
             }
             2 => {
@@ -6337,9 +6339,15 @@ impl flutter_rust_bridge::IntoDart for crate::flutter::SessionStatus {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         match self {
             crate::flutter::SessionStatus::Connecting => [0.into_dart()].into_dart(),
-            crate::flutter::SessionStatus::Connected { relayed } => {
-                [1.into_dart(), relayed.into_into_dart().into_dart()].into_dart()
-            }
+            crate::flutter::SessionStatus::Connected {
+                relayed,
+                remote_address,
+            } => [
+                1.into_dart(),
+                relayed.into_into_dart().into_dart(),
+                remote_address.into_into_dart().into_dart(),
+            ]
+            .into_dart(),
             crate::flutter::SessionStatus::Inactive => [2.into_dart()].into_dart(),
             crate::flutter::SessionStatus::Unknown => [3.into_dart()].into_dart(),
             _ => {
@@ -6889,9 +6897,13 @@ impl SseEncode for crate::flutter::SessionStatus {
             crate::flutter::SessionStatus::Connecting => {
                 <i32>::sse_encode(0, serializer);
             }
-            crate::flutter::SessionStatus::Connected { relayed } => {
+            crate::flutter::SessionStatus::Connected {
+                relayed,
+                remote_address,
+            } => {
                 <i32>::sse_encode(1, serializer);
                 <bool>::sse_encode(relayed, serializer);
+                <String>::sse_encode(remote_address, serializer);
             }
             crate::flutter::SessionStatus::Inactive => {
                 <i32>::sse_encode(2, serializer);

@@ -34,6 +34,7 @@ use flutter_rust_bridge::JoinHandle;
 use flutter_rust_bridge::{frb, spawn};
 use kanal::AsyncReceiver;
 use kanal::{AsyncSender, unbounded_async};
+use libp2p::core::ConnectedPoint;
 use libp2p::identity::Keypair;
 use libp2p::{PeerId, Stream, StreamProtocol};
 use libp2p_stream::Control;
@@ -543,12 +544,10 @@ pub(crate) struct SessionState {
     end_call: Arc<Notify>,
 
     stop_screenshare: Arc<Mutex<Option<Arc<Notify>>>>,
-
-    relayed: Arc<AtomicBool>,
 }
 
 impl SessionState {
-    fn new(message_sender: &MSender<Message>, relayed: bool) -> Self {
+    fn new(message_sender: &MSender<Message>) -> Self {
         let stream_channel = unbounded_async();
 
         Self {
@@ -564,7 +563,6 @@ impl SessionState {
             wants_stream: Default::default(),
             end_call: Default::default(),
             stop_screenshare: Default::default(),
-            relayed: Arc::new(AtomicBool::new(relayed)),
         }
     }
 
@@ -673,4 +671,27 @@ impl StatisticsCollectorState {
 pub(crate) struct StartScreenshare {
     peer: PeerId,
     header: Option<Message>,
+}
+
+/// the state of a single connection during session negotiation
+#[derive(Debug, Clone)]
+pub(crate) struct ConnectionState {
+    /// the latency is ms when available
+    latency: Option<u128>,
+
+    /// whether the connection is relayed
+    pub(crate) relayed: bool,
+
+    /// the underlying connection details
+    pub(crate) endpoint: ConnectedPoint,
+}
+
+impl From<ConnectedPoint> for ConnectionState {
+    fn from(endpoint: ConnectedPoint) -> Self {
+        Self {
+            latency: None,
+            relayed: endpoint.is_relayed(),
+            endpoint,
+        }
+    }
 }

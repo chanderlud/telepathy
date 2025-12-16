@@ -4318,6 +4318,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       case 1:
         return SessionStatus_Connected(
           relayed: dco_decode_bool(raw[1]),
+          remoteAddress: dco_decode_String(raw[2]),
         );
       case 2:
         return SessionStatus_Inactive();
@@ -5088,7 +5089,9 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         return SessionStatus_Connecting();
       case 1:
         var var_relayed = sse_decode_bool(deserializer);
-        return SessionStatus_Connected(relayed: var_relayed);
+        var var_remoteAddress = sse_decode_String(deserializer);
+        return SessionStatus_Connected(
+            relayed: var_relayed, remoteAddress: var_remoteAddress);
       case 2:
         return SessionStatus_Inactive();
       case 3:
@@ -5949,9 +5952,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     switch (self) {
       case SessionStatus_Connecting():
         sse_encode_i_32(0, serializer);
-      case SessionStatus_Connected(relayed: final relayed):
+      case SessionStatus_Connected(
+          relayed: final relayed,
+          remoteAddress: final remoteAddress
+        ):
         sse_encode_i_32(1, serializer);
         sse_encode_bool(relayed, serializer);
+        sse_encode_String(remoteAddress, serializer);
       case SessionStatus_Inactive():
         sse_encode_i_32(2, serializer);
       case SessionStatus_Unknown():
@@ -6300,7 +6307,7 @@ class OverlayImpl extends RustOpaque implements Overlay {
       RustLib.instance.api.crateOverlayOverlayOverlayMoveOverlay(
           that: this, x: x, y: y, width: width, height: height);
 
-  /// non-windows platforms don't have an overlay
+  /// access the screen resolution for overlay positioning in the front end
   (int, int) screenResolution() =>
       RustLib.instance.api.crateOverlayOverlayOverlayScreenResolution(
         that: this,
