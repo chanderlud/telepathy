@@ -12,7 +12,7 @@ import 'package:telepathy/widgets/home/home_tab_view.dart';
 import 'package:telepathy/src/rust/flutter.dart';
 
 /// The main body of the app.
-class HomePage extends StatelessWidget {
+class HomePage extends StatefulWidget {
   final Telepathy telepathy;
   final SettingsController settingsController;
   final InterfaceController interfaceController;
@@ -36,28 +36,85 @@ class HomePage extends StatelessWidget {
       required this.audioDevices});
 
   @override
-  Widget build(BuildContext context) {
-    PeriodicNotifier notifier = PeriodicNotifier();
+  State<HomePage> createState() => _HomePageState();
+}
 
-    CallControls callControls = CallControls(
-      telepathy: telepathy,
-      settingsController: settingsController,
-      interfaceController: interfaceController,
-      stateController: stateController,
-      statisticsController: statisticsController,
-      player: player,
+class _HomePageState extends State<HomePage> {
+  late final PeriodicNotifier notifier;
+  late CallControls callControls;
+  late ChatWidget chatWidget;
+
+  CallControls _createCallControls() {
+    return CallControls(
+      telepathy: widget.telepathy,
+      settingsController: widget.settingsController,
+      interfaceController: widget.interfaceController,
+      stateController: widget.stateController,
+      statisticsController: widget.statisticsController,
+      player: widget.player,
       notifier: notifier,
-      overlay: overlay,
-      audioDevices: audioDevices,
+      overlay: widget.overlay,
+      audioDevices: widget.audioDevices,
     );
+  }
 
-    ChatWidget chatWidget = ChatWidget(
-        telepathy: telepathy,
-        stateController: stateController,
-        chatStateController: chatStateController,
-        player: player,
-        settingsController: settingsController);
+  ChatWidget _createChatWidget() {
+    return ChatWidget(
+        telepathy: widget.telepathy,
+        stateController: widget.stateController,
+        chatStateController: widget.chatStateController,
+        player: widget.player,
+        settingsController: widget.settingsController);
+  }
 
+  @override
+  void initState() {
+    super.initState();
+    notifier = PeriodicNotifier();
+
+    callControls = _createCallControls();
+    chatWidget = _createChatWidget();
+  }
+
+  @override
+  void didUpdateWidget(covariant HomePage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    final bool callControlsDepsChanged = widget.telepathy != oldWidget.telepathy ||
+        widget.settingsController != oldWidget.settingsController ||
+        widget.interfaceController != oldWidget.interfaceController ||
+        widget.stateController != oldWidget.stateController ||
+        widget.statisticsController != oldWidget.statisticsController ||
+        widget.player != oldWidget.player ||
+        widget.overlay != oldWidget.overlay ||
+        widget.audioDevices != oldWidget.audioDevices;
+
+    final bool chatWidgetDepsChanged = widget.telepathy != oldWidget.telepathy ||
+        widget.stateController != oldWidget.stateController ||
+        widget.chatStateController != oldWidget.chatStateController ||
+        widget.player != oldWidget.player ||
+        widget.settingsController != oldWidget.settingsController;
+
+    if (callControlsDepsChanged || chatWidgetDepsChanged) {
+      setState(() {
+        if (callControlsDepsChanged) {
+          callControls = _createCallControls();
+        }
+        if (chatWidgetDepsChanged) {
+          chatWidget = _createChatWidget();
+        }
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    notifier.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return Scaffold(
       body: Padding(
           padding: const EdgeInsets.all(20.0),
@@ -66,20 +123,21 @@ class HomePage extends StatelessWidget {
               child: LayoutBuilder(
                   builder: (BuildContext context, BoxConstraints constraints) {
                 ListenableBuilder contactsList = ListenableBuilder(
-                    listenable: settingsController,
+                    listenable: widget.settingsController,
                     builder: (BuildContext context, Widget? child) {
                       return ListenableBuilder(
-                          listenable: stateController,
+                          listenable: widget.stateController,
                           builder: (BuildContext context, Widget? child) {
                             List<Contact> contacts =
-                                settingsController.contacts.values.toList();
+                                widget.settingsController.contacts.values
+                                    .toList();
 
                             // sort contacts by session status then nickname
                             contacts.sort((a, b) {
                               SessionStatus aStatus =
-                                  stateController.sessionStatus(a);
+                                  widget.stateController.sessionStatus(a);
                               SessionStatus bStatus =
-                                  stateController.sessionStatus(b);
+                                  widget.stateController.sessionStatus(b);
 
                               if (aStatus == bStatus) {
                                 return a.nickname().compareTo(b.nickname());
@@ -101,12 +159,13 @@ class HomePage extends StatelessWidget {
                             });
 
                             return ContactsList(
-                              telepathy: telepathy,
+                              telepathy: widget.telepathy,
                               contacts: contacts,
-                              rooms: settingsController.rooms.values.toList(),
-                              stateController: stateController,
-                              settingsController: settingsController,
-                              player: player,
+                              rooms: widget.settingsController.rooms.values
+                                  .toList(),
+                              stateController: widget.stateController,
+                              settingsController: widget.settingsController,
+                              player: widget.player,
                             );
                           });
                     });
@@ -115,7 +174,7 @@ class HomePage extends StatelessWidget {
                   return Column(
                     children: [
                       ListenableBuilder(
-                        listenable: stateController,
+                        listenable: widget.stateController,
                         builder: (BuildContext context, Widget? child) {
                           return Container(
                               constraints: const BoxConstraints(maxHeight: 275),
@@ -127,7 +186,7 @@ class HomePage extends StatelessWidget {
                                     duration: const Duration(milliseconds: 250),
                                     curve: Curves.easeInOut,
                                     alignment: Alignment.centerLeft,
-                                    child: stateController.isCallActive
+                                    child: widget.stateController.isCallActive
                                         ? Row(
                                             mainAxisSize: MainAxisSize.min,
                                             children: [
@@ -137,9 +196,10 @@ class HomePage extends StatelessWidget {
                                                         maxWidth: 300),
                                                 child: CallDetailsWidget(
                                                     statisticsController:
-                                                        statisticsController,
+                                                        widget
+                                                            .statisticsController,
                                                     stateController:
-                                                        stateController),
+                                                        widget.stateController),
                                               ),
                                               const SizedBox(width: 20),
                                             ],
@@ -150,13 +210,15 @@ class HomePage extends StatelessWidget {
                                   // Contacts list always present, just expands when the left bit collapses
                                   Flexible(
                                     fit: FlexFit.loose,
-                                    child: stateController.activeRoom != null
+                                    child: widget.stateController.activeRoom !=
+                                            null
                                         ? RoomDetailsWidget(
-                                            telepathy: telepathy,
-                                            stateController: stateController,
-                                            player: player,
+                                            telepathy: widget.telepathy,
+                                            stateController:
+                                                widget.stateController,
+                                            player: widget.player,
                                             settingsController:
-                                                settingsController,
+                                                widget.settingsController,
                                           )
                                         : contactsList,
                                   ),

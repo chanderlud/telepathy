@@ -36,11 +36,12 @@ Future<bool> acceptCallPrompt(BuildContext context, Contact contact) async {
     return false;
   }
 
+  Timer? timeoutTimer;
   bool? result = await showDialog<bool>(
     context: context,
     barrierDismissible: false,
     builder: (BuildContext context) {
-      Timer(timeout, () {
+      timeoutTimer = Timer(timeout, () {
         if (context.mounted) {
           Navigator.of(context).pop(false);
         }
@@ -52,12 +53,14 @@ Future<bool> acceptCallPrompt(BuildContext context, Contact contact) async {
           TextButton(
             child: const Text('Deny'),
             onPressed: () {
+              timeoutTimer?.cancel();
               Navigator.of(context).pop(false);
             },
           ),
           TextButton(
             child: const Text('Accept'),
             onPressed: () {
+              timeoutTimer?.cancel();
               Navigator.of(context).pop(true);
             },
           ),

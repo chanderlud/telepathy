@@ -190,9 +190,18 @@ class StateController extends ChangeNotifier {
 
 /// Notifies listeners every second.
 class PeriodicNotifier extends ChangeNotifier {
+  Timer? _timer;
+
   PeriodicNotifier() {
-    Timer.periodic(const Duration(seconds: 1), (timer) {
+    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
       notifyListeners();
     });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _timer = null;
+    super.dispose();
   }
 }
