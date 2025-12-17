@@ -12,3 +12,4 @@ class TemporaryConfig {
       required this.framerate,
       this.height});
 }
+

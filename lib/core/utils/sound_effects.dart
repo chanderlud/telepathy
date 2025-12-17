@@ -7,3 +7,4 @@ import 'package:telepathy/src/rust/audio/player.dart';
 /// sound effects without keeping duplicated logic in `main.dart`.
 SoundHandle? outgoingSoundHandle;
 SoundHandle? otherSoundHandle;
+

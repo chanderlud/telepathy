@@ -74,3 +74,4 @@ class _SelectedAttachmentsState extends State<SelectedAttachments> {
     return Wrap(children: chips);
   }
 }
+

@@ -39,3 +39,4 @@ int darkenColor(int colorInt, double amount) {
   // Reassemble back into a 32-bit ARGB int:
   return (a << 24) | (darkerR << 16) | (darkerG << 8) | darkerB;
 }
+

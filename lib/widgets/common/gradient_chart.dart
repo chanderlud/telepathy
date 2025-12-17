@@ -100,3 +100,4 @@ class _GradientMiniLineChartPainter extends CustomPainter {
         oldDelegate.strokeWidth != strokeWidth;
   }
 }
+

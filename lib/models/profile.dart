@@ -18,3 +18,4 @@ class Profile {
     required this.rooms,
   });
 }
+

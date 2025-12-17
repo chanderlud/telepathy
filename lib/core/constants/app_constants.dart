@@ -9,3 +9,4 @@ class AppConstants {
   static const EdgeInsets cardInsets =
       EdgeInsets.symmetric(vertical: 15.0, horizontal: 20.0);
 }
+
