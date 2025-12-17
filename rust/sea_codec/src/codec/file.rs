@@ -1,7 +1,6 @@
 use crate::{ProcessorMessage, codec::chunk::SeaChunk, encoder::EncoderSettings};
 use kanal::Receiver;
 use std::io::Cursor;
-
 use super::{
     chunk::SeaChunkType,
     common::{
@@ -158,6 +157,10 @@ impl SeaFile {
             encoded.residuals,
         );
         let output = chunk.serialize();
+
+        if self.header.chunk_size == 0 {
+            self.header.chunk_size = output.len() as u16;
+        }
 
         let full_samples_len =
             self.header.frames_per_chunk as usize * self.header.channels as usize;
