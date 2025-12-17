@@ -1,13 +1,20 @@
 import 'dart:io';
-import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:telepathy/core/utils/file_utils.dart';
+import 'package:telepathy/app.dart';
+import 'package:telepathy/core/utils/index.dart';
 import 'package:telepathy/src/rust/audio/player.dart';
 import 'package:telepathy/src/rust/flutter.dart';
 
+Future<Uint8List> _readFileBytes(File file) async {
+  return await file.readAsBytes();
+}
+
 /// Manages the state of chat messages and attachments.
 class ChatStateController extends ChangeNotifier {
+  static const int _maxCachedImages = 50;
+
   /// a list of messages in the chat
   List<ChatMessage> messages = [];
 
@@ -22,6 +29,8 @@ class ChatStateController extends ChangeNotifier {
 
   /// a list of files used in the chat which optionally display images
   Map<String, (File?, Image?)> files = {};
+
+  final List<String> _imageKeys = [];
 
   final SoundPlayer soundPlayer;
 
@@ -59,7 +68,20 @@ class ChatStateController extends ChangeNotifier {
     String newName =
         '$fileNameWithoutExtension-${DateTime.now().millisecondsSinceEpoch}$fileExtension';
 
-    Uint8List bytes = await file.readAsBytes();
+    Uint8List bytes;
+    try {
+      bytes = await compute(_readFileBytes, file);
+    } catch (e) {
+      if (navigatorKey.currentState != null &&
+          navigatorKey.currentState!.mounted) {
+        showErrorDialog(
+          navigatorKey.currentState!.context,
+          'Failed to load attachment',
+          e.toString(),
+        );
+      }
+      return;
+    }
     attachments.add((newName, bytes));
     _addFile(newName, file, bytes);
     notifyListeners();
@@ -80,8 +102,21 @@ class ChatStateController extends ChangeNotifier {
   /// adds a file to the list of files, optionally displaying images
   void _addFile(String name, File? file, Uint8List data) {
     if (isValidImageFormat(name)) {
-      Image? image = Image.memory(data, fit: BoxFit.contain);
+      Image? image = Image.memory(
+        data,
+        fit: BoxFit.contain,
+        cacheWidth: 800,
+        cacheHeight: 800,
+        filterQuality: FilterQuality.medium,
+      );
       files[name] = (file, image);
+
+      _imageKeys.remove(name);
+      _imageKeys.add(name);
+      if (_imageKeys.length > _maxCachedImages) {
+        final oldestKey = _imageKeys.removeAt(0);
+        files.remove(oldestKey);
+      }
     } else {
       files[name] = (file, null);
     }
@@ -92,6 +127,8 @@ class ChatStateController extends ChangeNotifier {
     messages.clear();
     attachments.clear();
     messageInput.clear();
+    files.clear();
+    _imageKeys.clear();
     notifyListeners();
   }
 
@@ -112,7 +149,7 @@ class ChatStateController extends ChangeNotifier {
   void removeAttachment(String name) {
     attachments.removeWhere((attachment) => attachment.$1 == name);
     files.remove(name);
+    _imageKeys.remove(name);
     notifyListeners();
   }
 }
-

@@ -23,4 +23,3 @@ class OverlayConfig {
     required this.backgroundColor,
   });
 }
-

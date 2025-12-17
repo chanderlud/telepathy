@@ -59,4 +59,3 @@ class SettingsHeader extends StatelessWidget {
     );
   }
 }
-

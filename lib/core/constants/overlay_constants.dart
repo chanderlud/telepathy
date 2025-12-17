@@ -10,4 +10,3 @@ const String defaultOverlayFontFamily = 'Inconsolata';
 const int defaultOverlayFontColor = 0xFFFFFFFF;
 const int defaultOverlayFontHeight = 36;
 const int defaultOverlayFontBackgroundColor = 0x80000000;
-

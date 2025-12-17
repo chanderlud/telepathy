@@ -22,4 +22,3 @@ Future<void> updateDenoiseModel(String? model, Telepathy telepathy) async {
   List<int> bytes = await readAssetBytes('models/$model.rnn');
   telepathy.setModel(model: Uint8List.fromList(bytes));
 }
-

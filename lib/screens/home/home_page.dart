@@ -3,11 +3,9 @@ import 'package:telepathy/controllers/index.dart';
 import 'package:telepathy/src/rust/audio/player.dart';
 import 'package:telepathy/src/rust/overlay/overlay.dart';
 import 'package:telepathy/src/rust/telepathy.dart';
-import 'package:telepathy/widgets/call/call_controls.dart';
-import 'package:telepathy/widgets/call/call_details_widget.dart';
-import 'package:telepathy/widgets/call/room_details_widget.dart';
-import 'package:telepathy/widgets/chat/chat_widget.dart';
-import 'package:telepathy/widgets/contacts/sorted_contacts_list.dart';
+import 'package:telepathy/widgets/call/call.dart';
+import 'package:telepathy/widgets/chat/chat.dart';
+import 'package:telepathy/widgets/contacts/contacts.dart';
 import 'package:telepathy/widgets/home/home_tab_view.dart';
 
 /// The main body of the app.
@@ -79,20 +77,22 @@ class _HomePageState extends State<HomePage> {
   void didUpdateWidget(covariant HomePage oldWidget) {
     super.didUpdateWidget(oldWidget);
 
-    final bool callControlsDepsChanged = widget.telepathy != oldWidget.telepathy ||
-        widget.settingsController != oldWidget.settingsController ||
-        widget.interfaceController != oldWidget.interfaceController ||
-        widget.stateController != oldWidget.stateController ||
-        widget.statisticsController != oldWidget.statisticsController ||
-        widget.player != oldWidget.player ||
-        widget.overlay != oldWidget.overlay ||
-        widget.audioDevices != oldWidget.audioDevices;
+    final bool callControlsDepsChanged =
+        widget.telepathy != oldWidget.telepathy ||
+            widget.settingsController != oldWidget.settingsController ||
+            widget.interfaceController != oldWidget.interfaceController ||
+            widget.stateController != oldWidget.stateController ||
+            widget.statisticsController != oldWidget.statisticsController ||
+            widget.player != oldWidget.player ||
+            widget.overlay != oldWidget.overlay ||
+            widget.audioDevices != oldWidget.audioDevices;
 
-    final bool chatWidgetDepsChanged = widget.telepathy != oldWidget.telepathy ||
-        widget.stateController != oldWidget.stateController ||
-        widget.chatStateController != oldWidget.chatStateController ||
-        widget.player != oldWidget.player ||
-        widget.settingsController != oldWidget.settingsController;
+    final bool chatWidgetDepsChanged =
+        widget.telepathy != oldWidget.telepathy ||
+            widget.stateController != oldWidget.stateController ||
+            widget.chatStateController != oldWidget.chatStateController ||
+            widget.player != oldWidget.player ||
+            widget.settingsController != oldWidget.settingsController;
 
     if (callControlsDepsChanged || chatWidgetDepsChanged) {
       setState(() {
@@ -153,9 +153,8 @@ class _HomePageState extends State<HomePage> {
                                                     const BoxConstraints(
                                                         maxWidth: 300),
                                                 child: CallDetailsWidget(
-                                                    statisticsController:
-                                                        widget
-                                                            .statisticsController,
+                                                    statisticsController: widget
+                                                        .statisticsController,
                                                     stateController:
                                                         widget.stateController),
                                               ),

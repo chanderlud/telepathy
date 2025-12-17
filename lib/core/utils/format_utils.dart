@@ -36,4 +36,3 @@ String roundToTotalDigits(double number) {
   // round to the required number of fractional digits
   return number.toStringAsFixed(fractionalDigits).padRight(4, '0');
 }
-

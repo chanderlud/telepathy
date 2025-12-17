@@ -108,8 +108,7 @@ class _SortedContactsListState extends State<SortedContactsList> {
     );
     final int sessionsHash = _computeSessionsHash();
 
-    final bool contactsChanged =
-        _previousContactsLength != contactsLength ||
+    final bool contactsChanged = _previousContactsLength != contactsLength ||
         _previousContactsHashCode != contactsHash;
     final bool sessionsChanged = _previousSessionsHashCode != sessionsHash;
 
@@ -147,5 +146,3 @@ class _SortedContactsListState extends State<SortedContactsList> {
     );
   }
 }
-
-

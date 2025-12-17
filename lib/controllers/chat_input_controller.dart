@@ -5,8 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:super_clipboard/super_clipboard.dart';
 import 'package:telepathy/controllers/chat_controller.dart';
-import 'package:telepathy/core/utils/clipboard_extensions.dart';
-import 'package:telepathy/core/utils/console.dart';
+import 'package:telepathy/core/utils/index.dart';
 
 /// Handles chat input side-effects (paste + file pick) so the UI can stay focused
 /// on composition.
@@ -105,4 +104,3 @@ class ChatInputController {
     }
   }
 }
-

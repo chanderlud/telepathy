@@ -48,4 +48,3 @@ class Log {
 
   Log(this.message, this.type, this.time);
 }
-

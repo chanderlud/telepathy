@@ -62,4 +62,3 @@ class AudioDevices extends ChangeNotifier {
     periodicTimer = null;
   }
 }
-

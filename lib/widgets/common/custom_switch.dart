@@ -24,4 +24,3 @@ class CustomSwitch extends StatelessWidget {
     );
   }
 }
-

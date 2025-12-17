@@ -55,4 +55,3 @@ Color getColor(double fraction) {
     return Color.lerp(mediumColor, loudColor, scaledFraction)!;
   }
 }
-

@@ -37,4 +37,3 @@ class StatisticsController extends ChangeNotifier {
     notifyListeners();
   }
 }
-

@@ -69,4 +69,3 @@ class _JumpToSimulation extends Simulation {
   @override
   bool isDone(double time) => true;
 }
-
