@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:telepathy/console.dart';
+import 'package:telepathy/core/utils/index.dart';
 
 class LogsSettings extends StatefulWidget {
   final TextEditingController searchController;

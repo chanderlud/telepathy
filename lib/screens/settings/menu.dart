@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:telepathy/settings/view.dart';
+import 'package:telepathy/screens/settings/view.dart';
 
 class SettingsMenu extends StatelessWidget {
   final SettingsSection selected;

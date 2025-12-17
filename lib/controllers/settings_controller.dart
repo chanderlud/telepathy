@@ -1,26 +1,17 @@
 import 'dart:convert';
-import 'dart:typed_data';
+import 'dart:ui';
 
 import 'package:collection/collection.dart';
-import 'package:telepathy/src/rust/error.dart';
-import 'package:telepathy/src/rust/flutter.dart';
-import 'package:flutter/cupertino.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:telepathy/core/constants/network_constants.dart';
+import 'package:telepathy/core/constants/overlay_constants.dart';
+import 'package:telepathy/core/utils/console.dart';
+import 'package:telepathy/models/index.dart';
+import 'package:telepathy/src/rust/error.dart';
+import 'package:telepathy/src/rust/flutter.dart';
 import 'package:uuid/uuid.dart';
-import 'package:telepathy/console.dart';
-
-const defaultRelayAddress = '5.78.76.47:40142';
-const defaultRelayId = '12D3KooWSePyyLtTHJsTMqMUS5pbQtdt8oJJX7rrEYCwG8bURYBG';
-const defaultOverlayEnabled = false;
-const defaultOverlayX = 0.0;
-const defaultOverlayY = 0.0;
-const defaultOverlayWidth = 600.0;
-const defaultOverlayHeight = 38.0;
-const defaultOverlayFontFamily = 'Inconsolata';
-const defaultOverlayFontColor = 0xFFFFFFFF;
-const defaultOverlayFontHeight = 36;
-const defaultOverlayFontBackgroundColor = 0x80000000;
 
 class SettingsController with ChangeNotifier {
   final FlutterSecureStorage storage;
@@ -523,117 +514,4 @@ class SettingsController with ChangeNotifier {
     await options.setInt(
         'overlayBackgroundColor', overlayConfig.backgroundColor.toARGB32());
   }
-}
-
-class InterfaceController with ChangeNotifier {
-  final SharedPreferences options;
-
-  InterfaceController({required this.options});
-
-  late int primaryColor;
-
-  int get secondaryColor => darkenColor(primaryColor, 0.1);
-
-  Future<void> init() async {
-    primaryColor = options.getInt("primaryColor") ?? 0xFF5538e5;
-    notifyListeners();
-  }
-
-  Future<void> setPrimaryColor(int color) async {
-    primaryColor = color;
-    await options.setInt('primaryColor', color);
-    notifyListeners();
-  }
-}
-
-class OverlayConfig {
-  bool enabled;
-  double x;
-  double y;
-  double width;
-  double height;
-  String fontFamily;
-  Color fontColor;
-  int fontHeight;
-  Color backgroundColor;
-
-  OverlayConfig({
-    required this.enabled,
-    required this.x,
-    required this.y,
-    required this.width,
-    required this.height,
-    required this.fontFamily,
-    required this.fontColor,
-    required this.fontHeight,
-    required this.backgroundColor,
-  });
-}
-
-class Profile {
-  final String id;
-  final String nickname;
-  final String peerId;
-  final List<int> keypair;
-  final Map<String, Contact> contacts;
-  final Map<String, Room> rooms;
-
-  Profile({
-    required this.id,
-    required this.nickname,
-    required this.peerId,
-    required this.keypair,
-    required this.contacts,
-    required this.rooms,
-  });
-}
-
-class Room {
-  late String id;
-  late List<String> peerIds;
-  late String nickname;
-  List<String> online = [];
-
-  Room({
-    required this.id,
-    required this.peerIds,
-    required this.nickname,
-  });
-
-  // Deserialize (from JSON)
-  factory Room.fromJson(Map<String, dynamic> json) {
-    List<String> peers = List<String>.from(json['peerIds']);
-
-    return Room(
-      id: roomHash(peers: peers),
-      peerIds: peers,
-      nickname: json['nickname'],
-    );
-  }
-
-  // Serialize (to JSON)
-  Map<String, dynamic> toJson() {
-    return {
-      'peerIds': peerIds,
-      'nickname': nickname,
-    };
-  }
-}
-
-int darkenColor(int colorInt, double amount) {
-  assert(amount >= 0 && amount <= 1, '"amount" should be between 0.0 and 1.0');
-
-  // Separate out ARGB channels:
-  final a = (colorInt >> 24) & 0xFF;
-  final r = (colorInt >> 16) & 0xFF;
-  final g = (colorInt >> 8) & 0xFF;
-  final b = colorInt & 0xFF;
-
-  // Multiply each channel by (1 - amount) to darken; clamp to [0,255].
-  int darkerR = (r * (1 - amount)).clamp(0, 255).toInt();
-  int darkerG = (g * (1 - amount)).clamp(0, 255).toInt();
-  int darkerB = (b * (1 - amount)).clamp(0, 255).toInt();
-
-  // Reassemble back into a 32-bit ARGB int:
-  return (a << 24) | (darkerR << 16) | (darkerG << 8) | darkerB;
 }

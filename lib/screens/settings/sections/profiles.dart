@@ -1,10 +1,11 @@
 import 'dart:core';
 import 'package:flutter/services.dart';
-import 'package:telepathy/settings/controller.dart';
 import 'package:flutter/material.dart' hide Overlay;
 import 'package:flutter_svg/flutter_svg.dart';
-import 'package:telepathy/main.dart';
+import 'package:telepathy/controllers/index.dart';
 import 'package:telepathy/src/rust/telepathy.dart';
+import 'package:telepathy/models/index.dart';
+import 'package:telepathy/widgets/common/index.dart';
 
 class ProfileSettings extends StatefulWidget {
   final SettingsController controller;

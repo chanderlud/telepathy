@@ -1,24 +1,21 @@
-import 'dart:async';
 import 'dart:core';
 import 'dart:io';
+
 import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:telepathy/settings/controller.dart';
-import 'package:telepathy/settings/sections/audio_video.dart';
-import 'package:telepathy/settings/sections/interface.dart';
-import 'package:telepathy/settings/sections/networking.dart';
-import 'package:telepathy/settings/sections/overlay.dart';
-import 'package:telepathy/settings/sections/profiles.dart';
-import 'package:telepathy/src/rust/audio/player.dart';
-import 'package:collection/collection.dart';
 import 'package:flutter/material.dart' hide Overlay;
-import 'package:flutter_svg/flutter_svg.dart';
-import 'package:telepathy/console.dart';
-import 'package:telepathy/main.dart';
-import 'package:telepathy/src/rust/telepathy.dart';
+import 'package:telepathy/controllers/index.dart';
+import 'package:telepathy/core/utils/index.dart';
+import 'package:telepathy/screens/settings/header.dart';
+import 'package:telepathy/screens/settings/logs.dart';
+import 'package:telepathy/screens/settings/menu.dart';
+import 'package:telepathy/screens/settings/sections/audio_video.dart';
+import 'package:telepathy/screens/settings/sections/interface.dart';
+import 'package:telepathy/screens/settings/sections/networking.dart';
+import 'package:telepathy/screens/settings/sections/overlay.dart';
+import 'package:telepathy/screens/settings/sections/profiles.dart';
+import 'package:telepathy/src/rust/audio/player.dart';
 import 'package:telepathy/src/rust/overlay/overlay.dart';
-import 'package:telepathy/settings/logs.dart';
-import 'package:telepathy/settings/header.dart';
-import 'package:telepathy/settings/menu.dart';
+import 'package:telepathy/src/rust/telepathy.dart';
 
 enum SettingsSection {
   audioVideo,
@@ -280,133 +277,4 @@ class SettingsPageState extends State<SettingsPage>
       return Theme.of(context).colorScheme.surfaceDim;
     }
   }
-}
-
-class DropDown<T> extends StatelessWidget {
-  final String? label;
-  final List<(String, String)> items;
-  final String? initialSelection;
-  final void Function(String?) onSelected;
-  final double? width;
-  final bool enabled;
-
-  const DropDown(
-      {super.key,
-      this.label,
-      required this.items,
-      required this.initialSelection,
-      required this.onSelected,
-      this.width,
-      this.enabled = true});
-
-  @override
-  Widget build(BuildContext context) {
-    return DropdownMenu<String>(
-      width: width,
-      label: label == null ? null : Text(label!),
-      enabled: enabled,
-      dropdownMenuEntries: items.map((item) {
-        return DropdownMenuEntry(
-          value: item.$1,
-          label: item.$2,
-        );
-      }).toList(),
-      onSelected: onSelected,
-      initialSelection: initialSelection,
-      trailingIcon: SvgPicture.asset(
-        'assets/icons/DropdownDown.svg',
-        semanticsLabel: 'Open Dropdown',
-        width: 20,
-      ),
-      selectedTrailingIcon: SvgPicture.asset(
-        'assets/icons/DropdownUp.svg',
-        semanticsLabel: 'Close Dropdown',
-        width: 20,
-      ),
-    );
-  }
-}
-
-class AudioDevices extends ChangeNotifier {
-  final Telepathy telepathy;
-  Timer? periodicTimer;
-
-  late List<String> _inputDevices = [];
-  late List<String> _outputDevices = [];
-
-  final ListEquality<String> _listEquality = const ListEquality<String>();
-
-  List<String> get inputDevices => ['Default', ..._inputDevices];
-
-  List<String> get outputDevices => ['Default', ..._outputDevices];
-
-  AudioDevices({required this.telepathy}) {
-    DebugConsole.debug('AudioDevices created');
-    updateDevices();
-  }
-
-  @override
-  void dispose() {
-    periodicTimer?.cancel();
-    super.dispose();
-  }
-
-  void updateDevices() async {
-    var (inputDevices, outputDevices) = await telepathy.listDevices();
-
-    bool notify = false;
-
-    if (!_listEquality.equals(_inputDevices, inputDevices)) {
-      _inputDevices = inputDevices;
-      notify = true;
-    }
-
-    if (!_listEquality.equals(_outputDevices, outputDevices)) {
-      _outputDevices = outputDevices;
-      notify = true;
-    }
-
-    if (notify) {
-      notifyListeners();
-    }
-  }
-
-  void startUpdates() {
-    periodicTimer = Timer.periodic(const Duration(milliseconds: 500), (timer) {
-      updateDevices();
-    });
-  }
-
-  void pauseUpdates() {
-    periodicTimer?.cancel();
-  }
-}
-
-Future<bool> unsavedConfirmation(BuildContext context) async {
-  bool? result = await showDialog<bool>(
-    context: context,
-    builder: (BuildContext context) {
-      return AlertDialog(
-        title: const Text('Unsaved Changes'),
-        content: const Text(
-            'You have unsaved changes. Are you sure you want to leave?'),
-        actions: [
-          Button(
-            text: 'Cancel',
-            onPressed: () {
-              Navigator.of(context).pop(false);
-            },
-          ),
-          Button(
-            text: 'Leave',
-            onPressed: () {
-              Navigator.of(context).pop(true);
-            },
-          )
-        ],
-      );
-    },
-  );
-
-  return result ?? false;
 }

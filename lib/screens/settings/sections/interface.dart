@@ -1,7 +1,7 @@
 import 'dart:core';
-import 'package:telepathy/settings/controller.dart';
 import 'package:flutter/material.dart' hide Overlay;
-import 'package:telepathy/main.dart';
+import 'package:telepathy/controllers/index.dart';
+import 'package:telepathy/widgets/common/index.dart';
 
 class InterfaceSettings extends StatefulWidget {
   final InterfaceController controller;

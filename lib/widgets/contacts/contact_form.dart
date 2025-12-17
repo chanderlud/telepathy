@@ -1,0 +1,277 @@
+import 'package:collection/collection.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
+import 'package:telepathy/controllers/index.dart';
+import 'package:telepathy/core/utils/index.dart';
+import 'package:telepathy/src/rust/error.dart';
+import 'package:telepathy/src/rust/telepathy.dart';
+import 'package:telepathy/widgets/common/index.dart';
+import 'package:telepathy/src/rust/flutter.dart';
+
+/// A widget which allows the user to add a contact.
+class ContactForm extends StatefulWidget {
+  final Telepathy telepathy;
+  final SettingsController settingsController;
+
+  const ContactForm(
+      {super.key, required this.telepathy, required this.settingsController});
+
+  @override
+  State<ContactForm> createState() => ContactFormState();
+}
+
+/// The state for ContactForm.
+class ContactFormState extends State<ContactForm> {
+  final TextEditingController _nicknameInput = TextEditingController();
+  final TextEditingController _peerIdInput = TextEditingController();
+  final List<String> _peerIds = [];
+  String? selectedPeer;
+  bool? addContact;
+
+  @override
+  Widget build(BuildContext context) {
+    if (addContact == null) {
+      return Container(
+        padding: const EdgeInsets.symmetric(vertical: 15.0, horizontal: 20.0),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.secondaryContainer,
+          borderRadius: BorderRadius.circular(10.0),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Button(
+              text: 'Add Contact',
+              onPressed: () async {
+                setState(() {
+                  addContact = true;
+                });
+              },
+            ),
+            Button(
+              text: 'Add Room',
+              onPressed: () async {
+                setState(() {
+                  addContact = false;
+                });
+              },
+            )
+          ],
+        ),
+      );
+    } else if (addContact == true) {
+      return Container(
+        padding: const EdgeInsets.symmetric(vertical: 15.0, horizontal: 20.0),
+        constraints: const BoxConstraints(maxWidth: 250),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.secondaryContainer,
+          borderRadius: BorderRadius.circular(10.0),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text("Add Contact", style: TextStyle(fontSize: 20)),
+            const SizedBox(height: 21),
+            TextInput(controller: _nicknameInput, labelText: 'Nickname'),
+            const SizedBox(height: 15),
+            TextInput(
+                controller: _peerIdInput,
+                labelText: 'Peer ID',
+                hintText: 'string encoded peer ID',
+                obscureText: true),
+            const SizedBox(height: 26),
+            Center(
+              child: Button(
+                text: 'Add Contact',
+                onPressed: () async {
+                  String nickname = _nicknameInput.text;
+                  String peerId = _peerIdInput.text;
+
+                  if (nickname.isEmpty || peerId.isEmpty) {
+                    showErrorDialog(context, 'Failed to add contact',
+                        'Nickname and peer id cannot be empty');
+                    return;
+                  } else if (widget.settingsController.contacts.keys
+                      .contains(peerId)) {
+                    showErrorDialog(context, 'Failed to add contact',
+                        'Contact for peer ID already exists');
+                    return;
+                  } else if (widget.settingsController.peerId == peerId) {
+                    showErrorDialog(context, 'Failed to add contact',
+                        'Cannot add self as a contact');
+                    return;
+                  }
+
+                  try {
+                    Contact contact =
+                        widget.settingsController.addContact(nickname, peerId);
+
+                    widget.telepathy.startSession(contact: contact);
+
+                    _nicknameInput.clear();
+                    _peerIdInput.clear();
+                    Navigator.pop(context);
+                  } on DartError catch (_) {
+                    showErrorDialog(
+                        context, 'Failed to add contact', 'Invalid peer ID');
+                  }
+                },
+              ),
+            ),
+          ],
+        ),
+      );
+    } else {
+      var contacts = widget.settingsController.contacts.values
+          .where((c) => !_peerIds.contains(c.peerId()));
+
+      return Container(
+        padding: const EdgeInsets.symmetric(vertical: 15.0, horizontal: 20.0),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.secondaryContainer,
+          borderRadius: BorderRadius.circular(10.0),
+        ),
+        constraints: const BoxConstraints(maxWidth: 300),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                const Padding(
+                  padding: EdgeInsetsGeometry.directional(bottom: 7),
+                  child: Text("Add Room", style: TextStyle(fontSize: 20)),
+                ),
+                const SizedBox(width: 12),
+                IconButton(
+                  onPressed: () {
+                    // TODO handle paste room details from URL
+                  },
+                  icon: SvgPicture.asset('assets/icons/Copy.svg'),
+                  constraints:
+                      const BoxConstraints(maxWidth: 32, maxHeight: 32),
+                  padding: EdgeInsetsGeometry.directional(
+                      start: 7, top: 7, end: 7, bottom: 7),
+                )
+              ],
+            ),
+            const SizedBox(height: 15),
+            TextInput(controller: _nicknameInput, labelText: 'Nickname'),
+            const SizedBox(height: 15),
+            Row(
+              children: [
+                Expanded(
+                  child: TextInput(
+                    controller: _peerIdInput,
+                    labelText: 'Peer ID',
+                    hintText: 'string encoded peer ID',
+                    obscureText: true,
+                  ),
+                ),
+                const SizedBox(width: 16),
+                IconButton(
+                  icon: SvgPicture.asset('assets/icons/Plus.svg'),
+                  onPressed: () {
+                    if (_peerIds.contains(_peerIdInput.text)) {
+                      return;
+                    } else if (validatePeerId(peerId: _peerIdInput.text)) {
+                      _peerIds.add(_peerIdInput.text);
+                      _peerIdInput.clear();
+                    } else {
+                      showErrorDialog(context, 'Failed to add Peer ID',
+                          'The provided Peer ID is invalid');
+                    }
+                  },
+                ),
+              ],
+            ),
+            if (contacts.isNotEmpty) const SizedBox(height: 15),
+            if (contacts.isNotEmpty)
+              Row(
+                children: [
+                  Expanded(
+                    child: DropDown(
+                      items: contacts
+                          .map((c) => (c.peerId(), c.nickname()))
+                          .toList(),
+                      initialSelection: contacts.elementAtOrNull(0)?.peerId(),
+                      onSelected: (selected) => {
+                        setState(() {
+                          selectedPeer = selected;
+                        })
+                      },
+                      label: "Contact",
+                      width: 250,
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  IconButton(
+                    icon: SvgPicture.asset('assets/icons/Plus.svg'),
+                    onPressed: () {
+                      String? peerId =
+                          selectedPeer ?? contacts.elementAtOrNull(0)?.peerId();
+                      if (peerId != null && !_peerIds.contains(peerId)) {
+                        setState(() {
+                          _peerIds.add(peerId);
+                        });
+                      }
+                    },
+                  ),
+                ],
+              ),
+            const SizedBox(height: 26),
+            Center(
+                child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('Peers: ${_peerIds.length}'),
+                const SizedBox(width: 24),
+                Button(
+                  text: 'Add room',
+                  onPressed: () async {
+                    String nickname = _nicknameInput.text;
+
+                    try {
+                      if (nickname.isEmpty) {
+                        showErrorDialog(context, 'Failed to add room',
+                            'Nickname cannot be empty');
+                        return;
+                      } else if (_peerIds.isEmpty) {
+                        showErrorDialog(context, 'Failed to add room',
+                            'Peer IDs cannot be empty');
+                        return;
+                      }
+
+                      // the room must always contain the current profile's peer id
+                      if (!_peerIds
+                          .contains(widget.settingsController.peerId)) {
+                        _peerIds.add(widget.settingsController.peerId);
+                      }
+
+                      if (widget.settingsController.rooms.keys
+                          .contains(roomHash(peers: _peerIds))) {
+                        showErrorDialog(context, 'Failed to add room',
+                            'It appears this room already exists');
+                        return;
+                      }
+
+                      widget.settingsController.addRoom(nickname, _peerIds);
+                      _nicknameInput.clear();
+                      setState(() {
+                        _peerIds.clear();
+                      });
+                      Navigator.pop(context);
+                    } on DartError catch (error) {
+                      showErrorDialog(context, 'Failed to add room',
+                          'Invalid peer ID: ${error.message}');
+                    }
+                  },
+                )
+              ],
+            )),
+          ],
+        ),
+      );
+    }
+  }
+}
