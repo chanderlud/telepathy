@@ -71,6 +71,8 @@ pub(crate) const KEEP_ALIVE: Duration = Duration::from_secs(10);
 pub(crate) const CHANNEL_SIZE: usize = 2_400;
 /// the protocol identifier for Telepathy
 const CHAT_PROTOCOL: StreamProtocol = StreamProtocol::new("/telepathy/0.0.1");
+/// Maximum allowed size for a single length-delimited control/message frame on the session stream.
+const SESSION_MAX_FRAME_LENGTH: usize = 1024 * 1024 * 1024;
 
 /// the public API for flutter
 #[frb(opaque)]
@@ -338,6 +340,16 @@ impl Telepathy {
 
     /// Sends a chat message
     pub async fn send_chat(&self, message: &mut ChatMessage) -> std::result::Result<(), DartError> {
+        if message
+            .attachments
+            .iter()
+            .map(|a| a.data.len())
+            .sum::<usize>()
+            > SESSION_MAX_FRAME_LENGTH
+        {
+            return Err("attachments too large".to_string().into());
+        }
+
         let Some(state) = self
             .inner
             .session_states
@@ -495,6 +507,7 @@ pub(crate) struct EarlyCallState {
     input_config: SupportedStreamConfig,
     #[cfg(not(target_family = "wasm"))]
     input_device: Device,
+    input_channels: usize,
 }
 
 impl EarlyCallState {

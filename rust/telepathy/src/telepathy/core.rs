@@ -20,8 +20,8 @@ use crate::telepathy::utils::{
 };
 use crate::telepathy::{
     CHAT_PROTOCOL, DeviceName, EarlyCallState, HELLO_TIMEOUT, KEEP_ALIVE, OptionalCallArgs,
-    RoomConnection, RoomMessage, RoomState, SessionState, StartScreenshare,
-    StatisticsCollectorState,
+    RoomConnection, RoomMessage, RoomState, SESSION_MAX_FRAME_LENGTH, SessionState,
+    StartScreenshare, StatisticsCollectorState,
 };
 use crate::telepathy::{ConnectionState, Result};
 use atomic_float::AtomicF32;
@@ -689,7 +689,7 @@ where
         let mut keep_alive = interval(KEEP_ALIVE);
         // the length delimited transport used for the session
         let mut transport = LengthDelimitedCodec::builder()
-            .max_frame_length(usize::MAX)
+            .max_frame_length(SESSION_MAX_FRAME_LENGTH)
             .length_field_type::<u64>()
             .new_framed(stream.compat());
 
@@ -796,6 +796,11 @@ where
 
                 match result? {
                     Message::Hello { ringtone, audio_header, room_hash } => {
+                        if !audio_header.is_valid() {
+                            warn!("received invalid audio header from {}", contact.nickname);
+                            return Ok(false);
+                        }
+
                         remote_audio_header = audio_header;
                         room_hash_option = room_hash;
                         if self.core_state.play_custom_ringtones.load(Relaxed) {

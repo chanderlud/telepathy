@@ -3,7 +3,6 @@ use crate::audio::resampler_factory;
 use crate::error::{DartError, Error, ErrorKind};
 use crate::frb_generated::FLUTTER_RUST_BRIDGE_HANDLER;
 use crate::telepathy::DeviceName;
-use crate::telepathy::messages::AudioHeader;
 use crate::telepathy::utils::{SendStream, db_to_multiplier, get_output_device};
 use atomic_float::AtomicF32;
 use core::time::Duration;
@@ -127,6 +126,40 @@ struct AudioBuffer {
     condvar: Condvar,
 }
 
+struct AudioHeader {
+    channels: u32,
+    sample_rate: u32,
+    sample_format: SampleFormat,
+}
+
+impl TryFrom<&[u8]> for AudioHeader {
+    type Error = ();
+
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+        if value.len() < 44 {
+            return Err(());
+        }
+
+        let bits_per_sample = u16::from_le_bytes([value[34], value[35]]);
+        let audio_format = u16::from_le_bytes([value[20], value[21]]);
+
+        let sample_format = match (audio_format, bits_per_sample) {
+            (1, 8) => SampleFormat::U8,
+            (1, 16) => SampleFormat::I16,
+            (1, 32) => SampleFormat::I32,
+            (3, 32) => SampleFormat::F32,
+            (3, 64) => SampleFormat::F64,
+            _ => return Err(()),
+        };
+
+        Ok(Self {
+            channels: u16::from_le_bytes([value[22], value[23]]) as u32,
+            sample_rate: u32::from_le_bytes([value[24], value[25], value[26], value[27]]),
+            sample_format,
+        })
+    }
+}
+
 /// loads a ringtone into a sea file for future use in the backend
 #[cfg(not(target_family = "wasm"))]
 pub async fn load_ringtone(path: String) -> Result<(), DartError> {
@@ -180,21 +213,17 @@ async fn play_sound(
     let output_config = output_device.default_output_config()?;
 
     // parse the input spec
-    let mut spec = AudioHeader::from(&bytes[0..44]);
+    let spec_result = AudioHeader::try_from(&bytes[0..44]);
+    let is_valid_wav = spec_result.is_ok();
+    let mut spec = spec_result.unwrap_or(AudioHeader {
+        channels: 0,
+        sample_rate: 0,
+        sample_format: SampleFormat::I16,
+    });
     let mut samples = None;
     let mut decoder_handle = None;
-
-    let sample_format = if spec.is_valid() {
-        // match the correct sample format
-        match spec.sample_format.as_str() {
-            "u8" => SampleFormat::U8,
-            "i16" => SampleFormat::I16,
-            "i32" => SampleFormat::I32,
-            "f32" => SampleFormat::F32,
-            "f64" => SampleFormat::F64,
-            _ => return Err(ErrorKind::UnknownSampleFormat.into()),
-        }
-    } else {
+    // if not valid wav, try to handle as SEA codec file
+    if !is_valid_wav {
         let (input_sender, input_receiver) = unbounded();
         let (output_sender, output_receiver) = unbounded();
         let input_sender = input_sender.to_async();
@@ -227,8 +256,7 @@ async fn play_sound(
         }
 
         samples = Some((output_receiver, sample_count));
-        SampleFormat::I16 // codec mode is 16 bit only
-    };
+    }
 
     // the resampling ratio used by the processor
     let ratio = output_config.sample_rate().0 as f64 / spec.sample_rate as f64;
@@ -325,7 +353,7 @@ async fn play_sound(
         move || {
             processor(
                 (samples.is_none().then_some(bytes), samples),
-                sample_format,
+                spec.sample_format,
                 spec,
                 output_volume,
                 sender,
@@ -592,15 +620,15 @@ async fn wav_to_sea(bytes: &[u8], residual_bits: f32) -> Result<Vec<u8>, Error> 
         return Err(ErrorKind::InvalidWav.into());
     }
 
-    let spec = AudioHeader::from(&bytes[0..44]);
+    let spec = AudioHeader::try_from(&bytes[0..44]).map_err(|_| ErrorKind::InvalidWav)?;
     let channels = spec.channels;
     let sample_rate = spec.sample_rate;
 
-    let sample_size = match spec.sample_format.as_str() {
-        "u8" => 1,
-        "i16" => 2,
-        "i32" | "f32" => 4,
-        "f64" => 8,
+    let sample_size = match spec.sample_format {
+        SampleFormat::U8 => 1,
+        SampleFormat::I16 => 2,
+        SampleFormat::I32 | SampleFormat::F32 => 4,
+        SampleFormat::F64 => 8,
         _ => 1,
     };
 
@@ -635,14 +663,14 @@ async fn wav_to_sea(bytes: &[u8], residual_bits: f32) -> Result<Vec<u8>, Error> 
     let mut buffer = [0; FRAME_SIZE];
 
     for chunk in bytes[44..].chunks(FRAME_SIZE * sample_size) {
-        let written = match spec.sample_format.as_str() {
-            "u8" => {
+        let written = match spec.sample_format {
+            SampleFormat::U8 => {
                 for (j, sample) in chunk.iter().enumerate() {
                     buffer[j] = ((*sample as i16) - 128) << 8;
                 }
                 chunk.len()
             }
-            "i16" => {
+            SampleFormat::I16 => {
                 for (i, sample_bytes) in chunk.chunks_exact(2).enumerate() {
                     buffer[i] = i16::from_le_bytes([sample_bytes[0], sample_bytes[1]]);
                 }

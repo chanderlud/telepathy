@@ -513,8 +513,7 @@ where
         input_sender: Sender<f32>,
         end_call: Arc<Notify>,
     ) -> Result<SendStream> {
-        let input_channels = call_state.local_configuration.channels as usize;
-
+        let input_channels = call_state.input_channels;
         Ok(SendStream {
             stream: call_state.input_device.build_input_stream(
                 &call_state.input_config.clone().into(),
@@ -552,7 +551,6 @@ where
         let input_config;
 
         let input_sample_rate;
-        let input_sample_format;
         let input_channels;
 
         #[cfg(not(target_family = "wasm"))]
@@ -565,7 +563,6 @@ where
             }
             info!("input_device: {:?}", input_device.name());
             input_sample_rate = input_config.sample_rate().0;
-            input_sample_format = input_config.sample_format().to_string();
             input_channels = input_config.channels() as usize;
         }
 
@@ -577,7 +574,6 @@ where
                 return Err(ErrorKind::NoInputDevice.into());
             }
 
-            input_sample_format = String::from("f32");
             input_channels = 1; // only ever 1 channel on web
         }
 
@@ -587,9 +583,7 @@ where
         let config_residual_bits = self.core_state.codec_config.residual_bits.load(Relaxed);
 
         let mut local_configuration = AudioHeader {
-            channels: input_channels as u32,
             sample_rate: input_sample_rate,
-            sample_format: input_sample_format,
             codec_enabled: config_codec_enabled,
             vbr: config_vbr,
             residual_bits: config_residual_bits as f64,
@@ -608,6 +602,7 @@ where
             input_config,
             #[cfg(not(target_family = "wasm"))]
             input_device,
+            input_channels,
         })
     }
 
