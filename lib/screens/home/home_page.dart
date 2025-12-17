@@ -7,9 +7,8 @@ import 'package:telepathy/widgets/call/call_controls.dart';
 import 'package:telepathy/widgets/call/call_details_widget.dart';
 import 'package:telepathy/widgets/call/room_details_widget.dart';
 import 'package:telepathy/widgets/chat/chat_widget.dart';
-import 'package:telepathy/widgets/contacts/contacts_list.dart';
+import 'package:telepathy/widgets/contacts/sorted_contacts_list.dart';
 import 'package:telepathy/widgets/home/home_tab_view.dart';
-import 'package:telepathy/src/rust/flutter.dart';
 
 /// The main body of the app.
 class HomePage extends StatefulWidget {
@@ -122,53 +121,12 @@ class _HomePageState extends State<HomePage> {
               bottom: false,
               child: LayoutBuilder(
                   builder: (BuildContext context, BoxConstraints constraints) {
-                ListenableBuilder contactsList = ListenableBuilder(
-                    listenable: widget.settingsController,
-                    builder: (BuildContext context, Widget? child) {
-                      return ListenableBuilder(
-                          listenable: widget.stateController,
-                          builder: (BuildContext context, Widget? child) {
-                            List<Contact> contacts =
-                                widget.settingsController.contacts.values
-                                    .toList();
-
-                            // sort contacts by session status then nickname
-                            contacts.sort((a, b) {
-                              SessionStatus aStatus =
-                                  widget.stateController.sessionStatus(a);
-                              SessionStatus bStatus =
-                                  widget.stateController.sessionStatus(b);
-
-                              if (aStatus == bStatus) {
-                                return a.nickname().compareTo(b.nickname());
-                              } else if (aStatus.runtimeType ==
-                                  SessionStatus_Connected) {
-                                return -1;
-                              } else if (bStatus.runtimeType ==
-                                  SessionStatus_Connected) {
-                                return 1;
-                              } else if (aStatus.runtimeType ==
-                                  SessionStatus_Connecting) {
-                                return -1;
-                              } else if (bStatus.runtimeType ==
-                                  SessionStatus_Connecting) {
-                                return 1;
-                              } else {
-                                return 0;
-                              }
-                            });
-
-                            return ContactsList(
-                              telepathy: widget.telepathy,
-                              contacts: contacts,
-                              rooms: widget.settingsController.rooms.values
-                                  .toList(),
-                              stateController: widget.stateController,
-                              settingsController: widget.settingsController,
-                              player: widget.player,
-                            );
-                          });
-                    });
+                final Widget contactsList = SortedContactsList(
+                  telepathy: widget.telepathy,
+                  settingsController: widget.settingsController,
+                  stateController: widget.stateController,
+                  player: widget.player,
+                );
 
                 if (constraints.maxWidth > 600) {
                   return Column(
