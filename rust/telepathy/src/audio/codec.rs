@@ -1,5 +1,6 @@
+use crate::error::Error;
 use kanal::{Receiver, Sender};
-use log::{info, warn};
+use log::info;
 use sea_codec::ProcessorMessage;
 use sea_codec::codec::file::SeaFileHeader;
 use sea_codec::decoder::SeaDecoder;
@@ -12,37 +13,31 @@ pub(crate) fn encoder(
     vbr: bool,
     residual_bits: f32,
     room: bool,
-) {
+) -> Result<(), Error> {
     let settings = EncoderSettings {
-        frames_per_chunk: 480,
-        scale_factor_frames: 20,
         residual_bits,
         vbr,
         ..Default::default()
     };
-
-    if let Ok(mut encoder) = SeaEncoder::new(1, sample_rate, settings, receiver, sender) {
-        if room {
-            // skip Start state in rooms
-            encoder.state = SeaEncoderState::WritingFrames;
-        }
-
-        while encoder.encode_frame().is_ok() {}
-        info!("Encoder finished");
-    } else {
-        warn!("Encoder did not start successfully");
+    let mut encoder = SeaEncoder::new(1, sample_rate, settings, receiver, sender)?;
+    if room {
+        // skip Start state in rooms
+        encoder.state = SeaEncoderState::WritingFrames;
     }
+    // encode frames until receiver closes
+    while encoder.encode_frame().is_ok() {}
+    info!("Encoder finished");
+    Ok(())
 }
 
 pub(crate) fn decoder(
     receiver: Receiver<ProcessorMessage>,
     sender: Sender<ProcessorMessage>,
     header: Option<SeaFileHeader>,
-) {
-    if let Ok(mut decoder) = SeaDecoder::new(receiver, sender, header) {
-        while decoder.decode_frame().is_ok() {}
-        info!("Decoder finished");
-    } else {
-        warn!("Decoder did not start successfully");
-    }
+) -> Result<(), Error> {
+    let mut decoder = SeaDecoder::new(receiver, sender, header)?;
+    // decode frames until receiver closes
+    while decoder.decode_frame().is_ok() {}
+    info!("Decoder finished");
+    Ok(())
 }

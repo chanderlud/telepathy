@@ -14,7 +14,7 @@ use flutter_rust_bridge::{frb, spawn_blocking_with};
 use kanal::{Receiver, unbounded};
 #[cfg(not(target_family = "wasm"))]
 use kanal::{Sender, bounded};
-use log::error;
+use log::{debug, error};
 use nnnoiseless::FRAME_SIZE;
 use rubato::Resampler;
 use sea_codec::ProcessorMessage;
@@ -233,11 +233,11 @@ async fn play_sound(
             .await?;
 
         let decoder_future = spawn_blocking_with(
-            move || SeaDecoder::new(input_receiver, output_sender, None).unwrap(),
+            move || SeaDecoder::new(input_receiver, output_sender, None),
             FLUTTER_RUST_BRIDGE_HANDLER.thread_pool(),
         );
 
-        let mut decoder = decoder_future.await?;
+        let mut decoder = decoder_future.await??;
         let header = decoder.get_header();
         let sample_count =
             (bytes.len() - 14) / header.chunk_size as usize * FRAME_SIZE / header.channels as usize;
@@ -289,7 +289,7 @@ async fn play_sound(
     let output_stream = SendStream {
         stream: output_device.build_output_stream(
             &output_config.into(),
-            move |output: &mut [f32], _: &_| {
+            move |output: &mut [f32], _| {
                 #[cfg(target_family = "wasm")]
                 let mut data = {
                     audio_buffer.condvar.notify_one();
@@ -328,7 +328,6 @@ async fn play_sound(
                         // this unwrap is safe as the result was already checked for is_err
                         #[cfg(not(target_family = "wasm"))]
                         let samples = samples_result.unwrap();
-
                         #[cfg(target_family = "wasm")]
                         let samples: Vec<f32> = data.drain(..output_channels).collect();
 
@@ -368,6 +367,7 @@ async fn play_sound(
 
     select! {
         _ = cancel.notified() => {
+            debug!("reached cancel sound branch");
             // this causes the stream to begin fading out
             #[cfg(not(target_family = "wasm"))]
             processed_sender.close()?;
@@ -378,6 +378,7 @@ async fn play_sound(
             sleep(Duration::from_secs(1)).await;
         }
         result = &mut processor_future => {
+            debug!("processor finished: {:?}", result);
             // keep track of the return value
             processor_join = Some(result);
             #[cfg(target_family = "wasm")]
@@ -453,13 +454,13 @@ fn processor(
         .as_ref()
         .map(|bytes| bytes[44..].chunks(FRAME_SIZE * sample_size));
 
-    loop {
+    'outer: loop {
         match (byte_chunks.as_mut(), samples.as_ref()) {
             (None, Some((samples, _))) => {
                 let samples = if let Ok(ProcessorMessage::Samples(samples)) = samples.recv() {
                     samples
                 } else {
-                    break;
+                    break 'outer;
                 };
 
                 let scale = 1_f32 / i16::MAX as f32;
@@ -475,7 +476,7 @@ fn processor(
                 let chunk = if let Some(chunk) = chunks.next() {
                     chunk
                 } else {
-                    break;
+                    break 'outer;
                 };
 
                 match sample_format {
@@ -528,7 +529,7 @@ fn processor(
                     _ => return Err(ErrorKind::UnknownSampleFormat.into()),
                 }
             }
-            _ => break,
+            _ => break 'outer,
         }
 
         for channel in pre_buf.iter_mut() {
@@ -578,13 +579,15 @@ fn processor(
             #[cfg(not(target_family = "wasm"))]
             {
                 let buffer = mem::take(&mut out_buf);
-                processed_sender.send(buffer)?;
+                if processed_sender.send(buffer).is_err() {
+                    break 'outer;
+                }
             }
 
             #[cfg(target_family = "wasm")]
             {
                 if audio_buffer.canceled.load(Relaxed) {
-                    break;
+                    break 'outer;
                 }
 
                 // enforce bounding on the buffer
@@ -601,15 +604,14 @@ fn processor(
                     data.append(&mut buffer);
                 } else {
                     error!("failed to lock audio buffer");
-                    break;
+                    break 'outer;
                 }
             }
         }
     }
 
     #[cfg(not(target_family = "wasm"))]
-    processed_sender.close()?;
-
+    let _ = processed_sender.close();
     Ok(())
 }
 
@@ -718,9 +720,10 @@ mod tests {
 
         let mut player = super::SoundPlayer::new(0.1);
         let handle = player.play(sea_bytes).await;
+        handle.cancel();
 
         sleep(std::time::Duration::from_secs(2)).await;
-        handle.cancel();
+        // handle.cancel();
         sleep(std::time::Duration::from_secs(1)).await;
     }
 

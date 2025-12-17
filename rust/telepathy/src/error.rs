@@ -2,6 +2,7 @@ use std::array::TryFromSliceError;
 use std::fmt::{Display, Formatter};
 use std::net::AddrParseError;
 
+use crate::BehaviourEvent;
 use cpal::{BuildStreamError, DefaultStreamConfigError, DevicesError, PlayStreamError};
 #[cfg(target_family = "wasm")]
 use flutter_rust_bridge::for_generated::futures::channel::oneshot::Canceled;
@@ -10,10 +11,9 @@ use libp2p::swarm::{DialError, SwarmEvent};
 use libp2p::{TransportBuilderError, TransportError};
 use libp2p_stream::{AlreadyRegistered, OpenStreamError};
 use rubato::{ResampleError, ResamplerConstructionError};
+use sea_codec::codec::common::SeaError;
 use tokio::task::JoinError;
 use tokio::time::error::Elapsed;
-
-use crate::BehaviourEvent;
 
 /// generic error type for Telepathy
 #[derive(Debug)]
@@ -46,6 +46,7 @@ pub(crate) enum ErrorKind {
     IdentityParse(ParseError),
     Transport(TransportError<std::io::Error>),
     AlreadyRegistered(AlreadyRegistered),
+    SeaError(SeaError),
     #[cfg(target_family = "wasm")]
     Canceled(Canceled),
     TransportBuildError(TransportBuilderError),
@@ -291,6 +292,14 @@ impl From<wasm_bindgen::JsValue> for Error {
     }
 }
 
+impl From<SeaError> for Error {
+    fn from(err: SeaError) -> Self {
+        Self {
+            kind: ErrorKind::SeaError(err),
+        }
+    }
+}
+
 impl From<ErrorKind> for Error {
     fn from(kind: ErrorKind) -> Self {
         Self { kind }
@@ -328,6 +337,7 @@ impl Display for Error {
                 ErrorKind::IdentityParse(ref err) => format!("Identity parse error: {}", err),
                 ErrorKind::Transport(ref err) => format!("Transport error: {}", err),
                 ErrorKind::AlreadyRegistered(ref err) => format!("Already registered: {}", err),
+                ErrorKind::SeaError(ref err) => format!("Sea error: {err:?}"),
                 #[cfg(target_family = "wasm")]
                 ErrorKind::Canceled(ref err) => format!("Canceled: {}", err),
                 ErrorKind::TransportBuildError(ref err) =>

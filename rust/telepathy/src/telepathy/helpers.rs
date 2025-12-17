@@ -361,7 +361,7 @@ where
                         vbr,
                         residual_bits,
                         is_room,
-                    );
+                    )
                 },
                 FLUTTER_RUST_BRIDGE_HANDLER.thread_pool(),
             );
@@ -445,7 +445,7 @@ where
                         network_output_receiver.to_sync(),
                         decoded_output_sender.to_sync(),
                         header,
-                    );
+                    )
                 },
                 FLUTTER_RUST_BRIDGE_HANDLER.thread_pool(),
             ));
@@ -726,7 +726,7 @@ pub(crate) struct OutputHelper {
     sender: Option<AsyncSender<ProcessorMessage>>,
     stream: SendStream,
     processor_handle: JoinHandle<Result<()>>,
-    decoder_handle: Option<JoinHandle<()>>,
+    decoder_handle: Option<JoinHandle<Result<()>>>,
 }
 
 impl OutputHelper {
@@ -737,7 +737,7 @@ impl OutputHelper {
     pub(crate) async fn join(self) -> Result<()> {
         self.processor_handle.await??;
         if let Some(handle) = self.decoder_handle {
-            handle.await?;
+            handle.await??;
         }
         drop(self.stream);
         Ok(())
@@ -748,7 +748,7 @@ pub(crate) struct InputHelper {
     receiver: Option<AsyncReceiver<ProcessorMessage>>,
     sender: Option<Sender<f32>>,
     processor_handle: JoinHandle<Result<()>>,
-    encoder_handle: Option<JoinHandle<()>>,
+    encoder_handle: Option<JoinHandle<Result<()>>>,
 }
 
 impl InputHelper {
@@ -772,7 +772,7 @@ impl InputHelper {
         }
 
         if let Some(handle) = self.encoder_handle {
-            handle.await?;
+            handle.await??;
         }
         Ok(())
     }
