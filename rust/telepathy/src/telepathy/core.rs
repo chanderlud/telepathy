@@ -1056,20 +1056,12 @@ where
             )
             .await?;
 
-        #[cfg(not(target_family = "wasm"))]
         let input_stream =
             self.setup_input_stream(&call_state, input_helper.sender(), end_call.clone())?;
 
-        // play the input stream (non web)
+        // play the input stream
         #[cfg(not(target_family = "wasm"))]
         input_stream.stream.play()?;
-        // play the input stream (web)
-        #[cfg(target_family = "wasm")]
-        if let Some(web_input) = self.web_input.lock().await.as_ref() {
-            web_input.resume();
-        } else {
-            return Err(ErrorKind::NoInputDevice.into());
-        }
 
         let statistics_handle = spawn(statistics_collector(
             statistics_state,
@@ -1152,23 +1144,23 @@ where
             stop_io.cancel();
         }
 
+        debug!("starting call teardown");
         // on ios the audio session must be deactivated
         #[cfg(target_os = "ios")]
         deactivate_audio_session();
-
-        #[cfg(target_family = "wasm")]
-        {
-            // drop the web input to free resources and stop the input processor
-            *self.web_input.lock().await = None;
+        // drop input stream to stop input processor
+        cfg_if::cfg_if! {
+            if #[cfg(target_family = "wasm")] {
+                *self.web_input.lock().await = None;
+            } else {
+                drop(input_stream);
+            }
         }
-
-        debug!("starting call teardown");
-        drop(input_stream);
+        // join background tasks
         statistics_handle.await?;
         input_helper.join().await?;
         output_helper.join().await?;
         debug!("finished call teardown");
-
         Ok(())
     }
 
@@ -1311,20 +1303,12 @@ where
             )
             .await?;
 
-        #[cfg(not(target_family = "wasm"))]
         let input_stream =
             self.setup_input_stream(&call_state, input_helper.sender(), end_call.clone())?;
 
-        // play the input stream (non web)
+        // play the input stream
         #[cfg(not(target_family = "wasm"))]
         input_stream.stream.play()?;
-        // play the input stream (web)
-        #[cfg(target_family = "wasm")]
-        if let Some(web_input) = self.web_input.lock().await.as_ref() {
-            web_input.resume();
-        } else {
-            return Err(ErrorKind::NoInputDevice.into());
-        }
 
         let input_handle = spawn(audio_input(
             input_helper.receiver(),
@@ -1404,6 +1388,17 @@ where
 
         // tear down processing stack
         debug!("starting to tear down room processing stack");
+        // on ios the audio session must be deactivated
+        #[cfg(target_os = "ios")]
+        deactivate_audio_session();
+        // drop input stream to stop input processor
+        cfg_if::cfg_if! {
+            if #[cfg(target_family = "wasm")] {
+                *self.web_input.lock().await = None;
+            } else {
+                drop(input_stream);
+            }
+        }
         stop_io.cancel();
         // join input IO task
         input_handle.await??;

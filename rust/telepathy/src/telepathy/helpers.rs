@@ -531,6 +531,23 @@ where
         })
     }
 
+    /// helper method to start the web input
+    /// mirrors the non-web API for code reusability
+    #[cfg(target_family = "wasm")]
+    pub(crate) fn setup_input_stream(
+        &self,
+        _call_state: &EarlyCallState,
+        _input_sender: Sender<f32>,
+        _end_call: Arc<Notify>,
+    ) -> Result<()> {
+        if let Some(web_input) = self.web_input.blocking_lock().as_ref() {
+            web_input.resume();
+            Ok(())
+        } else {
+            Err(ErrorKind::NoInputDevice.into())
+        }
+    }
+
     /// helper method to set up EarlyCallState
     pub(crate) async fn setup_call(&self, peer: PeerId) -> Result<EarlyCallState> {
         // if there is an early room state, use it w/ the real peer id
@@ -634,30 +651,28 @@ where
 
     /// helper method to load pre-encoded ringtone bytes
     pub(crate) async fn load_ringtone(&self) -> Option<Vec<u8>> {
-        #[cfg(not(target_family = "wasm"))]
-        if self.core_state.send_custom_ringtone.load(Relaxed) {
-            match File::open("ringtone.sea").await {
-                Ok(mut file) => {
-                    let mut buffer = Vec::new();
+        cfg_if::cfg_if! {
+            if #[cfg(target_family = "wasm")] {
+                None
+            } else {
+                match File::open("ringtone.sea").await {
+                    Ok(mut file) => {
+                        let mut buffer = Vec::new();
 
-                    if let Err(error) = file.read_to_end(&mut buffer).await {
-                        error!("failed to read ringtone: {:?}", error);
+                        if let Err(error) = file.read_to_end(&mut buffer).await {
+                            error!("failed to read ringtone: {:?}", error);
+                            None
+                        } else {
+                            Some(buffer)
+                        }
+                    }
+                    Err(error) => {
+                        error!("failed to open ringtone: {:?}", error);
                         None
-                    } else {
-                        Some(buffer)
                     }
                 }
-                Err(error) => {
-                    error!("failed to open ringtone: {:?}", error);
-                    None
-                }
             }
-        } else {
-            None
         }
-
-        #[cfg(target_family = "wasm")]
-        None
     }
 
     /// helper method to check if a peer is in the current room
