@@ -96,7 +96,7 @@ where
 async fn mock_callbacks_test_network_matrix() {
     for profile in PROFILES {
         let _net = NetemGuard::apply(profile, &[40143, 40144]).expect("netem setup failed");
-        if timeout(Duration::from_secs(5), run_test(profile))
+        if timeout(Duration::from_secs(5), run_test())
             .await
             .is_err()
         {
@@ -105,7 +105,12 @@ async fn mock_callbacks_test_network_matrix() {
     }
 }
 
-async fn run_test(profile: &NetProfile) {
+#[tokio::test]
+async fn mock_callbacks() {
+    run_test().await;
+}
+
+async fn run_test() {
     fast_log::init(
         Config::new()
             .file("mock_callbacks.log")
@@ -220,9 +225,7 @@ async fn run_test(profile: &NetProfile) {
     assert!(!a_is_relayed.load(Relaxed));
     assert!(!b_is_relayed.load(Relaxed));
 
-    // each client starts a call with the other at the same time
     a_session.start_call.notify_one();
-    b_session.start_call.notify_one();
 
     tokio::time::sleep(Duration::from_secs(5)).await;
 

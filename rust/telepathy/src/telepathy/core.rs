@@ -816,8 +816,8 @@ where
                     // the call is part of a room, but the client is not in the room
                     write_message(transport, &Message::Reject).await?;
                     return Ok(true);
-                } else if self.core_state.in_call.load(Relaxed) {
-                    // do not accept another call if already in one
+                } else if self.is_call_active().await {
+                    // do not accept another call if already active
                     write_message(transport, &Message::Busy).await?;
                     return Ok(true);
                 } else {
@@ -981,14 +981,12 @@ where
         call_state: EarlyCallState,
     ) -> Result<()> {
         let stream = state.open_stream(control, &call_state).await?;
-
+        // stop_io must always cancel, even when the call fails
+        let stop_io = CancellationToken::new();
         // change the app call state
         self.core_state.in_call.store(true, Relaxed);
         // show the overlay
         self.overlay.show();
-
-        // stop_io must notify when the call ends, so it is external to the call function
-        let stop_io = CancellationToken::new();
 
         let result = self
             .call(
@@ -1168,6 +1166,7 @@ where
         }
 
         debug!("starting call teardown");
+        drop(input_stream);
         statistics_handle.await?;
         input_helper.join().await?;
         output_helper.join().await?;

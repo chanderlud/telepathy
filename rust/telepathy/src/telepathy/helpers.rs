@@ -34,7 +34,7 @@ use libp2p::swarm::SwarmEvent;
 use libp2p::tcp;
 use libp2p::{Multiaddr, PeerId, Swarm, dcutr, identify, noise, ping, yamux};
 use libp2p_stream::Control;
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use nnnoiseless::DenoiseState;
 use sea_codec::ProcessorMessage;
 use sea_codec::codec::file::SeaFileHeader;
@@ -735,11 +735,13 @@ impl OutputHelper {
     }
 
     pub(crate) async fn join(self) -> Result<()> {
+        drop(self.stream);
+        debug!("joining output processor");
         self.processor_handle.await??;
         if let Some(handle) = self.decoder_handle {
+            debug!("joining decoder");
             handle.await??;
         }
-        drop(self.stream);
         Ok(())
     }
 }
@@ -761,6 +763,7 @@ impl InputHelper {
     }
 
     pub(crate) async fn join(self) -> Result<()> {
+        debug!("joining input processor");
         match self.processor_handle.await? {
             Ok(()) => (),
             Err(error) => match error.kind {
@@ -772,6 +775,7 @@ impl InputHelper {
         }
 
         if let Some(handle) = self.encoder_handle {
+            debug!("joining encoder");
             handle.await??;
         }
         Ok(())
