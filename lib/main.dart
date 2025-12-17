@@ -109,6 +109,7 @@ Future<void> main(List<String> args) async {
 
     if (navigatorKey.currentState == null ||
         !navigatorKey.currentState!.mounted) {
+      handle.cancel();
       return false;
     }
 

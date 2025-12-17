@@ -26,6 +26,7 @@ class AudioDevices extends ChangeNotifier {
   @override
   void dispose() {
     periodicTimer?.cancel();
+    periodicTimer = null;
     super.dispose();
   }
 
@@ -50,6 +51,7 @@ class AudioDevices extends ChangeNotifier {
   }
 
   void startUpdates() {
+    periodicTimer?.cancel();
     periodicTimer = Timer.periodic(const Duration(milliseconds: 500), (timer) {
       updateDevices();
     });
@@ -57,6 +59,7 @@ class AudioDevices extends ChangeNotifier {
 
   void pauseUpdates() {
     periodicTimer?.cancel();
+    periodicTimer = null;
   }
 }
 

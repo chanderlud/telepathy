@@ -91,8 +91,8 @@ class ContactFormState extends State<ContactForm> {
                     showErrorDialog(context, 'Failed to add contact',
                         'Nickname and peer id cannot be empty');
                     return;
-                  } else if (widget.settingsController.contacts.keys
-                      .contains(peerId)) {
+                  } else if (widget.settingsController.contacts.values
+                      .any((c) => c.peerId() == peerId)) {
                     showErrorDialog(context, 'Failed to add contact',
                         'Contact for peer ID already exists');
                     return;

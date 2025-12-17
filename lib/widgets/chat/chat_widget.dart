@@ -60,7 +60,9 @@ class ChatWidgetState extends State<ChatWidget> {
     if (!widget.chatStateController.active) return;
     if (text.isEmpty && widget.chatStateController.attachments.isEmpty) return;
 
-    Contact contact = widget.stateController.activeContact!;
+    final Contact? contact = widget.stateController.activeContact;
+    // Chat is only supported for direct contact calls right now (not rooms).
+    if (contact == null) return;
 
     try {
       ChatMessage message = widget.telepathy.buildChat(
@@ -79,16 +81,17 @@ class ChatWidgetState extends State<ChatWidget> {
   }
 
   void _onStateControllerChange() {
-    if (widget.stateController.isCallActive ==
-        widget.chatStateController.active) {
+    // Only enable chat when a direct contact is active.
+    final bool desiredActive = widget.stateController.activeContact != null;
+
+    if (desiredActive == widget.chatStateController.active) {
       return;
-    } else if (!widget.stateController.isCallActive &&
-        widget.chatStateController.active) {
+    } else if (!desiredActive && widget.chatStateController.active) {
       widget.chatStateController.clearState();
     }
 
     setState(() {
-      widget.chatStateController.active = widget.stateController.isCallActive;
+      widget.chatStateController.active = desiredActive;
     });
   }
 
