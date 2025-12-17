@@ -96,10 +96,7 @@ where
 async fn mock_callbacks_test_network_matrix() {
     for profile in PROFILES {
         let _net = NetemGuard::apply(profile, &[40143, 40144]).expect("netem setup failed");
-        if timeout(Duration::from_secs(5), run_test())
-            .await
-            .is_err()
-        {
+        if timeout(Duration::from_secs(5), run_test()).await.is_err() {
             panic!("Test timed out with profile {profile:?}");
         }
     }

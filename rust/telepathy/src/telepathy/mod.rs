@@ -36,6 +36,7 @@ use kanal::AsyncReceiver;
 use kanal::{AsyncSender, unbounded_async};
 use libp2p::core::ConnectedPoint;
 use libp2p::identity::Keypair;
+use libp2p::multiaddr::Protocol;
 use libp2p::{PeerId, Stream, StreamProtocol};
 use libp2p_stream::Control;
 use log::{debug, error, info, warn};
@@ -43,6 +44,7 @@ use messages::{Attachment, AudioHeader, Message};
 use nnnoiseless::{FRAME_SIZE, RnnModel};
 use sockets::{Transport, TransportStream};
 use std::mem;
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
@@ -74,6 +76,8 @@ pub(crate) const CHANNEL_SIZE: usize = 2_400;
 const CHAT_PROTOCOL: StreamProtocol = StreamProtocol::new("/telepathy/0.0.1");
 /// Maximum allowed size for a single length-delimited control/message frame on the session stream.
 const SESSION_MAX_FRAME_LENGTH: usize = 1024 * 1024 * 1024;
+/// How long to attempt direct connection upgrade before falling back to a relayed option
+const DCUTR_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// the public API for flutter
 #[frb(opaque)]
@@ -711,8 +715,8 @@ pub(crate) struct ConnectionState {
     /// whether the connection is relayed
     pub(crate) relayed: bool,
 
-    /// the underlying connection details
-    pub(crate) endpoint: ConnectedPoint,
+    /// an IP address for the underlying connection, if known
+    pub(crate) remote_address: Option<IpAddr>,
 
     /// tracks failed open stream attempts
     retries: Arc<AtomicUsize>,
@@ -723,8 +727,20 @@ impl From<ConnectedPoint> for ConnectionState {
         Self {
             latency: None,
             relayed: endpoint.is_relayed(),
-            endpoint,
+            remote_address: Self::remote_address(&endpoint),
             retries: Default::default(),
         }
+    }
+}
+
+impl ConnectionState {
+    /// extract an IP address from the endpoint if possible
+    pub(crate) fn remote_address(endpoint: &ConnectedPoint) -> Option<IpAddr> {
+        let remote_address = endpoint.get_remote_address();
+        remote_address.iter().find_map(|p| match p {
+            Protocol::Ip4(ip) => Some(IpAddr::V4(ip)),
+            Protocol::Ip6(ip) => Some(IpAddr::V6(ip)),
+            _ => None,
+        })
     }
 }

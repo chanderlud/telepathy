@@ -16,12 +16,13 @@ use crate::telepathy::sockets::{
     audio_output,
 };
 use crate::telepathy::utils::{
-    loopback, read_message, statistics_collector, stream_to_audio_transport, write_message,
+    loopback, read_message, select_best_connection, statistics_collector,
+    stream_to_audio_transport, write_message,
 };
 use crate::telepathy::{
-    CHAT_PROTOCOL, DeviceName, EarlyCallState, HELLO_TIMEOUT, KEEP_ALIVE, OptionalCallArgs,
-    RoomConnection, RoomMessage, RoomState, SESSION_MAX_FRAME_LENGTH, SessionState,
-    StartScreenshare, StatisticsCollectorState,
+    CHAT_PROTOCOL, DCUTR_TIMEOUT, DeviceName, EarlyCallState, HELLO_TIMEOUT, KEEP_ALIVE,
+    OptionalCallArgs, RoomConnection, RoomMessage, RoomState, SESSION_MAX_FRAME_LENGTH,
+    SessionState, StartScreenshare, StatisticsCollectorState,
 };
 use crate::telepathy::{ConnectionState, Result};
 use atomic_float::AtomicF32;
@@ -407,7 +408,11 @@ where
                     }
                 }
                 SwarmEvent::Behaviour(BehaviourEvent::Ping(event)) => {
-                    let latency = event.result.map(|duration| duration.as_millis()).ok();
+                    let latency = event
+                        .result
+                        .as_ref()
+                        .map(|duration| duration.as_millis())
+                        .ok();
 
                     // update the latency for the peer's session
                     if let Some(state) = self.session_states.read().await.get(&event.peer) {
@@ -415,57 +420,47 @@ where
                         continue; // the remaining logic is not needed while a session is active
                     }
 
-                    // if we are the dialer & the session is still connecting, update the latency and try to choose a connection
-                    let peer_state = if let Some(state) = peer_states.get_mut(&event.peer)
-                        && state.dialer
-                    {
-                        state
-                    } else {
+                    // if the session is still connecting, update the latency and try to choose a connection
+                    let Some(peer_state) = peer_states.get_mut(&event.peer) else {
+                        warn!("Ping without state {event:?}");
+                        _ = swarm.disconnect_peer_id(event.peer);
                         continue;
                     };
 
-                    // update the latency for the peer's connections
-                    if let Some(state) = peer_state.connections.get_mut(&event.connection) {
+                    if !peer_state.dialer {
+                        continue; // the dialer chooses the connection
+                    } else if let Some(state) = peer_state.connections.get_mut(&event.connection) {
+                        // update the latency for the peer's connections
                         state.latency = latency;
+                        info!("connection states: {:?}", peer_state.connections);
                     } else {
-                        warn!(
-                            "received ping for untracked connection: {}",
-                            event.connection
-                        );
+                        warn!("ping for untracked connection: {}", event.connection);
                     }
 
-                    info!("connection states: {:?}", peer_state.connections);
-
-                    if peer_state.latencies_missing() {
+                    if peer_state.created.elapsed() > DCUTR_TIMEOUT {
+                        // give up on direct connection upgrade
+                        // fall through to connection selection
+                    } else if peer_state.latencies_missing() {
                         // only start a session if all connections have latency
                         debug!("{} waiting for all latencies", event.peer);
                         continue;
-                    } else if peer_state.relayed_only() && !peer_state.ductr_failed {
+                    } else if peer_state.relayed_only() {
                         // only start a session if there is a non-relayed connection
-                        // if ductr fails, fall back to relayed
+                        // if dcutr times out, fallback
                         debug!("{} is all relayed", event.peer);
                         continue;
                     }
 
-                    // choose the connection with the lowest latency, prioritizing non-relay connections
-                    let connection = peer_state.connections.iter().min_by(|a, b| {
-                        match (a.1.relayed, b.1.relayed) {
-                            (false, true) => std::cmp::Ordering::Less, // prioritize non-relay connections
-                            (true, false) => std::cmp::Ordering::Greater, // prioritize non-relay connections
-                            _ => a.1.latency.cmp(&b.1.latency), // compare latencies if both have the same relay status
-                        }
-                    });
-
-                    let Some((id, state)) = connection else {
+                    // select the best connection
+                    let Some((id, state)) = select_best_connection(&peer_state.connections) else {
                         warn!("no connection available for {}", event.peer);
                         continue;
                     };
-
                     info!("using connection {state:?} [id:{id}] for {}", event.peer);
                     peer_state.selected_connection = true;
                     // close the other connections
                     for other_id in peer_state.connections.keys() {
-                        if id != other_id {
+                        if &id != other_id {
                             swarm.close_connection(*other_id);
                         }
                     }
@@ -501,16 +496,18 @@ where
                 }
                 SwarmEvent::Behaviour(BehaviourEvent::Dcutr(DcutrEvent {
                     remote_peer_id,
-                    result,
+                    result: Err(error),
                 })) => {
-                    let Some(state) = peer_states.get_mut(&remote_peer_id) else {
-                        warn!("ductr event with unknown peer {remote_peer_id}: {result:?}");
-                        continue;
-                    };
-
-                    let failed = result.is_err();
-                    info!("setting ductr_failed to {failed} for {remote_peer_id}");
-                    state.ductr_failed = failed;
+                    let has_peer_state = peer_states.get_mut(&remote_peer_id).is_some();
+                    let has_session_state = self
+                        .session_states
+                        .read()
+                        .await
+                        .get(&remote_peer_id)
+                        .is_some();
+                    warn!(
+                        "dcutr failed with {remote_peer_id} [ps={has_peer_state} ss={has_session_state}]: {error:?}"
+                    );
                 }
                 event => {
                     trace!("other swarm event: {:?}", event);
@@ -1516,7 +1513,7 @@ pub(crate) struct CoreState {
 }
 
 /// a state used for session negotiation
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct PeerState {
     /// set to true after dialing peer's identity addresses
     dialed: bool,
@@ -1527,24 +1524,31 @@ struct PeerState {
     /// a map of connections and their latencies
     connections: HashMap<ConnectionId, ConnectionState>,
 
+    /// a single connection has been selected to become a session
     selected_connection: bool,
 
-    ductr_failed: bool,
+    /// the instant the state was created
+    created: Instant,
 }
 
 impl PeerState {
     fn dialer() -> Self {
         Self {
+            dialed: false,
             dialer: true,
-            ..Default::default()
+            connections: Default::default(),
+            selected_connection: false,
+            created: Instant::now(),
         }
     }
 
     fn non_dialer(endpoint: ConnectedPoint, connection_id: ConnectionId) -> Self {
         Self {
+            dialed: false,
             dialer: false,
             connections: HashMap::from([(connection_id, endpoint.into())]),
-            ..Default::default()
+            selected_connection: false,
+            created: Instant::now(),
         }
     }
 

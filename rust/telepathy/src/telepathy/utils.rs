@@ -3,7 +3,9 @@ use crate::flutter::Statistics;
 use crate::flutter::callbacks::FrbStatisticsCallback;
 use crate::overlay::{CONNECTED, LATENCY, LOSS};
 use crate::telepathy::sockets::{Transport, TransportStream};
-use crate::telepathy::{DeviceName, StatisticsCollectorState, TRANSFER_BUFFER_SIZE};
+use crate::telepathy::{
+    ConnectionState, DeviceName, StatisticsCollectorState, TRANSFER_BUFFER_SIZE,
+};
 use bincode::config::standard;
 use bincode::{Decode, Encode, decode_from_slice, encode_to_vec};
 use cpal::traits::{DeviceTrait, HostTrait};
@@ -12,8 +14,11 @@ use flutter_rust_bridge::for_generated::futures::{Sink, SinkExt};
 use kanal::{AsyncReceiver, AsyncSender};
 use libp2p::bytes::Bytes;
 use libp2p::futures::StreamExt;
+use libp2p::swarm::ConnectionId;
 use log::debug;
 use sea_codec::ProcessorMessage;
+use std::collections::HashMap;
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::Duration;
@@ -37,6 +42,14 @@ pub(crate) struct SendStream {
 
 /// Safety: SendStream must not be used across awaits
 unsafe impl Send for SendStream {}
+
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Debug)]
+enum Locality {
+    Loopback = 0,
+    Lan = 1,
+    Public = 2,
+    Unknown = 3,
+}
 
 /// converts a decibel value to a multiplier
 pub(crate) fn db_to_multiplier(db: f32) -> f32 {
@@ -194,4 +207,59 @@ pub(crate) fn stream_to_audio_transport(stream: libp2p::Stream) -> Transport<Tra
         .max_frame_length(TRANSFER_BUFFER_SIZE)
         .length_field_type::<u16>()
         .new_framed(stream.compat())
+}
+
+fn classify_locality(addr: Option<IpAddr>) -> Locality {
+    match addr {
+        Some(IpAddr::V4(v4)) => {
+            if v4.is_loopback() {
+                Locality::Loopback
+            } else if v4.is_private() || v4.is_link_local() {
+                Locality::Lan
+            } else {
+                Locality::Public
+            }
+        }
+        Some(IpAddr::V6(v6)) => {
+            if v6.is_loopback() {
+                Locality::Loopback
+            } else if v6.is_unique_local() || v6.is_unicast_link_local() {
+                Locality::Lan
+            } else {
+                Locality::Public
+            }
+        }
+        None => Locality::Unknown,
+    }
+}
+
+/// Pick the best connection according to:
+/// - non-relayed > relayed, then loopback > lan > public > unknown, then lowest latency
+/// - retries & ipv6 status are considered last
+pub(crate) fn select_best_connection(
+    conns: &HashMap<ConnectionId, ConnectionState>,
+) -> Option<(ConnectionId, &ConnectionState)> {
+    conns
+        .iter()
+        .min_by_key(|(id, s)| {
+            // lower is better
+            let relayed_rank = if s.relayed { 1 } else { 0 };
+            let locality_rank = classify_locality(s.remote_address);
+            let latency_rank = s.latency.unwrap_or(u128::MAX);
+            let retries_rank = s.retries.load(Relaxed);
+            let is_ipv6 = if s.remote_address.is_some_and(|a| a.is_ipv6()) {
+                0
+            } else {
+                1
+            };
+            (
+                relayed_rank,
+                locality_rank,
+                latency_rank,
+                retries_rank,
+                is_ipv6,
+                **id,
+            )
+        })
+        .map(|(id, s)| (*id, s))
 }

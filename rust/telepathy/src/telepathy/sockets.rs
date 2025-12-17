@@ -177,7 +177,10 @@ pub(crate) async fn audio_output(
 
                 if len >= 16 {
                     if message.get_u32().abs_diff(timestamp(&started_at)) < MAX_AGE {
-                        if sender.try_send(ProcessorMessage::bytes(message.freeze())).is_err() {
+                        if sender
+                            .try_send(ProcessorMessage::bytes(message.freeze()))
+                            .is_err()
+                        {
                             info!("audio_output ended with closed channel");
                             break Ok(());
                         }
