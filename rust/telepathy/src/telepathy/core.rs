@@ -479,27 +479,25 @@ where
                         // the relay server sends identity events which will be caught here
                         continue;
                     };
-
-                    if peer_state.dialed || !peer_state.dialer {
+                    // skip if the peer is not the dialer or has already dialed
+                    if !peer_state.dialer || peer_state.dialed {
                         continue;
-                    } else {
-                        peer_state.dialed = true;
                     }
-
-                    info!("Identify event from {peer_id}: {info:?}");
-
-                    // for address in info.listen_addrs {
-                    //     // checks for relayed addresses which are not useful
-                    //     if address.ends_with(&Protocol::P2p(peer_id).into()) {
-                    //         continue;
-                    //     }
-                    //
-                    //     // dials the non-relayed addresses to attempt direct connections
-                    //     info!("dialing {} from identify event", address);
-                    //     if let Err(error) = swarm.dial(address) {
-                    //         error!("Error dialing {}: {}", peer_id, error);
-                    //     }
-                    // }
+                    debug!("Identify event from {peer_id}: {info:?}");
+                    peer_state.dialed = true;
+                    // in order to find the best connection between peers (i.e. LAN or localhost)
+                    // it is important to dial every non-relayed addresses they discover
+                    for address in info.listen_addrs {
+                        // ignore relayed addresses here
+                        if address.ends_with(&Protocol::P2p(peer_id).into()) {
+                            continue;
+                        }
+                        // dials the non-relayed addresses to attempt direct connections
+                        debug!("dialing {} from identify event", address);
+                        if let Err(error) = swarm.dial(address) {
+                            error!("Error dialing {peer_id}: {error}");
+                        }
+                    }
                 }
                 SwarmEvent::Behaviour(BehaviourEvent::Dcutr(DcutrEvent {
                     remote_peer_id,
