@@ -1,6 +1,3 @@
-use crate::{ProcessorMessage, codec::chunk::SeaChunk, encoder::EncoderSettings};
-use kanal::Receiver;
-use std::io::Cursor;
 use super::{
     chunk::SeaChunkType,
     common::{
@@ -10,6 +7,9 @@ use super::{
     encoder_cbr::CbrEncoder,
     encoder_vbr::VbrEncoder,
 };
+use crate::{ProcessorMessage, codec::chunk::SeaChunk, encoder::EncoderSettings};
+use kanal::Receiver;
+use std::io::Cursor;
 
 #[derive(Debug, Clone)]
 pub struct SeaFileHeader {
