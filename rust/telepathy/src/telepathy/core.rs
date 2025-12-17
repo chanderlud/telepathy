@@ -422,8 +422,7 @@ where
 
                     // if the session is still connecting, update the latency and try to choose a connection
                     let Some(peer_state) = peer_states.get_mut(&event.peer) else {
-                        warn!("Ping without state {event:?}");
-                        _ = swarm.disconnect_peer_id(event.peer);
+                        info!("Ping without state {event:?}");
                         continue;
                     };
 
