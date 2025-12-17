@@ -166,14 +166,7 @@ where
     /// Ends all sessions & restores session_states to default
     pub(crate) async fn reset_sessions(&self) {
         for (_, session) in self.session_states.write().await.drain() {
-            // stops any call
-            session.end_call.notify_one();
-            // stops the session loop
-            session.stop_session.cancel();
-            // stops any active screenshare threads
-            if let Some(notify) = session.stop_screenshare.lock().await.take() {
-                notify.notify_waiters();
-            }
+            session.teardown().await;
         }
     }
 
@@ -614,7 +607,16 @@ where
                 peer_states.remove(&peer);
             }
             Err(error) => {
-                warn!("OpenStreamError for {peer}: {error}");
+                let retries = state.retries.fetch_add(1, Relaxed);
+                if retries > 3 {
+                    warn!("giving up on opening session for {peer}");
+                    peer_states.remove(&peer);
+                    self.callbacks
+                        .session_status(SessionStatus::Inactive, peer)
+                        .await;
+                } else {
+                    warn!("OpenStreamError for {peer}: {error} [r={retries}]");
+                }
             }
         }
     }
@@ -641,10 +643,7 @@ where
 
         if let Some(old_state) = old_state_option {
             warn!("{peer} already had a session");
-            // if the session was in a call, end it so the session can end
-            old_state.end_call.notify_one();
-            // stop the session
-            old_state.stop_session.cancel();
+            old_state.teardown().await;
         }
 
         let contact = if let Some(contact) = contact_option {
@@ -698,7 +697,7 @@ where
             state.start_call.notify_one();
         }
 
-        let result = loop {
+        loop {
             let result = self
                 .session_inner(
                     &contact,
@@ -712,11 +711,11 @@ where
 
             match (result, contact.is_room_only) {
                 // the session was stopped
-                (Ok(false), _) => break Ok(false),
+                (Ok(false), _) => break,
                 // room only sessions never continue
                 (Ok(true), true) => {
                     info!("session for {} was room only", contact.peer_id);
-                    break Ok(true);
+                    break;
                 }
                 // normal session continue
                 (Ok(true), false) => {
@@ -738,26 +737,21 @@ where
                     if room_only || error.is_session_critical() {
                         // session cannot recover from these errors
                         error!("Session error for {}: {error:?}", contact.nickname);
-                        break Err(error);
+                        break;
                     } else {
                         warn!("recoverable session failure: {:?}", error);
                     }
                 }
             }
-        };
-
-        match result {
-            // session cleanup required
-            Ok(true) | Err(_) => (),
-            // the session has already been cleaned up
-            Ok(false) => {
-                warn!("Session for {} stopped", contact.nickname);
-                return;
-            }
         }
 
-        // cleanup
-        self.session_states.write().await.remove(&peer);
+        // if the state exists and has the same id, clean it up
+        // if a new session state already exists with a new ID, we don't want to clean it up
+        let mut states = self.session_states.write().await;
+        if states.get(&peer).map(|s| s.id == state.id).unwrap_or(false) {
+            states.remove(&peer);
+        }
+        drop(states);
 
         // avoid sending session statuses for dummy contacts
         if !contact.is_room_only {

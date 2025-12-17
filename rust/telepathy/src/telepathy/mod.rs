@@ -55,6 +55,7 @@ use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use utils::*;
+use uuid::Uuid;
 #[cfg(target_family = "wasm")]
 use wasmtimer::tokio::interval;
 
@@ -524,6 +525,9 @@ impl EarlyCallState {
 /// shared values for a single session
 #[derive(Debug)]
 pub(crate) struct SessionState {
+    /// identifies a unique session state
+    id: Uuid,
+
     /// signals the session to initiate a call
     start_call: Notify,
 
@@ -564,6 +568,7 @@ impl SessionState {
         let stream_channel = unbounded_async();
 
         Self {
+            id: Uuid::new_v4(),
             start_call: Notify::new(),
             stop_session: Default::default(),
             in_call: AtomicBool::new(false),
@@ -615,6 +620,17 @@ impl SessionState {
         let result = self.stream_receiver.recv().await.map_err(Into::into);
         self.wants_stream.store(false, Relaxed);
         result
+    }
+
+    async fn teardown(&self) {
+        // stops any call
+        self.end_call.notify_one();
+        // stops the session loop
+        self.stop_session.cancel();
+        // stops any active screenshare threads
+        if let Some(notify) = self.stop_screenshare.lock().await.take() {
+            notify.notify_waiters();
+        }
     }
 }
 
@@ -697,6 +713,9 @@ pub(crate) struct ConnectionState {
 
     /// the underlying connection details
     pub(crate) endpoint: ConnectedPoint,
+
+    /// tracks failed open stream attempts
+    retries: Arc<AtomicUsize>,
 }
 
 impl From<ConnectedPoint> for ConnectionState {
@@ -705,6 +724,7 @@ impl From<ConnectedPoint> for ConnectionState {
             latency: None,
             relayed: endpoint.is_relayed(),
             endpoint,
+            retries: Default::default(),
         }
     }
 }
