@@ -28,9 +28,9 @@ class RoomDetailsWidget extends StatelessWidget {
       if (contact != null) {
         return contact.nickname();
       } else if (peerId == settingsController.peerId) {
-        return "You";
+        return 'You';
       } else {
-        return "Anonymous";
+        return 'Anonymous';
       }
     }
 
@@ -49,13 +49,14 @@ class RoomDetailsWidget extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
-              child: Row(
-                children: [
-                  const Text("Room Details", style: TextStyle(fontSize: 20)),
-                ],
-              )),
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+            child: Row(
+              children: [
+                Text('Room Details', style: TextStyle(fontSize: 20)),
+              ],
+            ),
+          ),
           const SizedBox(height: 10.0),
           IconButton(
             visualDensity: VisualDensity.comfortable,
@@ -74,8 +75,8 @@ class RoomDetailsWidget extends StatelessWidget {
               otherSoundHandle = await player.play(bytes: bytes);
             },
           ),
-          Text("Online: ${online.map(getNickname).join(" ")}"),
-          Text("Offline: ${offline.map(getNickname).join("  ")}")
+          Text('Online: ${online.map(getNickname).join(' ')}'),
+          Text('Offline: ${offline.map(getNickname).join('  ')}')
         ],
       ),
     );

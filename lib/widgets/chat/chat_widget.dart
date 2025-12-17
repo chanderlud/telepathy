@@ -32,6 +32,10 @@ class ChatWidget extends StatefulWidget {
 }
 
 class ChatWidgetState extends State<ChatWidget> {
+  static const OutlineInputBorder _noBorder = OutlineInputBorder(
+    borderSide: BorderSide(color: Colors.transparent),
+  );
+
   final FocusNode _focusNode = FocusNode();
   late final ChatInputController _chatInputController;
 
@@ -126,11 +130,6 @@ class ChatWidgetState extends State<ChatWidget> {
         ListenableBuilder(
             listenable: widget.stateController,
             builder: (BuildContext context, Widget? child) {
-              const noBorder = OutlineInputBorder(
-                  borderSide: BorderSide(
-                color: Colors.transparent,
-              ));
-
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -187,10 +186,10 @@ class ChatWidgetState extends State<ChatWidget> {
                                       : 'Chat disabled',
                                   floatingLabelBehavior:
                                       FloatingLabelBehavior.never,
-                                  disabledBorder: noBorder,
-                                  border: noBorder,
-                                  focusedBorder: noBorder,
-                                  enabledBorder: noBorder,
+                                  disabledBorder: _noBorder,
+                                  border: _noBorder,
+                                  focusedBorder: _noBorder,
+                                  enabledBorder: _noBorder,
                                   contentPadding:
                                       const EdgeInsets.symmetric(horizontal: 2),
                                 ),

@@ -50,8 +50,8 @@ class ContactsList extends StatelessWidget {
               child: Row(
                 children: [
                   const Padding(
-                    padding: EdgeInsetsGeometry.directional(bottom: 2),
-                    child: Text("Contacts", style: TextStyle(fontSize: 20)),
+                    padding: EdgeInsetsDirectional.only(bottom: 2),
+                    child: Text('Contacts', style: TextStyle(fontSize: 20)),
                   ),
                   Padding(
                     padding: const EdgeInsets.only(left: 10, top: 3),
@@ -77,8 +77,12 @@ class ContactsList extends StatelessWidget {
                           maxWidth: 36,
                           maxHeight: 36,
                         ),
-                        padding: EdgeInsetsGeometry.directional(
-                            start: 1, top: 1, end: 1, bottom: 1),
+                        padding: const EdgeInsetsDirectional.only(
+                          start: 1,
+                          top: 1,
+                          end: 1,
+                          bottom: 1,
+                        ),
                         icon: SvgPicture.asset('assets/icons/Plus.svg')),
                   ),
                 ],

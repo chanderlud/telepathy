@@ -11,7 +11,7 @@ class InterfaceController with ChangeNotifier {
   int get secondaryColor => darkenColor(primaryColor, 0.1);
 
   Future<void> init() async {
-    primaryColor = options.getInt("primaryColor") ?? 0xFF5538e5;
+    primaryColor = options.getInt('primaryColor') ?? 0xFF5538e5;
     notifyListeners();
   }
 

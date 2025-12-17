@@ -77,7 +77,7 @@ class _GradientMiniLineChartPainter extends CustomPainter {
 
     // 2) Draw vertical gradient, masked to the line with srcIn
     final gradientPaint = Paint()
-      ..shader = LinearGradient(
+      ..shader = const LinearGradient(
         begin: Alignment.bottomCenter,
         end: Alignment.topCenter,
         colors: [
@@ -85,7 +85,7 @@ class _GradientMiniLineChartPainter extends CustomPainter {
           mediumColor,
           loudColor,
         ],
-        stops: const [0.0, 0.5, 1.0],
+        stops: [0.0, 0.5, 1.0],
       ).createShader(bounds)
       ..blendMode = BlendMode.srcIn;
 

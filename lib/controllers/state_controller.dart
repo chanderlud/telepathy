@@ -108,7 +108,7 @@ class StateController extends ChangeNotifier {
   }
 
   SessionStatus sessionStatus(Contact contact) {
-    return sessions[contact.peerId()] ?? SessionStatus.unknown();
+    return sessions[contact.peerId()] ?? const SessionStatus.unknown();
   }
 
   void deafen() {

@@ -15,13 +15,13 @@ class AudioLevel extends StatelessWidget {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        double threshold = level * numRectangles;
-        int maxIndex = numRectangles - 1;
+        final double threshold = level * numRectangles;
+        final int maxIndex = numRectangles - 1;
 
         // generate the rectangles
-        List<Widget> rectangles = List.generate(numRectangles, (index) {
+        final List<Widget> rectangles = List.generate(numRectangles, (index) {
           // calculate the fraction of the index in relation to the max index
-          double fraction = index / maxIndex;
+          final double fraction = index / maxIndex;
 
           return Container(
             width: 8,

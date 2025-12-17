@@ -22,7 +22,7 @@ class InterfaceSettingsState extends State<InterfaceSettings> {
   void initState() {
     super.initState();
     _primaryColorInput.text =
-        "#${widget.controller.primaryColor.toRadixString(16)}";
+        '#${widget.controller.primaryColor.toRadixString(16)}';
   }
 
   @override

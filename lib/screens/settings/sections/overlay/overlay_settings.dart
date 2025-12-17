@@ -44,7 +44,7 @@ class OverlaySettingsState extends State<OverlaySettings> {
         Row(
           children: [
             Button(
-              text: overlayVisible ? "Hide overlay" : "Show overlay",
+              text: overlayVisible ? 'Hide overlay' : 'Show overlay',
               onPressed: () {
                 if (widget.stateController.isCallActive ||
                     !widget.controller.overlayConfig.enabled) {
@@ -67,8 +67,8 @@ class OverlaySettingsState extends State<OverlaySettings> {
             const SizedBox(width: 20),
             Button(
               text: widget.controller.overlayConfig.enabled
-                  ? "Disable overlay"
-                  : "Enable overlay",
+                  ? 'Disable overlay'
+                  : 'Enable overlay',
               onPressed: () async {
                 if (widget.controller.overlayConfig.enabled) {
                   await widget.overlay.disable();

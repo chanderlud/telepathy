@@ -175,7 +175,7 @@ Future<void> main(List<String> args) async {
         return; // TODO add room leave sound
       case CallState_CallEnded():
         if (!stateController.isCallActive) {
-          DebugConsole.warn("call ended entered but there is no active call");
+          DebugConsole.warn('call ended entered but there is no active call');
           return;
         }
 

@@ -70,7 +70,7 @@ class ContactFormState extends State<ContactForm> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text("Add Contact", style: TextStyle(fontSize: 20)),
+            const Text('Add Contact', style: TextStyle(fontSize: 20)),
             const SizedBox(height: 21),
             TextInput(controller: _nicknameInput, labelText: 'Nickname'),
             const SizedBox(height: 15),
@@ -140,7 +140,7 @@ class ContactFormState extends State<ContactForm> {
               children: [
                 const Padding(
                   padding: EdgeInsetsGeometry.directional(bottom: 7),
-                  child: Text("Add Room", style: TextStyle(fontSize: 20)),
+                  child: Text('Add Room', style: TextStyle(fontSize: 20)),
                 ),
                 const SizedBox(width: 12),
                 IconButton(
@@ -150,7 +150,7 @@ class ContactFormState extends State<ContactForm> {
                   icon: SvgPicture.asset('assets/icons/Copy.svg'),
                   constraints:
                       const BoxConstraints(maxWidth: 32, maxHeight: 32),
-                  padding: EdgeInsetsGeometry.directional(
+                  padding: const EdgeInsetsGeometry.directional(
                       start: 7, top: 7, end: 7, bottom: 7),
                 )
               ],
@@ -200,7 +200,7 @@ class ContactFormState extends State<ContactForm> {
                           selectedPeer = selected;
                         })
                       },
-                      label: "Contact",
+                      label: 'Contact',
                       width: 250,
                     ),
                   ),

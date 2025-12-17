@@ -216,8 +216,8 @@ class ContactWidgetState extends State<ContactWidget> {
                   )),
             if (online) ...[
               Text((status as SessionStatus_Connected).relayed
-                  ? "relayed"
-                  : "direct"),
+                  ? 'relayed'
+                  : 'direct'),
               const SizedBox(width: 5),
               Text(status.remoteAddress),
             ],
