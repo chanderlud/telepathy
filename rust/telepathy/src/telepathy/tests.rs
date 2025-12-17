@@ -95,11 +95,13 @@ where
 #[tokio::test]
 async fn mock_callbacks_test_network_matrix() {
     for profile in PROFILES {
-        // pick ports (include relay if you want it impaired too)
         let _net = NetemGuard::apply(profile, &[40143, 40144]).expect("netem setup failed");
-
-        // run your existing test logic with timeouts
-        run_test(profile).await;
+        if timeout(Duration::from_secs(5), run_test(profile))
+            .await
+            .is_err()
+        {
+            panic!("Test timed out with profile {profile:?}");
+        }
     }
 }
 
@@ -715,14 +717,13 @@ fn cmd(args: &[&str]) -> std::io::Result<()> {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct NetProfile {
     name: &'static str,
     // tc netem args, like: ["delay","120ms","30ms","loss","5%"]
     netem_args: &'static [&'static str],
 }
 
-// keep this curated and explicit; you can go full property-testing later.
 static PROFILES: &[NetProfile] = &[
     NetProfile {
         name: "clean",
@@ -744,7 +745,6 @@ static PROFILES: &[NetProfile] = &[
         name: "reorder",
         netem_args: &["delay", "80ms", "20ms", "reorder", "15%", "50%"],
     },
-    // burst loss: Gilbert-Elliott “gemodel” exists in netem
     NetProfile {
         name: "bursty_loss",
         netem_args: &["loss", "gemodel", "2%", "20%", "10%", "10%"],
