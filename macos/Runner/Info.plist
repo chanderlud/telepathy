@@ -28,5 +28,7 @@
 	<string>MainMenu</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Find and connect to peers on your local network.</string>
 </dict>
 </plist>

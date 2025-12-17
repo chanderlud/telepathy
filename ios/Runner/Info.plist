@@ -51,5 +51,7 @@
 	</array>
     <key>NSMicrophoneUsageDescription</key>
     <string>Telepathy uses your microphone for audio calls</string>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Find and connect to peers on your local network.</string>
 </dict>
 </plist>
