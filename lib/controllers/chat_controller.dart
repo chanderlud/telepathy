@@ -7,7 +7,8 @@ import 'package:telepathy/core/utils/index.dart';
 import 'package:telepathy/src/rust/audio/player.dart';
 import 'package:telepathy/src/rust/flutter.dart';
 
-Future<Uint8List> _readFileBytes(File file) async {
+Future<Uint8List> _readFileBytes(String path) async {
+  final file = File(path);
   return await file.readAsBytes();
 }
 
@@ -70,7 +71,7 @@ class ChatStateController extends ChangeNotifier {
 
     Uint8List bytes;
     try {
-      bytes = await compute(_readFileBytes, file);
+      bytes = await compute(_readFileBytes, file.path);
     } catch (e) {
       if (navigatorKey.currentState != null &&
           navigatorKey.currentState!.mounted) {
