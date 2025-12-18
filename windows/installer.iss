@@ -2,28 +2,27 @@
 ; SEE THE DOCUMENTATION FOR DETAILS ON CREATING INNO SETUP SCRIPT FILES!
 
 #define MyAppName "Telepathy"
-#define MyAppVersion "0.1.0"
+#define MyAppVersion "2.5.1"
 #define MyAppPublisher "CFLM Studios"
 #define MyAppURL "https://chanchan.dev/telepathy"
 #define MyAppExeName "telepathy.exe"
 
 [Setup]
-; NOTE: The value of AppId uniquely identifies this application. Do not use the same AppId value in installers for other applications.
-; (To generate a new GUID, click Tools | Generate GUID inside the IDE.)
 AppId={{40DE2417-D60A-410B-B653-2F861D598310}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
-;AppVerName={#MyAppName} {#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}
-DefaultDirName={autopf}\Telepathy
+
+DefaultDirName={localappdata}\Programs\Telepathy
 DisableProgramGroupPage=yes
 LicenseFile=..\LICENSE
-; Uncomment the following line to run in non administrative install mode (install for current user only.)
-;PrivilegesRequired=lowest
-PrivilegesRequiredOverridesAllowed=dialog
+
+PrivilegesRequired=lowest
+PrivilegesRequiredOverridesAllowed=no
+
 OutputBaseFilename=telepathy_installer
 SetupIconFile=..\windows\runner\resources\app_icon.ico
 Compression=lzma
@@ -51,8 +50,8 @@ Source: "..\build\windows\x64\runner\Release\data\*"; DestDir: "{app}\data"; Fla
 ; NOTE: Don't use "Flags: ignoreversion" on any shared system files
 
 [Icons]
-Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{userprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
+Name: "{userdesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
