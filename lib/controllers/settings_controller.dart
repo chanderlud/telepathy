@@ -119,7 +119,8 @@ class SettingsController with ChangeNotifier {
       activeProfile = await createProfile('Default');
     } else {
       // if there are profiles, load the active profile or use the first profile if needed
-      activeProfile = await options.getString('activeProfile') ?? profiles.keys.first;
+      activeProfile =
+          await options.getString('activeProfile') ?? profiles.keys.first;
     }
 
     String? override = args.elementAtOrNull(0);
@@ -145,7 +146,7 @@ class SettingsController with ChangeNotifier {
     inputDevice = await options.getString('inputDevice');
     playCustomRingtones = await options.getBool('playCustomRingtones') ?? true;
     customRingtoneFile = await options.getString('customRingtoneFile');
-    denoiseModel = await options.getString('denoiseModel');
+    denoiseModel = await options.getString('denoiseModel') ?? 'Hogwash';
     efficiencyMode = await options.getBool('efficiencyMode') ?? false;
 
     networkConfig = await loadNetworkConfig();
@@ -426,7 +427,8 @@ class SettingsController with ChangeNotifier {
   Future<NetworkConfig> loadNetworkConfig() async {
     try {
       return NetworkConfig(
-        relayAddress: await options.getString('relayAddress') ?? defaultRelayAddress,
+        relayAddress:
+            await options.getString('relayAddress') ?? defaultRelayAddress,
         relayId: await options.getString('relayId') ?? defaultRelayId,
       );
     } on DartError catch (e) {
@@ -443,13 +445,15 @@ class SettingsController with ChangeNotifier {
   }
 
   Future<ScreenshareConfig> loadScreenshareConfig() async {
+    final buffer = await options.getString('screenshareConfigBuffer');
     return await ScreenshareConfig.newInstance(
-      buffer: base64Decode(await options.getString('screenshareConfigBuffer') ?? ''),
+      buffer: buffer != null ? base64Decode(buffer) : [],
     );
   }
 
   Future<void> saveScreenshareConfig() async {
-    await options.setString('screenshareConfigBuffer', base64Encode(screenshareConfig.toBytes()));
+    await options.setString(
+        'screenshareConfigBuffer', base64Encode(screenshareConfig.toBytes()));
   }
 
   Future<CodecConfig> loadCodecConfig() async {
@@ -470,17 +474,19 @@ class SettingsController with ChangeNotifier {
   Future<OverlayConfig> loadOverlayConfig() async {
     try {
       return OverlayConfig(
-        enabled: await options.getBool('overlayEnabled') ?? defaultOverlayEnabled,
+        enabled:
+            await options.getBool('overlayEnabled') ?? defaultOverlayEnabled,
         x: await options.getDouble('overlayX') ?? defaultOverlayX,
         y: await options.getDouble('overlayY') ?? defaultOverlayY,
         width: await options.getDouble('overlayWidth') ?? defaultOverlayWidth,
-        height: await options.getDouble('overlayHeight') ?? defaultOverlayHeight,
-        fontFamily:
-    await options.getString('overlayFontFamily') ?? defaultOverlayFontFamily,
-        fontColor: Color(
-            await options.getInt('overlayFontColor') ?? defaultOverlayFontColor),
-        fontHeight:
-        await options.getInt('overlayFontHeight') ?? defaultOverlayFontHeight,
+        height:
+            await options.getDouble('overlayHeight') ?? defaultOverlayHeight,
+        fontFamily: await options.getString('overlayFontFamily') ??
+            defaultOverlayFontFamily,
+        fontColor: Color(await options.getInt('overlayFontColor') ??
+            defaultOverlayFontColor),
+        fontHeight: await options.getInt('overlayFontHeight') ??
+            defaultOverlayFontHeight,
         backgroundColor: Color(await options.getInt('overlayBackgroundColor') ??
             defaultOverlayFontBackgroundColor),
       );
