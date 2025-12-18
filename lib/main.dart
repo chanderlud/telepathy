@@ -7,6 +7,7 @@ import 'package:flutter/material.dart' hide Overlay;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:shared_preferences/util/legacy_to_async_migration_util.dart';
 import 'package:telepathy/app.dart';
 import 'package:telepathy/controllers/index.dart';
 import 'package:telepathy/core/utils/index.dart';
@@ -54,6 +55,14 @@ Future<void> main(List<String> args) async {
   }
 
   const storage = FlutterSecureStorage();
+
+  final legacy = await SharedPreferences.getInstance();
+
+  await migrateLegacySharedPreferencesToSharedPreferencesAsyncIfNecessary(
+    legacySharedPreferencesInstance: legacy,
+    sharedPreferencesAsyncOptions: const SharedPreferencesOptions(),
+    migrationCompletedKey: 'prefs_migrated_to_async_v1',
+  );
   final SharedPreferencesAsync options = SharedPreferencesAsync();
 
   final SettingsController settingsController =
