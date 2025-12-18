@@ -15,7 +15,7 @@ tokio-util = { version = "0.7", features = ["codec", "compat"] }
 cpal = { version = "0.16", features = ["wasm-bindgen"] }
 log = "0.4"
 kanal = "0.1.1"
-rubato = "0.16"
+rubato = { version = "0.16", default-features = false }
 nnnoiseless = { version = "0.5", default-features = false }
 atomic_float = "1"
 flutter_rust_bridge = "=2.11.1"
