@@ -2,12 +2,11 @@ use crate::error::{Error, ErrorKind};
 use crate::flutter::Statistics;
 use crate::flutter::callbacks::FrbStatisticsCallback;
 use crate::overlay::{CONNECTED, LATENCY, LOSS};
+use crate::telepathy::messages::Message;
 use crate::telepathy::sockets::{Transport, TransportStream};
 use crate::telepathy::{
     ConnectionState, DeviceName, StatisticsCollectorState, TRANSFER_BUFFER_SIZE,
 };
-use bincode::config::standard;
-use bincode::{Decode, Encode, decode_from_slice, encode_to_vec};
 use cpal::traits::{DeviceTrait, HostTrait};
 use cpal::{Device, Host, Stream};
 use flutter_rust_bridge::for_generated::futures::{Sink, SinkExt};
@@ -17,6 +16,7 @@ use libp2p::futures::StreamExt;
 use libp2p::swarm::ConnectionId;
 use log::debug;
 use sea_codec::ProcessorMessage;
+use speedy::{Readable, Writable};
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -92,30 +92,25 @@ pub(crate) fn level_from_window(local_max: f32, max: &mut f32) -> f32 {
     }
 }
 
-/// Writes a bincode message to the stream
-pub(crate) async fn write_message<M: Encode, W>(
-    transport: &mut Transport<W>,
-    message: &M,
-) -> Result<()>
+/// Writes a message to the stream
+pub(crate) async fn write_message<W>(transport: &mut Transport<W>, message: &Message) -> Result<()>
 where
     W: AsyncWrite + Unpin,
     Transport<W>: Sink<Bytes> + Unpin,
 {
-    let buffer = encode_to_vec(message, standard())?;
-
+    let buffer = message.write_to_vec()?;
     transport
         .send(Bytes::from(buffer))
         .await
-        .map_err(|_| ErrorKind::TransportSend)
-        .map_err(Into::into)
+        .map_err(|_| ErrorKind::TransportSend.into())
 }
 
-/// Reads a bincode message from the stream
-pub(crate) async fn read_message<M: Decode<()>, R: AsyncRead + Unpin>(
+/// Reads a message from the stream
+pub(crate) async fn read_message<R: AsyncRead + Unpin>(
     transport: &mut Transport<R>,
-) -> Result<M> {
+) -> Result<Message> {
     if let Some(Ok(buffer)) = transport.next().await {
-        let (message, _) = decode_from_slice(&buffer[..], standard())?; // decode the message
+        let message = Message::read_from_buffer(&buffer[..])?;
         Ok(message)
     } else {
         Err(ErrorKind::TransportRecv.into())

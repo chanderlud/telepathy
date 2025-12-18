@@ -307,11 +307,8 @@ where
                     endpoint,
                     connection_id,
                     ..
-                } => {
-                    if peer_id == relay_identity {
-                        // ignore the relay connection
-                        continue;
-                    } else if self.session_states.read().await.contains_key(&peer_id) {
+                } if peer_id != relay_identity => {
+                    if self.session_states.read().await.contains_key(&peer_id) {
                         // TODO does this case ever hit in normal operation or does it only occur when the session is invalidated by a crash or other failure?
                         // ignore connections with peers who have a session
                         warn!("ignored connection from {} (EDGE CASE DETECTED)", peer_id);
@@ -407,10 +404,12 @@ where
                         peer_states.remove(&peer_id);
                     }
                 }
-                SwarmEvent::Behaviour(BehaviourEvent::Ping(event)) => {
+                SwarmEvent::Behaviour(BehaviourEvent::Ping(event))
+                    if event.peer != relay_identity =>
+                {
                     let Ok(latency) = event.result else {
                         warn!("unexpected ping result {:?}", event);
-                        continue
+                        continue;
                     };
 
                     // update the latency for the peer's session
@@ -467,9 +466,9 @@ where
                     peer_id,
                     info,
                     ..
-                })) => {
+                })) if peer_id != relay_identity => {
                     let Some(peer_state) = peer_states.get_mut(&peer_id) else {
-                        // the relay server sends identity events which will be caught here
+                        // peers with sessions may land here
                         continue;
                     };
                     // skip if the peer is not the dialer or has already dialed
@@ -774,7 +773,7 @@ where
                 info!("session for {} stopped", contact.nickname);
                 Ok(false)
             },
-            result = read_message::<Message, _>(transport) => {
+            result = read_message(transport) => {
                 let mut other_ringtone = None;
                 let remote_audio_header;
                 let room_hash_option;
@@ -871,7 +870,7 @@ where
                             }
                         }
                     }
-                    result = read_message::<Message, _>(transport) => {
+                    result = read_message(transport) => {
                         // always cancel prompt because there is no chance of the call succeeding now
                         if let Some(cancel) = cancel_prompt {
                             cancel.notify_one();
@@ -1253,7 +1252,7 @@ where
                     _ = write_message(transport, &Message::Goodbye { reason: None }).await;
                     break
                 }
-                result = read_message::<Message, _>(transport) => {
+                result = read_message(transport) => {
                     match result {
                         Ok(Message::Goodbye { .. }) | Err(_) => {
                             break;

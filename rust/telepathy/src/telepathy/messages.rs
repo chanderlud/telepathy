@@ -1,7 +1,7 @@
 use crate::error::Error;
-use bincode::{Decode, Encode};
+use speedy::{Readable, Writable};
 
-#[derive(Debug, Decode, Encode, Clone)]
+#[derive(Readable, Writable, Debug, Clone)]
 pub(crate) enum Message {
     Hello {
         ringtone: Option<Vec<u8>>,
@@ -41,7 +41,7 @@ impl Message {
     }
 }
 
-#[derive(Debug, Decode, Encode, Clone, Default)]
+#[derive(Readable, Writable, Debug, Clone, Default)]
 pub(crate) struct AudioHeader {
     pub(crate) sample_rate: u32,
     pub(crate) codec_enabled: bool,
@@ -55,7 +55,7 @@ impl AudioHeader {
     }
 }
 
-#[derive(Debug, Decode, Encode, Clone)]
+#[derive(Readable, Writable, Debug, Clone)]
 pub(crate) struct Attachment {
     pub(crate) name: String,
     pub(crate) data: Vec<u8>,
