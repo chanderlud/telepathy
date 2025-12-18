@@ -8,7 +8,9 @@ import 'package:telepathy/src/rust/telepathy.dart';
 import 'package:telepathy/widgets/common/index.dart';
 
 class AudioSettings extends StatefulWidget {
-  final SettingsController controller;
+  final AudioSettingsController audioSettingsController;
+  final PreferencesController preferencesController;
+  final NetworkSettingsController networkSettingsController;
   final Telepathy telepathy;
   final StateController stateController;
   final StatisticsController statisticsController;
@@ -18,7 +20,9 @@ class AudioSettings extends StatefulWidget {
 
   const AudioSettings(
       {super.key,
-      required this.controller,
+      required this.audioSettingsController,
+      required this.preferencesController,
+      required this.networkSettingsController,
       required this.telepathy,
       required this.stateController,
       required this.player,
@@ -67,22 +71,24 @@ class _AudioSettingsState extends State<AudioSettings> {
                   builder: (BuildContext context, Widget? child) {
                     String inputInitialSelection;
 
-                    if (widget.controller.inputDevice == null) {
+                    if (widget.audioSettingsController.inputDevice == null) {
                       inputInitialSelection = 'Default';
                     } else if (widget.audioDevices.inputDevices
-                        .contains(widget.controller.inputDevice)) {
-                      inputInitialSelection = widget.controller.inputDevice!;
+                        .contains(widget.audioSettingsController.inputDevice)) {
+                      inputInitialSelection =
+                          widget.audioSettingsController.inputDevice!;
                     } else {
                       inputInitialSelection = 'Default';
                     }
 
                     String outputInitialSelection;
 
-                    if (widget.controller.outputDevice == null) {
+                    if (widget.audioSettingsController.outputDevice == null) {
                       outputInitialSelection = 'Default';
-                    } else if (widget.audioDevices.outputDevices
-                        .contains(widget.controller.outputDevice)) {
-                      outputInitialSelection = widget.controller.outputDevice!;
+                    } else if (widget.audioDevices.outputDevices.contains(
+                        widget.audioSettingsController.outputDevice)) {
+                      outputInitialSelection =
+                          widget.audioSettingsController.outputDevice!;
                     } else {
                       outputInitialSelection = 'Default';
                     }
@@ -103,7 +109,8 @@ class _AudioSettingsState extends State<AudioSettings> {
                             initialSelection: inputInitialSelection,
                             onSelected: (String? value) {
                               if (value == 'Default') value = null;
-                              widget.controller.updateInputDevice(value);
+                              widget.audioSettingsController
+                                  .updateInputDevice(value);
                               widget.telepathy.setInputDevice(device: value);
                             },
                             width: width),
@@ -115,7 +122,8 @@ class _AudioSettingsState extends State<AudioSettings> {
                           initialSelection: outputInitialSelection,
                           onSelected: (String? value) {
                             if (value == 'Default') value = null;
-                            widget.controller.updateOutputDevice(value);
+                            widget.audioSettingsController
+                                .updateOutputDevice(value);
                             widget.telepathy.setOutputDevice(device: value);
                             widget.player.updateOutputDevice(name: value);
                           },
@@ -171,7 +179,7 @@ class _AudioSettingsState extends State<AudioSettings> {
           children: [
             const Text('Noise Suppression', style: TextStyle(fontSize: 18)),
             ListenableBuilder(
-                listenable: widget.controller,
+                listenable: widget.audioSettingsController,
                 builder: (BuildContext context, Widget? child) {
                   return ListenableBuilder(
                       listenable: widget.stateController,
@@ -182,13 +190,16 @@ class _AudioSettingsState extends State<AudioSettings> {
                               ('Vanilla', 'Vanilla'),
                               ('Hogwash', 'Hogwash')
                             ],
-                            initialSelection: widget.controller.useDenoise
-                                ? widget.controller.denoiseModel ?? 'Vanilla'
+                            initialSelection: widget
+                                    .audioSettingsController.useDenoise
+                                ? widget.audioSettingsController.denoiseModel ??
+                                    'Vanilla'
                                 : 'Off',
                             onSelected: (String? value) {
                               if (value == 'Off') {
                                 // save denoise option
-                                widget.controller.updateUseDenoise(false);
+                                widget.audioSettingsController
+                                    .updateUseDenoise(false);
                                 // set denoise to false
                                 widget.telepathy.setDenoise(denoise: false);
                               } else {
@@ -197,9 +208,11 @@ class _AudioSettingsState extends State<AudioSettings> {
                                 }
 
                                 // save denoise option
-                                widget.controller.updateUseDenoise(true);
+                                widget.audioSettingsController
+                                    .updateUseDenoise(true);
                                 // save denoise model
-                                widget.controller.setDenoiseModel(value);
+                                widget.audioSettingsController
+                                    .setDenoiseModel(value);
                                 // set denoise to true
                                 widget.telepathy.setDenoise(denoise: true);
                                 // set denoise model
@@ -217,12 +230,13 @@ class _AudioSettingsState extends State<AudioSettings> {
           children: [
             const Text('Play Custom Ringtones', style: TextStyle(fontSize: 18)),
             ListenableBuilder(
-                listenable: widget.controller,
+                listenable: widget.preferencesController,
                 builder: (BuildContext context, Widget? child) {
                   return CustomSwitch(
-                      value: widget.controller.playCustomRingtones,
+                      value: widget.preferencesController.playCustomRingtones,
                       onChanged: (play) {
-                        widget.controller.updatePlayCustomRingtones(play);
+                        widget.preferencesController
+                            .updatePlayCustomRingtones(play);
                         widget.telepathy.setPlayCustomRingtones(play: play);
                       });
                 }),
@@ -244,18 +258,19 @@ class _AudioSettingsState extends State<AudioSettings> {
 
                   if (result != null) {
                     String? path = result.files.single.path;
-                    widget.controller.updateCustomRingtoneFile(path);
+                    widget.preferencesController.updateCustomRingtoneFile(path);
                     widget.telepathy.setSendCustomRingtone(send: true);
                     loadRingtone(path: path!);
                   } else {
-                    widget.controller.updateCustomRingtoneFile(null);
+                    widget.preferencesController.updateCustomRingtoneFile(null);
                     widget.telepathy.setSendCustomRingtone(send: false);
                   }
                 }),
             ListenableBuilder(
-                listenable: widget.controller,
+                listenable: widget.preferencesController,
                 builder: (BuildContext context, Widget? child) {
-                  return Text(widget.controller.customRingtoneFile ?? '',
+                  return Text(
+                      widget.preferencesController.customRingtoneFile ?? '',
                       style: const TextStyle(fontSize: 16));
                 }),
           ],
@@ -263,18 +278,18 @@ class _AudioSettingsState extends State<AudioSettings> {
         const SizedBox(height: 20),
         const Text('Sound Effect Volume', style: TextStyle(fontSize: 16)),
         ListenableBuilder(
-            listenable: widget.controller,
+            listenable: widget.audioSettingsController,
             builder: (BuildContext context, Widget? child) {
               return Slider(
-                  value: widget.controller.soundVolume,
+                  value: widget.audioSettingsController.soundVolume,
                   onChanged: (value) {
-                    widget.controller.updateSoundVolume(value);
+                    widget.audioSettingsController.updateSoundVolume(value);
                     widget.player.updateOutputVolume(volume: value);
                   },
                   min: -20,
                   max: 20,
                   label:
-                      '${widget.controller.soundVolume.toStringAsFixed(2)} db');
+                      '${widget.audioSettingsController.soundVolume.toStringAsFixed(2)} db');
             }),
         const SizedBox(height: 5),
         Row(
@@ -284,21 +299,23 @@ class _AudioSettingsState extends State<AudioSettings> {
             const Text('Enable Efficiency Mode',
                 style: TextStyle(fontSize: 18)),
             ListenableBuilder(
-                listenable: widget.controller,
+                listenable: widget.preferencesController,
                 builder: (BuildContext context, Widget? child) {
                   return CustomSwitch(
-                      value: widget.controller.efficiencyMode,
+                      value: widget.preferencesController.efficiencyMode,
                       onChanged: (enabled) {
-                        widget.controller.updateEfficiencyMode(enabled);
+                        widget.preferencesController
+                            .updateEfficiencyMode(enabled);
                         widget.telepathy.setEfficiencyMode(enabled: enabled);
                       });
                 }),
           ],
         ),
         ListenableBuilder(
-          listenable: widget.controller,
+          listenable: widget.networkSettingsController,
           builder: (BuildContext context, Widget? child) {
-            final values = widget.controller.codecConfig.toValues();
+            final values =
+                widget.networkSettingsController.codecConfig.toValues();
             final bool codecEnabled = values.$1;
             final bool codecVbr = values.$2;
             final double residualBits = values.$3.clamp(1.0, 8.0).toDouble();
@@ -314,7 +331,8 @@ class _AudioSettingsState extends State<AudioSettings> {
                     CustomSwitch(
                       value: codecEnabled,
                       onChanged: (enabled) {
-                        widget.controller.updateCodecEnabled(enabled);
+                        widget.networkSettingsController
+                            .updateCodecEnabled(enabled);
                       },
                     ),
                   ],
@@ -331,7 +349,7 @@ class _AudioSettingsState extends State<AudioSettings> {
                       CustomSwitch(
                         value: codecVbr,
                         onChanged: (vbr) {
-                          widget.controller.updateCodecVbr(vbr);
+                          widget.networkSettingsController.updateCodecVbr(vbr);
                         },
                       ),
                     ],
@@ -347,7 +365,8 @@ class _AudioSettingsState extends State<AudioSettings> {
                     value: residualBits,
                     label: residualBits.toStringAsFixed(1),
                     onChanged: (value) {
-                      widget.controller.updateCodecResidualBits(value);
+                      widget.networkSettingsController
+                          .updateCodecResidualBits(value);
                     },
                   ),
                 ],

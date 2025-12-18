@@ -11,7 +11,10 @@ import 'package:telepathy/widgets/home/home_tab_view.dart';
 /// The main body of the app.
 class HomePage extends StatefulWidget {
   final Telepathy telepathy;
-  final SettingsController settingsController;
+  final ProfilesController profilesController;
+  final AudioSettingsController audioSettingsController;
+  final NetworkSettingsController networkSettingsController;
+  final PreferencesController preferencesController;
   final InterfaceController interfaceController;
   final StateController stateController;
   final StatisticsController statisticsController;
@@ -23,7 +26,10 @@ class HomePage extends StatefulWidget {
   const HomePage(
       {super.key,
       required this.telepathy,
-      required this.settingsController,
+      required this.profilesController,
+      required this.audioSettingsController,
+      required this.networkSettingsController,
+      required this.preferencesController,
       required this.interfaceController,
       required this.stateController,
       required this.player,
@@ -44,7 +50,10 @@ class _HomePageState extends State<HomePage> {
   CallControls _createCallControls() {
     return CallControls(
       telepathy: widget.telepathy,
-      settingsController: widget.settingsController,
+      profilesController: widget.profilesController,
+      audioSettingsController: widget.audioSettingsController,
+      networkSettingsController: widget.networkSettingsController,
+      preferencesController: widget.preferencesController,
       interfaceController: widget.interfaceController,
       stateController: widget.stateController,
       statisticsController: widget.statisticsController,
@@ -61,7 +70,7 @@ class _HomePageState extends State<HomePage> {
         stateController: widget.stateController,
         chatStateController: widget.chatStateController,
         player: widget.player,
-        settingsController: widget.settingsController);
+        profilesController: widget.profilesController);
   }
 
   @override
@@ -77,22 +86,26 @@ class _HomePageState extends State<HomePage> {
   void didUpdateWidget(covariant HomePage oldWidget) {
     super.didUpdateWidget(oldWidget);
 
-    final bool callControlsDepsChanged =
-        widget.telepathy != oldWidget.telepathy ||
-            widget.settingsController != oldWidget.settingsController ||
-            widget.interfaceController != oldWidget.interfaceController ||
-            widget.stateController != oldWidget.stateController ||
-            widget.statisticsController != oldWidget.statisticsController ||
-            widget.player != oldWidget.player ||
-            widget.overlay != oldWidget.overlay ||
-            widget.audioDevices != oldWidget.audioDevices;
+    final bool callControlsDepsChanged = widget.telepathy !=
+            oldWidget.telepathy ||
+        widget.profilesController != oldWidget.profilesController ||
+        widget.audioSettingsController != oldWidget.audioSettingsController ||
+        widget.networkSettingsController !=
+            oldWidget.networkSettingsController ||
+        widget.preferencesController != oldWidget.preferencesController ||
+        widget.interfaceController != oldWidget.interfaceController ||
+        widget.stateController != oldWidget.stateController ||
+        widget.statisticsController != oldWidget.statisticsController ||
+        widget.player != oldWidget.player ||
+        widget.overlay != oldWidget.overlay ||
+        widget.audioDevices != oldWidget.audioDevices;
 
     final bool chatWidgetDepsChanged =
         widget.telepathy != oldWidget.telepathy ||
             widget.stateController != oldWidget.stateController ||
             widget.chatStateController != oldWidget.chatStateController ||
             widget.player != oldWidget.player ||
-            widget.settingsController != oldWidget.settingsController;
+            widget.profilesController != oldWidget.profilesController;
 
     if (callControlsDepsChanged || chatWidgetDepsChanged) {
       setState(() {
@@ -123,7 +136,7 @@ class _HomePageState extends State<HomePage> {
                   builder: (BuildContext context, BoxConstraints constraints) {
                 final Widget contactsList = SortedContactsList(
                   telepathy: widget.telepathy,
-                  settingsController: widget.settingsController,
+                  profilesController: widget.profilesController,
                   stateController: widget.stateController,
                   player: widget.player,
                 );
@@ -174,8 +187,8 @@ class _HomePageState extends State<HomePage> {
                                             stateController:
                                                 widget.stateController,
                                             player: widget.player,
-                                            settingsController:
-                                                widget.settingsController,
+                                            profilesController:
+                                                widget.profilesController,
                                           )
                                         : contactsList,
                                   ),

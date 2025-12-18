@@ -14,7 +14,7 @@ import 'package:telepathy/widgets/contacts/snap_scroll_physics.dart';
 class ContactsList extends StatelessWidget {
   final Telepathy telepathy;
   final StateController stateController;
-  final SettingsController settingsController;
+  final ProfilesController profilesController;
   final List<Contact> contacts;
   final List<Room> rooms;
   final SoundPlayer player;
@@ -25,7 +25,7 @@ class ContactsList extends StatelessWidget {
       required this.contacts,
       required this.rooms,
       required this.stateController,
-      required this.settingsController,
+      required this.profilesController,
       required this.player});
 
   @override
@@ -67,7 +67,7 @@ class ContactsList extends StatelessWidget {
                                   children: [
                                     ContactForm(
                                       telepathy: telepathy,
-                                      settingsController: settingsController,
+                                      profilesController: profilesController,
                                     )
                                   ],
                                 );
@@ -115,7 +115,7 @@ class ContactsList extends StatelessWidget {
                             telepathy: telepathy,
                             stateController: stateController,
                             player: player,
-                            settingsController: settingsController,
+                            profilesController: profilesController,
                           );
                         } else if (item is Room) {
                           return RoomWidget(

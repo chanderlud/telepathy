@@ -10,12 +10,12 @@ import 'package:telepathy/src/rust/flutter.dart';
 import 'package:telepathy/widgets/common/index.dart';
 
 class ScreenshareSettings extends StatefulWidget {
-  final SettingsController controller;
+  final NetworkSettingsController networkSettingsController;
   final BoxConstraints constraints;
 
   const ScreenshareSettings({
     super.key,
-    required this.controller,
+    required this.networkSettingsController,
     required this.constraints,
   });
 
@@ -33,9 +33,10 @@ class _ScreenshareSettingsState extends State<ScreenshareSettings> {
   void initState() {
     super.initState();
 
-    var capabilitiesFuture = widget.controller.screenshareConfig.capabilities();
+    var capabilitiesFuture =
+        widget.networkSettingsController.screenshareConfig.capabilities();
     var recordingConfigFuture =
-        widget.controller.screenshareConfig.recordingConfig();
+        widget.networkSettingsController.screenshareConfig.recordingConfig();
 
     Future.wait([capabilitiesFuture, recordingConfigFuture])
         .then((List<dynamic> results) {
@@ -210,12 +211,13 @@ class _ScreenshareSettingsState extends State<ScreenshareSettings> {
               });
 
               try {
-                await widget.controller.screenshareConfig.updateRecordingConfig(
-                    encoder: _temporaryConfig!.encoder,
-                    device: _temporaryConfig!.device,
-                    bitrate: _temporaryConfig!.bitrate,
-                    framerate: _temporaryConfig!.framerate,
-                    height: _temporaryConfig!.height);
+                await widget.networkSettingsController.screenshareConfig
+                    .updateRecordingConfig(
+                        encoder: _temporaryConfig!.encoder,
+                        device: _temporaryConfig!.device,
+                        bitrate: _temporaryConfig!.bitrate,
+                        framerate: _temporaryConfig!.framerate,
+                        height: _temporaryConfig!.height);
               } on DartError catch (e) {
                 setState(() {
                   _loading = false;
@@ -229,7 +231,7 @@ class _ScreenshareSettingsState extends State<ScreenshareSettings> {
                 return;
               }
 
-              widget.controller.saveScreenshareConfig();
+              widget.networkSettingsController.saveScreenshareConfig();
               setState(() {
                 _temporaryConfig = null;
                 _loading = false;

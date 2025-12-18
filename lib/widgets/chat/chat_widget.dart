@@ -15,7 +15,7 @@ import 'package:telepathy/widgets/chat/selected_attachments.dart';
 class ChatWidget extends StatefulWidget {
   final Telepathy telepathy;
   final StateController stateController;
-  final SettingsController settingsController;
+  final ProfilesController profilesController;
   final ChatStateController chatStateController;
   final SoundPlayer player;
 
@@ -25,7 +25,7 @@ class ChatWidget extends StatefulWidget {
       required this.stateController,
       required this.chatStateController,
       required this.player,
-      required this.settingsController});
+      required this.profilesController});
 
   @override
   State<StatefulWidget> createState() => ChatWidgetState();
@@ -115,7 +115,7 @@ class ChatWidgetState extends State<ChatWidget> {
                       ChatMessage message =
                           widget.chatStateController.messages[index];
                       bool sender = message.isSender(
-                          identity: widget.settingsController.peerId);
+                          identity: widget.profilesController.peerId);
 
                       return MessageItem(
                         message: message,

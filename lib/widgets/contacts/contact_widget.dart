@@ -13,7 +13,7 @@ class ContactWidget extends StatefulWidget {
   final Contact contact;
   final Telepathy telepathy;
   final StateController stateController;
-  final SettingsController settingsController;
+  final ProfilesController profilesController;
   final SoundPlayer player;
 
   const ContactWidget(
@@ -22,7 +22,7 @@ class ContactWidget extends StatefulWidget {
       required this.telepathy,
       required this.stateController,
       required this.player,
-      required this.settingsController});
+      required this.profilesController});
 
   @override
   State<StatefulWidget> createState() => ContactWidgetState();
@@ -121,11 +121,11 @@ class ContactWidgetState extends State<ContactWidget> {
                               false;
 
                           if (confirm) {
-                            widget.settingsController
+                            widget.profilesController
                                 .removeContact(widget.contact);
                             widget.telepathy
                                 .stopSession(contact: widget.contact);
-                            widget.settingsController.saveContacts();
+                            widget.profilesController.saveContacts();
                           }
 
                           if (context.mounted) {
@@ -158,7 +158,7 @@ class ContactWidgetState extends State<ContactWidget> {
                   Button(
                     text: 'Save',
                     onPressed: () {
-                      widget.settingsController.saveContacts();
+                      widget.profilesController.saveContacts();
                       Navigator.pop(context);
                     },
                   ),

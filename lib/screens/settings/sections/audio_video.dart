@@ -6,7 +6,9 @@ import 'package:telepathy/src/rust/audio/player.dart';
 import 'package:telepathy/src/rust/telepathy.dart';
 
 class AVSettings extends StatelessWidget {
-  final SettingsController controller;
+  final AudioSettingsController audioSettingsController;
+  final PreferencesController preferencesController;
+  final NetworkSettingsController networkSettingsController;
   final Telepathy telepathy;
   final StateController stateController;
   final StatisticsController statisticsController;
@@ -16,7 +18,9 @@ class AVSettings extends StatelessWidget {
 
   const AVSettings(
       {super.key,
-      required this.controller,
+      required this.audioSettingsController,
+      required this.preferencesController,
+      required this.networkSettingsController,
       required this.telepathy,
       required this.stateController,
       required this.player,
@@ -30,7 +34,9 @@ class AVSettings extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         AudioSettings(
-          controller: controller,
+          audioSettingsController: audioSettingsController,
+          preferencesController: preferencesController,
+          networkSettingsController: networkSettingsController,
           telepathy: telepathy,
           stateController: stateController,
           player: player,
@@ -42,7 +48,7 @@ class AVSettings extends StatelessWidget {
         const Divider(),
         const SizedBox(height: 20),
         ScreenshareSettings(
-          controller: controller,
+          networkSettingsController: networkSettingsController,
           constraints: constraints,
         ),
       ],

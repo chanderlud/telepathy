@@ -14,7 +14,10 @@ final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 /// The main app
 class TelepathyApp extends StatefulWidget {
   final Telepathy telepathy;
-  final SettingsController settingsController;
+  final ProfilesController profilesController;
+  final AudioSettingsController audioSettingsController;
+  final NetworkSettingsController networkSettingsController;
+  final PreferencesController preferencesController;
   final InterfaceController interfaceController;
   final StateController callStateController;
   final StatisticsController statisticsController;
@@ -26,7 +29,10 @@ class TelepathyApp extends StatefulWidget {
   const TelepathyApp(
       {super.key,
       required this.telepathy,
-      required this.settingsController,
+      required this.profilesController,
+      required this.audioSettingsController,
+      required this.networkSettingsController,
+      required this.preferencesController,
       required this.callStateController,
       required this.player,
       required this.chatStateController,
@@ -87,7 +93,10 @@ class _TelepathyAppState extends State<TelepathyApp> with WindowListener {
             ),
             home: HomePage(
               telepathy: widget.telepathy,
-              settingsController: widget.settingsController,
+              profilesController: widget.profilesController,
+              audioSettingsController: widget.audioSettingsController,
+              networkSettingsController: widget.networkSettingsController,
+              preferencesController: widget.preferencesController,
               interfaceController: widget.interfaceController,
               stateController: widget.callStateController,
               player: widget.player,

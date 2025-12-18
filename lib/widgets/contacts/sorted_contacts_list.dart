@@ -21,14 +21,14 @@ import 'package:telepathy/widgets/contacts/contacts_list.dart';
 /// Connected > Connecting > Others, then alphabetical by nickname within group.
 class SortedContactsList extends StatefulWidget {
   final Telepathy telepathy;
-  final SettingsController settingsController;
+  final ProfilesController profilesController;
   final StateController stateController;
   final SoundPlayer player;
 
   const SortedContactsList({
     super.key,
     required this.telepathy,
-    required this.settingsController,
+    required this.profilesController,
     required this.stateController,
     required this.player,
   });
@@ -54,7 +54,7 @@ class _SortedContactsListState extends State<SortedContactsList> {
     super.didUpdateWidget(oldWidget);
 
     // If controller instances are swapped, treat it as a cache invalidation.
-    if (widget.settingsController != oldWidget.settingsController ||
+    if (widget.profilesController != oldWidget.profilesController ||
         widget.stateController != oldWidget.stateController) {
       _cachedSortedContacts = null;
       _previousContactsLength = null;
@@ -66,7 +66,7 @@ class _SortedContactsListState extends State<SortedContactsList> {
 
   List<Contact> _sortContacts() {
     final List<Contact> contacts =
-        widget.settingsController.contacts.values.toList();
+        widget.profilesController.contacts.values.toList();
 
     // sort contacts by session status then nickname
     contacts.sort((a, b) {
@@ -100,9 +100,9 @@ class _SortedContactsListState extends State<SortedContactsList> {
   }
 
   void _refreshCacheIfNeeded({required bool force}) {
-    final int contactsLength = widget.settingsController.contacts.length;
+    final int contactsLength = widget.profilesController.contacts.length;
     final int contactsHash = Object.hashAll(
-      widget.settingsController.contacts.entries.map(
+      widget.profilesController.contacts.entries.map(
         (e) => Object.hash(e.key, e.value.nickname()),
       ),
     );
@@ -127,7 +127,7 @@ class _SortedContactsListState extends State<SortedContactsList> {
   Widget build(BuildContext context) {
     return ListenableBuilder(
       listenable: Listenable.merge([
-        widget.settingsController,
+        widget.profilesController,
         widget.stateController,
       ]),
       builder: (BuildContext context, Widget? child) {
@@ -137,9 +137,9 @@ class _SortedContactsListState extends State<SortedContactsList> {
         return ContactsList(
           telepathy: widget.telepathy,
           contacts: _cachedSortedContacts ?? const <Contact>[],
-          rooms: widget.settingsController.rooms.values.toList(),
+          rooms: widget.profilesController.rooms.values.toList(),
           stateController: widget.stateController,
-          settingsController: widget.settingsController,
+          profilesController: widget.profilesController,
           player: widget.player,
         );
       },

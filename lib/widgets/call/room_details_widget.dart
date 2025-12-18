@@ -11,23 +11,23 @@ class RoomDetailsWidget extends StatelessWidget {
   final Telepathy telepathy;
   final StateController stateController;
   final SoundPlayer player;
-  final SettingsController settingsController;
+  final ProfilesController profilesController;
 
   const RoomDetailsWidget(
       {super.key,
       required this.telepathy,
       required this.stateController,
       required this.player,
-      required this.settingsController});
+      required this.profilesController});
 
   @override
   Widget build(BuildContext context) {
     String getNickname(String peerId) {
-      Contact? contact = settingsController.contacts.values
+      Contact? contact = profilesController.contacts.values
           .firstWhereOrNull((c) => c.peerId() == peerId);
       if (contact != null) {
         return contact.nickname();
-      } else if (peerId == settingsController.peerId) {
+      } else if (peerId == profilesController.peerId) {
         return 'You';
       } else {
         return 'Anonymous';
@@ -35,7 +35,7 @@ class RoomDetailsWidget extends StatelessWidget {
     }
 
     final room = stateController.activeRoom;
-    List<String> online = [...room?.online ?? [], settingsController.peerId];
+    List<String> online = [...room?.online ?? [], profilesController.peerId];
     var offline = room?.peerIds.where((p) => !online.contains(p)) ?? [];
 
     return Container(

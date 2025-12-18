@@ -33,70 +33,60 @@ class CallDetailsWidget extends StatelessWidget {
               }),
           const SizedBox(height: 8),
           ListenableBuilder(
-              listenable: statisticsController,
-              builder: (BuildContext context, Widget? child) {
-                return GradientMiniLineChart(
-                    values: statisticsController.lossWindow, strokeWidth: 2);
-              }),
-          const SizedBox(height: 6),
-          const Spacer(),
-          const Text('Input level'),
-          const SizedBox(height: 7),
-          ListenableBuilder(
-              listenable: statisticsController,
-              builder: (BuildContext context, Widget? child) {
-                return AudioLevel(
-                    level: statisticsController.inputLevel, numRectangles: 20);
-              }),
-          const SizedBox(height: 9),
-          const Text('Output level'),
-          const SizedBox(height: 7),
-          ListenableBuilder(
-              listenable: statisticsController,
-              builder: (BuildContext context, Widget? child) {
-                return AudioLevel(
-                    level: statisticsController.outputLevel, numRectangles: 20);
-              }),
-          const SizedBox(height: 12),
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ListenableBuilder(
-                  listenable: statisticsController,
-                  builder: (BuildContext context, Widget? child) {
-                    Color color = getColor(statisticsController.latency / 200);
-                    return SvgPicture.asset('assets/icons/Latency.svg',
-                        colorFilter: ColorFilter.mode(color, BlendMode.srcIn),
-                        semanticsLabel: 'Latency icon');
-                  }),
-              const SizedBox(width: 7),
-              ListenableBuilder(
-                  listenable: statisticsController,
-                  builder: (BuildContext context, Widget? child) {
-                    return Text('${statisticsController.latency} ms',
-                        style: const TextStyle(height: 0));
-                  }),
-              const Spacer(),
-              SvgPicture.asset('assets/icons/Upload.svg',
-                  semanticsLabel: 'Upload icon'),
-              const SizedBox(width: 4),
-              ListenableBuilder(
-                  listenable: statisticsController,
-                  builder: (BuildContext context, Widget? child) {
-                    return Text(statisticsController.upload,
-                        style: const TextStyle(height: 0));
-                  }),
-              const Spacer(),
-              SvgPicture.asset('assets/icons/Download.svg',
-                  semanticsLabel: 'Download icon'),
-              const SizedBox(width: 4),
-              ListenableBuilder(
-                  listenable: statisticsController,
-                  builder: (BuildContext context, Widget? child) {
-                    return Text(statisticsController.download,
-                        style: const TextStyle(height: 0));
-                  }),
-            ],
+            listenable: statisticsController,
+            builder: (BuildContext context, Widget? child) {
+              return Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    GradientMiniLineChart(
+                        values: statisticsController.lossWindow,
+                        strokeWidth: 2),
+                    const SizedBox(height: 6),
+                    const Text('Input level'),
+                    const SizedBox(height: 7),
+                    AudioLevel(
+                        level: statisticsController.inputLevel,
+                        numRectangles: 20),
+                    const SizedBox(height: 9),
+                    const Text('Output level'),
+                    const SizedBox(height: 7),
+                    AudioLevel(
+                        level: statisticsController.outputLevel,
+                        numRectangles: 20),
+                    const SizedBox(height: 12),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Builder(builder: (BuildContext context) {
+                          Color color =
+                              getColor(statisticsController.latency / 200);
+                          return SvgPicture.asset('assets/icons/Latency.svg',
+                              colorFilter:
+                                  ColorFilter.mode(color, BlendMode.srcIn),
+                              semanticsLabel: 'Latency icon');
+                        }),
+                        const SizedBox(width: 7),
+                        Text('${statisticsController.latency} ms',
+                            style: const TextStyle(height: 0)),
+                        const Spacer(),
+                        SvgPicture.asset('assets/icons/Upload.svg',
+                            semanticsLabel: 'Upload icon'),
+                        const SizedBox(width: 4),
+                        Text(statisticsController.upload,
+                            style: const TextStyle(height: 0)),
+                        const Spacer(),
+                        SvgPicture.asset('assets/icons/Download.svg',
+                            semanticsLabel: 'Download icon'),
+                        const SizedBox(width: 4),
+                        Text(statisticsController.download,
+                            style: const TextStyle(height: 0)),
+                      ],
+                    ),
+                  ],
+                ),
+              );
+            },
           ),
         ],
       ),

@@ -7,13 +7,13 @@ import 'package:telepathy/widgets/common/index.dart';
 
 class OverlaySettings extends StatefulWidget {
   final Overlay overlay;
-  final SettingsController controller;
+  final NetworkSettingsController networkSettingsController;
   final StateController stateController;
 
   const OverlaySettings(
       {super.key,
       required this.overlay,
-      required this.controller,
+      required this.networkSettingsController,
       required this.stateController});
 
   @override
@@ -29,7 +29,7 @@ class OverlaySettingsState extends State<OverlaySettings> {
       widget.overlay.hide_();
     }
 
-    widget.controller.saveOverlayConfig();
+    widget.networkSettingsController.saveOverlayConfig();
 
     super.dispose();
   }
@@ -47,7 +47,7 @@ class OverlaySettingsState extends State<OverlaySettings> {
               text: overlayVisible ? 'Hide overlay' : 'Show overlay',
               onPressed: () {
                 if (widget.stateController.isCallActive ||
-                    !widget.controller.overlayConfig.enabled) {
+                    !widget.networkSettingsController.overlayConfig.enabled) {
                   return;
                 } else if (overlayVisible) {
                   widget.overlay.hide_();
@@ -60,19 +60,20 @@ class OverlaySettingsState extends State<OverlaySettings> {
                 });
               },
               disabled: widget.stateController.isCallActive ||
-                  !widget.controller.overlayConfig.enabled,
+                  !widget.networkSettingsController.overlayConfig.enabled,
               width: 90,
               height: 25,
             ),
             const SizedBox(width: 20),
             Button(
-              text: widget.controller.overlayConfig.enabled
+              text: widget.networkSettingsController.overlayConfig.enabled
                   ? 'Disable overlay'
                   : 'Enable overlay',
               onPressed: () async {
-                if (widget.controller.overlayConfig.enabled) {
+                if (widget.networkSettingsController.overlayConfig.enabled) {
                   await widget.overlay.disable();
-                  widget.controller.overlayConfig.enabled = false;
+                  widget.networkSettingsController.overlayConfig.enabled =
+                      false;
 
                   // the overlay is never visible when it is disabled
                   setState(() {
@@ -80,7 +81,7 @@ class OverlaySettingsState extends State<OverlaySettings> {
                   });
                 } else {
                   await widget.overlay.enable();
-                  widget.controller.overlayConfig.enabled = true;
+                  widget.networkSettingsController.overlayConfig.enabled = true;
 
                   if (widget.stateController.isCallActive) {
                     // if the call is active, the overlay should be shown
@@ -98,7 +99,7 @@ class OverlaySettingsState extends State<OverlaySettings> {
                 }
 
                 // save the config
-                widget.controller.saveOverlayConfig();
+                widget.networkSettingsController.saveOverlayConfig();
               },
               width: 110,
               height: 25,
@@ -108,11 +109,13 @@ class OverlaySettingsState extends State<OverlaySettings> {
         const SizedBox(height: 20),
         const Text('Font Size', style: TextStyle(fontSize: 18)),
         Slider(
-            value: widget.controller.overlayConfig.fontHeight.toDouble(),
+            value: widget.networkSettingsController.overlayConfig.fontHeight
+                .toDouble(),
             onChanged: (value) {
               widget.overlay.setFontHeight(height: value.round());
-              widget.controller.overlayConfig.fontHeight = value.round();
-              widget.controller.saveOverlayConfig();
+              widget.networkSettingsController.overlayConfig.fontHeight =
+                  value.round();
+              widget.networkSettingsController.saveOverlayConfig();
               setState(() {});
             },
             min: 0,
@@ -131,10 +134,13 @@ class OverlaySettingsState extends State<OverlaySettings> {
                       colorPicker(context, (Color color) {
                         widget.overlay.setBackgroundColor(
                             backgroundColor: color.toARGB32());
-                        widget.controller.overlayConfig.backgroundColor = color;
-                        widget.controller.saveOverlayConfig();
+                        widget.networkSettingsController.overlayConfig
+                            .backgroundColor = color;
+                        widget.networkSettingsController.saveOverlayConfig();
                         setState(() {});
-                      }, widget.controller.overlayConfig.backgroundColor);
+                      },
+                          widget.networkSettingsController.overlayConfig
+                              .backgroundColor);
                     }),
               ],
             ),
@@ -151,10 +157,13 @@ class OverlaySettingsState extends State<OverlaySettings> {
                       colorPicker(context, (Color color) {
                         widget.overlay
                             .setFontColor(fontColor: color.toARGB32());
-                        widget.controller.overlayConfig.fontColor = color;
-                        widget.controller.saveOverlayConfig();
+                        widget.networkSettingsController.overlayConfig
+                            .fontColor = color;
+                        widget.networkSettingsController.saveOverlayConfig();
                         setState(() {});
-                      }, widget.controller.overlayConfig.fontColor);
+                      },
+                          widget.networkSettingsController.overlayConfig
+                              .fontColor);
                     }),
               ],
             )
@@ -164,7 +173,7 @@ class OverlaySettingsState extends State<OverlaySettings> {
         if (size.$1 > 0 && size.$2 > 0)
           OverlayPositionWidget(
             overlay: widget.overlay,
-            controller: widget.controller,
+            networkSettingsController: widget.networkSettingsController,
             realMaxX: size.$1.toDouble(),
             realMaxY: size.$2.toDouble(),
           ),

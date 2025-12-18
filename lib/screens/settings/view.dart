@@ -27,7 +27,10 @@ enum SettingsSection {
 }
 
 class SettingsPage extends StatefulWidget {
-  final SettingsController controller;
+  final ProfilesController profilesController;
+  final AudioSettingsController audioSettingsController;
+  final NetworkSettingsController networkSettingsController;
+  final PreferencesController preferencesController;
   final InterfaceController interfaceController;
   final Telepathy telepathy;
   final StateController stateController;
@@ -39,7 +42,10 @@ class SettingsPage extends StatefulWidget {
 
   const SettingsPage(
       {super.key,
-      required this.controller,
+      required this.profilesController,
+      required this.audioSettingsController,
+      required this.networkSettingsController,
+      required this.preferencesController,
       required this.telepathy,
       required this.stateController,
       required this.player,
@@ -146,7 +152,12 @@ class SettingsPageState extends State<SettingsPage>
                                 BoxConstraints constraints) {
                               if (_section == SettingsSection.audioVideo) {
                                 return AVSettings(
-                                  controller: widget.controller,
+                                  audioSettingsController:
+                                      widget.audioSettingsController,
+                                  preferencesController:
+                                      widget.preferencesController,
+                                  networkSettingsController:
+                                      widget.networkSettingsController,
                                   telepathy: widget.telepathy,
                                   stateController: widget.stateController,
                                   player: widget.player,
@@ -157,14 +168,16 @@ class SettingsPageState extends State<SettingsPage>
                                 );
                               } else if (_section == SettingsSection.profiles) {
                                 return ProfileSettings(
-                                    controller: widget.controller,
+                                    profilesController:
+                                        widget.profilesController,
                                     telepathy: widget.telepathy,
                                     stateController: widget.stateController);
                               } else if (_section ==
                                   SettingsSection.networking) {
                                 return NetworkSettings(
                                     key: _key,
-                                    controller: widget.controller,
+                                    networkSettingsController:
+                                        widget.networkSettingsController,
                                     telepathy: widget.telepathy,
                                     stateController: widget.stateController,
                                     constraints: constraints);
@@ -179,7 +192,8 @@ class SettingsPageState extends State<SettingsPage>
                               } else if (_section == SettingsSection.overlay) {
                                 return OverlaySettings(
                                     overlay: widget.overlay,
-                                    controller: widget.controller,
+                                    networkSettingsController:
+                                        widget.networkSettingsController,
                                     stateController: widget.stateController);
                               } else {
                                 return const SizedBox();

@@ -6,14 +6,14 @@ import 'package:telepathy/src/rust/error.dart';
 import 'package:telepathy/widgets/common/index.dart';
 
 class NetworkSettings extends StatefulWidget {
-  final SettingsController controller;
+  final NetworkSettingsController networkSettingsController;
   final Telepathy telepathy;
   final StateController stateController;
   final BoxConstraints constraints;
 
   const NetworkSettings(
       {super.key,
-      required this.controller,
+      required this.networkSettingsController,
       required this.telepathy,
       required this.stateController,
       required this.constraints});
@@ -40,8 +40,10 @@ class NetworkSettingsState extends State<NetworkSettings> {
   }
 
   Future<void> _initialize() async {
-    _relayAddress = await widget.controller.networkConfig.getRelayAddress();
-    _relayPeerId = await widget.controller.networkConfig.getRelayId();
+    _relayAddress =
+        await widget.networkSettingsController.networkConfig.getRelayAddress();
+    _relayPeerId =
+        await widget.networkSettingsController.networkConfig.getRelayId();
 
     _relayAddressInput.text = _relayAddress;
     _relayPeerIdInput.text = _relayPeerId;
@@ -118,7 +120,8 @@ class NetworkSettingsState extends State<NetworkSettings> {
 
     try {
       // this will raise an error if the relay ID isn't formatted right
-      await widget.controller.networkConfig.setRelayId(relayId: relayId);
+      await widget.networkSettingsController.networkConfig
+          .setRelayId(relayId: relayId);
       _relayPeerId = relayId;
       changed = true;
       setState(() {
@@ -132,7 +135,7 @@ class NetworkSettingsState extends State<NetworkSettings> {
 
     try {
       // this will raise an error if the relay address isn't a valid socket address
-      await widget.controller.networkConfig
+      await widget.networkSettingsController.networkConfig
           .setRelayAddress(relayAddress: relayAddress);
       _relayAddress = relayAddress;
       changed = true;
@@ -148,7 +151,7 @@ class NetworkSettingsState extends State<NetworkSettings> {
     unsavedChanges = _relayAddressError != null || _relayPeerIdError != null;
 
     if (changed) {
-      widget.controller.saveNetworkConfig();
+      widget.networkSettingsController.saveNetworkConfig();
       widget.telepathy.restartManager();
     }
   }

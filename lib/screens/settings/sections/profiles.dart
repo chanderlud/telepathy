@@ -8,13 +8,13 @@ import 'package:telepathy/models/index.dart';
 import 'package:telepathy/widgets/common/index.dart';
 
 class ProfileSettings extends StatefulWidget {
-  final SettingsController controller;
+  final ProfilesController profilesController;
   final Telepathy telepathy;
   final StateController stateController;
 
   const ProfileSettings(
       {super.key,
-      required this.controller,
+      required this.profilesController,
       required this.telepathy,
       required this.stateController});
 
@@ -37,9 +37,9 @@ class ProfileSettingsState extends State<ProfileSettings> {
         mainAxisSize: MainAxisSize.min,
         children: [
           ListenableBuilder(
-              listenable: widget.controller,
+              listenable: widget.profilesController,
               builder: (BuildContext context, Widget? child) {
-                bool even = widget.controller.profiles.length % 2 == 0;
+                bool even = widget.profilesController.profiles.length % 2 == 0;
 
                 Color colorPicker(int index) {
                   if (even ? index % 2 == 0 : index % 2 != 0) {
@@ -51,10 +51,11 @@ class ProfileSettingsState extends State<ProfileSettings> {
 
                 return ListView.builder(
                     shrinkWrap: true,
-                    itemCount: widget.controller.profiles.length,
+                    itemCount: widget.profilesController.profiles.length,
                     itemBuilder: (BuildContext context, int index) {
-                      Profile profile =
-                          widget.controller.profiles.values.elementAt(index);
+                      Profile profile = widget
+                          .profilesController.profiles.values
+                          .elementAt(index);
 
                       return Container(
                         decoration: BoxDecoration(
@@ -78,7 +79,8 @@ class ProfileSettingsState extends State<ProfileSettings> {
                                 listenable: widget.stateController,
                                 builder: (BuildContext context, Widget? child) {
                                   return Button(
-                                    text: (widget.controller.activeProfile ==
+                                    text: (widget.profilesController
+                                                .activeProfile ==
                                             profile.id)
                                         ? 'Active'
                                         : 'Set Active',
@@ -86,18 +88,19 @@ class ProfileSettingsState extends State<ProfileSettings> {
                                     height: 25,
                                     disabled:
                                         widget.stateController.isCallActive ||
-                                            widget.controller.activeProfile ==
+                                            widget.profilesController
+                                                    .activeProfile ==
                                                 profile.id,
                                     onPressed: () {
-                                      widget.controller
+                                      widget.profilesController
                                           .setActiveProfile(profile.id);
                                       widget.telepathy
                                           .setIdentity(key: profile.keypair);
                                       widget.telepathy.restartManager();
                                     },
                                     noSplash: true,
-                                    disabledColor: widget
-                                                    .controller.activeProfile ==
+                                    disabledColor: widget.profilesController
+                                                    .activeProfile ==
                                                 profile.id &&
                                             widget.stateController.isCallActive
                                         ? Theme.of(context)
@@ -138,7 +141,7 @@ class ProfileSettingsState extends State<ProfileSettings> {
                                           Button(
                                             text: 'Delete',
                                             onPressed: () {
-                                              widget.controller
+                                              widget.profilesController
                                                   .removeProfile(profile.id);
                                               Navigator.of(context).pop();
                                             },
@@ -182,7 +185,7 @@ class ProfileSettingsState extends State<ProfileSettings> {
                           Button(
                             text: 'Create',
                             onPressed: () {
-                              widget.controller
+                              widget.profilesController
                                   .createProfile(_profileNameInput.text);
                               _profileNameInput.clear();
                               Navigator.of(context).pop();

@@ -65,28 +65,41 @@ Future<void> main(List<String> args) async {
   );
   final SharedPreferencesAsync options = SharedPreferencesAsync();
 
-  final SettingsController settingsController =
-      SettingsController(storage: storage, options: options, args: args);
-  await settingsController.init();
+  final ProfilesController profilesController =
+      ProfilesController(storage: storage, options: options);
+  await profilesController.init(args);
+
+  final AudioSettingsController audioSettingsController =
+      AudioSettingsController(options: options);
+  await audioSettingsController.init();
+
+  final NetworkSettingsController networkSettingsController =
+      NetworkSettingsController(options: options);
+  await networkSettingsController.init();
+
+  final PreferencesController preferencesController =
+      PreferencesController(options: options);
+  await preferencesController.init();
 
   final StateController stateController = StateController();
   final StatisticsController statisticsController = StatisticsController();
 
   final Overlay overlay = await Overlay.newInstance(
-    enabled: settingsController.overlayConfig.enabled,
-    x: settingsController.overlayConfig.x.round(),
-    y: settingsController.overlayConfig.y.round(),
-    width: settingsController.overlayConfig.width.round(),
-    height: settingsController.overlayConfig.height.round(),
-    fontHeight: settingsController.overlayConfig.fontHeight,
+    enabled: networkSettingsController.overlayConfig.enabled,
+    x: networkSettingsController.overlayConfig.x.round(),
+    y: networkSettingsController.overlayConfig.y.round(),
+    width: networkSettingsController.overlayConfig.width.round(),
+    height: networkSettingsController.overlayConfig.height.round(),
+    fontHeight: networkSettingsController.overlayConfig.fontHeight,
     backgroundColor:
-        settingsController.overlayConfig.backgroundColor.toARGB32(),
-    fontColor: settingsController.overlayConfig.fontColor.toARGB32(),
+        networkSettingsController.overlayConfig.backgroundColor.toARGB32(),
+    fontColor: networkSettingsController.overlayConfig.fontColor.toARGB32(),
   );
 
-  final soundPlayer = SoundPlayer(outputVolume: settingsController.soundVolume);
-  soundPlayer.updateOutputDevice(name: settingsController.outputDevice);
-  soundPlayer.updateOutputVolume(volume: settingsController.soundVolume);
+  final soundPlayer =
+      SoundPlayer(outputVolume: audioSettingsController.soundVolume);
+  soundPlayer.updateOutputDevice(name: audioSettingsController.outputDevice);
+  soundPlayer.updateOutputVolume(volume: audioSettingsController.soundVolume);
 
   ArcHost host = soundPlayer.host();
 
@@ -97,7 +110,7 @@ Future<void> main(List<String> args) async {
       (String id, Uint8List? ringtone, DartNotify cancel) record) async {
     final (String id, Uint8List? ringtone, DartNotify cancel) = record;
 
-    Contact? contact = settingsController.getContact(id);
+    Contact? contact = profilesController.getContact(id);
 
     if (stateController.isCallActive) {
       return false;
@@ -150,7 +163,7 @@ Future<void> main(List<String> args) async {
   /// called when a contact is needed in the backend
   Contact? getContact(Uint8List peerId) {
     try {
-      Contact? contact = settingsController.contacts.values
+      Contact? contact = profilesController.contacts.values
           .firstWhere((Contact contact) => contact.idEq(id: peerId));
       return contact.pubClone();
     } catch (_) {
@@ -206,7 +219,7 @@ Future<void> main(List<String> args) async {
 
   /// called when the backend wants to start sessions
   List<Contact> getContacts(_) {
-    return settingsController.contacts.values.map((c) => c.pubClone()).toList();
+    return profilesController.contacts.values.map((c) => c.pubClone()).toList();
   }
 
   FlutterCallbacks callbacks = FlutterCallbacks(
@@ -222,37 +235,37 @@ Future<void> main(List<String> args) async {
 
   final telepathy = Telepathy(
       host: host,
-      networkConfig: settingsController.networkConfig,
-      screenshareConfig: settingsController.screenshareConfig,
+      networkConfig: networkSettingsController.networkConfig,
+      screenshareConfig: networkSettingsController.screenshareConfig,
       overlay: overlay,
-      codecConfig: settingsController.codecConfig,
+      codecConfig: networkSettingsController.codecConfig,
       callbacks: callbacks);
 
-  await telepathy.setIdentity(key: settingsController.keypair);
+  await telepathy.setIdentity(key: profilesController.keypair);
   await telepathy.startManager();
 
   // attempt to open sessions with all contacts
-  for (Contact contact in settingsController.contacts.values) {
+  for (Contact contact in profilesController.contacts.values) {
     telepathy.startSession(contact: contact);
   }
 
   final audioDevices = AudioDevices(telepathy: telepathy);
 
   // apply options to the instance
-  telepathy.setRmsThreshold(decimal: settingsController.inputSensitivity);
-  telepathy.setInputVolume(decibel: settingsController.inputVolume);
-  telepathy.setOutputVolume(decibel: settingsController.outputVolume);
-  telepathy.setDenoise(denoise: settingsController.useDenoise);
+  telepathy.setRmsThreshold(decimal: audioSettingsController.inputSensitivity);
+  telepathy.setInputVolume(decibel: audioSettingsController.inputVolume);
+  telepathy.setOutputVolume(decibel: audioSettingsController.outputVolume);
+  telepathy.setDenoise(denoise: audioSettingsController.useDenoise);
   telepathy.setPlayCustomRingtones(
-      play: settingsController.playCustomRingtones);
-  telepathy.setInputDevice(device: settingsController.inputDevice);
-  telepathy.setOutputDevice(device: settingsController.outputDevice);
+      play: preferencesController.playCustomRingtones);
+  telepathy.setInputDevice(device: audioSettingsController.inputDevice);
+  telepathy.setOutputDevice(device: audioSettingsController.outputDevice);
   telepathy.setSendCustomRingtone(
-      send: settingsController.customRingtoneFile != null);
-  telepathy.setEfficiencyMode(enabled: settingsController.efficiencyMode);
+      send: preferencesController.customRingtoneFile != null);
+  telepathy.setEfficiencyMode(enabled: preferencesController.efficiencyMode);
 
-  if (settingsController.denoiseModel != null) {
-    updateDenoiseModel(settingsController.denoiseModel, telepathy);
+  if (audioSettingsController.denoiseModel != null) {
+    updateDenoiseModel(audioSettingsController.denoiseModel, telepathy);
   }
 
   final InterfaceController interfaceController =
@@ -261,7 +274,10 @@ Future<void> main(List<String> args) async {
 
   runApp(TelepathyApp(
     telepathy: telepathy,
-    settingsController: settingsController,
+    profilesController: profilesController,
+    audioSettingsController: audioSettingsController,
+    networkSettingsController: networkSettingsController,
+    preferencesController: preferencesController,
     interfaceController: interfaceController,
     callStateController: stateController,
     player: soundPlayer,

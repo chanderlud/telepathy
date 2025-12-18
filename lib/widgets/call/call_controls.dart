@@ -11,7 +11,10 @@ import 'package:telepathy/src/rust/telepathy.dart';
 /// A widget with commonly used controls for a call.
 class CallControls extends StatelessWidget {
   final Telepathy telepathy;
-  final SettingsController settingsController;
+  final ProfilesController profilesController;
+  final AudioSettingsController audioSettingsController;
+  final NetworkSettingsController networkSettingsController;
+  final PreferencesController preferencesController;
   final InterfaceController interfaceController;
   final StateController stateController;
   final StatisticsController statisticsController;
@@ -23,7 +26,10 @@ class CallControls extends StatelessWidget {
   const CallControls(
       {super.key,
       required this.telepathy,
-      required this.settingsController,
+      required this.profilesController,
+      required this.audioSettingsController,
+      required this.networkSettingsController,
+      required this.preferencesController,
       required this.stateController,
       required this.player,
       required this.statisticsController,
@@ -87,59 +93,53 @@ class CallControls extends StatelessWidget {
             }),
         Padding(
           padding: const EdgeInsets.only(left: 25, right: 25, top: 20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('Output Volume', style: TextStyle(fontSize: 15)),
-              ListenableBuilder(
-                  listenable: settingsController,
-                  builder: (BuildContext context, Widget? child) {
-                    return Slider(
-                        value: settingsController.outputVolume,
+          child: ListenableBuilder(
+              listenable: audioSettingsController,
+              builder: (BuildContext context, Widget? child) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Output Volume', style: TextStyle(fontSize: 15)),
+                    Slider(
+                        value: audioSettingsController.outputVolume,
                         onChanged: (value) async {
-                          await settingsController.updateOutputVolume(value);
+                          await audioSettingsController
+                              .updateOutputVolume(value);
                           telepathy.setOutputVolume(decibel: value);
                         },
                         min: -15,
                         max: 15,
                         label:
-                            '${settingsController.outputVolume.toStringAsFixed(2)} db');
-                  }),
-              const SizedBox(height: 2),
-              const Text('Input Volume', style: TextStyle(fontSize: 15)),
-              ListenableBuilder(
-                  listenable: settingsController,
-                  builder: (BuildContext context, Widget? child) {
-                    return Slider(
-                        value: settingsController.inputVolume,
+                            '${audioSettingsController.outputVolume.toStringAsFixed(2)} db'),
+                    const SizedBox(height: 2),
+                    const Text('Input Volume', style: TextStyle(fontSize: 15)),
+                    Slider(
+                        value: audioSettingsController.inputVolume,
                         onChanged: (value) async {
-                          await settingsController.updateInputVolume(value);
+                          await audioSettingsController.updateInputVolume(value);
                           telepathy.setInputVolume(decibel: value);
                         },
                         min: -15,
                         max: 15,
                         label:
-                            '${settingsController.inputVolume.toStringAsFixed(2)} db');
-                  }),
-              const SizedBox(height: 2),
-              const Text('Input Sensitivity', style: TextStyle(fontSize: 15)),
-              ListenableBuilder(
-                  listenable: settingsController,
-                  builder: (BuildContext context, Widget? child) {
-                    return Slider(
-                        value: settingsController.inputSensitivity,
+                            '${audioSettingsController.inputVolume.toStringAsFixed(2)} db'),
+                    const SizedBox(height: 2),
+                    const Text('Input Sensitivity',
+                        style: TextStyle(fontSize: 15)),
+                    Slider(
+                        value: audioSettingsController.inputSensitivity,
                         onChanged: (value) async {
-                          await settingsController
+                          await audioSettingsController
                               .updateInputSensitivity(value);
                           telepathy.setRmsThreshold(decimal: value);
                         },
                         min: -16,
                         max: 50,
                         label:
-                            '${settingsController.inputSensitivity.toStringAsFixed(2)} db');
-                  }),
-            ],
-          ),
+                            '${audioSettingsController.inputSensitivity.toStringAsFixed(2)} db'),
+                  ],
+                );
+              }),
         ),
         const Spacer(),
         Container(
@@ -219,7 +219,12 @@ class CallControls extends StatelessWidget {
                                   LayoutBuilder(builder: (BuildContext context,
                                       BoxConstraints constraints) {
                                 return SettingsPage(
-                                  controller: settingsController,
+                                  profilesController: profilesController,
+                                  audioSettingsController:
+                                      audioSettingsController,
+                                  networkSettingsController:
+                                      networkSettingsController,
+                                  preferencesController: preferencesController,
                                   interfaceController: interfaceController,
                                   telepathy: telepathy,
                                   stateController: stateController,
@@ -252,7 +257,7 @@ class CallControls extends StatelessWidget {
                                   }
 
                                   return;
-                                } else if ((await settingsController
+                                } else if ((await networkSettingsController
                                         .screenshareConfig
                                         .recordingConfig()) ==
                                     null) {

@@ -11,10 +11,10 @@ import 'package:telepathy/src/rust/flutter.dart';
 /// A widget which allows the user to add a contact.
 class ContactForm extends StatefulWidget {
   final Telepathy telepathy;
-  final SettingsController settingsController;
+  final ProfilesController profilesController;
 
   const ContactForm(
-      {super.key, required this.telepathy, required this.settingsController});
+      {super.key, required this.telepathy, required this.profilesController});
 
   @override
   State<ContactForm> createState() => ContactFormState();
@@ -92,12 +92,12 @@ class ContactFormState extends State<ContactForm> {
                     showErrorDialog(context, 'Failed to add contact',
                         'Nickname and peer id cannot be empty');
                     return;
-                  } else if (widget.settingsController.contacts.values
+                  } else if (widget.profilesController.contacts.values
                       .any((c) => c.peerId() == peerId)) {
                     showErrorDialog(context, 'Failed to add contact',
                         'Contact for peer ID already exists');
                     return;
-                  } else if (widget.settingsController.peerId == peerId) {
+                  } else if (widget.profilesController.peerId == peerId) {
                     showErrorDialog(context, 'Failed to add contact',
                         'Cannot add self as a contact');
                     return;
@@ -105,7 +105,7 @@ class ContactFormState extends State<ContactForm> {
 
                   try {
                     Contact contact =
-                        widget.settingsController.addContact(nickname, peerId);
+                        widget.profilesController.addContact(nickname, peerId);
 
                     widget.telepathy.startSession(contact: contact);
 
@@ -123,7 +123,7 @@ class ContactFormState extends State<ContactForm> {
         ),
       );
     } else {
-      var contacts = widget.settingsController.contacts.values
+      var contacts = widget.profilesController.contacts.values
           .where((c) => !_peerIds.contains(c.peerId()));
 
       return Container(
@@ -245,18 +245,18 @@ class ContactFormState extends State<ContactForm> {
 
                       // the room must always contain the current profile's peer id
                       if (!_peerIds
-                          .contains(widget.settingsController.peerId)) {
-                        _peerIds.add(widget.settingsController.peerId);
+                          .contains(widget.profilesController.peerId)) {
+                        _peerIds.add(widget.profilesController.peerId);
                       }
 
-                      if (widget.settingsController.rooms.keys
+                      if (widget.profilesController.rooms.keys
                           .contains(roomHash(peers: _peerIds))) {
                         showErrorDialog(context, 'Failed to add room',
                             'It appears this room already exists');
                         return;
                       }
 
-                      widget.settingsController.addRoom(nickname, _peerIds);
+                      widget.profilesController.addRoom(nickname, _peerIds);
                       _nicknameInput.clear();
                       setState(() {
                         _peerIds.clear();
