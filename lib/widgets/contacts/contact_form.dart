@@ -43,6 +43,7 @@ class ContactFormState extends State<ContactForm> {
             Button(
               text: 'Add Contact',
               onPressed: () async {
+                // TODO make the nickname input selected
                 setState(() {
                   addContact = true;
                 });

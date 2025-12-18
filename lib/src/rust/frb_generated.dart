@@ -72,7 +72,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.11.1';
 
   @override
-  int get rustContentHash => 1335617571;
+  int get rustContentHash => 582637808;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -229,12 +229,12 @@ abstract class RustLibApi extends BaseApi {
   Future<ScreenshareConfig> crateFlutterScreenshareConfigDefault();
 
   Future<ScreenshareConfig> crateFlutterScreenshareConfigNew(
-      {required String configStr});
+      {required List<int> buffer});
 
   Future<RecordingConfig?> crateFlutterScreenshareConfigRecordingConfig(
       {required ScreenshareConfig that});
 
-  String crateFlutterScreenshareConfigToString(
+  Uint8List crateFlutterScreenshareConfigToBytes(
       {required ScreenshareConfig that});
 
   Future<void> crateFlutterScreenshareConfigUpdateRecordingConfig(
@@ -502,7 +502,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateFlutterCapabilitiesDefaultConstMeta =>
       const TaskConstMeta(
-        debugName: "Capabilities_default",
+        debugName: 'Capabilities_default',
         argNames: [],
       );
 
@@ -527,8 +527,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateFlutterCapabilitiesDevicesConstMeta =>
       const TaskConstMeta(
-        debugName: "Capabilities_devices",
-        argNames: ["that"],
+        debugName: 'Capabilities_devices',
+        argNames: ['that'],
       );
 
   @override
@@ -552,8 +552,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateFlutterCapabilitiesEncodersConstMeta =>
       const TaskConstMeta(
-        debugName: "Capabilities_encoders",
-        argNames: ["that"],
+        debugName: 'Capabilities_encoders',
+        argNames: ['that'],
       );
 
   @override
@@ -578,8 +578,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateFlutterChatMessageAttachmentsConstMeta =>
       const TaskConstMeta(
-        debugName: "ChatMessage_attachments",
-        argNames: ["that"],
+        debugName: 'ChatMessage_attachments',
+        argNames: ['that'],
       );
 
   @override
@@ -604,8 +604,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateFlutterChatMessageAutoAccessorGetTextConstMeta =>
       const TaskConstMeta(
-        debugName: "ChatMessage_auto_accessor_get_text",
-        argNames: ["that"],
+        debugName: 'ChatMessage_auto_accessor_get_text',
+        argNames: ['that'],
       );
 
   @override
@@ -631,8 +631,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateFlutterChatMessageAutoAccessorSetTextConstMeta =>
       const TaskConstMeta(
-        debugName: "ChatMessage_auto_accessor_set_text",
-        argNames: ["that", "text"],
+        debugName: 'ChatMessage_auto_accessor_set_text',
+        argNames: ['that', 'text'],
       );
 
   @override
@@ -656,8 +656,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateFlutterChatMessageClearAttachmentsConstMeta =>
       const TaskConstMeta(
-        debugName: "ChatMessage_clear_attachments",
-        argNames: ["that"],
+        debugName: 'ChatMessage_clear_attachments',
+        argNames: ['that'],
       );
 
   @override
@@ -683,8 +683,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateFlutterChatMessageIsSenderConstMeta =>
       const TaskConstMeta(
-        debugName: "ChatMessage_is_sender",
-        argNames: ["that", "identity"],
+        debugName: 'ChatMessage_is_sender',
+        argNames: ['that', 'identity'],
       );
 
   @override
@@ -708,8 +708,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateFlutterChatMessageTimeConstMeta =>
       const TaskConstMeta(
-        debugName: "ChatMessage_time",
-        argNames: ["that"],
+        debugName: 'ChatMessage_time',
+        argNames: ['that'],
       );
 
   @override
@@ -733,7 +733,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateFlutterCodecConfigDefaultConstMeta =>
       const TaskConstMeta(
-        debugName: "CodecConfig_default",
+        debugName: 'CodecConfig_default',
         argNames: [],
       );
 
@@ -762,8 +762,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   TaskConstMeta get kCrateFlutterCodecConfigNewConstMeta => const TaskConstMeta(
-        debugName: "CodecConfig_new",
-        argNames: ["enabled", "vbr", "residualBits"],
+        debugName: 'CodecConfig_new',
+        argNames: ['enabled', 'vbr', 'residualBits'],
       );
 
   @override
@@ -789,8 +789,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateFlutterCodecConfigSetEnabledConstMeta =>
       const TaskConstMeta(
-        debugName: "CodecConfig_set_enabled",
-        argNames: ["that", "enabled"],
+        debugName: 'CodecConfig_set_enabled',
+        argNames: ['that', 'enabled'],
       );
 
   @override
@@ -816,8 +816,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateFlutterCodecConfigSetResidualBitsConstMeta =>
       const TaskConstMeta(
-        debugName: "CodecConfig_set_residual_bits",
-        argNames: ["that", "residualBits"],
+        debugName: 'CodecConfig_set_residual_bits',
+        argNames: ['that', 'residualBits'],
       );
 
   @override
@@ -843,8 +843,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateFlutterCodecConfigSetVbrConstMeta =>
       const TaskConstMeta(
-        debugName: "CodecConfig_set_vbr",
-        argNames: ["that", "vbr"],
+        debugName: 'CodecConfig_set_vbr',
+        argNames: ['that', 'vbr'],
       );
 
   @override
@@ -869,8 +869,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateFlutterCodecConfigToValuesConstMeta =>
       const TaskConstMeta(
-        debugName: "CodecConfig_to_values",
-        argNames: ["that"],
+        debugName: 'CodecConfig_to_values',
+        argNames: ['that'],
       );
 
   @override
@@ -897,8 +897,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateFlutterContactFromPartsConstMeta =>
       const TaskConstMeta(
-        debugName: "Contact_from_parts",
-        argNames: ["id", "nickname", "peerId"],
+        debugName: 'Contact_from_parts',
+        argNames: ['id', 'nickname', 'peerId'],
       );
 
   @override
@@ -921,8 +921,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   TaskConstMeta get kCrateFlutterContactIdConstMeta => const TaskConstMeta(
-        debugName: "Contact_id",
-        argNames: ["that"],
+        debugName: 'Contact_id',
+        argNames: ['that'],
       );
 
   @override
@@ -946,8 +946,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   TaskConstMeta get kCrateFlutterContactIdEqConstMeta => const TaskConstMeta(
-        debugName: "Contact_id_eq",
-        argNames: ["that", "id"],
+        debugName: 'Contact_id_eq',
+        argNames: ['that', 'id'],
       );
 
   @override
@@ -972,8 +972,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   TaskConstMeta get kCrateFlutterContactNewConstMeta => const TaskConstMeta(
-        debugName: "Contact_new",
-        argNames: ["nickname", "peerId"],
+        debugName: 'Contact_new',
+        argNames: ['nickname', 'peerId'],
       );
 
   @override
@@ -997,8 +997,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateFlutterContactNicknameConstMeta =>
       const TaskConstMeta(
-        debugName: "Contact_nickname",
-        argNames: ["that"],
+        debugName: 'Contact_nickname',
+        argNames: ['that'],
       );
 
   @override
@@ -1021,8 +1021,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   TaskConstMeta get kCrateFlutterContactPeerIdConstMeta => const TaskConstMeta(
-        debugName: "Contact_peer_id",
-        argNames: ["that"],
+        debugName: 'Contact_peer_id',
+        argNames: ['that'],
       );
 
   @override
@@ -1047,8 +1047,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateFlutterContactPubCloneConstMeta =>
       const TaskConstMeta(
-        debugName: "Contact_pub_clone",
-        argNames: ["that"],
+        debugName: 'Contact_pub_clone',
+        argNames: ['that'],
       );
 
   @override
@@ -1074,8 +1074,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateFlutterContactSetNicknameConstMeta =>
       const TaskConstMeta(
-        debugName: "Contact_set_nickname",
-        argNames: ["that", "nickname"],
+        debugName: 'Contact_set_nickname',
+        argNames: ['that', 'nickname'],
       );
 
   @override
@@ -1100,8 +1100,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateFlutterDartNotifyNotifiedConstMeta =>
       const TaskConstMeta(
-        debugName: "DartNotify_notified",
-        argNames: ["that"],
+        debugName: 'DartNotify_notified',
+        argNames: ['that'],
       );
 
   @override
@@ -1125,8 +1125,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateFlutterDartNotifyNotifyConstMeta =>
       const TaskConstMeta(
-        debugName: "DartNotify_notify",
-        argNames: ["that"],
+        debugName: 'DartNotify_notify',
+        argNames: ['that'],
       );
 
   @override
@@ -1188,17 +1188,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateFlutterFlutterCallbacksNewConstMeta =>
       const TaskConstMeta(
-        debugName: "FlutterCallbacks_new",
+        debugName: 'FlutterCallbacks_new',
         argNames: [
-          "acceptCall",
-          "getContact",
-          "callState",
-          "sessionStatus",
-          "getContacts",
-          "statistics",
-          "messageReceived",
-          "managerActive",
-          "screenshareStarted"
+          'acceptCall',
+          'getContact',
+          'callState',
+          'sessionStatus',
+          'getContacts',
+          'statistics',
+          'messageReceived',
+          'managerActive',
+          'screenshareStarted'
         ],
       );
 
@@ -1223,7 +1223,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateFlutterNetworkConfigDefaultConstMeta =>
       const TaskConstMeta(
-        debugName: "NetworkConfig_default",
+        debugName: 'NetworkConfig_default',
         argNames: [],
       );
 
@@ -1250,8 +1250,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateFlutterNetworkConfigGetRelayAddressConstMeta =>
       const TaskConstMeta(
-        debugName: "NetworkConfig_get_relay_address",
-        argNames: ["that"],
+        debugName: 'NetworkConfig_get_relay_address',
+        argNames: ['that'],
       );
 
   @override
@@ -1277,8 +1277,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateFlutterNetworkConfigGetRelayIdConstMeta =>
       const TaskConstMeta(
-        debugName: "NetworkConfig_get_relay_id",
-        argNames: ["that"],
+        debugName: 'NetworkConfig_get_relay_id',
+        argNames: ['that'],
       );
 
   @override
@@ -1304,8 +1304,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateFlutterNetworkConfigNewConstMeta =>
       const TaskConstMeta(
-        debugName: "NetworkConfig_new",
-        argNames: ["relayAddress", "relayId"],
+        debugName: 'NetworkConfig_new',
+        argNames: ['relayAddress', 'relayId'],
       );
 
   @override
@@ -1332,8 +1332,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateFlutterNetworkConfigSetRelayAddressConstMeta =>
       const TaskConstMeta(
-        debugName: "NetworkConfig_set_relay_address",
-        argNames: ["that", "relayAddress"],
+        debugName: 'NetworkConfig_set_relay_address',
+        argNames: ['that', 'relayAddress'],
       );
 
   @override
@@ -1360,8 +1360,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateFlutterNetworkConfigSetRelayIdConstMeta =>
       const TaskConstMeta(
-        debugName: "NetworkConfig_set_relay_id",
-        argNames: ["that", "relayId"],
+        debugName: 'NetworkConfig_set_relay_id',
+        argNames: ['that', 'relayId'],
       );
 
   @override
@@ -1385,7 +1385,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateOverlayOverlayOverlayDefaultConstMeta =>
       const TaskConstMeta(
-        debugName: "Overlay_default",
+        debugName: 'Overlay_default',
         argNames: [],
       );
 
@@ -1411,8 +1411,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateOverlayOverlayOverlayDisableConstMeta =>
       const TaskConstMeta(
-        debugName: "Overlay_disable",
-        argNames: ["that"],
+        debugName: 'Overlay_disable',
+        argNames: ['that'],
       );
 
   @override
@@ -1437,8 +1437,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateOverlayOverlayOverlayEnableConstMeta =>
       const TaskConstMeta(
-        debugName: "Overlay_enable",
-        argNames: ["that"],
+        debugName: 'Overlay_enable',
+        argNames: ['that'],
       );
 
   @override
@@ -1463,8 +1463,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateOverlayOverlayOverlayHideConstMeta =>
       const TaskConstMeta(
-        debugName: "Overlay_hide",
-        argNames: ["that"],
+        debugName: 'Overlay_hide',
+        argNames: ['that'],
       );
 
   @override
@@ -1498,8 +1498,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateOverlayOverlayOverlayMoveOverlayConstMeta =>
       const TaskConstMeta(
-        debugName: "Overlay_move_overlay",
-        argNames: ["that", "x", "y", "width", "height"],
+        debugName: 'Overlay_move_overlay',
+        argNames: ['that', 'x', 'y', 'width', 'height'],
       );
 
   @override
@@ -1548,16 +1548,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateOverlayOverlayOverlayNewConstMeta =>
       const TaskConstMeta(
-        debugName: "Overlay_new",
+        debugName: 'Overlay_new',
         argNames: [
-          "enabled",
-          "x",
-          "y",
-          "width",
-          "height",
-          "fontHeight",
-          "backgroundColor",
-          "fontColor"
+          'enabled',
+          'x',
+          'y',
+          'width',
+          'height',
+          'fontHeight',
+          'backgroundColor',
+          'fontColor'
         ],
       );
 
@@ -1583,8 +1583,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateOverlayOverlayOverlayScreenResolutionConstMeta =>
       const TaskConstMeta(
-        debugName: "Overlay_screen_resolution",
-        argNames: ["that"],
+        debugName: 'Overlay_screen_resolution',
+        argNames: ['that'],
       );
 
   @override
@@ -1611,8 +1611,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateOverlayOverlayOverlaySetBackgroundColorConstMeta =>
       const TaskConstMeta(
-        debugName: "Overlay_set_background_color",
-        argNames: ["that", "backgroundColor"],
+        debugName: 'Overlay_set_background_color',
+        argNames: ['that', 'backgroundColor'],
       );
 
   @override
@@ -1639,8 +1639,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateOverlayOverlayOverlaySetFontColorConstMeta =>
       const TaskConstMeta(
-        debugName: "Overlay_set_font_color",
-        argNames: ["that", "fontColor"],
+        debugName: 'Overlay_set_font_color',
+        argNames: ['that', 'fontColor'],
       );
 
   @override
@@ -1667,8 +1667,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateOverlayOverlayOverlaySetFontHeightConstMeta =>
       const TaskConstMeta(
-        debugName: "Overlay_set_font_height",
-        argNames: ["that", "height"],
+        debugName: 'Overlay_set_font_height',
+        argNames: ['that', 'height'],
       );
 
   @override
@@ -1693,8 +1693,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateOverlayOverlayOverlayShowConstMeta =>
       const TaskConstMeta(
-        debugName: "Overlay_show",
-        argNames: ["that"],
+        debugName: 'Overlay_show',
+        argNames: ['that'],
       );
 
   @override
@@ -1718,8 +1718,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateFlutterRecordingConfigBitrateConstMeta =>
       const TaskConstMeta(
-        debugName: "RecordingConfig_bitrate",
-        argNames: ["that"],
+        debugName: 'RecordingConfig_bitrate',
+        argNames: ['that'],
       );
 
   @override
@@ -1743,8 +1743,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateFlutterRecordingConfigDeviceConstMeta =>
       const TaskConstMeta(
-        debugName: "RecordingConfig_device",
-        argNames: ["that"],
+        debugName: 'RecordingConfig_device',
+        argNames: ['that'],
       );
 
   @override
@@ -1768,8 +1768,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateFlutterRecordingConfigEncoderConstMeta =>
       const TaskConstMeta(
-        debugName: "RecordingConfig_encoder",
-        argNames: ["that"],
+        debugName: 'RecordingConfig_encoder',
+        argNames: ['that'],
       );
 
   @override
@@ -1793,8 +1793,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateFlutterRecordingConfigFramerateConstMeta =>
       const TaskConstMeta(
-        debugName: "RecordingConfig_framerate",
-        argNames: ["that"],
+        debugName: 'RecordingConfig_framerate',
+        argNames: ['that'],
       );
 
   @override
@@ -1818,8 +1818,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateFlutterRecordingConfigHeightConstMeta =>
       const TaskConstMeta(
-        debugName: "RecordingConfig_height",
-        argNames: ["that"],
+        debugName: 'RecordingConfig_height',
+        argNames: ['that'],
       );
 
   @override
@@ -1846,8 +1846,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateFlutterScreenshareConfigCapabilitiesConstMeta =>
       const TaskConstMeta(
-        debugName: "ScreenshareConfig_capabilities",
-        argNames: ["that"],
+        debugName: 'ScreenshareConfig_capabilities',
+        argNames: ['that'],
       );
 
   @override
@@ -1871,17 +1871,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateFlutterScreenshareConfigDefaultConstMeta =>
       const TaskConstMeta(
-        debugName: "ScreenshareConfig_default",
+        debugName: 'ScreenshareConfig_default',
         argNames: [],
       );
 
   @override
   Future<ScreenshareConfig> crateFlutterScreenshareConfigNew(
-      {required String configStr}) {
+      {required List<int> buffer}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
-        sse_encode_String(configStr, serializer);
+        sse_encode_list_prim_u_8_loose(buffer, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
             funcId: 51, port: port_);
       },
@@ -1891,15 +1891,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeErrorData: null,
       ),
       constMeta: kCrateFlutterScreenshareConfigNewConstMeta,
-      argValues: [configStr],
+      argValues: [buffer],
       apiImpl: this,
     ));
   }
 
   TaskConstMeta get kCrateFlutterScreenshareConfigNewConstMeta =>
       const TaskConstMeta(
-        debugName: "ScreenshareConfig_new",
-        argNames: ["configStr"],
+        debugName: 'ScreenshareConfig_new',
+        argNames: ['buffer'],
       );
 
   @override
@@ -1926,12 +1926,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateFlutterScreenshareConfigRecordingConfigConstMeta =>
       const TaskConstMeta(
-        debugName: "ScreenshareConfig_recording_config",
-        argNames: ["that"],
+        debugName: 'ScreenshareConfig_recording_config',
+        argNames: ['that'],
       );
 
   @override
-  String crateFlutterScreenshareConfigToString(
+  Uint8List crateFlutterScreenshareConfigToBytes(
       {required ScreenshareConfig that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
@@ -1941,19 +1941,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 53)!;
       },
       codec: SseCodec(
-        decodeSuccessData: sse_decode_String,
-        decodeErrorData: null,
+        decodeSuccessData: sse_decode_list_prim_u_8_strict,
+        decodeErrorData: sse_decode_dart_error,
       ),
-      constMeta: kCrateFlutterScreenshareConfigToStringConstMeta,
+      constMeta: kCrateFlutterScreenshareConfigToBytesConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateFlutterScreenshareConfigToStringConstMeta =>
+  TaskConstMeta get kCrateFlutterScreenshareConfigToBytesConstMeta =>
       const TaskConstMeta(
-        debugName: "ScreenshareConfig_to_string",
-        argNames: ["that"],
+        debugName: 'ScreenshareConfig_to_bytes',
+        argNames: ['that'],
       );
 
   @override
@@ -1990,14 +1990,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta
       get kCrateFlutterScreenshareConfigUpdateRecordingConfigConstMeta =>
           const TaskConstMeta(
-            debugName: "ScreenshareConfig_update_recording_config",
+            debugName: 'ScreenshareConfig_update_recording_config',
             argNames: [
-              "that",
-              "encoder",
-              "device",
-              "bitrate",
-              "framerate",
-              "height"
+              'that',
+              'encoder',
+              'device',
+              'bitrate',
+              'framerate',
+              'height'
             ],
           );
 
@@ -2022,8 +2022,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateAudioPlayerSoundHandleCancelConstMeta =>
       const TaskConstMeta(
-        debugName: "SoundHandle_cancel",
-        argNames: ["that"],
+        debugName: 'SoundHandle_cancel',
+        argNames: ['that'],
       );
 
   @override
@@ -2048,8 +2048,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateAudioPlayerSoundPlayerHostConstMeta =>
       const TaskConstMeta(
-        debugName: "SoundPlayer_host",
-        argNames: ["that"],
+        debugName: 'SoundPlayer_host',
+        argNames: ['that'],
       );
 
   @override
@@ -2073,8 +2073,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateAudioPlayerSoundPlayerNewConstMeta =>
       const TaskConstMeta(
-        debugName: "SoundPlayer_new",
-        argNames: ["outputVolume"],
+        debugName: 'SoundPlayer_new',
+        argNames: ['outputVolume'],
       );
 
   @override
@@ -2102,8 +2102,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateAudioPlayerSoundPlayerPlayConstMeta =>
       const TaskConstMeta(
-        debugName: "SoundPlayer_play",
-        argNames: ["that", "bytes"],
+        debugName: 'SoundPlayer_play',
+        argNames: ['that', 'bytes'],
       );
 
   @override
@@ -2130,8 +2130,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateAudioPlayerSoundPlayerUpdateOutputDeviceConstMeta =>
       const TaskConstMeta(
-        debugName: "SoundPlayer_update_output_device",
-        argNames: ["that", "name"],
+        debugName: 'SoundPlayer_update_output_device',
+        argNames: ['that', 'name'],
       );
 
   @override
@@ -2157,8 +2157,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateAudioPlayerSoundPlayerUpdateOutputVolumeConstMeta =>
       const TaskConstMeta(
-        debugName: "SoundPlayer_update_output_volume",
-        argNames: ["that", "volume"],
+        debugName: 'SoundPlayer_update_output_volume',
+        argNames: ['that', 'volume'],
       );
 
   @override
@@ -2183,8 +2183,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateTelepathyTelepathyAudioTestConstMeta =>
       const TaskConstMeta(
-        debugName: "Telepathy_audio_test",
-        argNames: ["that"],
+        debugName: 'Telepathy_audio_test',
+        argNames: ['that'],
       );
 
   @override
@@ -2218,8 +2218,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateTelepathyTelepathyBuildChatConstMeta =>
       const TaskConstMeta(
-        debugName: "Telepathy_build_chat",
-        argNames: ["that", "contact", "text", "attachments"],
+        debugName: 'Telepathy_build_chat',
+        argNames: ['that', 'contact', 'text', 'attachments'],
       );
 
   @override
@@ -2244,8 +2244,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateTelepathyTelepathyEndCallConstMeta =>
       const TaskConstMeta(
-        debugName: "Telepathy_end_call",
-        argNames: ["that"],
+        debugName: 'Telepathy_end_call',
+        argNames: ['that'],
       );
 
   @override
@@ -2272,8 +2272,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateTelepathyTelepathyJoinRoomConstMeta =>
       const TaskConstMeta(
-        debugName: "Telepathy_join_room",
-        argNames: ["that", "memberStrings"],
+        debugName: 'Telepathy_join_room',
+        argNames: ['that', 'memberStrings'],
       );
 
   @override
@@ -2299,8 +2299,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateTelepathyTelepathyListDevicesConstMeta =>
       const TaskConstMeta(
-        debugName: "Telepathy_list_devices",
-        argNames: ["that"],
+        debugName: 'Telepathy_list_devices',
+        argNames: ['that'],
       );
 
   @override
@@ -2347,14 +2347,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   TaskConstMeta get kCrateTelepathyTelepathyNewConstMeta => const TaskConstMeta(
-        debugName: "Telepathy_new",
+        debugName: 'Telepathy_new',
         argNames: [
-          "host",
-          "networkConfig",
-          "screenshareConfig",
-          "overlay",
-          "codecConfig",
-          "callbacks"
+          'host',
+          'networkConfig',
+          'screenshareConfig',
+          'overlay',
+          'codecConfig',
+          'callbacks'
         ],
       );
 
@@ -2381,8 +2381,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateTelepathyTelepathyRestartManagerConstMeta =>
       const TaskConstMeta(
-        debugName: "Telepathy_restart_manager",
-        argNames: ["that"],
+        debugName: 'Telepathy_restart_manager',
+        argNames: ['that'],
       );
 
   @override
@@ -2410,8 +2410,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateTelepathyTelepathySendChatConstMeta =>
       const TaskConstMeta(
-        debugName: "Telepathy_send_chat",
-        argNames: ["that", "message"],
+        debugName: 'Telepathy_send_chat',
+        argNames: ['that', 'message'],
       );
 
   @override
@@ -2437,8 +2437,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateTelepathyTelepathySetDeafenedConstMeta =>
       const TaskConstMeta(
-        debugName: "Telepathy_set_deafened",
-        argNames: ["that", "deafened"],
+        debugName: 'Telepathy_set_deafened',
+        argNames: ['that', 'deafened'],
       );
 
   @override
@@ -2464,8 +2464,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateTelepathyTelepathySetDenoiseConstMeta =>
       const TaskConstMeta(
-        debugName: "Telepathy_set_denoise",
-        argNames: ["that", "denoise"],
+        debugName: 'Telepathy_set_denoise',
+        argNames: ['that', 'denoise'],
       );
 
   @override
@@ -2491,8 +2491,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateTelepathyTelepathySetEfficiencyModeConstMeta =>
       const TaskConstMeta(
-        debugName: "Telepathy_set_efficiency_mode",
-        argNames: ["that", "enabled"],
+        debugName: 'Telepathy_set_efficiency_mode',
+        argNames: ['that', 'enabled'],
       );
 
   @override
@@ -2519,8 +2519,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateTelepathyTelepathySetIdentityConstMeta =>
       const TaskConstMeta(
-        debugName: "Telepathy_set_identity",
-        argNames: ["that", "key"],
+        debugName: 'Telepathy_set_identity',
+        argNames: ['that', 'key'],
       );
 
   @override
@@ -2547,8 +2547,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateTelepathyTelepathySetInputDeviceConstMeta =>
       const TaskConstMeta(
-        debugName: "Telepathy_set_input_device",
-        argNames: ["that", "device"],
+        debugName: 'Telepathy_set_input_device',
+        argNames: ['that', 'device'],
       );
 
   @override
@@ -2574,8 +2574,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateTelepathyTelepathySetInputVolumeConstMeta =>
       const TaskConstMeta(
-        debugName: "Telepathy_set_input_volume",
-        argNames: ["that", "decibel"],
+        debugName: 'Telepathy_set_input_volume',
+        argNames: ['that', 'decibel'],
       );
 
   @override
@@ -2602,8 +2602,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateTelepathyTelepathySetModelConstMeta =>
       const TaskConstMeta(
-        debugName: "Telepathy_set_model",
-        argNames: ["that", "model"],
+        debugName: 'Telepathy_set_model',
+        argNames: ['that', 'model'],
       );
 
   @override
@@ -2629,8 +2629,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateTelepathyTelepathySetMutedConstMeta =>
       const TaskConstMeta(
-        debugName: "Telepathy_set_muted",
-        argNames: ["that", "muted"],
+        debugName: 'Telepathy_set_muted',
+        argNames: ['that', 'muted'],
       );
 
   @override
@@ -2657,8 +2657,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateTelepathyTelepathySetOutputDeviceConstMeta =>
       const TaskConstMeta(
-        debugName: "Telepathy_set_output_device",
-        argNames: ["that", "device"],
+        debugName: 'Telepathy_set_output_device',
+        argNames: ['that', 'device'],
       );
 
   @override
@@ -2684,8 +2684,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateTelepathyTelepathySetOutputVolumeConstMeta =>
       const TaskConstMeta(
-        debugName: "Telepathy_set_output_volume",
-        argNames: ["that", "decibel"],
+        debugName: 'Telepathy_set_output_volume',
+        argNames: ['that', 'decibel'],
       );
 
   @override
@@ -2711,8 +2711,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateTelepathyTelepathySetPlayCustomRingtonesConstMeta =>
       const TaskConstMeta(
-        debugName: "Telepathy_set_play_custom_ringtones",
-        argNames: ["that", "play"],
+        debugName: 'Telepathy_set_play_custom_ringtones',
+        argNames: ['that', 'play'],
       );
 
   @override
@@ -2738,8 +2738,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateTelepathyTelepathySetRmsThresholdConstMeta =>
       const TaskConstMeta(
-        debugName: "Telepathy_set_rms_threshold",
-        argNames: ["that", "decimal"],
+        debugName: 'Telepathy_set_rms_threshold',
+        argNames: ['that', 'decimal'],
       );
 
   @override
@@ -2765,8 +2765,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateTelepathyTelepathySetSendCustomRingtoneConstMeta =>
       const TaskConstMeta(
-        debugName: "Telepathy_set_send_custom_ringtone",
-        argNames: ["that", "send"],
+        debugName: 'Telepathy_set_send_custom_ringtone',
+        argNames: ['that', 'send'],
       );
 
   @override
@@ -2791,8 +2791,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateTelepathyTelepathyShutdownConstMeta =>
       const TaskConstMeta(
-        debugName: "Telepathy_shutdown",
-        argNames: ["that"],
+        debugName: 'Telepathy_shutdown',
+        argNames: ['that'],
       );
 
   @override
@@ -2820,8 +2820,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateTelepathyTelepathyStartCallConstMeta =>
       const TaskConstMeta(
-        debugName: "Telepathy_start_call",
-        argNames: ["that", "contact"],
+        debugName: 'Telepathy_start_call',
+        argNames: ['that', 'contact'],
       );
 
   @override
@@ -2846,8 +2846,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateTelepathyTelepathyStartManagerConstMeta =>
       const TaskConstMeta(
-        debugName: "Telepathy_start_manager",
-        argNames: ["that"],
+        debugName: 'Telepathy_start_manager',
+        argNames: ['that'],
       );
 
   @override
@@ -2875,8 +2875,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateTelepathyTelepathyStartScreenshareConstMeta =>
       const TaskConstMeta(
-        debugName: "Telepathy_start_screenshare",
-        argNames: ["that", "contact"],
+        debugName: 'Telepathy_start_screenshare',
+        argNames: ['that', 'contact'],
       );
 
   @override
@@ -2904,8 +2904,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateTelepathyTelepathyStartSessionConstMeta =>
       const TaskConstMeta(
-        debugName: "Telepathy_start_session",
-        argNames: ["that", "contact"],
+        debugName: 'Telepathy_start_session',
+        argNames: ['that', 'contact'],
       );
 
   @override
@@ -2933,8 +2933,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateTelepathyTelepathyStopSessionConstMeta =>
       const TaskConstMeta(
-        debugName: "Telepathy_stop_session",
-        argNames: ["that", "contact"],
+        debugName: 'Telepathy_stop_session',
+        argNames: ['that', 'contact'],
       );
 
   @override
@@ -2959,8 +2959,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateFlutterCreateLogStreamConstMeta =>
       const TaskConstMeta(
-        debugName: "create_log_stream",
-        argNames: ["s"],
+        debugName: 'create_log_stream',
+        argNames: ['s'],
       );
 
   @override
@@ -2981,7 +2981,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   TaskConstMeta get kCrateFlutterGenerateKeysConstMeta => const TaskConstMeta(
-        debugName: "generate_keys",
+        debugName: 'generate_keys',
         argNames: [],
       );
 
@@ -3006,8 +3006,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateAudioPlayerLoadRingtoneConstMeta =>
       const TaskConstMeta(
-        debugName: "load_ringtone",
-        argNames: ["path"],
+        debugName: 'load_ringtone',
+        argNames: ['path'],
       );
 
   @override
@@ -3029,8 +3029,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   TaskConstMeta get kCrateFlutterRoomHashConstMeta => const TaskConstMeta(
-        debugName: "room_hash",
-        argNames: ["peers"],
+        debugName: 'room_hash',
+        argNames: ['peers'],
       );
 
   @override
@@ -3051,7 +3051,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   TaskConstMeta get kCrateFlutterRustSetUpConstMeta => const TaskConstMeta(
-        debugName: "rust_set_up",
+        debugName: 'rust_set_up',
         argNames: [],
       );
 
@@ -3075,7 +3075,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateFlutterScreenshareAvailableConstMeta =>
       const TaskConstMeta(
-        debugName: "screenshare_available",
+        debugName: 'screenshare_available',
         argNames: [],
       );
 
@@ -3102,8 +3102,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateFlutterSendToDartLoggerSetStreamSinkConstMeta =>
       const TaskConstMeta(
-        debugName: "send_to_dart_logger_set_stream_sink",
-        argNames: ["streamSink"],
+        debugName: 'send_to_dart_logger_set_stream_sink',
+        argNames: ['streamSink'],
       );
 
   @override
@@ -3126,7 +3126,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateFlutterStatisticsDefaultConstMeta =>
       const TaskConstMeta(
-        debugName: "statistics_default",
+        debugName: 'statistics_default',
         argNames: [],
       );
 
@@ -3149,8 +3149,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   TaskConstMeta get kCrateFlutterValidatePeerIdConstMeta => const TaskConstMeta(
-        debugName: "validate_peer_id",
-        argNames: ["peerId"],
+        debugName: 'validate_peer_id',
+        argNames: ['peerId'],
       );
 
   Future<void> Function(int, dynamic)
@@ -3166,7 +3166,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       try {
         rawOutput = Box(await raw(arg0));
       } catch (e, s) {
-        rawError = Box(AnyhowException("$e\n\n$s"));
+        rawError = Box(AnyhowException('$e\n\n$s'));
       }
 
       final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -3199,7 +3199,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       try {
         rawOutput = Box(await raw(arg0));
       } catch (e, s) {
-        rawError = Box(AnyhowException("$e\n\n$s"));
+        rawError = Box(AnyhowException('$e\n\n$s'));
       }
 
       final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -3232,7 +3232,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       try {
         rawOutput = Box(await raw(arg0));
       } catch (e, s) {
-        rawError = Box(AnyhowException("$e\n\n$s"));
+        rawError = Box(AnyhowException('$e\n\n$s'));
       }
 
       final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -3268,7 +3268,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       try {
         rawOutput = Box(await raw(arg0));
       } catch (e, s) {
-        rawError = Box(AnyhowException("$e\n\n$s"));
+        rawError = Box(AnyhowException('$e\n\n$s'));
       }
 
       final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -3301,7 +3301,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       try {
         rawOutput = Box(await raw(arg0));
       } catch (e, s) {
-        rawError = Box(AnyhowException("$e\n\n$s"));
+        rawError = Box(AnyhowException('$e\n\n$s'));
       }
 
       final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -3336,7 +3336,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       try {
         rawOutput = Box(await raw(arg0));
       } catch (e, s) {
-        rawError = Box(AnyhowException("$e\n\n$s"));
+        rawError = Box(AnyhowException('$e\n\n$s'));
       }
 
       final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -3369,7 +3369,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       try {
         rawOutput = Box(await raw(arg0));
       } catch (e, s) {
-        rawError = Box(AnyhowException("$e\n\n$s"));
+        rawError = Box(AnyhowException('$e\n\n$s'));
       }
 
       final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -3402,7 +3402,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       try {
         rawOutput = Box(await raw(arg0));
       } catch (e, s) {
-        rawError = Box(AnyhowException("$e\n\n$s"));
+        rawError = Box(AnyhowException('$e\n\n$s'));
       }
 
       final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -3435,7 +3435,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       try {
         rawOutput = Box(await raw(arg0));
       } catch (e, s) {
-        rawError = Box(AnyhowException("$e\n\n$s"));
+        rawError = Box(AnyhowException('$e\n\n$s'));
       }
 
       final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -4053,9 +4053,9 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     switch (raw[0]) {
       case 0:
-        return CallState_Connected();
+        return const CallState_Connected();
       case 1:
-        return CallState_Waiting();
+        return const CallState_Waiting();
       case 2:
         return CallState_RoomJoin(
           dco_decode_String(raw[1]),
@@ -4070,7 +4070,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           dco_decode_bool(raw[2]),
         );
       default:
-        throw Exception("unreachable");
+        throw Exception('unreachable');
     }
   }
 
@@ -4306,7 +4306,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     final arr = raw as List<dynamic>;
     if (arr.isNotEmpty)
       throw Exception('unexpected arr length: expect 0 but see ${arr.length}');
-    return SendToDartLogger();
+    return const SendToDartLogger();
   }
 
   @protected
@@ -4314,18 +4314,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     switch (raw[0]) {
       case 0:
-        return SessionStatus_Connecting();
+        return const SessionStatus_Connecting();
       case 1:
         return SessionStatus_Connected(
           relayed: dco_decode_bool(raw[1]),
           remoteAddress: dco_decode_String(raw[2]),
         );
       case 2:
-        return SessionStatus_Inactive();
+        return const SessionStatus_Inactive();
       case 3:
-        return SessionStatus_Unknown();
+        return const SessionStatus_Unknown();
       default:
-        throw Exception("unreachable");
+        throw Exception('unreachable');
     }
   }
 
@@ -4830,9 +4830,9 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var tag_ = sse_decode_i_32(deserializer);
     switch (tag_) {
       case 0:
-        return CallState_Connected();
+        return const CallState_Connected();
       case 1:
-        return CallState_Waiting();
+        return const CallState_Waiting();
       case 2:
         var var_field0 = sse_decode_String(deserializer);
         return CallState_RoomJoin(var_field0);
@@ -5076,7 +5076,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   SendToDartLogger sse_decode_send_to_dart_logger(
       SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    return SendToDartLogger();
+    return const SendToDartLogger();
   }
 
   @protected
@@ -5086,16 +5086,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var tag_ = sse_decode_i_32(deserializer);
     switch (tag_) {
       case 0:
-        return SessionStatus_Connecting();
+        return const SessionStatus_Connecting();
       case 1:
         var var_relayed = sse_decode_bool(deserializer);
         var var_remoteAddress = sse_decode_String(deserializer);
         return SessionStatus_Connected(
             relayed: var_relayed, remoteAddress: var_remoteAddress);
       case 2:
-        return SessionStatus_Inactive();
+        return const SessionStatus_Inactive();
       case 3:
-        return SessionStatus_Unknown();
+        return const SessionStatus_Unknown();
       default:
         throw UnimplementedError('');
     }
@@ -6307,7 +6307,7 @@ class OverlayImpl extends RustOpaque implements Overlay {
       RustLib.instance.api.crateOverlayOverlayOverlayMoveOverlay(
           that: this, x: x, y: y, width: width, height: height);
 
-  /// access the screen resolution for overlay positioning in the front end
+  /// non-windows platforms don't have an overlay
   (int, int) screenResolution() =>
       RustLib.instance.api.crateOverlayOverlayOverlayScreenResolution(
         that: this,
@@ -6402,8 +6402,8 @@ class ScreenshareConfigImpl extends RustOpaque implements ScreenshareConfig {
         that: this,
       );
 
-  String toString() =>
-      RustLib.instance.api.crateFlutterScreenshareConfigToString(
+  Uint8List toBytes() =>
+      RustLib.instance.api.crateFlutterScreenshareConfigToBytes(
         that: this,
       );
 

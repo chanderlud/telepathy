@@ -15,7 +15,7 @@ import 'package:uuid/uuid.dart';
 
 class SettingsController with ChangeNotifier {
   final FlutterSecureStorage storage;
-  final SharedPreferences options;
+  final SharedPreferencesAsync options;
   final List<String> args;
 
   SettingsController(
@@ -83,7 +83,7 @@ class SettingsController with ChangeNotifier {
     // initialize an empty map for profiles
     profiles = {};
     // load a list of profile ids from the options storage
-    List<String> profileIds = options.getStringList('profiles') ?? [];
+    List<String> profileIds = await options.getStringList('profiles') ?? [];
 
     // load each profile from the secure storage
     for (String id in profileIds) {
@@ -119,7 +119,7 @@ class SettingsController with ChangeNotifier {
       activeProfile = await createProfile('Default');
     } else {
       // if there are profiles, load the active profile or use the first profile if needed
-      activeProfile = options.getString('activeProfile') ?? profiles.keys.first;
+      activeProfile = await options.getString('activeProfile') ?? profiles.keys.first;
     }
 
     String? override = args.elementAtOrNull(0);
@@ -136,22 +136,22 @@ class SettingsController with ChangeNotifier {
     await setActiveProfile(activeProfile);
 
     // load the remaining options with default values as needed
-    outputVolume = options.getDouble('outputVolume') ?? 0;
-    inputVolume = options.getDouble('inputVolume') ?? 0;
-    soundVolume = options.getDouble('soundVolume') ?? -10;
-    inputSensitivity = options.getDouble('inputSensitivity') ?? -16;
-    useDenoise = options.getBool('useDenoise') ?? true;
-    outputDevice = options.getString('outputDevice');
-    inputDevice = options.getString('inputDevice');
-    playCustomRingtones = options.getBool('playCustomRingtones') ?? true;
-    customRingtoneFile = options.getString('customRingtoneFile');
-    denoiseModel = options.getString('denoiseModel');
-    efficiencyMode = options.getBool('efficiencyMode') ?? false;
+    outputVolume = await options.getDouble('outputVolume') ?? 0;
+    inputVolume = await options.getDouble('inputVolume') ?? 0;
+    soundVolume = await options.getDouble('soundVolume') ?? -10;
+    inputSensitivity = await options.getDouble('inputSensitivity') ?? -16;
+    useDenoise = await options.getBool('useDenoise') ?? true;
+    outputDevice = await options.getString('outputDevice');
+    inputDevice = await options.getString('inputDevice');
+    playCustomRingtones = await options.getBool('playCustomRingtones') ?? true;
+    customRingtoneFile = await options.getString('customRingtoneFile');
+    denoiseModel = await options.getString('denoiseModel');
+    efficiencyMode = await options.getBool('efficiencyMode') ?? false;
 
-    networkConfig = loadNetworkConfig();
+    networkConfig = await loadNetworkConfig();
     screenshareConfig = await loadScreenshareConfig();
-    overlayConfig = loadOverlayConfig();
-    codecConfig = loadCodecConfig();
+    overlayConfig = await loadOverlayConfig();
+    codecConfig = await loadCodecConfig();
 
     notifyListeners();
   }
@@ -423,11 +423,11 @@ class SettingsController with ChangeNotifier {
     return rooms;
   }
 
-  NetworkConfig loadNetworkConfig() {
+  Future<NetworkConfig> loadNetworkConfig() async {
     try {
       return NetworkConfig(
-        relayAddress: options.getString('relayAddress') ?? defaultRelayAddress,
-        relayId: options.getString('relayId') ?? defaultRelayId,
+        relayAddress: await options.getString('relayAddress') ?? defaultRelayAddress,
+        relayId: await options.getString('relayId') ?? defaultRelayId,
       );
     } on DartError catch (e) {
       DebugConsole.warn('invalid network config values: $e');
@@ -444,19 +444,19 @@ class SettingsController with ChangeNotifier {
 
   Future<ScreenshareConfig> loadScreenshareConfig() async {
     return await ScreenshareConfig.newInstance(
-      configStr: options.getString('screenshareConfig') ?? '',
+      buffer: base64Decode(await options.getString('screenshareConfigBuffer') ?? ''),
     );
   }
 
   Future<void> saveScreenshareConfig() async {
-    await options.setString('screenshareConfig', screenshareConfig.toString());
+    await options.setString('screenshareConfigBuffer', base64Encode(screenshareConfig.toBytes()));
   }
 
-  CodecConfig loadCodecConfig() {
+  Future<CodecConfig> loadCodecConfig() async {
     return CodecConfig(
-      enabled: options.getBool('codecEnabled') ?? true,
-      vbr: options.getBool('codecVbr') ?? true,
-      residualBits: options.getDouble('codecResidualBits') ?? 5.0,
+      enabled: await options.getBool('codecEnabled') ?? true,
+      vbr: await options.getBool('codecVbr') ?? true,
+      residualBits: await options.getDouble('codecResidualBits') ?? 5.0,
     );
   }
 
@@ -467,21 +467,21 @@ class SettingsController with ChangeNotifier {
     await options.setDouble('codecResidualBits', values.$3);
   }
 
-  OverlayConfig loadOverlayConfig() {
+  Future<OverlayConfig> loadOverlayConfig() async {
     try {
       return OverlayConfig(
-        enabled: options.getBool('overlayEnabled') ?? defaultOverlayEnabled,
-        x: options.getDouble('overlayX') ?? defaultOverlayX,
-        y: options.getDouble('overlayY') ?? defaultOverlayY,
-        width: options.getDouble('overlayWidth') ?? defaultOverlayWidth,
-        height: options.getDouble('overlayHeight') ?? defaultOverlayHeight,
+        enabled: await options.getBool('overlayEnabled') ?? defaultOverlayEnabled,
+        x: await options.getDouble('overlayX') ?? defaultOverlayX,
+        y: await options.getDouble('overlayY') ?? defaultOverlayY,
+        width: await options.getDouble('overlayWidth') ?? defaultOverlayWidth,
+        height: await options.getDouble('overlayHeight') ?? defaultOverlayHeight,
         fontFamily:
-            options.getString('overlayFontFamily') ?? defaultOverlayFontFamily,
+    await options.getString('overlayFontFamily') ?? defaultOverlayFontFamily,
         fontColor: Color(
-            options.getInt('overlayFontColor') ?? defaultOverlayFontColor),
+            await options.getInt('overlayFontColor') ?? defaultOverlayFontColor),
         fontHeight:
-            options.getInt('overlayFontHeight') ?? defaultOverlayFontHeight,
-        backgroundColor: Color(options.getInt('overlayBackgroundColor') ??
+        await options.getInt('overlayFontHeight') ?? defaultOverlayFontHeight,
+        backgroundColor: Color(await options.getInt('overlayBackgroundColor') ??
             defaultOverlayFontBackgroundColor),
       );
     } on DartError catch (e) {

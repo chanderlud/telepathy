@@ -17,8 +17,8 @@ use flutter_rust_bridge::{DartFnFuture, frb};
 use lazy_static::lazy_static;
 use libp2p::PeerId;
 use libp2p::identity::Keypair;
-use log::{LevelFilter, info, warn};
-use serde::{Deserialize, Serialize};
+use log::{LevelFilter, error, info, warn};
+use speedy::{Readable, Writable};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4};
 use std::str::FromStr;
@@ -39,8 +39,8 @@ use uuid::Uuid;
 static INIT_LOGGER_ONCE: Once = Once::new();
 
 lazy_static! {
-    static ref SEND_TO_DART_LOGGER_STREAM_SINK: parking_lot::RwLock<Option<StreamSink<String>>> =
-        parking_lot::RwLock::new(None);
+    static ref SEND_TO_DART_LOGGER_STREAM_SINK: std::sync::RwLock<Option<StreamSink<String>>> =
+        std::sync::RwLock::new(None);
 }
 
 pub(crate) type DartVoid<A> = Arc<Mutex<dyn Fn(A) -> DartFnFuture<()> + Send>>;
@@ -310,28 +310,18 @@ impl Default for NetworkConfig {
 }
 
 #[frb(opaque)]
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone)]
 pub struct ScreenshareConfig {
     /// the screenshare capabilities. default until loaded
-    #[serde(skip)]
     capabilities: Arc<RwLock<Capabilities>>,
 
     /// a validated recording configuration
-    #[serde(with = "rwlock_option_recording_config")]
     pub(crate) recording_config: Arc<RwLock<Option<RecordingConfig>>>,
 
     /// the default width of the playback window
-    #[serde(
-        serialize_with = "atomic_u32_serialize",
-        deserialize_with = "atomic_u32_deserialize"
-    )]
     pub(crate) width: Arc<AtomicU32>,
 
     /// the default height of the playback window
-    #[serde(
-        serialize_with = "atomic_u32_serialize",
-        deserialize_with = "atomic_u32_deserialize"
-    )]
     pub(crate) height: Arc<AtomicU32>,
 }
 
@@ -349,8 +339,9 @@ impl Default for ScreenshareConfig {
 impl ScreenshareConfig {
     // this function must be async to use spawn
     #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-    pub async fn new(config_str: String) -> Self {
-        let config: ScreenshareConfig = serde_json::from_str(&config_str).unwrap_or_default();
+    pub async fn new(buffer: Vec<u8>) -> Self {
+        let disk_config = ScreenshareConfigDisk::read_from_buffer(&buffer);
+        let config = disk_config.map(ScreenshareConfig::from).unwrap_or_default();
 
         let capabilities_clone = Arc::clone(&config.capabilities);
         spawn(async move {
@@ -364,7 +355,7 @@ impl ScreenshareConfig {
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-    pub async fn new(_config_str: String) -> Self {
+    pub async fn new(_buffer: Vec<u8>) -> Self {
         Self::default()
     }
 
@@ -419,8 +410,41 @@ impl ScreenshareConfig {
     }
 
     #[frb(sync)]
-    pub fn to_string(&self) -> String {
-        serde_json::to_string(self).unwrap()
+    pub fn to_bytes(&self) -> Result<Vec<u8>, DartError> {
+        ScreenshareConfigDisk::from(self)
+            .write_to_vec()
+            .map_err(|error| {
+                error!("failed to serialize screenshare config {:?}", error);
+                "serialization failed".to_string().into()
+            })
+    }
+}
+
+#[derive(Readable, Writable)]
+struct ScreenshareConfigDisk {
+    recording_config: Option<RecordingConfig>,
+    width: u32,
+    height: u32,
+}
+
+impl From<&ScreenshareConfig> for ScreenshareConfigDisk {
+    fn from(cfg: &ScreenshareConfig) -> Self {
+        Self {
+            recording_config: cfg.recording_config.blocking_read().clone(),
+            width: cfg.width.load(Relaxed),
+            height: cfg.height.load(Relaxed),
+        }
+    }
+}
+
+impl From<ScreenshareConfigDisk> for ScreenshareConfig {
+    fn from(d: ScreenshareConfigDisk) -> Self {
+        Self {
+            capabilities: Arc::new(RwLock::new(Capabilities::default())),
+            recording_config: Arc::new(RwLock::new(d.recording_config)),
+            width: Arc::new(AtomicU32::new(d.width)),
+            height: Arc::new(AtomicU32::new(d.height)),
+        }
     }
 }
 
@@ -450,7 +474,7 @@ impl Capabilities {
 }
 
 /// recording config for screenshare
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Readable, Writable)]
 #[frb(opaque)]
 pub struct RecordingConfig {
     pub(crate) encoder: Encoder,
@@ -634,7 +658,7 @@ pub struct SendToDartLogger {}
 
 impl SendToDartLogger {
     pub fn set_stream_sink(stream_sink: StreamSink<String>) {
-        let mut guard = SEND_TO_DART_LOGGER_STREAM_SINK.write();
+        let mut guard = SEND_TO_DART_LOGGER_STREAM_SINK.write().unwrap();
         let overriding = guard.is_some();
 
         *guard = Some(stream_sink);
@@ -653,7 +677,7 @@ impl SendToDartLogger {
 #[cfg(not(target_family = "wasm"))]
 impl LogAppender for SendToDartLogger {
     fn do_logs(&mut self, records: &[FastLogRecord]) {
-        if let Some(stream) = SEND_TO_DART_LOGGER_STREAM_SINK.read().as_ref() {
+        if let Some(stream) = SEND_TO_DART_LOGGER_STREAM_SINK.read().unwrap().as_ref() {
             for record in records {
                 _ = stream.add(record.formated.clone());
             }
@@ -697,12 +721,7 @@ pub fn rust_set_up() {
 
         log_panics::init();
 
-        info!("init_logger (inside 'once') finished");
-
-        warn!(
-            "init_logger finished, chosen level={:?} (deliberately output by warn level)",
-            level
-        );
+        info!("init_logger finished");
     });
 }
 
@@ -760,51 +779,6 @@ async fn notify<A>(void: &DartVoid<A>, args: A) {
 
 async fn invoke<A, R>(method: &DartMethod<A, R>, args: A) -> R {
     (method.lock().await)(args).await
-}
-
-fn atomic_u32_serialize<S>(value: &Arc<AtomicU32>, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    let value = value.load(Relaxed);
-    serializer.serialize_u32(value)
-}
-
-fn atomic_u32_deserialize<'de, D>(deserializer: D) -> Result<Arc<AtomicU32>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = u32::deserialize(deserializer)?;
-    Ok(Arc::new(AtomicU32::new(value)))
-}
-
-mod rwlock_option_recording_config {
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-    use std::sync::Arc;
-    use tokio::sync::RwLock;
-
-    use crate::flutter::RecordingConfig;
-
-    pub fn serialize<S>(
-        value: &Arc<RwLock<Option<RecordingConfig>>>,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let lock = value.blocking_read();
-        lock.serialize(serializer)
-    }
-
-    pub fn deserialize<'de, D>(
-        deserializer: D,
-    ) -> Result<Arc<RwLock<Option<RecordingConfig>>>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let inner = Option::<RecordingConfig>::deserialize(deserializer)?;
-        Ok(Arc::new(RwLock::new(inner)))
-    }
 }
 
 #[cfg(test)]

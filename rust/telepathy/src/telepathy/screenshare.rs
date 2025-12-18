@@ -22,7 +22,7 @@ use libp2p::futures::{AsyncReadExt as ReadExt, AsyncWriteExt as WriteExt};
 use log::{error, info, warn};
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 use regex::Regex;
-use serde::{Deserialize, Serialize};
+use speedy::{Readable, Writable};
 #[cfg(not(target_family = "wasm"))]
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 #[cfg(not(target_family = "wasm"))]
@@ -98,7 +98,7 @@ impl Capabilities {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Readable, Writable)]
 pub(crate) enum Device {
     DirectShow,
     GdiGrab,
@@ -201,7 +201,7 @@ impl FromStr for Device {
     }
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Readable, Writable)]
 pub(crate) enum Encoder {
     Libx264,
     H264Nvenc,

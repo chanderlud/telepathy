@@ -41,7 +41,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.11.1";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1335617571;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 582637808;
 
 // Section: executor
 
@@ -1778,28 +1778,28 @@ fn wire__crate__overlay__overlay__Overlay_new_impl(
             };
             let mut deserializer =
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
-            let api_enabled = <bool>::sse_decode(&mut deserializer);
-            let api_x = <i32>::sse_decode(&mut deserializer);
-            let api_y = <i32>::sse_decode(&mut deserializer);
-            let api_width = <i32>::sse_decode(&mut deserializer);
-            let api_height = <i32>::sse_decode(&mut deserializer);
-            let api_font_height = <i32>::sse_decode(&mut deserializer);
-            let api_background_color = <u32>::sse_decode(&mut deserializer);
-            let api_font_color = <u32>::sse_decode(&mut deserializer);
+            let api__enabled = <bool>::sse_decode(&mut deserializer);
+            let api__x = <i32>::sse_decode(&mut deserializer);
+            let api__y = <i32>::sse_decode(&mut deserializer);
+            let api__width = <i32>::sse_decode(&mut deserializer);
+            let api__height = <i32>::sse_decode(&mut deserializer);
+            let api__font_height = <i32>::sse_decode(&mut deserializer);
+            let api__background_color = <u32>::sse_decode(&mut deserializer);
+            let api__font_color = <u32>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, ()>(
                     (move || async move {
                         let output_ok = Result::<_, ()>::Ok(
                             crate::overlay::overlay::Overlay::new(
-                                api_enabled,
-                                api_x,
-                                api_y,
-                                api_width,
-                                api_height,
-                                api_font_height,
-                                api_background_color,
-                                api_font_color,
+                                api__enabled,
+                                api__x,
+                                api__y,
+                                api__width,
+                                api__height,
+                                api__font_height,
+                                api__background_color,
+                                api__font_color,
                             )
                             .await,
                         )?;
@@ -2425,13 +2425,13 @@ fn wire__crate__flutter__ScreenshareConfig_new_impl(
             };
             let mut deserializer =
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
-            let api_config_str = <String>::sse_decode(&mut deserializer);
+            let api_buffer = <Vec<u8>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, ()>(
                     (move || async move {
                         let output_ok = Result::<_, ()>::Ok(
-                            crate::flutter::ScreenshareConfig::new(api_config_str).await,
+                            crate::flutter::ScreenshareConfig::new(api_buffer).await,
                         )?;
                         Ok(output_ok)
                     })()
@@ -2499,14 +2499,14 @@ fn wire__crate__flutter__ScreenshareConfig_recording_config_impl(
         },
     )
 }
-fn wire__crate__flutter__ScreenshareConfig_to_string_impl(
+fn wire__crate__flutter__ScreenshareConfig_to_bytes_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
 ) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
     FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
         flutter_rust_bridge::for_generated::TaskInfo {
-            debug_name: "ScreenshareConfig_to_string",
+            debug_name: "ScreenshareConfig_to_bytes",
             port: None,
             mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
         },
@@ -2524,7 +2524,7 @@ fn wire__crate__flutter__ScreenshareConfig_to_string_impl(
                 flutter_rust_bridge::for_generated::RustAutoOpaqueInner<ScreenshareConfig>,
             >>::sse_decode(&mut deserializer);
             deserializer.end();
-            transform_result_sse::<_, ()>((move || {
+            transform_result_sse::<_, crate::error::DartError>((move || {
                 let mut api_that_guard = None;
                 let decode_indices_ =
                     flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
@@ -2539,9 +2539,7 @@ fn wire__crate__flutter__ScreenshareConfig_to_string_impl(
                     }
                 }
                 let api_that_guard = api_that_guard.unwrap();
-                let output_ok = Result::<_, ()>::Ok(crate::flutter::ScreenshareConfig::to_string(
-                    &*api_that_guard,
-                ))?;
+                let output_ok = crate::flutter::ScreenshareConfig::to_bytes(&*api_that_guard)?;
                 Ok(output_ok)
             })())
         },
@@ -6024,7 +6022,7 @@ fn pde_ffi_dispatcher_sync_impl(
         46 => wire__crate__flutter__RecordingConfig_encoder_impl(ptr, rust_vec_len, data_len),
         47 => wire__crate__flutter__RecordingConfig_framerate_impl(ptr, rust_vec_len, data_len),
         48 => wire__crate__flutter__RecordingConfig_height_impl(ptr, rust_vec_len, data_len),
-        53 => wire__crate__flutter__ScreenshareConfig_to_string_impl(ptr, rust_vec_len, data_len),
+        53 => wire__crate__flutter__ScreenshareConfig_to_bytes_impl(ptr, rust_vec_len, data_len),
         55 => wire__crate__audio__player__SoundHandle_cancel_impl(ptr, rust_vec_len, data_len),
         56 => wire__crate__audio__player__SoundPlayer_host_impl(ptr, rust_vec_len, data_len),
         57 => wire__crate__audio__player__SoundPlayer_new_impl(ptr, rust_vec_len, data_len),

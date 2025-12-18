@@ -2,16 +2,18 @@ use crate::flutter::{
     CallState, ChatMessage, Contact, DartNotify, FlutterCallbacks, FlutterStatisticsCallback,
     SessionStatus, Statistics, invoke, notify,
 };
+#[cfg(test)]
 use async_trait::async_trait;
 use libp2p::PeerId;
+#[cfg(test)]
 use mockall::automock;
 use std::sync::Arc;
 use tokio::spawn;
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 
-#[automock]
-#[async_trait]
+#[cfg_attr(test, automock)]
+#[cfg_attr(test, async_trait)]
 pub(crate) trait FrbCallbacks<S: FrbStatisticsCallback> {
     fn session_status(
         &self,
@@ -45,8 +47,8 @@ pub(crate) trait FrbCallbacks<S: FrbStatisticsCallback> {
     fn statistics_callback(&self) -> S;
 }
 
-#[automock]
-#[async_trait]
+#[cfg_attr(test, automock)]
+#[cfg_attr(test, async_trait)]
 pub(crate) trait FrbStatisticsCallback {
     fn post(&self, stats: Statistics) -> impl Future<Output = ()> + Send;
 }

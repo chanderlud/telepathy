@@ -2,7 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class InterfaceController with ChangeNotifier {
-  final SharedPreferences options;
+  final SharedPreferencesAsync options;
 
   InterfaceController({required this.options});
 
@@ -11,7 +11,7 @@ class InterfaceController with ChangeNotifier {
   int get secondaryColor => darkenColor(primaryColor, 0.1);
 
   Future<void> init() async {
-    primaryColor = options.getInt('primaryColor') ?? 0xFF5538e5;
+    primaryColor = await options.getInt('primaryColor') ?? 0xFF5538e5;
     notifyListeners();
   }
 

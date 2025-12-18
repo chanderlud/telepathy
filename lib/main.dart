@@ -54,7 +54,7 @@ Future<void> main(List<String> args) async {
   }
 
   const storage = FlutterSecureStorage();
-  final SharedPreferences options = await SharedPreferences.getInstance();
+  final SharedPreferencesAsync options = SharedPreferencesAsync();
 
   final SettingsController settingsController =
       SettingsController(storage: storage, options: options, args: args);
@@ -248,7 +248,7 @@ Future<void> main(List<String> args) async {
 
   final InterfaceController interfaceController =
       InterfaceController(options: options);
-  interfaceController.init();
+  await interfaceController.init();
 
   runApp(TelepathyApp(
     telepathy: telepathy,
