@@ -411,12 +411,12 @@ where
                     let latency = event
                         .result
                         .as_ref()
-                        .map(|duration| duration.as_millis())
+                        .map(|duration| duration.as_secs_f64())
                         .ok();
 
                     // update the latency for the peer's session
-                    if let Some(state) = self.session_states.read().await.get(&event.peer) {
-                        state.latency.store(latency.unwrap_or(0) as usize, Relaxed);
+                    if let Some(state) = self.session_states.read().await.get(&event.peer) && let Some(l) = latency {
+                        state.latency.store((l * 1000_f64) as usize, Relaxed);
                         continue; // the remaining logic is not needed while a session is active
                     }
 

@@ -709,8 +709,8 @@ pub(crate) struct StartScreenshare {
 /// the state of a single connection during session negotiation
 #[derive(Debug, Clone)]
 pub(crate) struct ConnectionState {
-    /// the latency is ms when available
-    latency: Option<u128>,
+    /// the latest latency, when available
+    latency: Option<f64>,
 
     /// whether the connection is relayed
     pub(crate) relayed: bool,
