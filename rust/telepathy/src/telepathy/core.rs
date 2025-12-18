@@ -408,15 +408,14 @@ where
                     }
                 }
                 SwarmEvent::Behaviour(BehaviourEvent::Ping(event)) => {
-                    let latency = event
-                        .result
-                        .as_ref()
-                        .map(|duration| duration.as_secs_f64())
-                        .ok();
+                    let Ok(latency) = event.result else {
+                        warn!("unexpected ping result {:?}", event);
+                        continue
+                    };
 
                     // update the latency for the peer's session
-                    if let Some(state) = self.session_states.read().await.get(&event.peer) && let Some(l) = latency {
-                        state.latency.store((l * 1000_f64) as usize, Relaxed);
+                    if let Some(state) = self.session_states.read().await.get(&event.peer) {
+                        state.latency.store(latency.as_millis() as usize, Relaxed);
                         continue; // the remaining logic is not needed while a session is active
                     }
 
@@ -430,7 +429,7 @@ where
                         continue; // the dialer chooses the connection
                     } else if let Some(state) = peer_state.connections.get_mut(&event.connection) {
                         // update the latency for the peer's connections
-                        state.latency = latency;
+                        state.latency = Some(latency);
                         info!("connection states: {:?}", peer_state.connections);
                     } else {
                         warn!("ping for untracked connection: {}", event.connection);

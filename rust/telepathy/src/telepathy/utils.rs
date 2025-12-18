@@ -22,7 +22,6 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::Duration;
-use ordered_float::OrderedFloat;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::select;
 use tokio::sync::Notify;
@@ -246,7 +245,7 @@ pub(crate) fn select_best_connection(
             // lower is better
             let relayed_rank = if s.relayed { 1 } else { 0 };
             let locality_rank = classify_locality(s.remote_address);
-            let latency_rank = OrderedFloat(s.latency.unwrap_or(f64::INFINITY));
+            let latency_rank = s.latency.unwrap_or(Duration::MAX);
             let retries_rank = s.retries.load(Relaxed);
             let is_ipv6 = if s.remote_address.is_some_and(|a| a.is_ipv6()) {
                 0

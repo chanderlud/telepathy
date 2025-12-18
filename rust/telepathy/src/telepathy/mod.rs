@@ -710,7 +710,7 @@ pub(crate) struct StartScreenshare {
 #[derive(Debug, Clone)]
 pub(crate) struct ConnectionState {
     /// the latest latency, when available
-    latency: Option<f64>,
+    latency: Option<Duration>,
 
     /// whether the connection is relayed
     pub(crate) relayed: bool,
