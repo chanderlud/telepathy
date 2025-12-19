@@ -107,7 +107,8 @@ class CallDetailsWidget extends StatelessWidget {
                       listenable: statisticsController,
                       selector: (c) => c.download,
                       builder: (context, download) {
-                        return Text(download, style: const TextStyle(height: 0));
+                        return Text(download,
+                            style: const TextStyle(height: 0));
                       },
                     ),
                   ],

@@ -102,7 +102,8 @@ class _AudioSettingsState extends State<AudioSettings> {
             String outputInitialSelection;
             if (state.selectedOutputDevice == null) {
               outputInitialSelection = 'Default';
-            } else if (state.outputDevices.contains(state.selectedOutputDevice)) {
+            } else if (state.outputDevices
+                .contains(state.selectedOutputDevice)) {
               outputInitialSelection = state.selectedOutputDevice!;
             } else {
               outputInitialSelection = 'Default';
@@ -316,7 +317,8 @@ class _AudioSettingsState extends State<AudioSettings> {
                 return CustomSwitch(
                     value: efficiencyMode,
                     onChanged: (enabled) {
-                      widget.preferencesController.updateEfficiencyMode(enabled);
+                      widget.preferencesController
+                          .updateEfficiencyMode(enabled);
                       widget.telepathy.setEfficiencyMode(enabled: enabled);
                     });
               },

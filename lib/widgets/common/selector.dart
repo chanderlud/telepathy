@@ -76,5 +76,3 @@ class _SelectorState<T extends Listenable, S> extends State<Selector<T, S>> {
     return widget.builder(context, _previousValue as S);
   }
 }
-
-

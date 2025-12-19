@@ -104,7 +104,8 @@ class CallControls extends StatelessWidget {
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text('Output Volume', style: TextStyle(fontSize: 15)),
+                      const Text('Output Volume',
+                          style: TextStyle(fontSize: 15)),
                       Slider(
                           value: outputVolume,
                           onChanged: (value) async {
@@ -127,11 +128,13 @@ class CallControls extends StatelessWidget {
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text('Input Volume', style: TextStyle(fontSize: 15)),
+                      const Text('Input Volume',
+                          style: TextStyle(fontSize: 15)),
                       Slider(
                           value: inputVolume,
                           onChanged: (value) async {
-                            await audioSettingsController.updateInputVolume(value);
+                            await audioSettingsController
+                                .updateInputVolume(value);
                             telepathy.setInputVolume(decibel: value);
                           },
                           min: -15,
