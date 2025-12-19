@@ -7,6 +7,7 @@ import 'package:telepathy/src/rust/audio/player.dart';
 import 'package:telepathy/src/rust/flutter.dart';
 import 'package:telepathy/src/rust/overlay/overlay.dart';
 import 'package:telepathy/src/rust/telepathy.dart';
+import 'package:telepathy/widgets/common/index.dart';
 
 /// A widget with commonly used controls for a call.
 class CallControls extends StatelessWidget {
@@ -93,53 +94,79 @@ class CallControls extends StatelessWidget {
             }),
         Padding(
           padding: const EdgeInsets.only(left: 25, right: 25, top: 20),
-          child: ListenableBuilder(
-              listenable: audioSettingsController,
-              builder: (BuildContext context, Widget? child) {
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text('Output Volume', style: TextStyle(fontSize: 15)),
-                    Slider(
-                        value: audioSettingsController.outputVolume,
-                        onChanged: (value) async {
-                          await audioSettingsController
-                              .updateOutputVolume(value);
-                          telepathy.setOutputVolume(decibel: value);
-                        },
-                        min: -15,
-                        max: 15,
-                        label:
-                            '${audioSettingsController.outputVolume.toStringAsFixed(2)} db'),
-                    const SizedBox(height: 2),
-                    const Text('Input Volume', style: TextStyle(fontSize: 15)),
-                    Slider(
-                        value: audioSettingsController.inputVolume,
-                        onChanged: (value) async {
-                          await audioSettingsController.updateInputVolume(value);
-                          telepathy.setInputVolume(decibel: value);
-                        },
-                        min: -15,
-                        max: 15,
-                        label:
-                            '${audioSettingsController.inputVolume.toStringAsFixed(2)} db'),
-                    const SizedBox(height: 2),
-                    const Text('Input Sensitivity',
-                        style: TextStyle(fontSize: 15)),
-                    Slider(
-                        value: audioSettingsController.inputSensitivity,
-                        onChanged: (value) async {
-                          await audioSettingsController
-                              .updateInputSensitivity(value);
-                          telepathy.setRmsThreshold(decimal: value);
-                        },
-                        min: -16,
-                        max: 50,
-                        label:
-                            '${audioSettingsController.inputSensitivity.toStringAsFixed(2)} db'),
-                  ],
-                );
-              }),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Selector<AudioSettingsController, double>(
+                listenable: audioSettingsController,
+                selector: (c) => c.outputVolume,
+                builder: (context, outputVolume) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Output Volume', style: TextStyle(fontSize: 15)),
+                      Slider(
+                          value: outputVolume,
+                          onChanged: (value) async {
+                            await audioSettingsController
+                                .updateOutputVolume(value);
+                            telepathy.setOutputVolume(decibel: value);
+                          },
+                          min: -15,
+                          max: 15,
+                          label: '${outputVolume.toStringAsFixed(2)} db'),
+                      const SizedBox(height: 2),
+                    ],
+                  );
+                },
+              ),
+              Selector<AudioSettingsController, double>(
+                listenable: audioSettingsController,
+                selector: (c) => c.inputVolume,
+                builder: (context, inputVolume) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Input Volume', style: TextStyle(fontSize: 15)),
+                      Slider(
+                          value: inputVolume,
+                          onChanged: (value) async {
+                            await audioSettingsController.updateInputVolume(value);
+                            telepathy.setInputVolume(decibel: value);
+                          },
+                          min: -15,
+                          max: 15,
+                          label: '${inputVolume.toStringAsFixed(2)} db'),
+                      const SizedBox(height: 2),
+                    ],
+                  );
+                },
+              ),
+              Selector<AudioSettingsController, double>(
+                listenable: audioSettingsController,
+                selector: (c) => c.inputSensitivity,
+                builder: (context, inputSensitivity) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Input Sensitivity',
+                          style: TextStyle(fontSize: 15)),
+                      Slider(
+                          value: inputSensitivity,
+                          onChanged: (value) async {
+                            await audioSettingsController
+                                .updateInputSensitivity(value);
+                            telepathy.setRmsThreshold(decimal: value);
+                          },
+                          min: -16,
+                          max: 50,
+                          label: '${inputSensitivity.toStringAsFixed(2)} db'),
+                    ],
+                  );
+                },
+              ),
+            ],
+          ),
         ),
         const Spacer(),
         Container(

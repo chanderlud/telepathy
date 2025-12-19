@@ -4,4 +4,5 @@ export 'custom_dialog.dart';
 export 'custom_switch.dart';
 export 'dropdown.dart';
 export 'gradient_chart.dart';
+export 'selector.dart';
 export 'text_input.dart';
