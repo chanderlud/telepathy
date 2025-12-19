@@ -1,3 +1,4 @@
+import 'package:collection/collection.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:telepathy/controllers/index.dart';
@@ -35,10 +36,25 @@ class AudioSettings extends StatefulWidget {
 }
 
 class _AudioSettingsState extends State<AudioSettings> {
+  late Listenable _deviceDropdownListenable;
+
   @override
   void initState() {
     super.initState();
+    _deviceDropdownListenable =
+        Listenable.merge([widget.audioDevices, widget.audioSettingsController]);
     widget.audioDevices.startUpdates();
+  }
+
+  @override
+  void didUpdateWidget(covariant AudioSettings oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    if (oldWidget.audioDevices != widget.audioDevices ||
+        oldWidget.audioSettingsController != widget.audioSettingsController) {
+      _deviceDropdownListenable = Listenable.merge(
+          [widget.audioDevices, widget.audioSettingsController]);
+    }
   }
 
   @override
@@ -63,114 +79,111 @@ class _AudioSettingsState extends State<AudioSettings> {
           style: TextStyle(fontSize: 20),
         ),
         const SizedBox(height: 17),
-        ListenableBuilder(
-            listenable: widget.stateController,
-            builder: (BuildContext context, Widget? child) {
-              return ListenableBuilder(
-                  listenable: widget.audioDevices,
-                  builder: (BuildContext context, Widget? child) {
-                    String inputInitialSelection;
+        Selector<Listenable, _DeviceDropdownState>(
+          listenable: _deviceDropdownListenable,
+          selector: (_) => _DeviceDropdownState(
+            inputDevices:
+                List<String>.unmodifiable(widget.audioDevices.inputDevices),
+            outputDevices:
+                List<String>.unmodifiable(widget.audioDevices.outputDevices),
+            selectedInputDevice: widget.audioSettingsController.inputDevice,
+            selectedOutputDevice: widget.audioSettingsController.outputDevice,
+          ),
+          builder: (BuildContext context, _DeviceDropdownState state) {
+            String inputInitialSelection;
+            if (state.selectedInputDevice == null) {
+              inputInitialSelection = 'Default';
+            } else if (state.inputDevices.contains(state.selectedInputDevice)) {
+              inputInitialSelection = state.selectedInputDevice!;
+            } else {
+              inputInitialSelection = 'Default';
+            }
 
-                    if (widget.audioSettingsController.inputDevice == null) {
-                      inputInitialSelection = 'Default';
-                    } else if (widget.audioDevices.inputDevices
-                        .contains(widget.audioSettingsController.inputDevice)) {
-                      inputInitialSelection =
-                          widget.audioSettingsController.inputDevice!;
-                    } else {
-                      inputInitialSelection = 'Default';
-                    }
+            String outputInitialSelection;
+            if (state.selectedOutputDevice == null) {
+              outputInitialSelection = 'Default';
+            } else if (state.outputDevices.contains(state.selectedOutputDevice)) {
+              outputInitialSelection = state.selectedOutputDevice!;
+            } else {
+              outputInitialSelection = 'Default';
+            }
 
-                    String outputInitialSelection;
+            final double width = widget.constraints.maxWidth < 650
+                ? widget.constraints.maxWidth
+                : (widget.constraints.maxWidth - 20) / 2;
 
-                    if (widget.audioSettingsController.outputDevice == null) {
-                      outputInitialSelection = 'Default';
-                    } else if (widget.audioDevices.outputDevices.contains(
-                        widget.audioSettingsController.outputDevice)) {
-                      outputInitialSelection =
-                          widget.audioSettingsController.outputDevice!;
-                    } else {
-                      outputInitialSelection = 'Default';
-                    }
-
-                    double width = widget.constraints.maxWidth < 650
-                        ? widget.constraints.maxWidth
-                        : (widget.constraints.maxWidth - 20) / 2;
-
-                    return Wrap(
-                      spacing: 20,
-                      runSpacing: 20,
-                      children: [
-                        DropDown(
-                            label: 'Input Device',
-                            items: widget.audioDevices.inputDevices
-                                .map((d) => (d, d))
-                                .toList(),
-                            initialSelection: inputInitialSelection,
-                            onSelected: (String? value) {
-                              if (value == 'Default') value = null;
-                              widget.audioSettingsController
-                                  .updateInputDevice(value);
-                              widget.telepathy.setInputDevice(device: value);
-                            },
-                            width: width),
-                        DropDown(
-                          label: 'Output Device',
-                          items: widget.audioDevices.outputDevices
-                              .map((d) => (d, d))
-                              .toList(),
-                          initialSelection: outputInitialSelection,
-                          onSelected: (String? value) {
-                            if (value == 'Default') value = null;
-                            widget.audioSettingsController
-                                .updateOutputDevice(value);
-                            widget.telepathy.setOutputDevice(device: value);
-                            widget.player.updateOutputDevice(name: value);
-                          },
-                          width: width,
-                        )
-                      ],
-                    );
-                  });
-            }),
+            return Wrap(
+              spacing: 20,
+              runSpacing: 20,
+              children: [
+                DropDown(
+                    label: 'Input Device',
+                    items: state.inputDevices.map((d) => (d, d)).toList(),
+                    initialSelection: inputInitialSelection,
+                    onSelected: (String? value) {
+                      if (value == 'Default') value = null;
+                      widget.audioSettingsController.updateInputDevice(value);
+                      widget.telepathy.setInputDevice(device: value);
+                    },
+                    width: width),
+                DropDown(
+                  label: 'Output Device',
+                  items: state.outputDevices.map((d) => (d, d)).toList(),
+                  initialSelection: outputInitialSelection,
+                  onSelected: (String? value) {
+                    if (value == 'Default') value = null;
+                    widget.audioSettingsController.updateOutputDevice(value);
+                    widget.telepathy.setOutputDevice(device: value);
+                    widget.player.updateOutputDevice(name: value);
+                  },
+                  width: width,
+                )
+              ],
+            );
+          },
+        ),
         const SizedBox(height: 20),
         Row(children: [
-          ListenableBuilder(
-              listenable: widget.stateController,
-              builder: (BuildContext context, Widget? child) {
-                return Button(
-                  text: widget.stateController.inAudioTest
-                      ? 'End Test'
-                      : 'Sound Test',
-                  width: 80,
-                  height: 25,
-                  disabled: widget.stateController.isCallActive,
-                  onPressed: () async {
-                    if (widget.stateController.inAudioTest) {
+          Selector<StateController, (bool, bool)>(
+            listenable: widget.stateController,
+            selector: (controller) =>
+                (controller.inAudioTest, controller.isCallActive),
+            builder: (BuildContext context, state) {
+              final (inAudioTest, isCallActive) = state;
+              return Button(
+                text: inAudioTest ? 'End Test' : 'Sound Test',
+                width: 80,
+                height: 25,
+                disabled: isCallActive,
+                onPressed: () async {
+                  if (inAudioTest) {
+                    widget.stateController.setInAudioTest();
+                    widget.telepathy.endCall();
+                  } else {
+                    widget.stateController.setInAudioTest();
+                    try {
+                      await widget.telepathy.audioTest();
+                    } on DartError catch (e) {
+                      if (!context.mounted) return;
+                      showErrorDialog(
+                          context, 'Error in Audio Test', e.message);
                       widget.stateController.setInAudioTest();
-                      widget.telepathy.endCall();
-                    } else {
-                      widget.stateController.setInAudioTest();
-                      try {
-                        await widget.telepathy.audioTest();
-                      } on DartError catch (e) {
-                        if (!context.mounted) return;
-                        showErrorDialog(
-                            context, 'Error in Audio Test', e.message);
-                        widget.stateController.setInAudioTest();
-                      }
                     }
-                  },
-                );
-              }),
+                  }
+                },
+              );
+            },
+          ),
           const SizedBox(width: 20),
-          ListenableBuilder(
-              listenable: widget.statisticsController,
-              builder: (BuildContext context, Widget? child) {
-                return AudioLevel(
-                    level: widget.statisticsController.inputLevel,
-                    numRectangles: (widget.constraints.maxWidth - 145) ~/ 13.5);
-              }),
+          Selector<StatisticsController, double>(
+            listenable: widget.statisticsController,
+            selector: (controller) => controller.inputLevel,
+            builder: (BuildContext context, double inputLevel) {
+              return AudioLevel(
+                  level: inputLevel,
+                  numRectangles: (widget.constraints.maxWidth - 145) ~/ 13.5);
+            },
+          ),
         ]),
         const SizedBox(height: 20),
         Row(
@@ -178,49 +191,43 @@ class _AudioSettingsState extends State<AudioSettings> {
           mainAxisSize: MainAxisSize.max,
           children: [
             const Text('Noise Suppression', style: TextStyle(fontSize: 18)),
-            ListenableBuilder(
-                listenable: widget.audioSettingsController,
-                builder: (BuildContext context, Widget? child) {
-                  return ListenableBuilder(
-                      listenable: widget.stateController,
-                      builder: (BuildContext context, Widget? child) {
-                        return DropDown(
-                            items: const [
-                              ('Off', 'Off'),
-                              ('Vanilla', 'Vanilla'),
-                              ('Hogwash', 'Hogwash')
-                            ],
-                            initialSelection: widget
-                                    .audioSettingsController.useDenoise
-                                ? widget.audioSettingsController.denoiseModel ??
-                                    'Vanilla'
-                                : 'Off',
-                            onSelected: (String? value) {
-                              if (value == 'Off') {
-                                // save denoise option
-                                widget.audioSettingsController
-                                    .updateUseDenoise(false);
-                                // set denoise to false
-                                widget.telepathy.setDenoise(denoise: false);
-                              } else {
-                                if (value == 'Vanilla') {
-                                  value = null;
-                                }
+            Selector<AudioSettingsController, (bool, String?)>(
+              listenable: widget.audioSettingsController,
+              selector: (controller) =>
+                  (controller.useDenoise, controller.denoiseModel),
+              builder: (BuildContext context, state) {
+                final (useDenoise, denoiseModel) = state;
+                return DropDown(
+                    items: const [
+                      ('Off', 'Off'),
+                      ('Vanilla', 'Vanilla'),
+                      ('Hogwash', 'Hogwash')
+                    ],
+                    initialSelection:
+                        useDenoise ? (denoiseModel ?? 'Vanilla') : 'Off',
+                    onSelected: (String? value) {
+                      if (value == 'Off') {
+                        // save denoise option
+                        widget.audioSettingsController.updateUseDenoise(false);
+                        // set denoise to false
+                        widget.telepathy.setDenoise(denoise: false);
+                      } else {
+                        if (value == 'Vanilla') {
+                          value = null;
+                        }
 
-                                // save denoise option
-                                widget.audioSettingsController
-                                    .updateUseDenoise(true);
-                                // save denoise model
-                                widget.audioSettingsController
-                                    .setDenoiseModel(value);
-                                // set denoise to true
-                                widget.telepathy.setDenoise(denoise: true);
-                                // set denoise model
-                                updateDenoiseModel(value, widget.telepathy);
-                              }
-                            });
-                      });
-                }),
+                        // save denoise option
+                        widget.audioSettingsController.updateUseDenoise(true);
+                        // save denoise model
+                        widget.audioSettingsController.setDenoiseModel(value);
+                        // set denoise to true
+                        widget.telepathy.setDenoise(denoise: true);
+                        // set denoise model
+                        updateDenoiseModel(value, widget.telepathy);
+                      }
+                    });
+              },
+            ),
           ],
         ),
         const SizedBox(height: 5),
@@ -229,17 +236,19 @@ class _AudioSettingsState extends State<AudioSettings> {
           mainAxisSize: MainAxisSize.max,
           children: [
             const Text('Play Custom Ringtones', style: TextStyle(fontSize: 18)),
-            ListenableBuilder(
-                listenable: widget.preferencesController,
-                builder: (BuildContext context, Widget? child) {
-                  return CustomSwitch(
-                      value: widget.preferencesController.playCustomRingtones,
-                      onChanged: (play) {
-                        widget.preferencesController
-                            .updatePlayCustomRingtones(play);
-                        widget.telepathy.setPlayCustomRingtones(play: play);
-                      });
-                }),
+            Selector<PreferencesController, bool>(
+              listenable: widget.preferencesController,
+              selector: (controller) => controller.playCustomRingtones,
+              builder: (BuildContext context, bool playCustomRingtones) {
+                return CustomSwitch(
+                    value: playCustomRingtones,
+                    onChanged: (play) {
+                      widget.preferencesController
+                          .updatePlayCustomRingtones(play);
+                      widget.telepathy.setPlayCustomRingtones(play: play);
+                    });
+              },
+            ),
           ],
         ),
         const SizedBox(height: 15),
@@ -266,31 +275,33 @@ class _AudioSettingsState extends State<AudioSettings> {
                     widget.telepathy.setSendCustomRingtone(send: false);
                   }
                 }),
-            ListenableBuilder(
-                listenable: widget.preferencesController,
-                builder: (BuildContext context, Widget? child) {
-                  return Text(
-                      widget.preferencesController.customRingtoneFile ?? '',
-                      style: const TextStyle(fontSize: 16));
-                }),
+            Selector<PreferencesController, String?>(
+              listenable: widget.preferencesController,
+              selector: (controller) => controller.customRingtoneFile,
+              builder: (BuildContext context, String? customRingtoneFile) {
+                return Text(customRingtoneFile ?? '',
+                    style: const TextStyle(fontSize: 16));
+              },
+            ),
           ],
         ),
         const SizedBox(height: 20),
         const Text('Sound Effect Volume', style: TextStyle(fontSize: 16)),
-        ListenableBuilder(
-            listenable: widget.audioSettingsController,
-            builder: (BuildContext context, Widget? child) {
-              return Slider(
-                  value: widget.audioSettingsController.soundVolume,
-                  onChanged: (value) {
-                    widget.audioSettingsController.updateSoundVolume(value);
-                    widget.player.updateOutputVolume(volume: value);
-                  },
-                  min: -20,
-                  max: 20,
-                  label:
-                      '${widget.audioSettingsController.soundVolume.toStringAsFixed(2)} db');
-            }),
+        Selector<AudioSettingsController, double>(
+          listenable: widget.audioSettingsController,
+          selector: (controller) => controller.soundVolume,
+          builder: (BuildContext context, double soundVolume) {
+            return Slider(
+                value: soundVolume,
+                onChanged: (value) {
+                  widget.audioSettingsController.updateSoundVolume(value);
+                  widget.player.updateOutputVolume(volume: value);
+                },
+                min: -20,
+                max: 20,
+                label: '${soundVolume.toStringAsFixed(2)} db');
+          },
+        ),
         const SizedBox(height: 5),
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -298,17 +309,18 @@ class _AudioSettingsState extends State<AudioSettings> {
           children: [
             const Text('Enable Efficiency Mode',
                 style: TextStyle(fontSize: 18)),
-            ListenableBuilder(
-                listenable: widget.preferencesController,
-                builder: (BuildContext context, Widget? child) {
-                  return CustomSwitch(
-                      value: widget.preferencesController.efficiencyMode,
-                      onChanged: (enabled) {
-                        widget.preferencesController
-                            .updateEfficiencyMode(enabled);
-                        widget.telepathy.setEfficiencyMode(enabled: enabled);
-                      });
-                }),
+            Selector<PreferencesController, bool>(
+              listenable: widget.preferencesController,
+              selector: (controller) => controller.efficiencyMode,
+              builder: (BuildContext context, bool efficiencyMode) {
+                return CustomSwitch(
+                    value: efficiencyMode,
+                    onChanged: (enabled) {
+                      widget.preferencesController.updateEfficiencyMode(enabled);
+                      widget.telepathy.setEfficiencyMode(enabled: enabled);
+                    });
+              },
+            ),
           ],
         ),
         ListenableBuilder(
@@ -377,4 +389,36 @@ class _AudioSettingsState extends State<AudioSettings> {
       ],
     );
   }
+}
+
+class _DeviceDropdownState {
+  final List<String> inputDevices;
+  final List<String> outputDevices;
+  final String? selectedInputDevice;
+  final String? selectedOutputDevice;
+
+  _DeviceDropdownState({
+    required this.inputDevices,
+    required this.outputDevices,
+    required this.selectedInputDevice,
+    required this.selectedOutputDevice,
+  });
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is _DeviceDropdownState &&
+          runtimeType == other.runtimeType &&
+          const ListEquality().equals(inputDevices, other.inputDevices) &&
+          const ListEquality().equals(outputDevices, other.outputDevices) &&
+          selectedInputDevice == other.selectedInputDevice &&
+          selectedOutputDevice == other.selectedOutputDevice;
+
+  @override
+  int get hashCode => Object.hash(
+        const ListEquality().hash(inputDevices),
+        const ListEquality().hash(outputDevices),
+        selectedInputDevice,
+        selectedOutputDevice,
+      );
 }
