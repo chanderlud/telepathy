@@ -64,10 +64,18 @@ class ChatStateController extends ChangeNotifier {
 
   /// adds a file to the list of attachments
   void addAttachmentFile(String name, File file) async {
-    final fileNameWithoutExtension = name.substring(0, name.lastIndexOf('.'));
-    final fileExtension = name.substring(name.lastIndexOf('.'));
-    String newName =
-        '$fileNameWithoutExtension-${DateTime.now().millisecondsSinceEpoch}$fileExtension';
+    final lastDot = name.lastIndexOf('.');
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+
+    final String newName;
+    if (lastDot == -1) {
+      // No extension; keep the original name and append the timestamp suffix.
+      newName = '$name-$nowMs';
+    } else {
+      final fileNameWithoutExtension = name.substring(0, lastDot);
+      final fileExtension = name.substring(lastDot);
+      newName = '$fileNameWithoutExtension-$nowMs$fileExtension';
+    }
 
     Uint8List bytes;
     try {
@@ -90,10 +98,18 @@ class ChatStateController extends ChangeNotifier {
 
   /// adds an attachment from memory to the list of attachments
   void addAttachmentMemory(String name, Uint8List data) {
-    final fileNameWithoutExtension = name.substring(0, name.lastIndexOf('.'));
-    final fileExtension = name.substring(name.lastIndexOf('.'));
-    String newName =
-        '$fileNameWithoutExtension-${DateTime.now().millisecondsSinceEpoch}$fileExtension';
+    final lastDot = name.lastIndexOf('.');
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+
+    final String newName;
+    if (lastDot == -1) {
+      // No extension; keep the original name and append the timestamp suffix.
+      newName = '$name-$nowMs';
+    } else {
+      final fileNameWithoutExtension = name.substring(0, lastDot);
+      final fileExtension = name.substring(lastDot);
+      newName = '$fileNameWithoutExtension-$nowMs$fileExtension';
+    }
 
     attachments.add((newName, data));
     _addFile(newName, null, data);
