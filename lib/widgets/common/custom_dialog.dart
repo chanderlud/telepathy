@@ -1,9 +1,9 @@
-import 'dart:io';
-
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:process_run/process_run.dart';
 import 'package:super_clipboard/super_clipboard.dart';
 import 'package:telepathy/core/utils/console.dart';
+import 'package:telepathy/core/utils/io_shim.dart';
+import 'package:telepathy/core/utils/shell_runner.dart';
 
 /// A custom right click dialog.
 class CustomPositionedDialog extends StatelessWidget {
@@ -71,11 +71,11 @@ class CustomPositionedDialog extends StatelessWidget {
                   if ((Platform.isMacOS ||
                           Platform.isLinux ||
                           Platform.isWindows) &&
-                      file != null)
+                      file != null &&
+                      !kIsWeb)
                     InkWell(
                       onTap: () {
-                        // init shell
-                        Shell shell = Shell();
+                        final shell = TelepathyShellRunner();
 
                         if (Platform.isWindows) {
                           shell.run(
@@ -94,6 +94,13 @@ class CustomPositionedDialog extends StatelessWidget {
                       child: const SizedBox(
                         width: 125,
                         child: Text('View in Folder'),
+                      ),
+                    ),
+                  if (kIsWeb)
+                    const SizedBox(
+                      width: 200,
+                      child: Text(
+                        "File downloaded to browser's Downloads folder",
                       ),
                     ),
                 ],

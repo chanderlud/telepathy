@@ -1,9 +1,8 @@
-import 'dart:io';
-
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:telepathy/app.dart';
 import 'package:telepathy/core/utils/index.dart';
+import 'package:telepathy/core/utils/io_shim.dart';
 import 'package:telepathy/src/rust/audio/player.dart';
 import 'package:telepathy/src/rust/flutter.dart';
 
@@ -43,14 +42,18 @@ class ChatStateController extends ChangeNotifier {
 
     // handle any attachments
     for (var attachment in message.attachments()) {
-      File? file = await saveToDownloads(attachment.$2, attachment.$1);
+      if (kIsWeb) {
+        await saveToDownloads(attachment.$2, attachment.$1);
+        _addFile(attachment.$1, null, attachment.$2);
+      } else {
+        File? file = await saveToDownloads(attachment.$2, attachment.$1);
+        if (file == null) {
+          continue;
+        }
 
-      if (file == null) {
-        continue;
+        // add the file record
+        _addFile(attachment.$1, file, attachment.$2);
       }
-
-      // add the file record
-      _addFile(attachment.$1, file, attachment.$2);
     }
 
     // remove attachment data from memory
@@ -64,6 +67,18 @@ class ChatStateController extends ChangeNotifier {
 
   /// adds a file to the list of attachments
   void addAttachmentFile(String name, File file) async {
+    if (kIsWeb) {
+      final context = navigatorKey.currentState?.context;
+      if (context != null && navigatorKey.currentState!.mounted) {
+        showErrorDialog(
+          context,
+          'Attachments not supported on web',
+          'Uploading files from disk is not supported in the web build.',
+        );
+      }
+      return;
+    }
+
     final lastDot = name.lastIndexOf('.');
     final nowMs = DateTime.now().millisecondsSinceEpoch;
 

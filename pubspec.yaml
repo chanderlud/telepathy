@@ -29,6 +29,7 @@ dependencies:
   process_run: ^1.2.4
   freezed_annotation: ^3.0.0
   window_manager: ^0.5.1
+  web: ^1.1.1
 
 dev_dependencies:
   flutter_test:

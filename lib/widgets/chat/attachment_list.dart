@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'package:telepathy/core/utils/io_shim_stub.dart';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';

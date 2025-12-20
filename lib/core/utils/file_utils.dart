@@ -1,25 +1,16 @@
-import 'dart:io';
-import 'dart:typed_data';
+/// Cross-platform file saving helpers.
+///
+/// This library uses conditional exports to provide a platform-specific
+/// implementation of [saveToDownloads] while keeping a stable import path.
+///
+/// Platform behavior:
+/// - Android: Saves to the platform Downloads directory, under `Telepathy/`.
+/// - iOS: Saves to an app-sandboxed downloads directory (via `path_provider`).
+/// - Web: Triggers a browser download and returns `null`.
+///
+/// Return value:
+/// - Native: Returns a `dart:io` `File` on success.
+/// - Web: Returns `null` (no `dart:io` `File`), and also returns `null` on error.
+library;
 
-import 'package:path_provider/path_provider.dart';
-import 'package:telepathy/core/utils/console.dart';
-
-// TODO verify cross-platform compatibility
-Future<File?> saveToDownloads(Uint8List fileBytes, String fileName) async {
-  Directory? downloadsDirectory = await getDownloadsDirectory();
-
-  if (downloadsDirectory != null) {
-    final subdirectory = Directory('${downloadsDirectory.path}/Telepathy');
-    if (!await subdirectory.exists()) {
-      await subdirectory.create();
-    }
-
-    final file = File('${subdirectory.path}/$fileName');
-    await file.writeAsBytes(fileBytes);
-
-    return file;
-  } else {
-    DebugConsole.warn('Unable to get downloads directory');
-    return null;
-  }
-}
+export 'file_utils_web.dart' if (dart.library.io) 'file_utils_native.dart';
