@@ -7,6 +7,8 @@ class TextInput extends StatelessWidget {
   final TextEditingController controller;
   final bool? obscureText;
   final bool? enabled;
+  final FocusNode? focusNode;
+  final bool? autofocus;
   final void Function(String)? onChanged;
   final void Function(String)? onSubmitted;
   final Widget? error;
@@ -18,6 +20,8 @@ class TextInput extends StatelessWidget {
       required this.controller,
       this.obscureText,
       this.enabled,
+      this.focusNode,
+      this.autofocus,
       this.onChanged,
       this.onSubmitted,
       this.error});
@@ -28,6 +32,8 @@ class TextInput extends StatelessWidget {
       controller: controller,
       obscureText: obscureText ?? false,
       enabled: enabled,
+      focusNode: focusNode,
+      autofocus: autofocus ?? false,
       onChanged: onChanged,
       onSubmitted: onSubmitted,
       decoration: InputDecoration(

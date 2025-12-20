@@ -1,8 +1,10 @@
 import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' hide TextInput;
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:telepathy/controllers/index.dart';
 import 'package:telepathy/core/utils/index.dart';
+import 'package:telepathy/core/utils/room_format_utils.dart';
 import 'package:telepathy/src/rust/error.dart';
 import 'package:telepathy/src/rust/telepathy.dart';
 import 'package:telepathy/widgets/common/index.dart';
@@ -25,8 +27,15 @@ class ContactFormState extends State<ContactForm> {
   final TextEditingController _nicknameInput = TextEditingController();
   final TextEditingController _peerIdInput = TextEditingController();
   final List<String> _peerIds = [];
+  final FocusNode _nicknameFocusNode = FocusNode();
   String? selectedPeer;
   bool? addContact;
+
+  @override
+  void dispose() {
+    _nicknameFocusNode.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -43,9 +52,11 @@ class ContactFormState extends State<ContactForm> {
             Button(
               text: 'Add Contact',
               onPressed: () async {
-                // TODO make the nickname input selected
                 setState(() {
                   addContact = true;
+                });
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  _nicknameFocusNode.requestFocus();
                 });
               },
             ),
@@ -54,6 +65,9 @@ class ContactFormState extends State<ContactForm> {
               onPressed: () async {
                 setState(() {
                   addContact = false;
+                });
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  _nicknameFocusNode.requestFocus();
                 });
               },
             )
@@ -73,7 +87,11 @@ class ContactFormState extends State<ContactForm> {
           children: [
             const Text('Add Contact', style: TextStyle(fontSize: 20)),
             const SizedBox(height: 21),
-            TextInput(controller: _nicknameInput, labelText: 'Nickname'),
+            TextInput(
+              controller: _nicknameInput,
+              labelText: 'Nickname',
+              focusNode: _nicknameFocusNode,
+            ),
             const SizedBox(height: 15),
             TextInput(
                 controller: _peerIdInput,
@@ -145,8 +163,62 @@ class ContactFormState extends State<ContactForm> {
                 ),
                 const SizedBox(width: 12),
                 IconButton(
-                  onPressed: () {
-                    // TODO handle paste room details from URL
+                  onPressed: () async {
+                    final data = await Clipboard.getData(Clipboard.kTextPlain);
+                    final text = data?.text?.trim();
+
+                    if (text == null || text.isEmpty) {
+                      if (!context.mounted) return;
+                      showErrorDialog(context, 'Failed to paste room details',
+                          'Clipboard does not contain any text');
+                      return;
+                    }
+
+                    final parsed = parseRoomDetails(text);
+                    if (parsed == null) {
+                      if (!context.mounted) return;
+                      showErrorDialog(context, 'Failed to paste room details',
+                          'Clipboard text is not a valid room details format');
+                      return;
+                    }
+
+                    final nickname = parsed.nickname.trim();
+                    final peerIds = parsed.peerIds
+                        .map((p) => p.trim())
+                        .where((p) => p.isNotEmpty)
+                        .toSet()
+                        .toList();
+
+                    if (nickname.isEmpty) {
+                      if (!context.mounted) return;
+                      showErrorDialog(context, 'Failed to paste room details',
+                          'Room nickname cannot be empty');
+                      return;
+                    }
+
+                    if (peerIds.isEmpty) {
+                      if (!context.mounted) return;
+                      showErrorDialog(context, 'Failed to paste room details',
+                          'Room peer IDs cannot be empty');
+                      return;
+                    }
+
+                    final invalid = peerIds
+                        .firstWhereOrNull((p) => !validatePeerId(peerId: p));
+                    if (invalid != null) {
+                      if (!context.mounted) return;
+                      showErrorDialog(context, 'Failed to paste room details',
+                          'Invalid peer ID: $invalid');
+                      return;
+                    }
+
+                    _nicknameInput.text = nickname;
+                    _peerIdInput.clear();
+                    setState(() {
+                      _peerIds
+                        ..clear()
+                        ..addAll(peerIds);
+                    });
                   },
                   icon: SvgPicture.asset('assets/icons/Copy.svg'),
                   constraints:
@@ -157,7 +229,11 @@ class ContactFormState extends State<ContactForm> {
               ],
             ),
             const SizedBox(height: 15),
-            TextInput(controller: _nicknameInput, labelText: 'Nickname'),
+            TextInput(
+              controller: _nicknameInput,
+              labelText: 'Nickname',
+              focusNode: _nicknameFocusNode,
+            ),
             const SizedBox(height: 15),
             Row(
               children: [
@@ -176,8 +252,10 @@ class ContactFormState extends State<ContactForm> {
                     if (_peerIds.contains(_peerIdInput.text)) {
                       return;
                     } else if (validatePeerId(peerId: _peerIdInput.text)) {
-                      _peerIds.add(_peerIdInput.text);
-                      _peerIdInput.clear();
+                      setState(() {
+                        _peerIds.add(_peerIdInput.text);
+                        _peerIdInput.clear();
+                      });
                     } else {
                       showErrorDialog(context, 'Failed to add Peer ID',
                           'The provided Peer ID is invalid');

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:telepathy/controllers/index.dart';
 import 'package:telepathy/core/utils/index.dart';
@@ -57,6 +58,32 @@ class RoomWidgetState extends State<RoomWidget> {
             const SizedBox(width: 10),
             Text(widget.room.nickname, style: const TextStyle(fontSize: 16)),
             const Spacer(),
+            IconButton(
+              visualDensity: VisualDensity.comfortable,
+              icon: SvgPicture.asset(
+                'assets/icons/Copy.svg',
+                semanticsLabel: 'Copy room details icon',
+                width: 28,
+              ),
+              onPressed: () async {
+                try {
+                  final roomDetailsString = widget.room.toShareableFormat();
+                  await Clipboard.setData(
+                      ClipboardData(text: roomDetailsString));
+                  if (!context.mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Room details copied'),
+                      duration: Duration(seconds: 1),
+                    ),
+                  );
+                } catch (_) {
+                  if (!context.mounted) return;
+                  showErrorDialog(context, 'Copy failed',
+                      'Failed to copy room details to clipboard');
+                }
+              },
+            ),
             IconButton(
               visualDensity: VisualDensity.comfortable,
               icon: SvgPicture.asset(

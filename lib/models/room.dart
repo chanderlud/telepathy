@@ -1,4 +1,5 @@
 import 'package:telepathy/src/rust/flutter.dart';
+import 'package:telepathy/core/utils/room_format_utils.dart';
 
 class Room {
   late String id;
@@ -29,5 +30,9 @@ class Room {
       'peerIds': peerIds,
       'nickname': nickname,
     };
+  }
+
+  String toShareableFormat() {
+    return serializeRoomDetails(nickname, peerIds);
   }
 }
