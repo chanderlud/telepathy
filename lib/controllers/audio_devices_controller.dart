@@ -13,6 +13,7 @@ class AudioDevices extends ChangeNotifier {
   late List<String> _outputDevices = [];
 
   final ListEquality<String> _listEquality = const ListEquality<String>();
+  bool _refreshing = false;
 
   List<String> get inputDevices => ['Default', ..._inputDevices];
 
@@ -30,23 +31,31 @@ class AudioDevices extends ChangeNotifier {
     super.dispose();
   }
 
-  void updateDevices() async {
-    var (inputDevices, outputDevices) = await telepathy.listDevices();
+  Future<void> updateDevices() async {
+    if (_refreshing) return;
+    _refreshing = true;
+    try {
+      var (inputDevices, outputDevices) = await telepathy.listDevices();
 
-    bool notify = false;
+      bool notify = false;
 
-    if (!_listEquality.equals(_inputDevices, inputDevices)) {
-      _inputDevices = inputDevices;
-      notify = true;
-    }
+      if (!_listEquality.equals(_inputDevices, inputDevices)) {
+        _inputDevices = inputDevices;
+        notify = true;
+      }
 
-    if (!_listEquality.equals(_outputDevices, outputDevices)) {
-      _outputDevices = outputDevices;
-      notify = true;
-    }
+      if (!_listEquality.equals(_outputDevices, outputDevices)) {
+        _outputDevices = outputDevices;
+        notify = true;
+      }
 
-    if (notify) {
-      notifyListeners();
+      if (notify) {
+        notifyListeners();
+      }
+    } catch (e, st) {
+      DebugConsole.debug('Failed to update audio devices: $e\n$st');
+    } finally {
+      _refreshing = false;
     }
   }
 
