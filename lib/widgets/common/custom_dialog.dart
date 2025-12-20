@@ -65,7 +65,8 @@ class CustomPositionedDialog extends StatelessWidget {
                       child: Text('Copy'),
                     ),
                   ),
-                  // TODO need some kind of divider here
+                  const SizedBox(height: 5),
+                  const Divider(),
                   const SizedBox(height: 5),
                   if ((Platform.isMacOS ||
                           Platform.isLinux ||
@@ -76,12 +77,13 @@ class CustomPositionedDialog extends StatelessWidget {
                         // init shell
                         Shell shell = Shell();
 
-                        // TODO work on cross platform support
                         if (Platform.isWindows) {
                           shell.run(
                               'explorer.exe /select,${file!.path.replaceAll("/", "\\\\")}');
                         } else if (Platform.isMacOS) {
                           shell.run('open -R "${file!.path}"');
+                        } else if (Platform.isLinux) {
+                          shell.run('xdg-open "${file!.parent.path}"');
                         } else {
                           DebugConsole.warn(
                               'Opening file in folder not supported on this platform');
