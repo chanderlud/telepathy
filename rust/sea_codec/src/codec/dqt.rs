@@ -1,4 +1,4 @@
-use std::array;
+use core::array;
 
 #[derive(Debug, PartialEq)]
 pub struct SeaDequantTab {
@@ -9,7 +9,7 @@ pub struct SeaDequantTab {
 }
 
 // scale_factors along with residuals should cover all potential values
-// we try to calcualte an exponent for max scalefactor that is efficient given the range ot residuals
+// we try to calculate an exponent for max scalefactor that is efficient given the range ot residuals
 // theoretically [12, 11, 10, 9, 8, 7] should be fine, but these numbers perform better over a diverse dataset
 pub static IDEAL_POW_FACTOR: [f32; 8] = [12.0, 11.65, 11.20, 10.58, 9.64, 8.75, 7.66, 6.63]; // were found experimentally
 
@@ -47,7 +47,7 @@ impl SeaDequantTab {
 
         let scale_factor_items = 1 << scale_factor_bits;
         for index in 1..=scale_factor_items {
-            let value: f32 = (index as f32).powf(power_factor);
+            let value: f32 = libm::powf(index as f32, power_factor);
             output.push(value as i32);
         }
 
@@ -83,7 +83,7 @@ impl SeaDequantTab {
         let steps = 1 << (residual_bits - 1);
         let end = ((1 << residual_bits) - 1) as f32;
         let step = (end - start) / (steps - 1) as f32;
-        let step_floor = step.floor();
+        let step_floor = libm::floorf(step);
 
         let mut curve = vec![0.0; steps];
         for (i, item) in curve.iter_mut().enumerate().take(steps).skip(1) {
@@ -116,7 +116,7 @@ impl SeaDequantTab {
 
             // zig zag pattern decreases quantization error
             for item in dqt.iter().take(dqt_items) {
-                let val = (scale_factors[s] as f32 * item).round() as i32;
+                let val = libm::roundf(scale_factors[s] as f32 * item) as i32;
                 output[s].push(val);
                 output[s].push(-val);
             }
