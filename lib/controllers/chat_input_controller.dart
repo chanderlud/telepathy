@@ -36,7 +36,9 @@ class ChatInputController {
 
   Future<void> chooseFile() async {
     try {
-      final result = await FilePicker.platform.pickFiles();
+      final result = await FilePicker.platform.pickFiles(
+        withData: Platform.isAndroid || Platform.isIOS,
+      );
       if (result == null) return;
 
       final filePickerFile = result.files.single;
