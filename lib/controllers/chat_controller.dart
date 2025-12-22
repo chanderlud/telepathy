@@ -2,7 +2,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:telepathy/app.dart';
 import 'package:telepathy/core/utils/index.dart';
-import 'package:telepathy/core/utils/io_shim.dart';
 import 'package:telepathy/src/rust/audio/player.dart';
 import 'package:telepathy/src/rust/flutter.dart';
 

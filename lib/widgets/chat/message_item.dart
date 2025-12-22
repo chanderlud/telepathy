@@ -1,5 +1,4 @@
-import 'package:telepathy/core/utils/io_shim_stub.dart';
-
+import 'package:telepathy/core/utils/io_shim.dart';
 import 'package:flutter/material.dart';
 import 'package:telepathy/widgets/chat/attachment_list.dart';
 import 'package:telepathy/src/rust/flutter.dart';

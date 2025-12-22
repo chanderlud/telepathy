@@ -1,5 +1,3 @@
-import 'package:telepathy/core/utils/io_shim_stub.dart';
-
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
