@@ -19,9 +19,8 @@ AppUpdatesURL={#MyAppURL}
 DefaultDirName={localappdata}\Programs\Telepathy
 DisableProgramGroupPage=yes
 LicenseFile=..\LICENSE
-
+DisableDirPage=yes
 PrivilegesRequired=lowest
-PrivilegesRequiredOverridesAllowed=no
 
 OutputBaseFilename=telepathy_installer
 SetupIconFile=..\windows\runner\resources\app_icon.ico
