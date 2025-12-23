@@ -417,7 +417,7 @@ where
         if output_config.sample_format() != SampleFormat::F32 {
             return Err(ErrorKind::UnsupportedSampleFormat.into());
         }
-        info!("output device: {:?}", output_device.name());
+        info!("output device: {:?}", output_device.description());
 
         // in rooms, the SEA header is hard coded
         let header = is_room.then_some(SeaFileHeader {
@@ -428,7 +428,7 @@ where
             sample_rate: remote_sample_rate as u32,
         });
         // the ratio of the output sample rate to the remote input sample rate
-        let ratio = output_config.sample_rate().0 as f64 / remote_sample_rate;
+        let ratio = output_config.sample_rate() as f64 / remote_sample_rate;
         let state = OutputProcessorState::new(
             &self.core_state.output_volume,
             statistics_state.output_rms.clone(),
@@ -578,8 +578,8 @@ where
             if input_config.sample_format() != SampleFormat::F32 {
                 return Err(ErrorKind::UnsupportedSampleFormat.into());
             }
-            info!("input_device: {:?}", input_device.name());
-            input_sample_rate = input_config.sample_rate().0;
+            info!("input_device: {:?}", input_device.description());
+            input_sample_rate = input_config.sample_rate();
             input_channels = input_config.channels() as usize;
         }
 
@@ -627,21 +627,11 @@ where
     #[cfg(not(target_family = "wasm"))]
     pub(crate) async fn get_input_device(&self) -> Result<Device> {
         match *self.core_state.input_device.lock().await {
-            Some(ref name) => Ok(self
-                .host
-                .input_devices()?
-                .find(|device| {
-                    if let Ok(ref device_name) = device.name() {
-                        name == device_name
-                    } else {
-                        false
-                    }
-                })
-                .unwrap_or(
-                    self.host
-                        .default_input_device()
-                        .ok_or(ErrorKind::NoInputDevice)?,
-                )),
+            Some(ref id) => Ok(self.host.device_by_id(id).unwrap_or(
+                self.host
+                    .default_input_device()
+                    .ok_or(ErrorKind::NoInputDevice)?,
+            )),
             None => self
                 .host
                 .default_input_device()

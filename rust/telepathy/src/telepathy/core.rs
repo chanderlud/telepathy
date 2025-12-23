@@ -20,9 +20,9 @@ use crate::telepathy::utils::{
     stream_to_audio_transport, write_message,
 };
 use crate::telepathy::{
-    CHAT_PROTOCOL, DCUTR_TIMEOUT, DeviceName, EarlyCallState, HELLO_TIMEOUT, KEEP_ALIVE,
-    OptionalCallArgs, RoomConnection, RoomMessage, RoomState, SESSION_MAX_FRAME_LENGTH,
-    SessionState, StartScreenshare, StatisticsCollectorState,
+    CHAT_PROTOCOL, DCUTR_TIMEOUT, EarlyCallState, HELLO_TIMEOUT, KEEP_ALIVE, OptionalCallArgs,
+    RoomConnection, RoomMessage, RoomState, SESSION_MAX_FRAME_LENGTH, SessionState, SharedDeviceId,
+    StartScreenshare, StatisticsCollectorState,
 };
 use crate::telepathy::{ConnectionState, Result};
 use atomic_float::AtomicF32;
@@ -1458,10 +1458,10 @@ pub(crate) struct CoreState {
     pub(crate) denoise_model: Arc<RwLock<RnnModel>>,
 
     /// Manually set the input device
-    pub(crate) input_device: DeviceName,
+    pub(crate) input_device: SharedDeviceId,
 
     /// Manually set the output device
-    pub(crate) output_device: DeviceName,
+    pub(crate) output_device: SharedDeviceId,
 
     /// The current libp2p private key
     pub(crate) identity: Arc<RwLock<Option<Keypair>>>,

@@ -255,7 +255,7 @@ abstract class RustLibApi extends BaseApi {
       {required SoundPlayer that, required List<int> bytes});
 
   Future<void> crateAudioPlayerSoundPlayerUpdateOutputDevice(
-      {required SoundPlayer that, String? name});
+      {required SoundPlayer that, String? deviceId});
 
   void crateAudioPlayerSoundPlayerUpdateOutputVolume(
       {required SoundPlayer that, required double volume});
@@ -273,8 +273,8 @@ abstract class RustLibApi extends BaseApi {
   Future<void> crateTelepathyTelepathyJoinRoom(
       {required Telepathy that, required List<String> memberStrings});
 
-  Future<(List<String>, List<String>)> crateTelepathyTelepathyListDevices(
-      {required Telepathy that});
+  Future<(List<AudioDevice>, List<AudioDevice>)>
+      crateTelepathyTelepathyListDevices({required Telepathy that});
 
   Telepathy crateTelepathyTelepathyNew(
       {required ArcHost host,
@@ -302,7 +302,7 @@ abstract class RustLibApi extends BaseApi {
       {required Telepathy that, required List<int> key});
 
   Future<void> crateTelepathyTelepathySetInputDevice(
-      {required Telepathy that, String? device});
+      {required Telepathy that, String? deviceId});
 
   void crateTelepathyTelepathySetInputVolume(
       {required Telepathy that, required double decibel});
@@ -314,7 +314,7 @@ abstract class RustLibApi extends BaseApi {
       {required Telepathy that, required bool muted});
 
   Future<void> crateTelepathyTelepathySetOutputDevice(
-      {required Telepathy that, String? device});
+      {required Telepathy that, String? deviceId});
 
   void crateTelepathyTelepathySetOutputVolume(
       {required Telepathy that, required double decibel});
@@ -2108,13 +2108,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @override
   Future<void> crateAudioPlayerSoundPlayerUpdateOutputDevice(
-      {required SoundPlayer that, String? name}) {
+      {required SoundPlayer that, String? deviceId}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSoundPlayer(
             that, serializer);
-        sse_encode_opt_String(name, serializer);
+        sse_encode_opt_String(deviceId, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
             funcId: 59, port: port_);
       },
@@ -2123,7 +2123,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeErrorData: null,
       ),
       constMeta: kCrateAudioPlayerSoundPlayerUpdateOutputDeviceConstMeta,
-      argValues: [that, name],
+      argValues: [that, deviceId],
       apiImpl: this,
     ));
   }
@@ -2131,7 +2131,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateAudioPlayerSoundPlayerUpdateOutputDeviceConstMeta =>
       const TaskConstMeta(
         debugName: 'SoundPlayer_update_output_device',
-        argNames: ['that', 'name'],
+        argNames: ['that', 'deviceId'],
       );
 
   @override
@@ -2277,8 +2277,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<(List<String>, List<String>)> crateTelepathyTelepathyListDevices(
-      {required Telepathy that}) {
+  Future<(List<AudioDevice>, List<AudioDevice>)>
+      crateTelepathyTelepathyListDevices({required Telepathy that}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -2288,7 +2288,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             funcId: 65, port: port_);
       },
       codec: SseCodec(
-        decodeSuccessData: sse_decode_record_list_string_list_string,
+        decodeSuccessData:
+            sse_decode_record_list_audio_device_list_audio_device,
         decodeErrorData: sse_decode_dart_error,
       ),
       constMeta: kCrateTelepathyTelepathyListDevicesConstMeta,
@@ -2525,13 +2526,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @override
   Future<void> crateTelepathyTelepathySetInputDevice(
-      {required Telepathy that, String? device}) {
+      {required Telepathy that, String? deviceId}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
             that, serializer);
-        sse_encode_opt_String(device, serializer);
+        sse_encode_opt_String(deviceId, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
             funcId: 73, port: port_);
       },
@@ -2540,7 +2541,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeErrorData: null,
       ),
       constMeta: kCrateTelepathyTelepathySetInputDeviceConstMeta,
-      argValues: [that, device],
+      argValues: [that, deviceId],
       apiImpl: this,
     ));
   }
@@ -2548,7 +2549,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateTelepathyTelepathySetInputDeviceConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_set_input_device',
-        argNames: ['that', 'device'],
+        argNames: ['that', 'deviceId'],
       );
 
   @override
@@ -2635,13 +2636,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @override
   Future<void> crateTelepathyTelepathySetOutputDevice(
-      {required Telepathy that, String? device}) {
+      {required Telepathy that, String? deviceId}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
             that, serializer);
-        sse_encode_opt_String(device, serializer);
+        sse_encode_opt_String(deviceId, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
             funcId: 77, port: port_);
       },
@@ -2650,7 +2651,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeErrorData: null,
       ),
       constMeta: kCrateTelepathyTelepathySetOutputDeviceConstMeta,
-      argValues: [that, device],
+      argValues: [that, deviceId],
       apiImpl: this,
     ));
   }
@@ -2658,7 +2659,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateTelepathyTelepathySetOutputDeviceConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_set_output_device',
-        argNames: ['that', 'device'],
+        argNames: ['that', 'deviceId'],
       );
 
   @override
@@ -4019,6 +4020,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  AudioDevice dco_decode_audio_device(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 2)
+      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    return AudioDevice(
+      name: dco_decode_String(arr[0]),
+      id: dco_decode_String(arr[1]),
+    );
+  }
+
+  @protected
   bool dco_decode_bool(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as bool;
@@ -4118,6 +4131,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   List<String> dco_decode_list_String(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return (raw as List<dynamic>).map(dco_decode_String).toList();
+  }
+
+  @protected
+  List<AudioDevice> dco_decode_list_audio_device(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_audio_device).toList();
   }
 
   @protected
@@ -4240,16 +4259,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  (List<String>, List<String>) dco_decode_record_list_string_list_string(
-      dynamic raw) {
+  (List<AudioDevice>, List<AudioDevice>)
+      dco_decode_record_list_audio_device_list_audio_device(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
     if (arr.length != 2) {
       throw Exception('Expected 2 elements, got ${arr.length}');
     }
     return (
-      dco_decode_list_String(arr[0]),
-      dco_decode_list_String(arr[1]),
+      dco_decode_list_audio_device(arr[0]),
+      dco_decode_list_audio_device(arr[1]),
     );
   }
 
@@ -4794,6 +4813,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  AudioDevice sse_decode_audio_device(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_name = sse_decode_String(deserializer);
+    var var_id = sse_decode_String(deserializer);
+    return AudioDevice(name: var_name, id: var_id);
+  }
+
+  @protected
   bool sse_decode_bool(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return deserializer.buffer.getUint8() != 0;
@@ -4897,6 +4924,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var ans_ = <String>[];
     for (var idx_ = 0; idx_ < len_; ++idx_) {
       ans_.add(sse_decode_String(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
+  List<AudioDevice> sse_decode_list_audio_device(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <AudioDevice>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_audio_device(deserializer));
     }
     return ans_;
   }
@@ -5030,11 +5069,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  (List<String>, List<String>) sse_decode_record_list_string_list_string(
-      SseDeserializer deserializer) {
+  (List<AudioDevice>, List<AudioDevice>)
+      sse_decode_record_list_audio_device_list_audio_device(
+          SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    var var_field0 = sse_decode_list_String(deserializer);
-    var var_field1 = sse_decode_list_String(deserializer);
+    var var_field0 = sse_decode_list_audio_device(deserializer);
+    var var_field1 = sse_decode_list_audio_device(deserializer);
     return (var_field0, var_field1);
   }
 
@@ -5692,6 +5732,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_audio_device(AudioDevice self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.name, serializer);
+    sse_encode_String(self.id, serializer);
+  }
+
+  @protected
   void sse_encode_bool(bool self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     serializer.buffer.putUint8(self ? 1 : 0);
@@ -5784,6 +5831,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_i_32(self.length, serializer);
     for (final item in self) {
       sse_encode_String(item, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_list_audio_device(
+      List<AudioDevice> self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_audio_device(item, serializer);
     }
   }
 
@@ -5906,11 +5963,11 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_record_list_string_list_string(
-      (List<String>, List<String>) self, SseSerializer serializer) {
+  void sse_encode_record_list_audio_device_list_audio_device(
+      (List<AudioDevice>, List<AudioDevice>) self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_list_String(self.$1, serializer);
-    sse_encode_list_String(self.$2, serializer);
+    sse_encode_list_audio_device(self.$1, serializer);
+    sse_encode_list_audio_device(self.$2, serializer);
   }
 
   @protected
@@ -6307,7 +6364,7 @@ class OverlayImpl extends RustOpaque implements Overlay {
       RustLib.instance.api.crateOverlayOverlayOverlayMoveOverlay(
           that: this, x: x, y: y, width: width, height: height);
 
-  /// non-windows platforms don't have an overlay
+  /// access the screen resolution for overlay positioning in the front end
   (int, int) screenResolution() =>
       RustLib.instance.api.crateOverlayOverlayOverlayScreenResolution(
         that: this,
@@ -6473,8 +6530,9 @@ class SoundPlayerImpl extends RustOpaque implements SoundPlayer {
   Future<SoundHandle> play({required List<int> bytes}) => RustLib.instance.api
       .crateAudioPlayerSoundPlayerPlay(that: this, bytes: bytes);
 
-  Future<void> updateOutputDevice({String? name}) => RustLib.instance.api
-      .crateAudioPlayerSoundPlayerUpdateOutputDevice(that: this, name: name);
+  Future<void> updateOutputDevice({String? deviceId}) =>
+      RustLib.instance.api.crateAudioPlayerSoundPlayerUpdateOutputDevice(
+          that: this, deviceId: deviceId);
 
   void updateOutputVolume({required double volume}) =>
       RustLib.instance.api.crateAudioPlayerSoundPlayerUpdateOutputVolume(
@@ -6524,7 +6582,7 @@ class TelepathyImpl extends RustOpaque implements Telepathy {
           that: this, memberStrings: memberStrings);
 
   /// Lists the input and output devices
-  Future<(List<String>, List<String>)> listDevices() =>
+  Future<(List<AudioDevice>, List<AudioDevice>)> listDevices() =>
       RustLib.instance.api.crateTelepathyTelepathyListDevices(
         that: this,
       );
@@ -6553,8 +6611,8 @@ class TelepathyImpl extends RustOpaque implements Telepathy {
   Future<void> setIdentity({required List<int> key}) => RustLib.instance.api
       .crateTelepathyTelepathySetIdentity(that: this, key: key);
 
-  Future<void> setInputDevice({String? device}) => RustLib.instance.api
-      .crateTelepathyTelepathySetInputDevice(that: this, device: device);
+  Future<void> setInputDevice({String? deviceId}) => RustLib.instance.api
+      .crateTelepathyTelepathySetInputDevice(that: this, deviceId: deviceId);
 
   void setInputVolume({required double decibel}) => RustLib.instance.api
       .crateTelepathyTelepathySetInputVolume(that: this, decibel: decibel);
@@ -6565,8 +6623,8 @@ class TelepathyImpl extends RustOpaque implements Telepathy {
   void setMuted({required bool muted}) => RustLib.instance.api
       .crateTelepathyTelepathySetMuted(that: this, muted: muted);
 
-  Future<void> setOutputDevice({String? device}) => RustLib.instance.api
-      .crateTelepathyTelepathySetOutputDevice(that: this, device: device);
+  Future<void> setOutputDevice({String? deviceId}) => RustLib.instance.api
+      .crateTelepathyTelepathySetOutputDevice(that: this, deviceId: deviceId);
 
   void setOutputVolume({required double decibel}) => RustLib.instance.api
       .crateTelepathyTelepathySetOutputVolume(that: this, decibel: decibel);

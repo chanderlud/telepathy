@@ -171,7 +171,15 @@ class ChatStateController extends ChangeNotifier {
   }
 
   bool isValidImageFormat(String fileName) {
-    const validExtensions = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'tiff'];
+    const validExtensions = [
+      'jpg',
+      'jpeg',
+      'png',
+      'gif',
+      'bmp',
+      'webp',
+      'tiff'
+    ];
     final extension = fileName.split('.').last.toLowerCase();
     return validExtensions.contains(extension);
   }

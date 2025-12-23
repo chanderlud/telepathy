@@ -1,6 +1,6 @@
 [package]
 name = "telepathy"
-version = "2.5.1"
+version = "2.5.2"
 edition = "2024"
 build = "build.rs"
 
@@ -12,7 +12,7 @@ crate-type = ["cdylib", "staticlib"]
 [dependencies]
 sea-codec = { path = "../sea_codec" }
 tokio-util = { version = "0.7", features = ["codec", "compat"] }
-cpal = { version = "0.16", features = ["wasm-bindgen"] }
+cpal = { version = "0.17", features = ["wasm-bindgen", "audioworklet"] }
 log = "0.4"
 kanal = "0.1.1"
 rubato = { version = "0.16", default-features = false }

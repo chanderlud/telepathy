@@ -97,7 +97,8 @@ Future<void> main(List<String> args) async {
 
   final soundPlayer =
       SoundPlayer(outputVolume: audioSettingsController.soundVolume);
-  soundPlayer.updateOutputDevice(name: audioSettingsController.outputDevice);
+  soundPlayer.updateOutputDevice(
+      deviceId: audioSettingsController.outputDeviceId);
   soundPlayer.updateOutputVolume(volume: audioSettingsController.soundVolume);
 
   ArcHost host = soundPlayer.host();
@@ -257,8 +258,8 @@ Future<void> main(List<String> args) async {
   telepathy.setDenoise(denoise: audioSettingsController.useDenoise);
   telepathy.setPlayCustomRingtones(
       play: preferencesController.playCustomRingtones);
-  telepathy.setInputDevice(device: audioSettingsController.inputDevice);
-  telepathy.setOutputDevice(device: audioSettingsController.outputDevice);
+  telepathy.setInputDevice(deviceId: audioSettingsController.inputDeviceId);
+  telepathy.setOutputDevice(deviceId: audioSettingsController.outputDeviceId);
   telepathy.setSendCustomRingtone(
       send: preferencesController.customRingtoneFile != null);
   telepathy.setEfficiencyMode(enabled: preferencesController.efficiencyMode);

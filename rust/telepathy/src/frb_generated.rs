@@ -1778,28 +1778,28 @@ fn wire__crate__overlay__overlay__Overlay_new_impl(
             };
             let mut deserializer =
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
-            let api__enabled = <bool>::sse_decode(&mut deserializer);
-            let api__x = <i32>::sse_decode(&mut deserializer);
-            let api__y = <i32>::sse_decode(&mut deserializer);
-            let api__width = <i32>::sse_decode(&mut deserializer);
-            let api__height = <i32>::sse_decode(&mut deserializer);
-            let api__font_height = <i32>::sse_decode(&mut deserializer);
-            let api__background_color = <u32>::sse_decode(&mut deserializer);
-            let api__font_color = <u32>::sse_decode(&mut deserializer);
+            let api_enabled = <bool>::sse_decode(&mut deserializer);
+            let api_x = <i32>::sse_decode(&mut deserializer);
+            let api_y = <i32>::sse_decode(&mut deserializer);
+            let api_width = <i32>::sse_decode(&mut deserializer);
+            let api_height = <i32>::sse_decode(&mut deserializer);
+            let api_font_height = <i32>::sse_decode(&mut deserializer);
+            let api_background_color = <u32>::sse_decode(&mut deserializer);
+            let api_font_color = <u32>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, ()>(
                     (move || async move {
                         let output_ok = Result::<_, ()>::Ok(
                             crate::overlay::overlay::Overlay::new(
-                                api__enabled,
-                                api__x,
-                                api__y,
-                                api__width,
-                                api__height,
-                                api__font_height,
-                                api__background_color,
-                                api__font_color,
+                                api_enabled,
+                                api_x,
+                                api_y,
+                                api_width,
+                                api_height,
+                                api_font_height,
+                                api_background_color,
+                                api_font_color,
                             )
                             .await,
                         )?;
@@ -2826,7 +2826,7 @@ fn wire__crate__audio__player__SoundPlayer_update_output_device_impl(
             let api_that = <RustOpaqueMoi<
                 flutter_rust_bridge::for_generated::RustAutoOpaqueInner<SoundPlayer>,
             >>::sse_decode(&mut deserializer);
-            let api_name = <Option<String>>::sse_decode(&mut deserializer);
+            let api_device_id = <Option<String>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, ()>(
@@ -2851,7 +2851,7 @@ fn wire__crate__audio__player__SoundPlayer_update_output_device_impl(
                         let output_ok = Result::<_, ()>::Ok({
                             crate::audio::player::SoundPlayer::update_output_device(
                                 &*api_that_guard,
-                                api_name,
+                                api_device_id,
                             )
                             .await;
                         })?;
@@ -3661,7 +3661,7 @@ fn wire__crate__telepathy__Telepathy_set_input_device_impl(
             let api_that = <RustOpaqueMoi<
                 flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Telepathy>,
             >>::sse_decode(&mut deserializer);
-            let api_device = <Option<String>>::sse_decode(&mut deserializer);
+            let api_device_id = <Option<String>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, ()>(
@@ -3686,7 +3686,7 @@ fn wire__crate__telepathy__Telepathy_set_input_device_impl(
                         let output_ok = Result::<_, ()>::Ok({
                             crate::telepathy::Telepathy::set_input_device(
                                 &*api_that_guard,
-                                api_device,
+                                api_device_id,
                             )
                             .await;
                         })?;
@@ -3879,7 +3879,7 @@ fn wire__crate__telepathy__Telepathy_set_output_device_impl(
             let api_that = <RustOpaqueMoi<
                 flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Telepathy>,
             >>::sse_decode(&mut deserializer);
-            let api_device = <Option<String>>::sse_decode(&mut deserializer);
+            let api_device_id = <Option<String>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, ()>(
@@ -3904,7 +3904,7 @@ fn wire__crate__telepathy__Telepathy_set_output_device_impl(
                         let output_ok = Result::<_, ()>::Ok({
                             crate::telepathy::Telepathy::set_output_device(
                                 &*api_that_guard,
-                                api_device,
+                                api_device_id,
                             )
                             .await;
                         })?;
@@ -5491,6 +5491,18 @@ impl SseDecode for String {
     }
 }
 
+impl SseDecode for crate::telepathy::AudioDevice {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_name = <String>::sse_decode(deserializer);
+        let mut var_id = <String>::sse_decode(deserializer);
+        return crate::telepathy::AudioDevice {
+            name: var_name,
+            id: var_id,
+        };
+    }
+}
+
 impl SseDecode for bool {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -5579,6 +5591,18 @@ impl SseDecode for Vec<String> {
         let mut ans_ = vec![];
         for idx_ in 0..len_ {
             ans_.push(<String>::sse_decode(deserializer));
+        }
+        return ans_;
+    }
+}
+
+impl SseDecode for Vec<crate::telepathy::AudioDevice> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = vec![];
+        for idx_ in 0..len_ {
+            ans_.push(<crate::telepathy::AudioDevice>::sse_decode(deserializer));
         }
         return ans_;
     }
@@ -5700,11 +5724,16 @@ impl SseDecode for (i32, i32) {
     }
 }
 
-impl SseDecode for (Vec<String>, Vec<String>) {
+impl SseDecode
+    for (
+        Vec<crate::telepathy::AudioDevice>,
+        Vec<crate::telepathy::AudioDevice>,
+    )
+{
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
-        let mut var_field0 = <Vec<String>>::sse_decode(deserializer);
-        let mut var_field1 = <Vec<String>>::sse_decode(deserializer);
+        let mut var_field0 = <Vec<crate::telepathy::AudioDevice>>::sse_decode(deserializer);
+        let mut var_field1 = <Vec<crate::telepathy::AudioDevice>>::sse_decode(deserializer);
         return (var_field0, var_field1);
     }
 }
@@ -6274,6 +6303,24 @@ impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<Telepathy>> for Telepathy {
 }
 
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::telepathy::AudioDevice {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.name.into_into_dart().into_dart(),
+            self.id.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::telepathy::AudioDevice {}
+impl flutter_rust_bridge::IntoIntoDart<crate::telepathy::AudioDevice>
+    for crate::telepathy::AudioDevice
+{
+    fn into_into_dart(self) -> crate::telepathy::AudioDevice {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::flutter::CallState {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         match self {
@@ -6659,6 +6706,14 @@ impl SseEncode for String {
     }
 }
 
+impl SseEncode for crate::telepathy::AudioDevice {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.name, serializer);
+        <String>::sse_encode(self.id, serializer);
+    }
+}
+
 impl SseEncode for bool {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -6743,6 +6798,16 @@ impl SseEncode for Vec<String> {
         <i32>::sse_encode(self.len() as _, serializer);
         for item in self {
             <String>::sse_encode(item, serializer);
+        }
+    }
+}
+
+impl SseEncode for Vec<crate::telepathy::AudioDevice> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::telepathy::AudioDevice>::sse_encode(item, serializer);
         }
     }
 }
@@ -6850,11 +6915,16 @@ impl SseEncode for (i32, i32) {
     }
 }
 
-impl SseEncode for (Vec<String>, Vec<String>) {
+impl SseEncode
+    for (
+        Vec<crate::telepathy::AudioDevice>,
+        Vec<crate::telepathy::AudioDevice>,
+    )
+{
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
-        <Vec<String>>::sse_encode(self.0, serializer);
-        <Vec<String>>::sse_encode(self.1, serializer);
+        <Vec<crate::telepathy::AudioDevice>>::sse_encode(self.0, serializer);
+        <Vec<crate::telepathy::AudioDevice>>::sse_encode(self.1, serializer);
     }
 }
 

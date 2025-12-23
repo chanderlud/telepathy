@@ -66,7 +66,7 @@ class ChatInputController {
 
           // Use bytes directly on mobile
           final bytes = filePickerFile.bytes!;
-          
+
           // File size validation (50MB limit for mobile)
           const maxFileSize = 50 * 1024 * 1024; // 50MB
           if (bytes.length > maxFileSize) {
@@ -203,7 +203,8 @@ class ChatInputController {
 
               chatStateController.addAttachmentMemory(fileName, bytes);
             } catch (e) {
-              DebugConsole.error('Failed to read clipboard file format $format: $e');
+              DebugConsole.error(
+                  'Failed to read clipboard file format $format: $e');
               // Continue to next format instead of failing completely
               continue;
             }

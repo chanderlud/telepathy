@@ -33,7 +33,7 @@ abstract class SoundPlayer implements RustOpaqueInterface {
   /// Public play function
   Future<SoundHandle> play({required List<int> bytes});
 
-  Future<void> updateOutputDevice({String? name});
+  Future<void> updateOutputDevice({String? deviceId});
 
   void updateOutputVolume({required double volume});
 }

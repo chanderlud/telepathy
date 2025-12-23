@@ -23,10 +23,10 @@ class AudioSettingsController with ChangeNotifier {
   late String? denoiseModel;
 
   /// the output device for calls
-  late String? outputDevice;
+  late String? outputDeviceId;
 
   /// the input device for calls
-  late String? inputDevice;
+  late String? inputDeviceId;
 
   AudioSettingsController({required this.options});
 
@@ -37,8 +37,8 @@ class AudioSettingsController with ChangeNotifier {
     inputSensitivity = await options.getDouble('inputSensitivity') ?? -16;
     useDenoise = await options.getBool('useDenoise') ?? true;
     denoiseModel = await options.getString('denoiseModel') ?? 'Hogwash';
-    outputDevice = await options.getString('outputDevice');
-    inputDevice = await options.getString('inputDevice');
+    outputDeviceId = await options.getString('outputDeviceId');
+    inputDeviceId = await options.getString('inputDeviceId');
 
     notifyListeners();
   }
@@ -85,25 +85,21 @@ class AudioSettingsController with ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> updateOutputDevice(String? device) async {
-    outputDevice = device;
-
-    if (device != null) {
-      await options.setString('outputDevice', device);
+  Future<void> updateOutputDevice(String? deviceId) async {
+    if (deviceId != null) {
+      await options.setString('outputDeviceId', deviceId);
     } else {
-      await options.remove('outputDevice');
+      await options.remove('outputDeviceId');
     }
 
     notifyListeners();
   }
 
-  Future<void> updateInputDevice(String? device) async {
-    inputDevice = device;
-
-    if (device != null) {
-      await options.setString('inputDevice', device);
+  Future<void> updateInputDevice(String? deviceId) async {
+    if (deviceId != null) {
+      await options.setString('inputDeviceId', deviceId);
     } else {
-      await options.remove('inputDevice');
+      await options.remove('inputDeviceId');
     }
 
     notifyListeners();

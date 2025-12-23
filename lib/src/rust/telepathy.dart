@@ -12,7 +12,7 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These functions are ignored because they are not marked as `pub`: `codec_config`, `new`, `new`, `open_stream`, `receive_stream`, `remote_address`, `teardown`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `ConnectionState`, `EarlyCallState`, `OptionalCallArgs`, `RoomConnection`, `RoomMessage`, `RoomState`, `SessionState`, `StartScreenshare`, `StatisticsCollectorState`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `from`, `try_from`
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Telepathy>>
 abstract class Telepathy implements RustOpaqueInterface {
@@ -31,7 +31,7 @@ abstract class Telepathy implements RustOpaqueInterface {
   Future<void> joinRoom({required List<String> memberStrings});
 
   /// Lists the input and output devices
-  Future<(List<String>, List<String>)> listDevices();
+  Future<(List<AudioDevice>, List<AudioDevice>)> listDevices();
 
   factory Telepathy(
           {required ArcHost host,
@@ -64,7 +64,7 @@ abstract class Telepathy implements RustOpaqueInterface {
   /// Sets the signing key (called when the profile changes)
   Future<void> setIdentity({required List<int> key});
 
-  Future<void> setInputDevice({String? device});
+  Future<void> setInputDevice({String? deviceId});
 
   void setInputVolume({required double decibel});
 
@@ -72,7 +72,7 @@ abstract class Telepathy implements RustOpaqueInterface {
 
   void setMuted({required bool muted});
 
-  Future<void> setOutputDevice({String? device});
+  Future<void> setOutputDevice({String? deviceId});
 
   void setOutputVolume({required double decibel});
 
@@ -97,4 +97,25 @@ abstract class Telepathy implements RustOpaqueInterface {
 
   /// Stops a specific session (called when a contact is deleted)
   Future<void> stopSession({required Contact contact});
+}
+
+class AudioDevice {
+  final String name;
+  final String id;
+
+  const AudioDevice({
+    required this.name,
+    required this.id,
+  });
+
+  @override
+  int get hashCode => name.hashCode ^ id.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AudioDevice &&
+          runtimeType == other.runtimeType &&
+          name == other.name &&
+          id == other.id;
 }

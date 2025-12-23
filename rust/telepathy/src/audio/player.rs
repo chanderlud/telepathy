@@ -2,7 +2,7 @@ use crate::audio::processing::wide_mul;
 use crate::audio::resampler_factory;
 use crate::error::{DartError, Error, ErrorKind};
 use crate::frb_generated::FLUTTER_RUST_BRIDGE_HANDLER;
-use crate::telepathy::DeviceName;
+use crate::telepathy::SharedDeviceId;
 use crate::telepathy::utils::{SendStream, db_to_multiplier, get_output_device};
 use atomic_float::AtomicF32;
 use core::time::Duration;
@@ -49,7 +49,7 @@ pub struct SoundPlayer {
     output_volume: Arc<AtomicF32>,
 
     /// The output device
-    output_device: DeviceName,
+    output_device: SharedDeviceId,
 
     /// The cpal host
     host: Arc<Host>,
@@ -58,7 +58,15 @@ pub struct SoundPlayer {
 impl SoundPlayer {
     #[frb(sync)]
     pub fn new(output_volume: f32) -> SoundPlayer {
-        let host = cpal::default_host();
+        let host;
+        cfg_if::cfg_if! {
+            if #[cfg(target_family = "wasm")] {
+                // attempt to use the audio worklet host on wasm
+                host = cpal::host_from_id(cpal::HostId::AudioWorklet).unwrap_or(cpal::default_host())
+            } else {
+                host = cpal::default_host()
+            }
+        }
 
         Self {
             output_volume: Arc::new(AtomicF32::new(db_to_multiplier(output_volume))),
@@ -100,8 +108,8 @@ impl SoundPlayer {
         self.output_volume.store(db_to_multiplier(volume), Relaxed);
     }
 
-    pub async fn update_output_device(&self, name: Option<String>) {
-        *self.output_device.lock().await = name;
+    pub async fn update_output_device(&self, device_id: Option<String>) {
+        *self.output_device.lock().await = device_id.and_then(|id| id.parse().ok());
     }
 }
 
@@ -202,7 +210,7 @@ async fn play_sound(
     cancel: Arc<Notify>,
     host: Arc<Host>,
     output_volume: Arc<AtomicF32>,
-    output_device: DeviceName,
+    output_device: SharedDeviceId,
 ) -> Result<(), Error> {
     if bytes.len() < 44 {
         return Err(ErrorKind::InvalidWav.into());
@@ -259,7 +267,7 @@ async fn play_sound(
     }
 
     // the resampling ratio used by the processor
-    let ratio = output_config.sample_rate().0 as f64 / spec.sample_rate as f64;
+    let ratio = output_config.sample_rate() as f64 / spec.sample_rate as f64;
 
     // sends samples from the processor to the output stream
     #[cfg(not(target_family = "wasm"))]
@@ -284,7 +292,7 @@ async fn play_sound(
     // a counter used for fading out the last samples when the sound is canceled
     let mut i = 0;
     // used to provide a fade to 0 when the sound is canceled
-    let f32_sample_rate = output_config.sample_rate().0 as f32;
+    let f32_sample_rate = output_config.sample_rate() as f32;
 
     let output_stream = SendStream {
         stream: output_device.build_output_stream(
@@ -369,11 +377,13 @@ async fn play_sound(
         _ = cancel.notified() => {
             debug!("reached cancel sound branch");
             // this causes the stream to begin fading out
-            #[cfg(not(target_family = "wasm"))]
-            processed_sender.close()?;
-            #[cfg(target_family = "wasm")]
-            processed_sender.canceled.store(true, Relaxed);
-
+            cfg_if::cfg_if! {
+                if #[cfg(target_family = "wasm")] {
+                    processed_sender.canceled.store(true, Relaxed);
+                } else {
+                    processed_sender.close()?;
+                }
+            }
             // we sleep to prevent the stream from being closed while fading
             sleep(Duration::from_secs(1)).await;
         }
@@ -391,18 +401,19 @@ async fn play_sound(
         }
     }
 
+    debug!("starting to tear down player stack");
+    // stop the output stream to ensure cleanup succeeds
+    drop(output_stream);
     // join the decoder task if there was one
     if let Some(handle) = decoder_handle {
         handle.await?;
     }
-
     // join the processor task
-    let result = match processor_join {
-        Some(result) => result,
-        None => processor_future.await,
+    match processor_join {
+        Some(result) => result??,
+        None => processor_future.await??,
     };
-
-    result??;
+    debug!("finished tearing down player stack");
     Ok(())
 }
 

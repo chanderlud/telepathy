@@ -25,10 +25,10 @@ use atomic_float::AtomicF32;
 use chrono::Local;
 #[cfg(not(target_family = "wasm"))]
 use cpal::Device;
-use cpal::Host;
 #[cfg(not(target_family = "wasm"))]
 use cpal::SupportedStreamConfig;
 use cpal::traits::{DeviceTrait, HostTrait};
+use cpal::{DeviceId, Host};
 #[cfg(target_family = "wasm")]
 use flutter_rust_bridge::JoinHandle;
 use flutter_rust_bridge::{frb, spawn};
@@ -62,7 +62,7 @@ use uuid::Uuid;
 use wasmtimer::tokio::interval;
 
 type Result<T> = std::result::Result<T, Error>;
-pub(crate) type DeviceName = Arc<Mutex<Option<String>>>;
+pub(crate) type SharedDeviceId = Arc<Mutex<Option<DeviceId>>>;
 
 /// The number of bytes in a single network audio frame
 const TRANSFER_BUFFER_SIZE: usize = FRAME_SIZE * size_of::<i16>();
@@ -466,25 +466,27 @@ impl Telepathy {
             .store(enabled, Relaxed);
     }
 
-    pub async fn set_input_device(&self, device: Option<String>) {
-        *self.inner.core_state.input_device.lock().await = device;
+    pub async fn set_input_device(&self, device_id: Option<String>) {
+        *self.inner.core_state.input_device.lock().await = device_id.and_then(|id| id.parse().ok());
     }
 
-    pub async fn set_output_device(&self, device: Option<String>) {
-        *self.inner.core_state.output_device.lock().await = device;
+    pub async fn set_output_device(&self, device_id: Option<String>) {
+        *self.inner.core_state.output_device.lock().await =
+            device_id.and_then(|id| id.parse().ok());
     }
 
     /// Lists the input and output devices
-    pub fn list_devices(&self) -> std::result::Result<(Vec<String>, Vec<String>), DartError> {
-        let input_devices = self.inner.host.input_devices().map_err(Error::from)?;
-        let output_devices = self.inner.host.output_devices().map_err(Error::from)?;
-
-        let input_devices = input_devices
-            .filter_map(|device| device.name().ok())
+    pub fn list_devices(
+        &self,
+    ) -> std::result::Result<(Vec<AudioDevice>, Vec<AudioDevice>), DartError> {
+        let host_input_devices = self.inner.host.input_devices().map_err(Error::from)?;
+        let input_devices = host_input_devices
+            .filter_map(|device| device.try_into().ok())
             .collect();
 
-        let output_devices = output_devices
-            .filter_map(|device| device.name().ok())
+        let host_output_devices = self.inner.host.output_devices().map_err(Error::from)?;
+        let output_devices = host_output_devices
+            .filter_map(|device| device.try_into().ok())
             .collect();
 
         Ok((input_devices, output_devices))
@@ -499,6 +501,22 @@ impl Telepathy {
 
         *self.inner.core_state.denoise_model.write().await = model;
         Ok(())
+    }
+}
+
+pub struct AudioDevice {
+    pub name: String,
+    pub id: String,
+}
+
+impl TryFrom<Device> for AudioDevice {
+    type Error = ();
+
+    fn try_from(value: Device) -> std::result::Result<Self, Self::Error> {
+        Ok(Self {
+            name: value.description().map_err(|_| ())?.name().to_string(),
+            id: value.id().map_err(|_| ())?.to_string(),
+        })
     }
 }
 

@@ -353,6 +353,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   String dco_decode_String(dynamic raw);
 
   @protected
+  AudioDevice dco_decode_audio_device(dynamic raw);
+
+  @protected
   bool dco_decode_bool(dynamic raw);
 
   @protected
@@ -390,6 +393,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<String> dco_decode_list_String(dynamic raw);
+
+  @protected
+  List<AudioDevice> dco_decode_list_audio_device(dynamic raw);
 
   @protected
   List<int> dco_decode_list_prim_u_8_loose(dynamic raw);
@@ -437,8 +443,8 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   (int, int) dco_decode_record_i_32_i_32(dynamic raw);
 
   @protected
-  (List<String>, List<String>) dco_decode_record_list_string_list_string(
-      dynamic raw);
+  (List<AudioDevice>, List<AudioDevice>)
+      dco_decode_record_list_audio_device_list_audio_device(dynamic raw);
 
   @protected
   (String, Uint8List) dco_decode_record_string_list_prim_u_8_strict(
@@ -710,6 +716,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   String sse_decode_String(SseDeserializer deserializer);
 
   @protected
+  AudioDevice sse_decode_audio_device(SseDeserializer deserializer);
+
+  @protected
   bool sse_decode_bool(SseDeserializer deserializer);
 
   @protected
@@ -747,6 +756,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<String> sse_decode_list_String(SseDeserializer deserializer);
+
+  @protected
+  List<AudioDevice> sse_decode_list_audio_device(SseDeserializer deserializer);
 
   @protected
   List<int> sse_decode_list_prim_u_8_loose(SseDeserializer deserializer);
@@ -795,8 +807,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   (int, int) sse_decode_record_i_32_i_32(SseDeserializer deserializer);
 
   @protected
-  (List<String>, List<String>) sse_decode_record_list_string_list_string(
-      SseDeserializer deserializer);
+  (List<AudioDevice>, List<AudioDevice>)
+      sse_decode_record_list_audio_device_list_audio_device(
+          SseDeserializer deserializer);
 
   @protected
   (String, Uint8List) sse_decode_record_string_list_prim_u_8_strict(
@@ -1117,6 +1130,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_String(String self, SseSerializer serializer);
 
   @protected
+  void sse_encode_audio_device(AudioDevice self, SseSerializer serializer);
+
+  @protected
   void sse_encode_bool(bool self, SseSerializer serializer);
 
   @protected
@@ -1154,6 +1170,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_list_String(List<String> self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_list_audio_device(
+      List<AudioDevice> self, SseSerializer serializer);
 
   @protected
   void sse_encode_list_prim_u_8_loose(List<int> self, SseSerializer serializer);
@@ -1202,8 +1222,8 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_record_i_32_i_32((int, int) self, SseSerializer serializer);
 
   @protected
-  void sse_encode_record_list_string_list_string(
-      (List<String>, List<String>) self, SseSerializer serializer);
+  void sse_encode_record_list_audio_device_list_audio_device(
+      (List<AudioDevice>, List<AudioDevice>) self, SseSerializer serializer);
 
   @protected
   void sse_encode_record_string_list_prim_u_8_strict(

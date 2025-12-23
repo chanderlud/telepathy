@@ -5,9 +5,9 @@ use crate::overlay::{CONNECTED, LATENCY, LOSS};
 use crate::telepathy::messages::Message;
 use crate::telepathy::sockets::{Transport, TransportStream};
 use crate::telepathy::{
-    ConnectionState, DeviceName, StatisticsCollectorState, TRANSFER_BUFFER_SIZE,
+    ConnectionState, SharedDeviceId, StatisticsCollectorState, TRANSFER_BUFFER_SIZE,
 };
-use cpal::traits::{DeviceTrait, HostTrait};
+use cpal::traits::HostTrait;
 use cpal::{Device, Host, Stream};
 use flutter_rust_bridge::for_generated::futures::{Sink, SinkExt};
 use kanal::{AsyncReceiver, AsyncSender};
@@ -58,23 +58,14 @@ pub(crate) fn db_to_multiplier(db: f32) -> f32 {
 
 /// Gets the output device
 pub(crate) async fn get_output_device(
-    output_device: &DeviceName,
+    output_device: &SharedDeviceId,
     host: &Arc<Host>,
 ) -> Result<Device> {
     match *output_device.lock().await {
-        Some(ref name) => Ok(host
-            .output_devices()?
-            .find(|device| {
-                if let Ok(ref device_name) = device.name() {
-                    name == device_name
-                } else {
-                    false
-                }
-            })
-            .unwrap_or(
-                host.default_output_device()
-                    .ok_or(ErrorKind::NoOutputDevice)?,
-            )),
+        Some(ref id) => Ok(host.device_by_id(id).unwrap_or(
+            host.default_output_device()
+                .ok_or(ErrorKind::NoOutputDevice)?,
+        )),
         None => host
             .default_output_device()
             .ok_or(ErrorKind::NoOutputDevice.into()),

@@ -9,15 +9,18 @@ class AudioDevices extends ChangeNotifier {
   final Telepathy telepathy;
   Timer? periodicTimer;
 
-  late List<String> _inputDevices = [];
-  late List<String> _outputDevices = [];
+  late List<AudioDevice> _inputDevices = [];
+  late List<AudioDevice> _outputDevices = [];
 
-  final ListEquality<String> _listEquality = const ListEquality<String>();
+  final ListEquality<AudioDevice> _listEquality =
+      const ListEquality<AudioDevice>();
   bool _refreshing = false;
 
-  List<String> get inputDevices => ['Default', ..._inputDevices];
+  List<AudioDevice> get inputDevices =>
+      [const AudioDevice(name: 'Default', id: ''), ..._inputDevices];
 
-  List<String> get outputDevices => ['Default', ..._outputDevices];
+  List<AudioDevice> get outputDevices =>
+      [const AudioDevice(name: 'Default', id: ''), ..._outputDevices];
 
   AudioDevices({required this.telepathy}) {
     DebugConsole.debug('AudioDevices created');
