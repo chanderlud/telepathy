@@ -23,7 +23,6 @@ use crate::telepathy::core::TelepathyCore;
 use crate::telepathy::helpers::OutputHelper;
 use atomic_float::AtomicF32;
 use chrono::Local;
-#[cfg(not(target_family = "wasm"))]
 use cpal::Device;
 #[cfg(not(target_family = "wasm"))]
 use cpal::SupportedStreamConfig;
