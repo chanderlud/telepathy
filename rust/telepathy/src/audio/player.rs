@@ -33,15 +33,13 @@ use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::select;
 use tokio::sync::Notify;
-#[cfg(not(target_family = "wasm"))]
-use tokio::time::sleep;
 use tokio_util::bytes::Bytes;
 #[cfg(target_family = "wasm")]
 use wasm_sync::{Condvar, Mutex};
-#[cfg(target_family = "wasm")]
-use wasmtimer::tokio::sleep;
 
 type DecodedReceiver = (Receiver<ProcessorMessage>, usize);
+
+const FADE_FRAMES: usize = 60;
 
 #[frb(opaque)]
 pub struct SoundPlayer {
@@ -279,12 +277,10 @@ async fn play_sound(
     #[cfg(target_family = "wasm")]
     let audio_buffer = processed_sender.clone();
 
-    // on web the output notifies this thread when playback has finished
-    #[cfg(target_family = "wasm")]
+    // notifies this thread when playback has finished
     let output_finished = Arc::new(Notify::new());
-    #[cfg(target_family = "wasm")]
+    // used inside the output stream to notify
     let output_finished_clone = output_finished.clone();
-
     // used to chunk the output buffer correctly
     let output_channels = output_config.channels() as usize;
     // keep track of the last samples played
@@ -315,7 +311,6 @@ async fn play_sound(
                         let mut canceled = audio_buffer.canceled.load(Relaxed);
 
                         if !canceled && data.is_empty() {
-                            output_finished_clone.notify_one();
                             audio_buffer.canceled.store(true, Relaxed);
                             canceled = true;
                         }
@@ -331,7 +326,12 @@ async fn play_sound(
 
                         // play the samples
                         frame.copy_from_slice(&last_samples);
-                        i += 1; // advance the counter
+                        // advance the counter
+                        i += 1;
+                        // notify main thread once after the full fade has occurred
+                        if i == FADE_FRAMES {
+                            output_finished_clone.notify_one();
+                        }
                     } else {
                         // this unwrap is safe as the result was already checked for is_err
                         #[cfg(not(target_family = "wasm"))]
@@ -384,26 +384,17 @@ async fn play_sound(
                     processed_sender.close()?;
                 }
             }
-            // we sleep to prevent the stream from being closed while fading
-            sleep(Duration::from_secs(1)).await;
         }
         result = &mut processor_future => {
             debug!("processor finished: {:?}", result);
             // keep track of the return value
             processor_join = Some(result);
-            #[cfg(target_family = "wasm")]
-            {
-                // on web, we need to wait for the output to finish playing before continuing
-                output_finished.notified().await;
-                // delay allows for fade out
-                sleep(Duration::from_secs(1)).await;
-            }
         }
     }
 
+    // wait for playback to complete before tearing down
+    output_finished.notified().await;
     debug!("starting to tear down player stack");
-    // stop the output stream to ensure cleanup succeeds
-    drop(output_stream);
     // join the decoder task if there was one
     if let Some(handle) = decoder_handle {
         handle.await?;
