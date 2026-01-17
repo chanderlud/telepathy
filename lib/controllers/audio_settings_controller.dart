@@ -86,6 +86,7 @@ class AudioSettingsController with ChangeNotifier {
   }
 
   Future<void> updateOutputDevice(String? deviceId) async {
+    outputDeviceId = deviceId;
     if (deviceId != null) {
       await options.setString('outputDeviceId', deviceId);
     } else {
@@ -96,6 +97,7 @@ class AudioSettingsController with ChangeNotifier {
   }
 
   Future<void> updateInputDevice(String? deviceId) async {
+    inputDeviceId = deviceId;
     if (deviceId != null) {
       await options.setString('inputDeviceId', deviceId);
     } else {

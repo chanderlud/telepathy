@@ -79,72 +79,80 @@ class _AudioSettingsState extends State<AudioSettings> {
           style: TextStyle(fontSize: 20),
         ),
         const SizedBox(height: 17),
-        Selector<Listenable, _DeviceDropdownState>(
-          listenable: _deviceDropdownListenable,
-          selector: (_) => _DeviceDropdownState(
-            inputDevices: List<AudioDevice>.unmodifiable(
-                widget.audioDevices.inputDevices),
-            outputDevices: List<AudioDevice>.unmodifiable(
-                widget.audioDevices.outputDevices),
-            selectedInputDevice: widget.audioSettingsController.inputDeviceId,
-            selectedOutputDevice: widget.audioSettingsController.outputDeviceId,
-          ),
-          builder: (BuildContext context, _DeviceDropdownState state) {
-            String inputInitialSelection;
-            if (state.selectedInputDevice == null) {
-              inputInitialSelection = '';
-            } else if (state.inputDevices.firstWhereOrNull(
-                    (d) => d.id == state.selectedInputDevice) !=
-                null) {
-              inputInitialSelection = state.selectedInputDevice!;
-            } else {
-              inputInitialSelection = '';
-            }
+        Selector<StateController, bool>(
+          listenable: widget.stateController,
+          selector: (controller) => controller.blockAudioChanges,
+          builder: (BuildContext context, bool blockAudioChanges) {
+            return Selector<Listenable, _DeviceDropdownState>(
+              listenable: _deviceDropdownListenable,
+              selector: (_) => _DeviceDropdownState(
+                inputDevices: List<AudioDevice>.unmodifiable(
+                    widget.audioDevices.inputDevices),
+                outputDevices: List<AudioDevice>.unmodifiable(
+                    widget.audioDevices.outputDevices),
+                selectedInputDevice: widget.audioSettingsController.inputDeviceId,
+                selectedOutputDevice: widget.audioSettingsController.outputDeviceId,
+              ),
+              builder: (BuildContext context, _DeviceDropdownState state) {
+                String inputInitialSelection;
+                if (state.selectedInputDevice == null) {
+                  inputInitialSelection = '';
+                } else if (state.inputDevices.firstWhereOrNull(
+                        (d) => d.id == state.selectedInputDevice) !=
+                    null) {
+                  inputInitialSelection = state.selectedInputDevice!;
+                } else {
+                  inputInitialSelection = '';
+                }
 
-            String outputInitialSelection;
-            if (state.selectedOutputDevice == null) {
-              outputInitialSelection = '';
-            } else if (state.outputDevices.firstWhereOrNull(
-                    (d) => d.id == state.selectedOutputDevice) !=
-                null) {
-              outputInitialSelection = state.selectedOutputDevice!;
-            } else {
-              outputInitialSelection = '';
-            }
+                String outputInitialSelection;
+                if (state.selectedOutputDevice == null) {
+                  outputInitialSelection = '';
+                } else if (state.outputDevices.firstWhereOrNull(
+                        (d) => d.id == state.selectedOutputDevice) !=
+                    null) {
+                  outputInitialSelection = state.selectedOutputDevice!;
+                } else {
+                  outputInitialSelection = '';
+                }
 
-            final double width = widget.constraints.maxWidth < 650
-                ? widget.constraints.maxWidth
-                : (widget.constraints.maxWidth - 20) / 2;
+                final double width = widget.constraints.maxWidth < 650
+                    ? widget.constraints.maxWidth
+                    : (widget.constraints.maxWidth - 20) / 2;
 
-            return Wrap(
-              spacing: 20,
-              runSpacing: 20,
-              children: [
-                DropDown(
-                    label: 'Input Device',
-                    items:
-                        state.inputDevices.map((d) => (d.id, d.name)).toList(),
-                    initialSelection: inputInitialSelection,
-                    onSelected: (String? id) {
-                      if (id == '') id = null;
-                      widget.audioSettingsController.updateInputDevice(id);
-                      widget.telepathy.setInputDevice(deviceId: id);
-                    },
-                    width: width),
-                DropDown(
-                  label: 'Output Device',
-                  items:
-                      state.outputDevices.map((d) => (d.id, d.name)).toList(),
-                  initialSelection: outputInitialSelection,
-                  onSelected: (String? id) {
-                    if (id == '') id = null;
-                    widget.audioSettingsController.updateOutputDevice(id);
-                    widget.telepathy.setOutputDevice(deviceId: id);
-                    widget.player.updateOutputDevice(deviceId: id);
-                  },
-                  width: width,
-                )
-              ],
+                return Wrap(
+                  spacing: 20,
+                  runSpacing: 20,
+                  children: [
+                    DropDown(
+                        label: 'Input Device',
+                        items:
+                            state.inputDevices.map((d) => (d.id, d.name)).toList(),
+                        initialSelection: inputInitialSelection,
+                        enabled: !blockAudioChanges,
+                        onSelected: (String? id) {
+                          if (id == '') id = null;
+                          widget.audioSettingsController.updateInputDevice(id);
+                          widget.telepathy.setInputDevice(deviceId: id);
+                        },
+                        width: width),
+                    DropDown(
+                      label: 'Output Device',
+                      items:
+                          state.outputDevices.map((d) => (d.id, d.name)).toList(),
+                      initialSelection: outputInitialSelection,
+                      enabled: !blockAudioChanges,
+                      onSelected: (String? id) {
+                        if (id == '') id = null;
+                        widget.audioSettingsController.updateOutputDevice(id);
+                        widget.telepathy.setOutputDevice(deviceId: id);
+                        widget.player.updateOutputDevice(deviceId: id);
+                      },
+                      width: width,
+                    )
+                  ],
+                );
+              },
             );
           },
         ),
