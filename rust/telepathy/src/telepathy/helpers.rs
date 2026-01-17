@@ -32,7 +32,7 @@ use libp2p::multiaddr::Protocol;
 use libp2p::swarm::SwarmEvent;
 #[cfg(not(target_family = "wasm"))]
 use libp2p::tcp;
-use libp2p::{Multiaddr, PeerId, Swarm, dcutr, identify, noise, ping, yamux};
+use libp2p::{Multiaddr, PeerId, Swarm, autonat, dcutr, identify, noise, ping, yamux};
 use libp2p_stream::Control;
 use log::{debug, error, info, warn};
 use nnnoiseless::DenoiseState;
@@ -95,6 +95,10 @@ where
                 )),
                 dcutr: dcutr::Behaviour::new(keypair.public().to_peer_id()),
                 stream: libp2p_stream::Behaviour::new(),
+                auto_nat: autonat::Behaviour::new(
+                    keypair.public().to_peer_id(),
+                    autonat::Config::default(),
+                ),
             })
             .map_err(|_| ErrorKind::SwarmBuild)?
             .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(30)))
