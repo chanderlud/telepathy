@@ -5,7 +5,6 @@ use crate::frb_generated::FLUTTER_RUST_BRIDGE_HANDLER;
 use crate::telepathy::SharedDeviceId;
 use crate::telepathy::utils::{SendStream, db_to_multiplier, get_output_device};
 use atomic_float::AtomicF32;
-use core::time::Duration;
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{Host, SampleFormat};
 use flutter_rust_bridge::JoinHandle;
