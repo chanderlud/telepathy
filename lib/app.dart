@@ -80,6 +80,21 @@ class _TelepathyAppState extends State<TelepathyApp> with WindowListener {
   }
 
   @override
+  void onWindowMinimize() {
+    widget.telepathy.pauseStatistics();
+  }
+
+  @override
+  void onWindowMaximize() {
+    widget.telepathy.resumeStatistics();
+  }
+
+  @override
+  void onWindowRestore() {
+    widget.telepathy.resumeStatistics();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
         listenable: widget.interfaceController,

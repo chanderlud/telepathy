@@ -48,8 +48,12 @@ abstract class Telepathy implements RustOpaqueInterface {
           codecConfig: codecConfig,
           callbacks: callbacks);
 
+  void pauseStatistics();
+
   /// Restarts the session manager
   Future<void> restartManager();
+
+  void resumeStatistics();
 
   /// Sends a chat message
   Future<void> sendChat({required ChatMessage message});

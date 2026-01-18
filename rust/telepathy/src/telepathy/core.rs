@@ -1065,6 +1065,7 @@ where
             self.callbacks.statistics_callback(),
             stop_io.clone(),
             self.core_state.efficiency_mode.load(Relaxed),
+            self.core_state.statistics_paused.clone(),
         ));
 
         if let Some(o) = optional {
@@ -1319,6 +1320,7 @@ where
             self.callbacks.statistics_callback(),
             stop_io.clone(),
             self.core_state.efficiency_mode.load(Relaxed),
+            self.core_state.statistics_paused.clone(),
         ));
 
         // kick the UI out of connecting mode
@@ -1486,6 +1488,9 @@ pub(crate) struct CoreState {
 
     /// Decreases the statistics update rate
     pub(crate) efficiency_mode: Arc<AtomicBool>,
+
+    /// Pauses statistics callbacks when window is minimized
+    pub(crate) statistics_paused: Arc<AtomicBool>,
 
     /// set to true at shutdown to break manager loop
     pub(crate) stop_manager: Arc<AtomicBool>,

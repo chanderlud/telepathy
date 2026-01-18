@@ -20,7 +20,7 @@ use speedy::{Readable, Writable};
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::Arc;
-use std::sync::atomic::Ordering::Relaxed;
+use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::select;
@@ -114,6 +114,7 @@ pub(crate) async fn statistics_collector<C: FrbStatisticsCallback>(
     callback: C,
     cancel: CancellationToken,
     efficient: bool,
+    statistics_paused: Arc<AtomicBool>,
 ) {
     // the interval for statistics updates
     let mut update_interval = interval(Duration::from_millis(if efficient { 500 } else { 100 }));
@@ -132,18 +133,20 @@ pub(crate) async fn statistics_collector<C: FrbStatisticsCallback>(
             _ = update_interval.tick() => {
                 let latency = state.latency.load(Relaxed);
                 let loss = state.loss.swap(0, Relaxed);
-
-                callback.post(Statistics {
-                    input_level: level_from_window(state.input_rms.swap(0_f32, Relaxed), &mut input_max),
-                    output_level: level_from_window(state.output_rms.swap(0_f32, Relaxed), &mut output_max),
-                    latency,
-                    upload_bandwidth: state.upload_bandwidth.load(Relaxed),
-                    download_bandwidth: state.download_bandwidth.load(Relaxed),
-                    loss,
-                }).await;
-
+                // update overlay statistics
                 LATENCY.store(latency, Relaxed);
                 LOSS.store(loss, Relaxed);
+                // only post statistics if not paused
+                if !statistics_paused.load(Relaxed) {
+                    callback.post(Statistics {
+                        input_level: level_from_window(state.input_rms.swap(0_f32, Relaxed), &mut input_max),
+                        output_level: level_from_window(state.output_rms.swap(0_f32, Relaxed), &mut output_max),
+                        latency,
+                        upload_bandwidth: state.upload_bandwidth.load(Relaxed),
+                        download_bandwidth: state.download_bandwidth.load(Relaxed),
+                        loss,
+                    }).await;
+                }
             }
             _ = reset_interval.tick() => {
                 input_max /= 2_f32;

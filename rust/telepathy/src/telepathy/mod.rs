@@ -465,6 +465,22 @@ impl Telepathy {
             .store(enabled, Relaxed);
     }
 
+    #[frb(sync)]
+    pub fn pause_statistics(&self) {
+        self.inner
+            .core_state
+            .statistics_paused
+            .store(true, Relaxed);
+    }
+
+    #[frb(sync)]
+    pub fn resume_statistics(&self) {
+        self.inner
+            .core_state
+            .statistics_paused
+            .store(false, Relaxed);
+    }
+
     pub async fn set_input_device(&self, device_id: Option<String>) {
         *self.inner.core_state.input_device.lock().await = device_id.and_then(|id| id.parse().ok());
     }
