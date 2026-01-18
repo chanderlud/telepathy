@@ -467,10 +467,7 @@ impl Telepathy {
 
     #[frb(sync)]
     pub fn pause_statistics(&self) {
-        self.inner
-            .core_state
-            .statistics_paused
-            .store(true, Relaxed);
+        self.inner.core_state.statistics_paused.store(true, Relaxed);
     }
 
     #[frb(sync)]

@@ -2,7 +2,7 @@
 ; SEE THE DOCUMENTATION FOR DETAILS ON CREATING INNO SETUP SCRIPT FILES!
 
 #define MyAppName "Telepathy"
-#define MyAppVersion "2.5.3"
+#define MyAppVersion "2.5.4"
 #define MyAppPublisher "CFLM Studios"
 #define MyAppURL "https://chanchan.dev/telepathy"
 #define MyAppExeName "telepathy.exe"
