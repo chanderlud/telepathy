@@ -163,9 +163,13 @@ pub(crate) fn input_processor<I: AudioInput>(
     // resampler is Some if resampling is needed
     let mut resampler = resampler_factory(ratio, 1, in_len)?;
     // the input for the resampler
-    let mut pre_buf = [vec![0_f32; in_len]];
+    let mut pre_vec = Vec::with_capacity(in_len);
+    pre_vec.resize(in_len, 0_f32);
+    let mut pre_buf = [pre_vec];
     // the output for the resampler
-    let mut post_buf = [vec![0_f32; post_len]];
+    let mut post_vec = Vec::with_capacity(post_len);
+    post_vec.resize(post_len, 0_f32);
+    let mut post_buf = [post_vec];
     // the output for rnnoise
     let mut out_buf = [0_f32; FRAME_SIZE];
 
@@ -297,7 +301,9 @@ pub(crate) fn output_processor<O: AudioOutput>(
     // the input for the resampler
     let pre_buf = [&mut [0_f32; FRAME_SIZE]];
     // the output for the resampler
-    let mut post_buf = [vec![0_f32; post_len]];
+    let mut post_vec = Vec::with_capacity(post_len);
+    post_vec.resize(post_len, 0_f32);
+    let mut post_buf = [post_vec];
 
     while let Ok(message) = input.recv() {
         if state.is_deafened() {

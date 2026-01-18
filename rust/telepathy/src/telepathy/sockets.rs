@@ -34,29 +34,65 @@ pub(crate) trait SendingSocket {
     async fn send(&mut self, packet: Bytes) -> usize;
 }
 
+/// Simple reusable `BytesMut` pool. This intentionally keeps allocations alive by:
+/// - taking ownership of a `BytesMut` for packet construction
+/// - producing outgoing `Bytes` via a *clone+freeze* (so the pool keeps the backing allocation)
+/// - returning the original `BytesMut` to the pool strictly after `send()` completes
+struct BytesMutPool {
+    free: Vec<BytesMut>,
+    cap_hint: usize,
+}
+
+impl BytesMutPool {
+    fn new(pool_size: usize, cap_hint: usize) -> Self {
+        let mut free = Vec::with_capacity(pool_size);
+        for _ in 0..pool_size {
+            free.push(BytesMut::with_capacity(cap_hint));
+        }
+        Self { free, cap_hint }
+    }
+
+    fn take(&mut self) -> BytesMut {
+        self.free
+            .pop()
+            .unwrap_or_else(|| BytesMut::with_capacity(self.cap_hint))
+    }
+
+    fn give_back(&mut self, mut buf: BytesMut) {
+        buf.clear();
+        self.free.push(buf);
+    }
+}
+
 pub(crate) struct ConstSocket {
     socket: AudioSocket,
 
     start: Instant,
+    /// Reused buffers to avoid allocating a new packet for every send.
+    timestamp_buffers: BytesMutPool,
 }
 
 impl ConstSocket {
     pub(crate) fn new(socket: AudioSocket) -> Self {
+        let cap = 4 + FRAME_SIZE * 2;
         Self {
             socket,
             start: Instant::now(),
+            // 4 bytes for timestamp + typical raw frame size (i16 * FRAME_SIZE).
+            // Keep a small double-buffer so we never relinquish allocation when producing `Bytes`.
+            timestamp_buffers: BytesMutPool::new(2, cap),
         }
     }
 }
 
 impl SendingSocket for ConstSocket {
     async fn send(&mut self, packet: Bytes) -> usize {
-        let prepared_packet = prepend_timestamp(&packet, timestamp(&self.start));
-        if self.socket.send(prepared_packet).await.is_ok() {
-            1
-        } else {
-            0
-        }
+        let mut buf = self.timestamp_buffers.take();
+        let prepared_packet = prepend_timestamp(&mut buf, &packet, timestamp(&self.start));
+        let ok = self.socket.send(prepared_packet).await.is_ok();
+        // Return the buffer only after send completes so it retains capacity between packets.
+        self.timestamp_buffers.give_back(buf);
+        ok as usize
     }
 }
 
@@ -64,6 +100,8 @@ pub(crate) struct SendingSockets {
     new_sockets: SharedSockets,
 
     sockets: Vec<(AudioSocket, Instant)>,
+    /// Reused buffers to avoid per-packet allocations; sends are sequential.
+    timestamp_buffers: BytesMutPool,
 }
 
 impl SendingSocket for SendingSockets {
@@ -78,12 +116,18 @@ impl SendingSocket for SendingSockets {
         let mut successful_sends = 0;
 
         while i < self.sockets.len() {
+            let mut buf = self.timestamp_buffers.take();
             let send_result = {
                 // limit the &mut borrow to this block
                 let socket = &mut self.sockets[i];
                 let now = timestamp(&socket.1);
-                socket.0.send(prepend_timestamp(&packet, now)).await
+                socket
+                    .0
+                    .send(prepend_timestamp(&mut buf, &packet, now))
+                    .await
             };
+            // Return the buffer only after the send future has completed.
+            self.timestamp_buffers.give_back(buf);
 
             if send_result.is_err() {
                 // remove this socket, do NOT increment i
@@ -104,9 +148,13 @@ impl SendingSocket for SendingSockets {
 
 impl SendingSockets {
     pub(crate) fn new(new_sockets: SharedSockets) -> Self {
+        let cap = 4 + FRAME_SIZE * 2;
         Self {
             new_sockets,
             sockets: Vec::new(),
+            // 4 bytes for timestamp + typical raw frame size (i16 * FRAME_SIZE).
+            // Keep a small double-buffer so we never relinquish allocation when producing `Bytes`.
+            timestamp_buffers: BytesMutPool::new(2, cap),
         }
     }
 }
@@ -187,10 +235,10 @@ pub(crate) async fn audio_output(
                     } else {
                         loss.fetch_add(FRAME_SIZE, Relaxed);
                     }
-                } else if len == 1 {
+                } else if len == 5 {
                     debug!("audio_output received keep alive");
                 } else {
-                    warn!("audio_output received unexpected message");
+                    warn!("audio_output received unexpected message len={len}");
                 }
             }
             Some(Err(error)) => {
@@ -205,11 +253,14 @@ pub(crate) async fn audio_output(
     }
 }
 
-fn prepend_timestamp(payload: &Bytes, ts: u32) -> Bytes {
-    let mut buf = BytesMut::with_capacity(4 + payload.len());
-    buf.put_u32(ts);
-    buf.extend_from_slice(payload);
-    buf.freeze()
+fn prepend_timestamp(buffer: &mut BytesMut, payload: &Bytes, ts: u32) -> Bytes {
+    buffer.clear();
+    buffer.reserve(4 + payload.len());
+    buffer.put_u32(ts);
+    buffer.extend_from_slice(payload);
+    // produce outgoing `Bytes` from a *clone* so the caller retains the full-capacity
+    // `BytesMut` for reuse (and returns it to the pool after send completes).
+    buffer.clone().freeze()
 }
 
 /// allows for ~12,000 hours per session before overflow
