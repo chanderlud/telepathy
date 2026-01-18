@@ -84,8 +84,9 @@ impl WebOutput {
     pub(crate) fn new(buf: Arc<wasm_sync::Mutex<Vec<f32>>>) -> Self {
         // This buffer is bounded by CHANNEL_SIZE; reserve upfront to avoid growth reallocations.
         if let Ok(mut data) = buf.lock() {
-            if data.capacity() < CHANNEL_SIZE {
-                data.reserve(CHANNEL_SIZE - data.capacity());
+            let current_capacity = data.capacity();
+            if current_capacity < CHANNEL_SIZE {
+                data.reserve(CHANNEL_SIZE - current_capacity);
             }
         }
 
@@ -113,8 +114,9 @@ impl AudioOutput for WebOutput {
         let take = space.min(samples.len());
         // Ensure we never grow past CHANNEL_SIZE without reserving.
         let needed = data.len() + take;
-        if data.capacity() < needed {
-            data.reserve(needed - data.capacity());
+        let current_capacity = data.capacity();
+        if current_capacity < needed {
+            data.reserve(needed - current_capacity);
         }
         data.extend_from_slice(&samples[..take]);
 
