@@ -1,11 +1,64 @@
+//! SIMD-optimized audio processing functions.
+//!
+//! This module provides optimized implementations for common audio processing
+//! operations using SIMD instructions where available, with scalar fallbacks.
+//!
+//! ## Performance Characteristics
+//!
+//! All public functions in this module automatically select the optimal
+//! implementation based on runtime CPU feature detection:
+//!
+//! | Function | AVX-512 | AVX2/AVX | Scalar |
+//! |----------|---------|----------|--------|
+//! | [`wide_mul`] | 16 floats/iter | 8 floats/iter | 1 float/iter |
+//! | [`wide_i16_to_f32`] | N/A | 16 samples/iter | 1 sample/iter |
+//! | [`wide_float_scaler`] | 16 floats/iter | 8 floats/iter | 1 float/iter |
+//!
+//! ## Alignment Requirements
+//!
+//! SIMD paths are only used when frame length meets alignment requirements:
+//! - AVX-512: frame length must be a multiple of 16
+//! - AVX2/AVX: frame length must be a multiple of 8
+//! - Scalar fallback handles any length
+//!
+//! The standard `FRAME_SIZE` (480) is a multiple of 16, so SIMD paths are
+//! typically used for normal audio processing.
+//!
+//! ## Safety
+//!
+//! All public functions are safe. SIMD intrinsics are used internally with
+//! proper `#[target_feature]` annotations and runtime feature detection.
+
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 
 const MAX_I16_F32: f32 = i16::MAX as f32;
 const MIN_I16_F32: f32 = i16::MIN as f32;
 
-/// mul with internal selection of optimal implementation
-pub(crate) fn wide_mul(frame: &mut [f32], factor: f32) {
+/// Multiplies frame samples by a factor with automatic SIMD optimization.
+///
+/// Selects the optimal implementation based on available CPU features:
+/// - AVX-512 for 16-element aligned frames (processes 16 floats per iteration)
+/// - AVX2 for 8-element aligned frames (processes 8 floats per iteration)
+/// - Scalar fallback for other cases (processes 1 float per iteration)
+///
+/// Results are clamped to [-1.0, 1.0].
+///
+/// # Performance Notes
+///
+/// For optimal performance, ensure `frame.len()` is a multiple of 16.
+/// The standard `FRAME_SIZE` (480) satisfies this requirement.
+///
+/// # Example
+///
+/// ```rust
+/// use telepathy_audio::wide_mul;
+///
+/// let mut samples = [0.5f32; 480];
+/// wide_mul(&mut samples, 0.8); // Apply 80% volume
+/// assert!(samples.iter().all(|&s| s == 0.4));
+/// ```
+pub fn wide_mul(frame: &mut [f32], factor: f32) {
     #[cfg(target_arch = "x86_64")]
     {
         if is_x86_feature_detected!("avx512f") && frame.len().is_multiple_of(16) {
@@ -21,7 +74,18 @@ pub(crate) fn wide_mul(frame: &mut [f32], factor: f32) {
     scalar_mul(frame, factor);
 }
 
-/// Safety: input length must be a multiple of 16
+/// Converts i16 samples to f32 with scaling and automatic SIMD optimization.
+///
+/// Converts 16-bit integer samples to 32-bit float samples, applying a scale
+/// factor. Results are clamped to [-1.0, 1.0].
+///
+/// # Performance Notes
+///
+/// - AVX2: processes 16 samples per iteration
+/// - Scalar: processes 1 sample per iteration
+///
+/// For optimal performance, ensure `ints.len()` is a multiple of 16.
+/// The standard `FRAME_SIZE` (480) satisfies this requirement.
 pub(crate) fn wide_i16_to_f32(ints: &[i16], out: &mut [f32], scale: f32) {
     #[cfg(target_arch = "x86_64")]
     {
@@ -34,7 +98,22 @@ pub(crate) fn wide_i16_to_f32(ints: &[i16], out: &mut [f32], scale: f32) {
     i16_to_f32_scalar(ints, out, scale);
 }
 
-/// Safety: input length must be a multiple of 16
+/// Scales float samples with truncation and automatic SIMD optimization.
+///
+/// Multiplies float samples by a scale factor and truncates toward zero.
+/// Results are clamped to i16 range [-32768.0, 32767.0].
+///
+/// This is used to convert normalized audio [-1.0, 1.0] to i16 range
+/// before noise suppression or codec encoding.
+///
+/// # Performance Notes
+///
+/// - AVX-512: processes 16 floats per iteration
+/// - AVX: processes 8 floats per iteration
+/// - Scalar: processes 1 float per iteration
+///
+/// For optimal performance, ensure `floats.len()` is a multiple of 16.
+/// The standard `FRAME_SIZE` (480) satisfies this requirement.
 pub(crate) fn wide_float_scaler(floats: &mut [f32], scale: f32) {
     #[cfg(target_arch = "x86_64")]
     {
@@ -51,7 +130,9 @@ pub(crate) fn wide_float_scaler(floats: &mut [f32], scale: f32) {
     scalar_float_scaler(floats, scale);
 }
 
-/// calculates the RMS of the frame (loop is unrolled for optimization)
+/// Calculates the RMS (Root Mean Square) of the frame.
+///
+/// Uses loop unrolling for optimization.
 pub(crate) fn calculate_rms(data: &[f32]) -> f32 {
     let mut sum1 = 0.0;
     let mut sum2 = 0.0;
@@ -71,7 +152,7 @@ pub(crate) fn calculate_rms(data: &[f32]) -> f32 {
     mean_of_squares.sqrt()
 }
 
-/// mul for any length input
+/// Scalar multiplication for any length input.
 fn scalar_mul(frame: &mut [f32], factor: f32) {
     for p in frame.iter_mut() {
         *p *= factor;
@@ -79,7 +160,7 @@ fn scalar_mul(frame: &mut [f32], factor: f32) {
     }
 }
 
-/// optimized mul for avx2 with 8|frame.len==true
+/// Optimized multiplication for AVX2 with 8|frame.len==true.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 #[allow(unsafe_op_in_unsafe_fn)]
@@ -100,7 +181,7 @@ unsafe fn avx2_mul(frame: &mut [f32], factor: f32) {
     }
 }
 
-/// optimized mul for avx512f with 16|frame.len==true
+/// Optimized multiplication for AVX-512 with 16|frame.len==true.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f")]
 #[allow(unsafe_op_in_unsafe_fn)]
@@ -122,14 +203,14 @@ unsafe fn avx512_mul(frame: &mut [f32], factor: f32) {
     }
 }
 
-/// scalar implementation of i16 to f32 conversion with scaling
+/// Scalar implementation of i16 to f32 conversion with scaling.
 fn i16_to_f32_scalar(ints: &[i16], out: &mut [f32], scale: f32) {
     for (out, &x) in out.iter_mut().zip(ints.iter()) {
         *out = (x as f32 * scale).clamp(-1_f32, 1_f32);
     }
 }
 
-/// avx2 implementation of i16 to f32 conversion with scaling
+/// AVX2 implementation of i16 to f32 conversion with scaling.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 #[allow(unsafe_op_in_unsafe_fn)]
@@ -166,6 +247,7 @@ unsafe fn i16_to_f32_avx2(ints: &[i16], out: &mut [f32], scale: f32) {
     }
 }
 
+/// Scalar implementation of float scaling with truncation.
 fn scalar_float_scaler(floats: &mut [f32], scale: f32) {
     for x in floats.iter_mut() {
         *x *= scale;
@@ -173,6 +255,7 @@ fn scalar_float_scaler(floats: &mut [f32], scale: f32) {
     }
 }
 
+/// AVX implementation of float scaling with truncation.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx")]
 #[allow(unsafe_op_in_unsafe_fn)]
@@ -198,6 +281,7 @@ unsafe fn avx_float_scaler(floats: &mut [f32], scale: f32) {
     }
 }
 
+/// AVX-512 implementation of float scaling with truncation.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f")]
 #[allow(unsafe_op_in_unsafe_fn)]
@@ -231,6 +315,11 @@ unsafe fn avx512_float_scaler(floats: &mut [f32], scale: f32) {
     }
 }
 
+/// Unit tests for SIMD processing functions.
+///
+/// These tests verify that all SIMD implementations produce identical results
+/// to the scalar fallback implementations. Tests run on x86_64 architecture
+/// and conditionally test AVX2 and AVX-512 paths based on CPU support.
 #[cfg(test)]
 mod tests {
     #![allow(non_snake_case)]
@@ -238,10 +327,31 @@ mod tests {
 
     use nnnoiseless::FRAME_SIZE;
 
+    /// Creates a test frame with values ranging from -0.5 to 0.5.
+    fn dummy_frame() -> [f32; FRAME_SIZE] {
+        let mut frame = [0_f32; FRAME_SIZE];
+        for (i, sample) in frame.iter_mut().enumerate() {
+            *sample = ((i as f32 / FRAME_SIZE as f32) * 2.0 - 1.0) * 0.5;
+        }
+        frame
+    }
+
+    /// Creates a test frame of i16 samples.
+    fn dummy_int_frame() -> [i16; FRAME_SIZE] {
+        let mut frame = [0_i16; FRAME_SIZE];
+        for (i, sample) in frame.iter_mut().enumerate() {
+            *sample = ((i as f32 / FRAME_SIZE as f32) * 2.0 - 1.0) as i16 * 16000;
+        }
+        frame
+    }
+
+    /// Verifies all multiplication variants produce identical output.
+    ///
+    /// Tests scalar, AVX2, AVX-512, and wide_mul against each other.
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn MulVariants_DummyFrame_EqualOutputs() {
-        let frame = crate::telepathy::tests::dummy_frame();
+        let frame = dummy_frame();
         let mut scalar_frame = frame.clone();
         let mut wide_frame = frame.clone();
 
@@ -271,10 +381,13 @@ mod tests {
         assert_eq!(scalar_frame, wide_frame);
     }
 
+    /// Verifies i16 to f32 conversion variants produce identical output.
+    ///
+    /// Tests scalar and AVX2 implementations against each other.
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn IntConversion_DummyFrame_EqualOutputs() {
-        let frame = crate::telepathy::tests::dummy_int_frame();
+        let frame = dummy_int_frame();
         let mut scalar_frame = [0_f32; FRAME_SIZE];
         let mut wide_frame = [0_f32; FRAME_SIZE];
         let scale = (1_f32 / i16::MAX as f32) * 2.0;
@@ -292,10 +405,13 @@ mod tests {
         assert_eq!(scalar_frame, wide_frame);
     }
 
+    /// Verifies float scaling variants produce identical output.
+    ///
+    /// Tests scalar, AVX, and AVX-512 implementations against each other.
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn FloatConversion_DummyFrame_EqualOutputs() {
-        let frame = crate::telepathy::tests::dummy_frame();
+        let frame = dummy_frame();
         let mut scalar_frame = frame.clone();
         let mut wide_frame = frame.clone();
 

@@ -2,23 +2,42 @@
 name = "telepathy_audio"
 version = "0.1.0"
 edition = "2024"
+description = "Audio processing library for telepathy with device management, codec support, and SIMD optimization"
+license = "MIT"
 
 [lib]
 crate-type = ["lib"]
 
 [dependencies]
+# Audio backend
 cpal = { version = "0.17", features = ["wasm-bindgen", "audioworklet"] }
+
+# Channel-based communication
 kanal = "0.1.1"
+
+# Resampling
 rubato = { version = "0.16", default-features = false }
+
+# Noise suppression
 nnnoiseless = { version = "0.5", default-features = false }
+
+# Atomic float operations
 atomic_float = "1"
-tokio-util = { version = "0.7", features = ["codec", "compat"] }
+
+# Codec support
 sea-codec = { path = "../sea_codec" }
+
+# Logging
 log = "0.4"
+
+# Conditional compilation helpers
 cfg-if = "1"
 
+# Byte buffers for callbacks
+bytes = "1"
+
 [target.'cfg(target_family = "wasm")'.dependencies]
-tokio = { version = "1", features = ["time", "io-util", "macros", "rt"] }
+tokio = { version = "1", features = ["time", "io-util", "macros", "rt", "sync"] }
 web-sys = { version = "0.3", features = [
     "AudioContext",
     "MediaDevices",
@@ -40,7 +59,14 @@ web-sys = { version = "0.3", features = [
     "Window"
 ] }
 wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
+serde-wasm-bindgen = "0.6"
+wasm_sync = "0.1"
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
-tokio = { version = "1", features = ["time", "io-util", "macros", "process", "net", "rt-multi-thread", "fs"] }
+tokio = { version = "1", features = ["time", "io-util", "macros", "process", "net", "rt-multi-thread", "fs", "sync"] }
+
+[dev-dependencies]
+# For testing
+tokio-test = "0.4"

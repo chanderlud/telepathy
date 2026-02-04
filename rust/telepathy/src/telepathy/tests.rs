@@ -1,7 +1,9 @@
 use super::*;
 use crate::audio::{
     ChannelInput, ChannelOutput, InputProcessorState, OutputProcessorState, input_processor,
+    output_processor,
 };
+use crate::audio::codec::{decoder, encoder};
 use crate::flutter::callbacks::{
     FrbStatisticsCallback, MockFrbCallbacks, MockFrbStatisticsCallback,
 };
@@ -32,28 +34,6 @@ struct BenchmarkResult {
     min: Duration,
     max: Duration,
     end: Duration,
-}
-
-impl Default for InputProcessorState {
-    fn default() -> Self {
-        Self {
-            input_volume: Arc::new(AtomicF32::new(1.0)),
-            rms_threshold: Arc::new(AtomicF32::new(db_to_multiplier(50_f32))),
-            muted: Arc::new(Default::default()),
-            rms_sender: Arc::new(Default::default()),
-        }
-    }
-}
-
-impl Default for OutputProcessorState {
-    fn default() -> Self {
-        Self {
-            output_volume: Arc::new(AtomicF32::new(1.0)),
-            rms_sender: Arc::new(Default::default()),
-            deafened: Arc::new(Default::default()),
-            loss_sender: Arc::new(Default::default()),
-        }
-    }
 }
 
 impl Contact {
@@ -468,7 +448,7 @@ fn simulate_input_stack(
 
     let output_receiver = if codec_enabled {
         spawn(move || {
-            crate::audio::codec::encoder(
+            encoder(
                 processed_input_receiver,
                 encoded_input_sender,
                 if denoise { 48_000 } else { sample_rate },
@@ -525,7 +505,7 @@ fn simulate_output_stack(
 
     let output_processor_receiver = if codec_enabled {
         spawn(move || {
-            crate::audio::codec::decoder(
+            decoder(
                 network_output_receiver.to_sync(),
                 decoded_output_sender.to_sync(),
                 None,
@@ -538,7 +518,7 @@ fn simulate_output_stack(
     };
 
     spawn(move || {
-        crate::audio::output_processor(
+        output_processor(
             output_processor_receiver,
             processor_output,
             ratio,

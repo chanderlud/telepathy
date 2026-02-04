@@ -1,5 +1,4 @@
-use crate::audio::processing::wide_mul;
-use crate::audio::resampler_factory;
+use telepathy_audio::{resampler_factory, wide_mul};
 use crate::error::{DartError, Error, ErrorKind};
 use crate::frb_generated::FLUTTER_RUST_BRIDGE_HANDLER;
 use crate::telepathy::SharedDeviceId;

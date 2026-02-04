@@ -11,6 +11,7 @@ crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
 sea-codec = { path = "../sea_codec" }
+telepathy_audio = { path = "../telepathy_audio" }
 tokio-util = { version = "0.7", features = ["codec", "compat"] }
 cpal = { version = "0.17", features = ["wasm-bindgen", "audioworklet"] }
 log = "0.4"

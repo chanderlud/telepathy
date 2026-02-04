@@ -1,11 +1,11 @@
 #[cfg(target_family = "wasm")]
 use crate::audio::WebOutput;
-use crate::audio::codec::{decoder, encoder};
 #[cfg(target_family = "wasm")]
 use crate::audio::web_audio::{WebAudioInput, WebAudioWrapper};
 #[cfg(not(target_family = "wasm"))]
 use crate::audio::{ChannelInput, ChannelOutput};
 use crate::audio::{InputProcessorState, OutputProcessorState, input_processor, output_processor};
+use crate::audio::codec::{decoder, encoder};
 use crate::error::ErrorKind;
 use crate::flutter::DartNotify;
 use crate::flutter::callbacks::{FrbCallbacks, FrbStatisticsCallback};
@@ -350,6 +350,7 @@ where
                     codec_enabled,
                     state,
                 )
+                .map_err(|e| e.into())
             },
             FLUTTER_RUST_BRIDGE_HANDLER.thread_pool(),
         );
@@ -366,6 +367,7 @@ where
                         residual_bits,
                         is_room,
                     )
+                    .map_err(|e| e.into())
                 },
                 FLUTTER_RUST_BRIDGE_HANDLER.thread_pool(),
             );
@@ -450,6 +452,7 @@ where
                         decoded_output_sender.to_sync(),
                         header,
                     )
+                    .map_err(|e| e.into())
                 },
                 FLUTTER_RUST_BRIDGE_HANDLER.thread_pool(),
             ));
@@ -461,7 +464,10 @@ where
 
         // spawn the output processor thread
         let processor_handle = spawn_blocking_with(
-            move || output_processor(output_processor_receiver, processor_input, ratio, state),
+            move || {
+                output_processor(output_processor_receiver, processor_input, ratio, state)
+                    .map_err(|e| e.into())
+            },
             FLUTTER_RUST_BRIDGE_HANDLER.thread_pool(),
         );
 

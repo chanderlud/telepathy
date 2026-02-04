@@ -117,12 +117,17 @@ impl fmt::Debug for DeviceHandle {
 ///
 /// ## Platform Behavior
 ///
-/// - On **wasm**: Prefers AudioWorklet host, falls back to default WebAudio
-/// - On **native**: Uses the platform's default audio host (WASAPI, ALSA, CoreAudio, etc.)
+/// - On **WASM**: Attempts to use `cpal::HostId::AudioWorklet` for better performance,
+///   falls back to cpal's default host if AudioWorklet is unavailable. The fallback
+///   is determined by cpal and may vary by browser.
+/// - On **Windows**: Uses WASAPI (Windows Audio Session API)
+/// - On **macOS**: Uses CoreAudio
+/// - On **Linux**: Uses ALSA
 ///
 /// ## Thread Safety
 ///
 /// `AudioHost` uses `Arc` internally and is safe to clone and share across threads.
+/// The underlying cpal host is wrapped in `Arc<cpal::Host>` for efficient sharing.
 #[derive(Clone)]
 pub struct AudioHost {
     host: Arc<cpal::Host>,
@@ -449,11 +454,18 @@ where
     None
 }
 
+/// Unit tests for device enumeration.
+///
+/// Note: Many of these tests depend on the system's audio configuration.
+/// Tests that interact with real hardware may fail on headless CI systems
+/// or systems without audio devices. They are designed to not panic even
+/// when no devices are available.
 #[cfg(test)]
 #[cfg(not(target_family = "wasm"))]
 mod tests {
     use super::*;
 
+    /// Verifies AudioHost can be created without panicking.
     #[test]
     fn test_host_creation() {
         let host = AudioHost::new();
@@ -461,12 +473,14 @@ mod tests {
         let _ = format!("{:?}", host);
     }
 
+    /// Verifies AudioHost::default() works correctly.
     #[test]
     fn test_host_default() {
         let host = AudioHost::default();
         let _ = format!("{:?}", host);
     }
 
+    /// Verifies AudioHost cloning works and both instances are independent.
     #[test]
     fn test_host_clone() {
         let host1 = AudioHost::new();
@@ -476,6 +490,8 @@ mod tests {
         let _ = format!("{:?}", host2);
     }
 
+    /// Tests device enumeration functions.
+    /// May return empty lists on systems without audio hardware.
     #[test]
     fn test_device_enumeration() {
         let host = AudioHost::new();
@@ -487,6 +503,8 @@ mod tests {
         let _ = list_all_devices(&host);
     }
 
+    /// Tests default device selection.
+    /// May return NoDefaultDevice on systems without audio hardware.
     #[test]
     fn test_default_device_selection() {
         let host = AudioHost::new();
@@ -497,6 +515,8 @@ mod tests {
         let _ = get_default_output_device(&host);
     }
 
+    /// Verifies fallback behavior when requesting a non-existent device.
+    /// Should fall back to default device or return NoDefaultDevice error.
     #[test]
     fn test_device_selection_with_invalid_id() {
         let host = AudioHost::new();
@@ -506,6 +526,7 @@ mod tests {
         let _ = get_output_device(&host, Some("nonexistent-device-id-12345"));
     }
 
+    /// Verifies AudioDeviceInfo equality comparison.
     #[test]
     fn test_device_info_equality() {
         let info1 = AudioDeviceInfo {
@@ -525,6 +546,7 @@ mod tests {
         assert_ne!(info1, info3);
     }
 
+    /// Verifies AudioDeviceInfo cloning preserves all fields.
     #[test]
     fn test_device_info_clone() {
         let info = AudioDeviceInfo {
@@ -535,6 +557,7 @@ mod tests {
         assert_eq!(info, cloned);
     }
 
+    /// Verifies all DeviceError variants display correctly.
     #[test]
     fn test_error_display() {
         let err1 = DeviceError::DeviceNotFound("test-id".to_string());
@@ -550,6 +573,7 @@ mod tests {
         assert!(err4.to_string().contains("bad-id"));
     }
 
+    /// Verifies AudioDeviceList cloning preserves device counts.
     #[test]
     fn test_device_list_clone() {
         let list = AudioDeviceList {
