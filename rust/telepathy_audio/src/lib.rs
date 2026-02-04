@@ -146,6 +146,7 @@ pub mod devices;
 mod error;
 mod input;
 mod output;
+pub mod player;
 mod processing;
 mod processor;
 mod state;
@@ -236,6 +237,24 @@ pub use processing::wide_mul;
 /// Returns `None` if no resampling is needed (ratio == 1.0), avoiding
 /// unnecessary processing overhead.
 pub use utils::resampler_factory;
+
+/// Converts decibel values to linear multipliers.
+///
+/// Uses the standard audio engineering formula: `10^(dB / 20)`.
+/// Useful for volume control where 0 dB = unity gain.
+pub use utils::db_to_multiplier;
+
+/// Wrapper for cpal streams to enable sending across thread boundaries.
+///
+/// See [`utils::SendStream`] for safety requirements.
+pub use utils::SendStream;
+
+// Re-export player API
+/// Framework-agnostic audio player for WAV and SEA codec files.
+///
+/// Supports automatic format detection, resampling, volume control,
+/// and graceful cancellation with fade-out.
+pub use player::{AudioPlayer, SoundHandle, wav_to_sea};
 
 // Re-export web audio types for WASM consumers
 #[cfg(target_family = "wasm")]

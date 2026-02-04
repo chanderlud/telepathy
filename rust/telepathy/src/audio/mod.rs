@@ -13,10 +13,10 @@ pub(crate) use telepathy_audio::{InputProcessorState, OutputProcessorState};
 pub(crate) use telepathy_audio::{input_processor, output_processor};
 
 // Re-export traits and channel implementations
-#[cfg(not(target_family = "wasm"))]
-pub(crate) use telepathy_audio::{ChannelInput, ChannelOutput};
 #[cfg(target_family = "wasm")]
 pub(crate) use telepathy_audio::WebOutput;
+#[cfg(not(target_family = "wasm"))]
+pub(crate) use telepathy_audio::{ChannelInput, ChannelOutput};
 
 // Re-export codec functions
 pub(crate) mod codec {
@@ -34,5 +34,5 @@ pub(crate) mod web_audio {
 #[cfg(target_os = "ios")]
 pub(crate) mod ios;
 
-// Sound player module (specific to telepathy)
+// Sound player module (Flutter wrapper for telepathy_audio player)
 pub mod player;

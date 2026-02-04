@@ -58,6 +58,16 @@ pub enum AudioError {
     /// Occurs for platform restrictions, such as calling synchronous `build`
     /// on WASM where async initialization is required.
     Platform(String),
+    /// Invalid WAV file error.
+    ///
+    /// Occurs when a WAV file has an invalid or corrupted header,
+    /// or when the file is too short to contain a valid header.
+    InvalidWav,
+    /// Unknown sample format error.
+    ///
+    /// Occurs when the audio file uses a sample format that is not
+    /// supported (e.g., unsupported bit depth or encoding).
+    UnknownSampleFormat,
 }
 
 impl fmt::Display for AudioError {
@@ -69,6 +79,8 @@ impl fmt::Display for AudioError {
             AudioError::Channel(msg) => write!(f, "Channel error: {}", msg),
             AudioError::Config(msg) => write!(f, "Configuration error: {}", msg),
             AudioError::Platform(msg) => write!(f, "Platform error: {}", msg),
+            AudioError::InvalidWav => write!(f, "Invalid WAV file"),
+            AudioError::UnknownSampleFormat => write!(f, "Unknown sample format"),
         }
     }
 }
@@ -173,6 +185,16 @@ impl From<kanal::SendError> for AudioError {
 impl From<kanal::ReceiveError> for AudioError {
     fn from(err: kanal::ReceiveError) -> Self {
         AudioError::Channel(format!("Receive error: {}", err))
+    }
+}
+
+/// Converts kanal close errors.
+///
+/// Occurs when closing a channel fails, typically when attempting to
+/// close an already-closed channel.
+impl From<kanal::CloseError> for AudioError {
+    fn from(err: kanal::CloseError) -> Self {
+        AudioError::Channel(format!("Close error: {}", err))
     }
 }
 

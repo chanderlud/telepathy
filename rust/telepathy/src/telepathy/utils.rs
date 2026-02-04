@@ -8,7 +8,7 @@ use crate::telepathy::{
     ConnectionState, SharedDeviceId, StatisticsCollectorState, TRANSFER_BUFFER_SIZE,
 };
 use cpal::traits::HostTrait;
-use cpal::{Device, Host, Stream};
+use cpal::{Device, Host};
 use flutter_rust_bridge::for_generated::futures::{Sink, SinkExt};
 use kanal::{AsyncReceiver, AsyncSender};
 use libp2p::bytes::Bytes;
@@ -33,15 +33,10 @@ use tokio_util::sync::CancellationToken;
 #[cfg(target_family = "wasm")]
 use wasmtimer::tokio::interval;
 
+// Re-export from telepathy_audio library
+pub(crate) use telepathy_audio::{SendStream, db_to_multiplier};
+
 type Result<T> = std::result::Result<T, Error>;
-
-/// wraps a cpal stream to unsafely make it send
-pub(crate) struct SendStream {
-    pub(crate) stream: Stream,
-}
-
-/// Safety: SendStream must not be used across awaits
-unsafe impl Send for SendStream {}
 
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Debug)]
 enum Locality {
@@ -49,11 +44,6 @@ enum Locality {
     Lan = 1,
     Public = 2,
     Unknown = 3,
-}
-
-/// converts a decibel value to a multiplier
-pub(crate) fn db_to_multiplier(db: f32) -> f32 {
-    10_f32.powf(db / 20_f32)
 }
 
 /// Gets the output device

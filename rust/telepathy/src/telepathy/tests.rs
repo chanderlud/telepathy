@@ -1,9 +1,9 @@
 use super::*;
+use crate::audio::codec::{decoder, encoder};
 use crate::audio::{
     ChannelInput, ChannelOutput, InputProcessorState, OutputProcessorState, input_processor,
     output_processor,
 };
-use crate::audio::codec::{decoder, encoder};
 use crate::flutter::callbacks::{
     FrbStatisticsCallback, MockFrbCallbacks, MockFrbStatisticsCallback,
 };

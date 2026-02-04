@@ -1,11 +1,11 @@
 #[cfg(target_family = "wasm")]
 use crate::audio::WebOutput;
+use crate::audio::codec::{decoder, encoder};
 #[cfg(target_family = "wasm")]
 use crate::audio::web_audio::{WebAudioInput, WebAudioWrapper};
 #[cfg(not(target_family = "wasm"))]
 use crate::audio::{ChannelInput, ChannelOutput};
 use crate::audio::{InputProcessorState, OutputProcessorState, input_processor, output_processor};
-use crate::audio::codec::{decoder, encoder};
 use crate::error::ErrorKind;
 use crate::flutter::DartNotify;
 use crate::flutter::callbacks::{FrbCallbacks, FrbStatisticsCallback};

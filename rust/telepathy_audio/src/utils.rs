@@ -1,6 +1,7 @@
 //! Utility functions for audio processing.
 //!
-//! This module provides helper functions for resampling and silence transitions.
+//! This module provides helper functions for resampling, silence transitions,
+//! and audio stream management.
 //!
 //! ## Resampling
 //!
@@ -13,11 +14,82 @@
 //! [`make_transition_up`] and [`make_transition_down`] create smooth ramps
 //! between silence and audio to prevent audible clicks and pops. These are
 //! used by the input processor when silence detection is enabled.
+//!
+//! ## Volume Conversion
+//!
+//! [`db_to_multiplier`] converts decibel values to linear multipliers for
+//! volume control. This is the standard formula used in audio engineering.
+//!
+//! ## Stream Wrapper
+//!
+//! [`SendStream`] wraps a cpal stream to allow sending across thread boundaries.
+//! This is necessary because cpal streams are not inherently `Send`.
 
 use crate::constants::RESAMPLER_PARAMETERS;
 use crate::error::AudioError;
+use cpal::Stream;
 use nnnoiseless::FRAME_SIZE;
 use rubato::SincFixedIn;
+
+/// Converts a decibel value to a linear multiplier.
+///
+/// This uses the standard audio engineering formula:
+/// `multiplier = 10^(dB / 20)`
+///
+/// # Arguments
+///
+/// * `db` - The decibel value to convert. Can be negative (attenuation)
+///   or positive (amplification).
+///
+/// # Returns
+///
+/// The linear multiplier corresponding to the decibel value.
+///
+/// # Examples
+///
+/// ```rust
+/// use telepathy_audio::db_to_multiplier;
+///
+/// // 0 dB = unity gain (multiplier of 1.0)
+/// assert!((db_to_multiplier(0.0) - 1.0).abs() < 0.001);
+///
+/// // -6 dB ≈ half amplitude
+/// assert!((db_to_multiplier(-6.0) - 0.5).abs() < 0.02);
+///
+/// // +6 dB ≈ double amplitude
+/// assert!((db_to_multiplier(6.0) - 2.0).abs() < 0.05);
+/// ```
+pub fn db_to_multiplier(db: f32) -> f32 {
+    10_f32.powf(db / 20_f32)
+}
+
+/// Wraps a cpal stream to make it sendable across thread boundaries.
+///
+/// CPAL streams are not inherently `Send` because they may contain
+/// platform-specific handles. This wrapper provides an unsafe `Send`
+/// implementation for cases where the stream needs to be moved between
+/// threads (e.g., storing in an async task).
+///
+/// # Safety
+///
+/// The `Send` implementation is unsafe. The caller must ensure that:
+/// - The stream is not used across await points in async code
+/// - The stream is properly synchronized if accessed from multiple threads
+///
+/// In practice, this is safe when the stream is created, stored, and
+/// eventually dropped without being actively used across thread boundaries.
+pub struct SendStream {
+    /// The wrapped cpal stream.
+    pub stream: Stream,
+}
+
+/// # Safety
+///
+/// `SendStream` must not be used across awaits. The stream should be
+/// created, stored, and dropped within a single logical thread context.
+/// This is safe for the player use case where the stream is created,
+/// played, and then dropped when playback completes.
+unsafe impl Send for SendStream {}
 
 /// Creates a resampler if needed based on the sample rate ratio.
 ///
