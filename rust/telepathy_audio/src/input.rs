@@ -76,7 +76,7 @@ pub struct AudioInputConfig {
     ///
     /// When `None`, uses the default RNNoise model.
     /// When `Some(bytes)`, loads a custom RNN model from the provided bytes.
-    pub denoise_model: Option<Vec<u8>>,
+    pub denoise_model: Option<RnnModel>,
     /// Input volume multiplier (1.0 = unity gain).
     ///
     /// Values less than 1.0 reduce volume, greater than 1.0 amplify.
@@ -140,6 +140,12 @@ where
 {
     config: AudioInputConfig,
     callback: Option<F>,
+    /// Optional shared atomic for input volume (enables real-time synchronization)
+    shared_input_volume: Option<Arc<AtomicF32>>,
+    /// Optional shared atomic for RMS threshold (enables real-time synchronization)
+    shared_rms_threshold: Option<Arc<AtomicF32>>,
+    /// Optional shared atomic for muted state (enables real-time synchronization)
+    shared_muted: Option<Arc<AtomicBool>>,
 }
 
 impl AudioInputBuilder<fn(Bytes)> {
@@ -148,6 +154,9 @@ impl AudioInputBuilder<fn(Bytes)> {
         AudioInputBuilder {
             config: AudioInputConfig::default(),
             callback: None,
+            shared_input_volume: None,
+            shared_rms_threshold: None,
+            shared_muted: None,
         }
     }
 }
@@ -176,7 +185,7 @@ where
     ///
     /// * `enabled` - Whether to enable noise suppression
     /// * `model` - Optional custom RNNoise model bytes (None for default model)
-    pub fn denoise(mut self, enabled: bool, model: Option<Vec<u8>>) -> Self {
+    pub fn denoise(mut self, enabled: bool, model: Option<RnnModel>) -> Self {
         self.config.denoise_enabled = enabled;
         self.config.denoise_model = model;
         self
@@ -198,6 +207,48 @@ where
     /// A value of 0.0 disables silence detection.
     pub fn rms_threshold(mut self, threshold: f32) -> Self {
         self.config.rms_threshold = threshold;
+        self
+    }
+
+    /// Sets a shared atomic for input volume, enabling real-time synchronization.
+    ///
+    /// When provided, the builder will use this shared atomic instead of creating
+    /// a new one. This allows external code to modify the volume in real-time
+    /// and have the changes immediately affect audio processing.
+    ///
+    /// Use this when you need to share volume control with other components,
+    /// such as a core state manager. For simple cases where you only need to
+    /// set the initial volume, use [`volume`](Self::volume) instead.
+    pub fn input_volume_shared(mut self, volume: &Arc<AtomicF32>) -> Self {
+        self.shared_input_volume = Some(volume.clone());
+        self
+    }
+
+    /// Sets a shared atomic for RMS threshold, enabling real-time synchronization.
+    ///
+    /// When provided, the builder will use this shared atomic instead of creating
+    /// a new one. This allows external code to modify the threshold in real-time
+    /// and have the changes immediately affect silence detection.
+    ///
+    /// Use this when you need to share threshold control with other components.
+    /// For simple cases where you only need to set the initial threshold,
+    /// use [`rms_threshold`](Self::rms_threshold) instead.
+    pub fn rms_threshold_shared(mut self, threshold: &Arc<AtomicF32>) -> Self {
+        self.shared_rms_threshold = Some(threshold.clone());
+        self
+    }
+
+    /// Sets a shared atomic for muted state, enabling real-time synchronization.
+    ///
+    /// When provided, the builder will use this shared atomic instead of creating
+    /// a new one. This allows external code to modify the muted state in real-time
+    /// and have the changes immediately affect audio processing.
+    ///
+    /// Use this when you need to share mute control with other components,
+    /// such as a core state manager. The muted state can still be controlled
+    /// via the handle's `mute()` and `unmute()` methods after building.
+    pub fn muted_shared(mut self, muted: &Arc<AtomicBool>) -> Self {
+        self.shared_muted = Some(muted.clone());
         self
     }
 
@@ -242,6 +293,9 @@ where
         AudioInputBuilder {
             config: self.config,
             callback: Some(callback),
+            shared_input_volume: self.shared_input_volume,
+            shared_rms_threshold: self.shared_rms_threshold,
+            shared_muted: self.shared_muted,
         }
     }
 
@@ -286,10 +340,19 @@ where
         let input_channels = config.channels() as usize;
         let device_sample_rate = config.sample_rate();
 
-        // Create shared atomic state
-        let input_volume = Arc::new(AtomicF32::new(self.config.volume));
-        let rms_threshold = Arc::new(AtomicF32::new(self.config.rms_threshold));
-        let muted = Arc::new(AtomicBool::new(false));
+        // Create shared atomic state (use provided shared atomics or create new ones)
+        let input_volume = self
+            .shared_input_volume
+            .clone()
+            .unwrap_or_else(|| Arc::new(AtomicF32::new(self.config.volume)));
+        let rms_threshold = self
+            .shared_rms_threshold
+            .clone()
+            .unwrap_or_else(|| Arc::new(AtomicF32::new(self.config.rms_threshold)));
+        let muted = self
+            .shared_muted
+            .clone()
+            .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
         let rms_sender = Arc::new(AtomicF32::new(0.0));
 
         // Create channels
@@ -309,12 +372,9 @@ where
 
         // Create denoiser if needed
         let denoiser = if self.config.denoise_enabled {
-            let model = if let Some(model_bytes) = &self.config.denoise_model {
-                RnnModel::from_bytes(model_bytes).unwrap_or_default()
-            } else {
-                RnnModel::default()
-            };
-            Some(DenoiseState::from_model(model))
+            Some(DenoiseState::from_model(
+                self.config.denoise_model.unwrap_or_default(),
+            ))
         } else {
             None
         };
@@ -481,10 +541,19 @@ where
         // Store the wrapper to keep it alive
         let web_audio = Arc::new(web_audio);
 
-        // Create shared atomic state
-        let input_volume = Arc::new(AtomicF32::new(self.config.volume));
-        let rms_threshold = Arc::new(AtomicF32::new(self.config.rms_threshold));
-        let muted = Arc::new(AtomicBool::new(false));
+        // Create shared atomic state (use provided shared atomics or create new ones)
+        let input_volume = self
+            .shared_input_volume
+            .clone()
+            .unwrap_or_else(|| Arc::new(AtomicF32::new(self.config.volume)));
+        let rms_threshold = self
+            .shared_rms_threshold
+            .clone()
+            .unwrap_or_else(|| Arc::new(AtomicF32::new(self.config.rms_threshold)));
+        let muted = self
+            .shared_muted
+            .clone()
+            .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
         let rms_sender = Arc::new(AtomicF32::new(0.0));
 
         // Create channels

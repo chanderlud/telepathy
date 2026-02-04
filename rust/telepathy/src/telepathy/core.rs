@@ -27,8 +27,6 @@ use crate::telepathy::{
 use crate::telepathy::{ConnectionState, Result};
 use atomic_float::AtomicF32;
 use chrono::Local;
-use cpal::Host;
-use cpal::traits::StreamTrait;
 #[cfg(target_family = "wasm")]
 use flutter_rust_bridge::JoinHandle;
 use flutter_rust_bridge::for_generated::futures::StreamExt;
@@ -47,6 +45,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::{Duration, Instant};
+use telepathy_audio::{AudioHost, AudioInputHandle, AudioOutputHandle};
 use tokio::select;
 use tokio::sync::mpsc::{Receiver as MReceiver, Sender as MSender, channel};
 use tokio::sync::{Mutex, Notify, RwLock};
@@ -61,13 +60,18 @@ use uuid::Uuid;
 #[cfg(target_family = "wasm")]
 use wasmtimer::tokio::{Interval, interval, timeout};
 
+/// Type alias for thread-safe storage of the active audio input handle
+pub(crate) type ActiveInputHandle = Arc<std::sync::Mutex<Option<AudioInputHandle>>>;
+/// Type alias for thread-safe storage of active audio output handles (multiple for rooms)
+pub(crate) type ActiveOutputHandles = Arc<std::sync::Mutex<HashMap<Uuid, AudioOutputHandle>>>;
+
 pub(crate) struct TelepathyCore<C, S>
 where
     S: FrbStatisticsCallback + Send + Sync + 'static,
     C: FrbCallbacks<S> + Send + Sync + 'static,
 {
     /// The audio host
-    pub(crate) host: Arc<Host>,
+    pub(crate) host: AudioHost,
 
     /// Core state for telepathy
     pub(crate) core_state: CoreState,
@@ -106,7 +110,7 @@ where
     C: FrbCallbacks<S> + Send + Sync + 'static,
 {
     pub(crate) fn new(
-        host: Arc<Host>,
+        host: AudioHost,
         network_config: &NetworkConfig,
         screenshare_config: &ScreenshareConfig,
         overlay: &Overlay,
@@ -1034,16 +1038,13 @@ where
         // the two clients agree on these codec options
         let codec_config = call_state.codec_config();
 
+        // Setup input using the library (stream is managed internally)
         let mut input_helper = self
-            .setup_input(
-                call_state.local_configuration.sample_rate as f64,
-                codec_config,
-                &statistics_state,
-                false,
-            )
+            .setup_input(codec_config, &statistics_state, false, end_call.clone())
             .await?;
 
-        let mut output_helper = self
+        // Setup output using the library (stream is managed internally)
+        let output_helper = self
             .setup_output(
                 call_state.remote_configuration.sample_rate as f64,
                 codec_config.0,
@@ -1052,13 +1053,6 @@ where
                 end_call.clone(),
             )
             .await?;
-
-        let input_stream =
-            self.setup_input_stream(&call_state, input_helper.sender(), end_call.clone())?;
-
-        // play the input stream
-        #[cfg(not(target_family = "wasm"))]
-        input_stream.stream.play()?;
 
         let statistics_handle = spawn(statistics_collector(
             statistics_state,
@@ -1146,18 +1140,15 @@ where
         // on ios the audio session must be deactivated
         #[cfg(target_os = "ios")]
         deactivate_audio_session();
-        // drop input stream to stop input processor
-        cfg_if::cfg_if! {
-            if #[cfg(target_family = "wasm")] {
-                *self.web_input.lock().await = None;
-            } else {
-                drop(input_stream);
-            }
+        // cleanup web input on WASM
+        #[cfg(target_family = "wasm")]
+        {
+            *self.web_input.lock().await = None;
         }
         // join background tasks
         statistics_handle.await?;
-        input_helper.join().await?;
-        output_helper.join().await?;
+        input_helper.join()?;
+        output_helper.join()?;
         debug!("finished call teardown");
         Ok(())
     }
@@ -1277,7 +1268,7 @@ where
         &self,
         mut receiver: MReceiver<RoomMessage>,
         end_sessions: CancellationToken,
-        call_state: EarlyCallState,
+        _call_state: EarlyCallState,
         stop_io: &CancellationToken,
         end_call: Arc<Notify>,
     ) -> Result<()> {
@@ -1292,21 +1283,15 @@ where
         // tracks connection state for peers
         let mut connections = HashMap::new();
 
+        // Setup input using the library (stream is managed internally)
         let mut input_helper = self
             .setup_input(
-                call_state.local_configuration.sample_rate as f64,
                 (true, true, 5_f32), // hard coded room codec options
                 &statistics_state,
                 true,
+                end_call.clone(),
             )
             .await?;
-
-        let input_stream =
-            self.setup_input_stream(&call_state, input_helper.sender(), end_call.clone())?;
-
-        // play the input stream
-        #[cfg(not(target_family = "wasm"))]
-        input_stream.stream.play()?;
 
         let input_handle = spawn(audio_input(
             input_helper.receiver(),
@@ -1342,8 +1327,8 @@ where
                             let (write, read) = (*audio_transport).split();
                             // this unwrap is safe because audio_input never panics
                             new_sockets.lock().unwrap().push((write, Instant::now()));
-                            // setup output stack
-                            let mut helper = self
+                            // setup output stack using the library
+                            let helper = self
                                 .setup_output(
                                     state.remote_configuration.sample_rate as f64,
                                     true,
@@ -1390,13 +1375,10 @@ where
         // on ios the audio session must be deactivated
         #[cfg(target_os = "ios")]
         deactivate_audio_session();
-        // drop input stream to stop input processor
-        cfg_if::cfg_if! {
-            if #[cfg(target_family = "wasm")] {
-                *self.web_input.lock().await = None;
-            } else {
-                drop(input_stream);
-            }
+        // cleanup web input on WASM
+        #[cfg(target_family = "wasm")]
+        {
+            *self.web_input.lock().await = None;
         }
         stop_io.cancel();
         // join input IO task
@@ -1404,7 +1386,7 @@ where
         // join output tasks
         for connection in connections.into_values() {
             connection.handle.await??;
-            connection.output.join().await?;
+            connection.output.join()?;
         }
         debug!("finished tearing down room processing stack");
         // cleanup room state
@@ -1414,7 +1396,7 @@ where
         // join statistics collector
         statistics_handle.await?;
         // join input tasks
-        input_helper.join().await?;
+        input_helper.join()?;
         Ok(())
     }
 }
@@ -1426,7 +1408,7 @@ where
 {
     fn clone(&self) -> Self {
         Self {
-            host: Arc::clone(&self.host),
+            host: self.host.clone(),
             core_state: self.core_state.clone(),
             room_state: Arc::clone(&self.room_state),
             session_states: Arc::clone(&self.session_states),
@@ -1507,6 +1489,14 @@ pub(crate) struct CoreState {
 
     /// configuration for audio codec, or lack thereof
     pub(crate) codec_config: CodecConfig,
+
+    /// The active audio input handle for live control during calls
+    /// Wrapped in std::sync::Mutex for sync access from setter methods
+    pub(crate) active_input_handle: ActiveInputHandle,
+
+    /// Active audio output handles for live control during calls
+    /// Uses HashMap with Uuid keys to support multiple outputs (rooms)
+    pub(crate) active_output_handles: ActiveOutputHandles,
 }
 
 /// a state used for session negotiation

@@ -73,9 +73,9 @@ impl DeviceHandle {
 
     /// Returns a reference to the underlying cpal device.
     ///
-    /// This method is intended for internal use by audio processing code.
-    #[allow(dead_code)] // Reserved for future audio processing integration
-    pub(crate) fn device(&self) -> &cpal::Device {
+    /// This method provides access to the underlying cpal device for
+    /// consumers that need to query device configuration.
+    pub fn device(&self) -> &cpal::Device {
         &self.device
     }
 
@@ -174,6 +174,12 @@ impl AudioHost {
 impl Default for AudioHost {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl From<Arc<cpal::Host>> for AudioHost {
+    fn from(host: Arc<cpal::Host>) -> Self {
+        Self { host }
     }
 }
 

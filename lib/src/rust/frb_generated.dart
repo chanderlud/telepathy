@@ -6578,6 +6578,14 @@ class SoundPlayerImpl extends RustOpaque implements SoundPlayer {
   /// # Returns
   ///
   /// A `FlutterSoundHandle` that can be used to cancel playback.
+  ///
+  /// # Errors
+  ///
+  /// Returns `DartError` if:
+  /// - The file is too short (< 14 bytes)
+  /// - No output device is available
+  /// - Stream configuration cannot be obtained
+  /// - Stream creation fails
   Future<FlutterSoundHandle> play({required List<int> bytes}) =>
       RustLib.instance.api
           .crateAudioPlayerSoundPlayerPlay(that: this, bytes: bytes);

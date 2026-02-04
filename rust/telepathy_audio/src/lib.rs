@@ -138,6 +138,48 @@
 //!     .build(&host)
 //!     .unwrap();
 //! ```
+//!
+//! ## With Shared Atomic State
+//!
+//! For real-time state synchronization between core components and audio processing,
+//! use the shared atomic builder methods:
+//!
+//! ```rust,no_run
+//! use telepathy_audio::{AudioHost, AudioInputBuilder, AudioOutputBuilder};
+//! use std::sync::Arc;
+//! use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+//! use atomic_float::AtomicF32;
+//!
+//! // Core state that can be shared across components
+//! let input_volume = Arc::new(AtomicF32::new(1.0));
+//! let output_volume = Arc::new(AtomicF32::new(1.0));
+//! let muted = Arc::new(AtomicBool::new(false));
+//! let deafened = Arc::new(AtomicBool::new(false));
+//!
+//! let host = AudioHost::new();
+//!
+//! // Input using shared atomics - changes to core state affect processing immediately
+//! let input = AudioInputBuilder::new()
+//!     .input_volume_shared(&input_volume)
+//!     .muted_shared(&muted)
+//!     .callback(|data| { /* process audio */ })
+//!     .build(&host)
+//!     .unwrap();
+//!
+//! // Output using shared atomics
+//! let output = AudioOutputBuilder::new()
+//!     .sample_rate(48000)
+//!     .output_volume_shared(&output_volume)
+//!     .deafened_shared(&deafened)
+//!     .build(&host)
+//!     .unwrap();
+//!
+//! // Changes to shared state immediately affect audio processing
+//! input_volume.store(0.5, Relaxed);  // Reduce input volume
+//! muted.store(true, Relaxed);        // Mute input
+//! output_volume.store(0.8, Relaxed); // Reduce output volume
+//! deafened.store(true, Relaxed);     // Deafen output
+//! ```
 
 // Internal modules
 mod codec;

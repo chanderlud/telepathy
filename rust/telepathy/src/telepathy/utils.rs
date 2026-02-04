@@ -4,13 +4,9 @@ use crate::flutter::callbacks::FrbStatisticsCallback;
 use crate::overlay::{CONNECTED, LATENCY, LOSS};
 use crate::telepathy::messages::Message;
 use crate::telepathy::sockets::{Transport, TransportStream};
-use crate::telepathy::{
-    ConnectionState, SharedDeviceId, StatisticsCollectorState, TRANSFER_BUFFER_SIZE,
-};
-use cpal::traits::HostTrait;
-use cpal::{Device, Host};
+use crate::telepathy::{ConnectionState, StatisticsCollectorState, TRANSFER_BUFFER_SIZE};
 use flutter_rust_bridge::for_generated::futures::{Sink, SinkExt};
-use kanal::{AsyncReceiver, AsyncSender};
+use kanal::AsyncReceiver;
 use libp2p::bytes::Bytes;
 use libp2p::futures::StreamExt;
 use libp2p::swarm::ConnectionId;
@@ -34,7 +30,7 @@ use tokio_util::sync::CancellationToken;
 use wasmtimer::tokio::interval;
 
 // Re-export from telepathy_audio library
-pub(crate) use telepathy_audio::{SendStream, db_to_multiplier};
+pub(crate) use telepathy_audio::db_to_multiplier;
 
 type Result<T> = std::result::Result<T, Error>;
 
@@ -44,22 +40,6 @@ enum Locality {
     Lan = 1,
     Public = 2,
     Unknown = 3,
-}
-
-/// Gets the output device
-pub(crate) async fn get_output_device(
-    output_device: &SharedDeviceId,
-    host: &Arc<Host>,
-) -> Result<Device> {
-    match *output_device.lock().await {
-        Some(ref id) => Ok(host.device_by_id(id).unwrap_or(
-            host.default_output_device()
-                .ok_or(ErrorKind::NoOutputDevice)?,
-        )),
-        None => host
-            .default_output_device()
-            .ok_or(ErrorKind::NoOutputDevice.into()),
-    }
 }
 
 /// Returns the percentage of the max input volume in the window compared to the max volume
@@ -156,7 +136,7 @@ pub(crate) async fn statistics_collector<C: FrbStatisticsCallback>(
 /// Used for audio tests, plays the input into the output
 pub(crate) async fn loopback(
     input_receiver: AsyncReceiver<ProcessorMessage>,
-    output_sender: AsyncSender<ProcessorMessage>,
+    output_sender: kanal::Sender<ProcessorMessage>,
     cancel: &CancellationToken,
     end_call: &Arc<Notify>,
 ) {

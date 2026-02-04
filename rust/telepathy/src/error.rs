@@ -12,7 +12,7 @@ use libp2p::{TransportBuilderError, TransportError};
 use libp2p_stream::{AlreadyRegistered, OpenStreamError};
 use rubato::{ResampleError, ResamplerConstructionError};
 use sea_codec::codec::common::SeaError;
-use telepathy_audio::AudioError;
+use telepathy_audio::{AudioError, devices::DeviceError};
 use tokio::task::JoinError;
 use tokio::time::error::Elapsed;
 
@@ -53,7 +53,6 @@ pub(crate) enum ErrorKind {
     TransportBuildError(TransportBuilderError),
     #[cfg(target_family = "wasm")]
     JsError(Option<String>),
-    NoOutputDevice,
     NoInputDevice,
     InvalidContactFormat,
     TryFromSlice(TryFromSliceError),
@@ -69,7 +68,6 @@ pub(crate) enum ErrorKind {
     NoEncoderAvailable,
     NoIdentityAvailable,
     NoStream,
-    UnsupportedSampleFormat,
 }
 
 impl From<std::io::Error> for Error {
@@ -299,6 +297,19 @@ impl From<AudioError> for Error {
     }
 }
 
+impl From<DeviceError> for Error {
+    fn from(err: DeviceError) -> Self {
+        match err {
+            DeviceError::NoDefaultDevice | DeviceError::DeviceNotFound(_) => Self {
+                kind: ErrorKind::NoInputDevice,
+            },
+            _ => Self {
+                kind: ErrorKind::AudioError(AudioError::Device(err.to_string())),
+            },
+        }
+    }
+}
+
 impl From<ErrorKind> for Error {
     fn from(kind: ErrorKind) -> Self {
         Self { kind }
@@ -343,7 +354,6 @@ impl Display for Error {
                     format!("Transport build error: {}", err),
                 #[cfg(target_family = "wasm")]
                 ErrorKind::JsError(ref err) => format!("Javascript error: {:?}", err),
-                ErrorKind::NoOutputDevice => "No output device found".to_string(),
                 ErrorKind::NoInputDevice => "No input device found".to_string(),
                 ErrorKind::InvalidContactFormat => "Invalid contact format".to_string(),
                 ErrorKind::TransportSend => "Transport failed on send".to_string(),
@@ -358,8 +368,6 @@ impl Display for Error {
                 ErrorKind::NoEncoderAvailable => "No encoder available".to_string(),
                 ErrorKind::NoIdentityAvailable => "No identity available".to_string(),
                 ErrorKind::NoStream => "Did not get a stream".to_string(),
-                ErrorKind::UnsupportedSampleFormat =>
-                    "Only 32 bit float samples are supported".to_string(),
             }
         )
     }
@@ -376,10 +384,7 @@ impl Error {
     pub(crate) fn is_audio_error(&self) -> bool {
         matches!(
             self.kind,
-            ErrorKind::NoInputDevice
-                | ErrorKind::NoOutputDevice
-                | ErrorKind::BuildStream(_)
-                | ErrorKind::StreamConfig(_)
+            ErrorKind::NoInputDevice | ErrorKind::BuildStream(_) | ErrorKind::StreamConfig(_)
         )
     }
 }

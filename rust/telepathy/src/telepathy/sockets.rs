@@ -1,6 +1,6 @@
 use crate::error::Error;
 use crate::telepathy::KEEP_ALIVE;
-use kanal::{AsyncReceiver, AsyncSender};
+use kanal::{AsyncReceiver, Sender};
 use libp2p::Stream;
 use libp2p::bytes::Bytes;
 use libp2p::futures::stream::{SplitSink, SplitStream};
@@ -201,7 +201,7 @@ pub(crate) async fn audio_input<S: SendingSocket>(
 
 /// Receives audio data from the socket and sends it to the output processor
 pub(crate) async fn audio_output(
-    sender: AsyncSender<ProcessorMessage>,
+    sender: Sender<ProcessorMessage>,
     mut socket: SplitStream<Transport<TransportStream>>,
     cancel: CancellationToken,
     bandwidth: Arc<AtomicUsize>,

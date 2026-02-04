@@ -108,6 +108,10 @@ impl Default for AudioOutputConfig {
 /// starting the stream.
 pub struct AudioOutputBuilder {
     config: AudioOutputConfig,
+    /// Optional shared atomic for output volume (enables real-time synchronization)
+    shared_output_volume: Option<Arc<AtomicF32>>,
+    /// Optional shared atomic for deafened state (enables real-time synchronization)
+    shared_deafened: Option<Arc<AtomicBool>>,
 }
 
 impl AudioOutputBuilder {
@@ -115,6 +119,8 @@ impl AudioOutputBuilder {
     pub fn new() -> Self {
         Self {
             config: AudioOutputConfig::default(),
+            shared_output_volume: None,
+            shared_deafened: None,
         }
     }
 
@@ -142,6 +148,34 @@ impl AudioOutputBuilder {
     /// * 2.0 = double volume
     pub fn volume(mut self, volume: f32) -> Self {
         self.config.volume = volume;
+        self
+    }
+
+    /// Sets a shared atomic for output volume, enabling real-time synchronization.
+    ///
+    /// When provided, the builder will use this shared atomic instead of creating
+    /// a new one. This allows external code to modify the volume in real-time
+    /// and have the changes immediately affect audio playback.
+    ///
+    /// Use this when you need to share volume control with other components,
+    /// such as a core state manager. For simple cases where you only need to
+    /// set the initial volume, use [`volume`](Self::volume) instead.
+    pub fn output_volume_shared(mut self, volume: &Arc<AtomicF32>) -> Self {
+        self.shared_output_volume = Some(volume.clone());
+        self
+    }
+
+    /// Sets a shared atomic for deafened state, enabling real-time synchronization.
+    ///
+    /// When provided, the builder will use this shared atomic instead of creating
+    /// a new one. This allows external code to modify the deafened state in real-time
+    /// and have the changes immediately affect audio playback.
+    ///
+    /// Use this when you need to share deafen control with other components,
+    /// such as a core state manager. The deafened state can still be controlled
+    /// via the handle's `deafen()` and `undeafen()` methods after building.
+    pub fn deafened_shared(mut self, deafened: &Arc<AtomicBool>) -> Self {
+        self.shared_deafened = Some(deafened.clone());
         self
     }
 
@@ -202,9 +236,15 @@ impl AudioOutputBuilder {
         let output_channels = config.channels() as usize;
         let output_sample_rate = config.sample_rate();
 
-        // Create shared atomic state
-        let output_volume = Arc::new(AtomicF32::new(self.config.volume));
-        let deafened = Arc::new(AtomicBool::new(false));
+        // Create shared atomic state (use provided shared atomics or create new ones)
+        let output_volume = self
+            .shared_output_volume
+            .clone()
+            .unwrap_or_else(|| Arc::new(AtomicF32::new(self.config.volume)));
+        let deafened = self
+            .shared_deafened
+            .clone()
+            .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
         let rms_sender = Arc::new(AtomicF32::new(0.0));
         let loss_sender = Arc::new(AtomicUsize::new(0));
 
@@ -320,9 +360,15 @@ impl AudioOutputBuilder {
         let web_buffer: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
         let processor_output = WebOutput::new(web_buffer.clone());
 
-        // Create shared atomic state
-        let output_volume = Arc::new(AtomicF32::new(self.config.volume));
-        let deafened = Arc::new(AtomicBool::new(false));
+        // Create shared atomic state (use provided shared atomics or create new ones)
+        let output_volume = self
+            .shared_output_volume
+            .clone()
+            .unwrap_or_else(|| Arc::new(AtomicF32::new(self.config.volume)));
+        let deafened = self
+            .shared_deafened
+            .clone()
+            .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
         let rms_sender = Arc::new(AtomicF32::new(0.0));
         let loss_sender = Arc::new(AtomicUsize::new(0));
 

@@ -23,11 +23,7 @@ use crate::telepathy::core::TelepathyCore;
 use crate::telepathy::helpers::OutputHelper;
 use atomic_float::AtomicF32;
 use chrono::Local;
-use cpal::Device;
-#[cfg(not(target_family = "wasm"))]
-use cpal::SupportedStreamConfig;
-use cpal::traits::{DeviceTrait, HostTrait};
-use cpal::{DeviceId, Host};
+use cpal::Host;
 #[cfg(target_family = "wasm")]
 use flutter_rust_bridge::JoinHandle;
 use flutter_rust_bridge::{frb, spawn};
@@ -48,6 +44,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::time::Duration;
+use telepathy_audio::{AudioDeviceInfo, list_all_devices};
 use tokio::select;
 use tokio::sync::mpsc::{Receiver as MReceiver, Sender as MSender, channel};
 use tokio::sync::{Mutex, Notify};
@@ -61,7 +58,7 @@ use uuid::Uuid;
 use wasmtimer::tokio::interval;
 
 type Result<T> = std::result::Result<T, Error>;
-pub(crate) type SharedDeviceId = Arc<Mutex<Option<DeviceId>>>;
+pub(crate) type SharedDeviceId = Arc<Mutex<Option<String>>>;
 
 /// The number of bytes in a single network audio frame
 const TRANSFER_BUFFER_SIZE: usize = FRAME_SIZE * size_of::<i16>();
@@ -69,8 +66,6 @@ const TRANSFER_BUFFER_SIZE: usize = FRAME_SIZE * size_of::<i16>();
 const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 /// How often to keep-alive libp2p streams
 pub(crate) const KEEP_ALIVE: Duration = Duration::from_secs(10);
-/// the number of samples to hold in a channel
-pub(crate) const CHANNEL_SIZE: usize = 2_400;
 /// the protocol identifier for Telepathy
 const CHAT_PROTOCOL: StreamProtocol = StreamProtocol::new("/telepathy/0.0.1");
 /// Maximum allowed size for a single length-delimited control/message frame on the session stream.
@@ -99,7 +94,7 @@ impl Telepathy {
     ) -> Telepathy {
         Self {
             inner: TelepathyCore::new(
-                host,
+                host.into(),
                 network_config,
                 screenshare_config,
                 overlay,
@@ -479,29 +474,30 @@ impl Telepathy {
     }
 
     pub async fn set_input_device(&self, device_id: Option<String>) {
-        *self.inner.core_state.input_device.lock().await = device_id.and_then(|id| id.parse().ok());
+        *self.inner.core_state.input_device.lock().await = device_id;
     }
 
     pub async fn set_output_device(&self, device_id: Option<String>) {
-        *self.inner.core_state.output_device.lock().await =
-            device_id.and_then(|id| id.parse().ok());
+        *self.inner.core_state.output_device.lock().await = device_id;
     }
 
     /// Lists the input and output devices
     pub fn list_devices(
         &self,
     ) -> std::result::Result<(Vec<AudioDevice>, Vec<AudioDevice>), DartError> {
-        let host_input_devices = self.inner.host.input_devices().map_err(Error::from)?;
-        let input_devices = host_input_devices
-            .filter_map(|device| device.try_into().ok())
-            .collect();
-
-        let host_output_devices = self.inner.host.output_devices().map_err(Error::from)?;
-        let output_devices = host_output_devices
-            .filter_map(|device| device.try_into().ok())
-            .collect();
-
-        Ok((input_devices, output_devices))
+        let device_list = list_all_devices(&self.inner.host).map_err(Error::from)?;
+        Ok((
+            device_list
+                .input_devices
+                .into_iter()
+                .map(AudioDevice::from)
+                .collect(),
+            device_list
+                .output_devices
+                .into_iter()
+                .map(AudioDevice::from)
+                .collect(),
+        ))
     }
 
     pub async fn set_model(&self, model: Option<Vec<u8>>) -> std::result::Result<(), DartError> {
@@ -521,14 +517,12 @@ pub struct AudioDevice {
     pub id: String,
 }
 
-impl TryFrom<Device> for AudioDevice {
-    type Error = ();
-
-    fn try_from(value: Device) -> std::result::Result<Self, Self::Error> {
-        Ok(Self {
-            name: value.description().map_err(|_| ())?.name().to_string(),
-            id: value.id().map_err(|_| ())?.to_string(),
-        })
+impl From<AudioDeviceInfo> for AudioDevice {
+    fn from(value: AudioDeviceInfo) -> Self {
+        Self {
+            name: value.name,
+            id: value.id,
+        }
     }
 }
 
@@ -538,11 +532,6 @@ pub(crate) struct EarlyCallState {
     peer: PeerId,
     local_configuration: AudioHeader,
     remote_configuration: AudioHeader,
-    #[cfg(not(target_family = "wasm"))]
-    input_config: SupportedStreamConfig,
-    #[cfg(not(target_family = "wasm"))]
-    input_device: Device,
-    input_channels: usize,
 }
 
 impl EarlyCallState {
