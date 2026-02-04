@@ -2,6 +2,7 @@
 members = [
     "relay_server",
     "telepathy",
+    "telepathy_audio",
     "sea_codec"
 ]
 resolver = "2"
