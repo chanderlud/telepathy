@@ -77,7 +77,7 @@ impl SeaChunk {
         let chunk_type: SeaChunkType = match encoded[0] {
             0x01 => SeaChunkType::Cbr,
             0x02 => SeaChunkType::Vbr,
-            _ => return Err(SeaError::InvalidFrame)
+            _ => return Err(SeaError::InvalidFrame),
         };
 
         let scale_factor_bits = encoded[1] >> 4;
