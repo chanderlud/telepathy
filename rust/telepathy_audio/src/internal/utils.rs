@@ -86,22 +86,6 @@ pub fn db_to_multiplier(db: f32) -> f32 {
 /// * `Ok(Some(resampler))` - A configured sinc resampler when ratio != 1.0
 /// * `Ok(None)` - When no resampling is needed (pass through samples)
 /// * `Err(_)` - When resampler creation fails (invalid parameters)
-///
-/// # Example
-///
-/// ```rust,no_run
-/// use telepathy_audio::resampler_factory;
-///
-/// // Upsampling from 44100 to 48000 Hz
-/// let ratio = 48000.0 / 44100.0;
-/// let resampler = resampler_factory(ratio, 1, 480)?;
-///
-/// match resampler {
-///     Some(mut r) => { /* use r.process_into_buffer(...) */ }
-///     None => { /* pass through unchanged */ }
-/// }
-/// # Ok::<(), telepathy_audio::AudioError>(())
-/// ```
 pub(crate) fn resampler_factory(
     ratio: f64,
     channels: usize,

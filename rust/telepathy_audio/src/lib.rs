@@ -195,19 +195,6 @@
 //! output_volume.store(0.8, Relaxed); // Reduce output volume
 //! deafened.store(true, Relaxed);     // Deafen output
 //! ```
-//!
-//! ## Import Styles
-//!
-//! Both of these import styles work (backward compatible):
-//!
-//! ```rust,no_run
-//! // Root-level imports (recommended for convenience)
-//! use telepathy_audio::{AudioInputBuilder, AudioOutputBuilder, AudioHost};
-//!
-//! // Module-qualified imports (useful for clarity)
-//! use telepathy_audio::io::{AudioInputBuilder, AudioOutputBuilder};
-//! use telepathy_audio::devices::AudioHost;
-//! ```
 
 // =============================================================================
 // Public modules
