@@ -29,8 +29,8 @@
 //! ```
 
 use crate::error::AudioError;
-use crate::processing::wide_mul;
-use crate::utils::{db_to_multiplier, resampler_factory};
+use crate::internal::processing::wide_mul;
+use crate::internal::utils::{db_to_multiplier, resampler_factory};
 use atomic_float::AtomicF32;
 use bytes::Bytes;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};

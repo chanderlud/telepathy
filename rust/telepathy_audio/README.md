@@ -12,25 +12,7 @@ A standalone audio processing library for the Telepathy project, providing devic
   - AVX-512 for 16-element aligned frames (where supported)
   - AVX2 for 8-element aligned frames (where supported)
   - Scalar fallback for all other cases
-- **Cross-Platform**: Native support for Windows, macOS, Linux, and WebAssembly
-
-## Platform Support
-
-| Platform | Audio Backend |
-|----------|---------------|
-| Windows  | WASAPI        |
-| macOS    | CoreAudio     |
-| Linux    | ALSA          |
-| Web      | AudioWorklet  |
-
-## Installation
-
-Add to your `Cargo.toml`:
-
-```toml
-[dependencies]
-telepathy_audio = { path = "../telepathy_audio" }
-```
+- **Cross-Platform**: Native support for Windows, macOS, Linux, iOS, Android, and WebAssembly
 
 ## Usage
 
@@ -158,6 +140,32 @@ let output = AudioOutputBuilder::new()
 > encoder sample rate automatically matches this. When denoise is disabled, the
 > processor passes through at the device's native sample rate.
 
+## Module Organization
+
+The library is organized into a hierarchical module structure:
+
+```
+telepathy_audio/
+├── devices       - Device enumeration and selection (public)
+├── io/           - Audio I/O module (public)
+│   ├── input     - Audio input capture
+│   └── output    - Audio output playback
+├── player        - Audio file playback (public)
+├── constants     - Public constants
+├── error         - Error types
+├── internal/     - Implementation details (private)
+│   ├── codec     - SEA codec encoding/decoding
+│   ├── processing- SIMD-optimized audio functions
+│   ├── processor - Core audio processors
+│   ├── state     - Processor state structs
+│   ├── traits    - AudioInput/AudioOutput traits
+│   └── utils     - Internal utilities
+└── platform/     - Platform-specific code (private)
+    └── web_audio - WASM audio implementation
+```
+
+**Public API**: `devices`, `io`, `player`, `constants`, `error`
+
 ## API Reference
 
 ### Types
@@ -203,63 +211,7 @@ This library builds on several excellent Rust crates:
 - [cpal](https://docs.rs/cpal) - Cross-platform audio I/O
 - [rubato](https://docs.rs/rubato) - High-quality audio resampling
 - [nnnoiseless](https://docs.rs/nnnoiseless) - RNNoise-based noise suppression
-- [sea_codec](../sea_codec) - SEA audio codec for efficient transmission
-
-## Migration Guide
-
-If migrating from direct cpal usage to telepathy_audio:
-
-### Basic Migration Steps
-
-1. Replace `cpal::default_host()` with `AudioHost::new()`
-2. Replace manual device enumeration with `list_all_devices()`
-3. Replace manual stream creation with `AudioInputBuilder` / `AudioOutputBuilder`
-4. Use the callback mechanism for receiving processed audio
-5. Use the sender mechanism for feeding audio data
-
-### Example Migration
-
-**Before (cpal):**
-```rust
-let host = cpal::default_host();
-let device = host.default_input_device().unwrap();
-let config = device.default_input_config().unwrap();
-let stream = device.build_input_stream(&config.into(), move |data: &[f32], _| {
-    // Process audio...
-}, |err| eprintln!("Error: {}", err), None).unwrap();
-stream.play().unwrap();
-```
-
-**After (telepathy_audio):**
-```rust
-let host = AudioHost::new();
-let input = AudioInputBuilder::new()
-    .callback(|data| {
-        // Process audio (already processed and formatted)
-    })
-    .build(&host)
-    .unwrap();
-```
-
-### WASM Migration Notes
-
-On WASM targets, use `build_async` instead of `build` for audio input, as
-microphone access requires async permission handling:
-
-```rust
-#[cfg(target_family = "wasm")]
-let input = AudioInputBuilder::new()
-    .callback(|data| { /* ... */ })
-    .build_async(&host)
-    .await
-    .unwrap();
-```
-
-### Troubleshooting
-
-- **"No input device" error**: Ensure audio devices are connected and permissions granted
-- **Sample rate mismatch**: The library handles resampling automatically
-- **WASM build errors**: Use `build_async` for input; output uses synchronous `build`
+- [sea_codec](https://github.com/Daninet/sea-codec) - SEA audio codec for efficient transmission
 
 ## License
 

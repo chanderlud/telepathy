@@ -21,17 +21,17 @@
 //!     .unwrap();
 //! ```
 
-use crate::codec::encoder;
 use crate::devices::AudioHost;
 #[cfg(not(target_family = "wasm"))]
 use crate::devices::{DeviceError, get_input_device};
 use crate::error::AudioError;
-use crate::processor::input_processor;
-use crate::state::InputProcessorState;
+use crate::internal::codec::encoder;
+use crate::internal::processor::input_processor;
+use crate::internal::state::InputProcessorState;
 #[cfg(not(target_family = "wasm"))]
-use crate::traits::{CHANNEL_SIZE, ChannelInput};
+use crate::internal::traits::{CHANNEL_SIZE, ChannelInput};
 #[cfg(target_family = "wasm")]
-use crate::web_audio::WebAudioWrapper;
+use crate::platform::web_audio::WebAudioWrapper;
 use atomic_float::AtomicF32;
 use bytes::Bytes;
 #[cfg(not(target_family = "wasm"))]
@@ -349,7 +349,7 @@ where
     /// - Spawns processor thread with the native signature
     /// - Spawns encoder thread (if codec enabled)
     /// - Spawns callback thread (if callback set)
-    fn build_common<I: crate::traits::AudioInput + Send + 'static>(
+    fn build_common<I: crate::internal::traits::AudioInput + Send + 'static>(
         self,
         processor_input: I,
         input_sample_rate: u32,
@@ -612,7 +612,7 @@ where
         _host: &AudioHost,
         web_audio_wrapper: Option<Arc<WebAudioWrapper>>,
     ) -> Result<AudioInputHandle, AudioError> {
-        use crate::web_audio::WebAudioInput;
+        use crate::platform::web_audio::WebAudioInput;
 
         if self.callback.is_none() && self.channel.is_none() {
             return Err(AudioError::Config(
@@ -687,7 +687,7 @@ pub struct AudioInputHandle {
     #[cfg(not(target_family = "wasm"))]
     _stream: Option<cpal::Stream>,
     #[cfg(target_family = "wasm")]
-    _web_audio: Option<std::sync::Arc<crate::web_audio::WebAudioWrapper>>,
+    _web_audio: Option<std::sync::Arc<crate::platform::web_audio::WebAudioWrapper>>,
     processor_handle: Option<JoinHandle<()>>,
     encoder_handle: Option<JoinHandle<()>>,
     callback_handle: Option<JoinHandle<()>>,

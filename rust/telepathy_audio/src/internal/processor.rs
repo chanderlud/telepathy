@@ -42,10 +42,10 @@
 
 use crate::constants::{MINIMUM_SILENCE_LENGTH, TRANSITION_LENGTH};
 use crate::error::AudioError;
-use crate::processing::*;
-use crate::state::{InputProcessorState, OutputProcessorState};
-use crate::traits::{AudioInput, AudioOutput};
-use crate::utils::{make_transition_down, make_transition_up, resampler_factory};
+use crate::internal::processing::*;
+use crate::internal::state::{InputProcessorState, OutputProcessorState};
+use crate::internal::traits::{AudioInput, AudioOutput};
+use crate::internal::utils::{make_transition_down, make_transition_up, resampler_factory};
 use bytes::Bytes;
 use kanal::{Receiver, Sender};
 use log::{debug, warn};
@@ -192,12 +192,15 @@ pub fn input_processor<I: AudioInput>(
             if silence_length < MINIMUM_SILENCE_LENGTH {
                 silence_length += 1; // short silences are ignored
             } else if silence_length == MINIMUM_SILENCE_LENGTH {
-                // insert frame to cleanly transition down to silence
-                send_frame(
-                    make_transition_down(TRANSITION_LENGTH, out_buf[0] as i16),
-                    &codec_output,
-                    &network_output,
-                )?;
+                let last_sample = out_buf[0] as i16;
+                if last_sample > 0 {
+                    // insert frame to cleanly transition down to silence
+                    send_frame(
+                        make_transition_down(TRANSITION_LENGTH, last_sample),
+                        &codec_output,
+                        &network_output,
+                    )?;
+                }
                 // don't transition down again
                 silence_length += 1;
                 continue;

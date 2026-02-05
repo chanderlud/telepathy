@@ -49,7 +49,7 @@
 #![cfg(target_family = "wasm")]
 
 use crate::error::AudioError;
-use crate::traits::{AudioInput, CHANNEL_SIZE};
+use crate::internal::traits::{AudioInput, CHANNEL_SIZE};
 use log::error;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;

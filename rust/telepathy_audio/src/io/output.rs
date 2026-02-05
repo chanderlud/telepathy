@@ -23,18 +23,18 @@
 //! // sender.send(audio_data).await;
 //! ```
 
-use crate::codec::decoder;
 use crate::devices::AudioHost;
 #[cfg(not(target_family = "wasm"))]
 use crate::devices::{DeviceError, get_output_device};
 use crate::error::AudioError;
-use crate::processor::output_processor;
-use crate::state::OutputProcessorState;
-use crate::traits::AudioOutput;
+use crate::internal::codec::decoder;
+use crate::internal::processor::output_processor;
+use crate::internal::state::OutputProcessorState;
+use crate::internal::traits::AudioOutput;
 #[cfg(not(target_family = "wasm"))]
-use crate::traits::CHANNEL_SIZE;
+use crate::internal::traits::CHANNEL_SIZE;
 #[cfg(not(target_family = "wasm"))]
-use crate::traits::ChannelOutput;
+use crate::internal::traits::ChannelOutput;
 use atomic_float::AtomicF32;
 use bytes::Bytes;
 #[cfg(not(target_family = "wasm"))]
@@ -394,7 +394,7 @@ impl AudioOutputBuilder {
     /// additional samples are dropped to prevent unbounded memory growth.
     #[cfg(target_family = "wasm")]
     pub fn build(self, _host: &AudioHost) -> Result<AudioOutputHandle, AudioError> {
-        use crate::traits::WebOutput;
+        use crate::internal::traits::WebOutput;
         use std::sync::Arc;
         use wasm_sync::Mutex;
 

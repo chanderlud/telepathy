@@ -15,6 +15,21 @@
 //!   - Scalar fallback when alignment requirements aren't met
 //! - **Cross-Platform**: Native support for Windows, macOS, Linux, and WebAssembly
 //!
+//! ## Module Organization
+//!
+//! The library is organized into the following modules:
+//!
+//! - **Public Modules**:
+//!   - [`devices`] - Device enumeration and selection
+//!   - [`io`] - Audio input/output builders and handles
+//!   - [`player`] - Audio file playback (WAV and SEA codec)
+//!   - [`error`] - Error types
+//!   - [`constants`] - Public constants (FRAME_SIZE, etc.)
+//!
+//! - **Internal Modules** (not part of public API):
+//!   - `internal` - Processing pipeline implementation
+//!   - `platform` - Platform-specific code (WASM)
+//!
 //! ## Platform Support
 //!
 //! | Platform | Backend |
@@ -180,23 +195,66 @@
 //! output_volume.store(0.8, Relaxed); // Reduce output volume
 //! deafened.store(true, Relaxed);     // Deafen output
 //! ```
+//!
+//! ## Import Styles
+//!
+//! Both of these import styles work (backward compatible):
+//!
+//! ```rust,no_run
+//! // Root-level imports (recommended for convenience)
+//! use telepathy_audio::{AudioInputBuilder, AudioOutputBuilder, AudioHost};
+//!
+//! // Module-qualified imports (useful for clarity)
+//! use telepathy_audio::io::{AudioInputBuilder, AudioOutputBuilder};
+//! use telepathy_audio::devices::AudioHost;
+//! ```
 
-// Internal modules
-mod codec;
-mod constants;
+// =============================================================================
+// Public modules
+// =============================================================================
+
+/// Device enumeration and selection.
+///
+/// This module provides functionality for listing available audio devices
+/// and selecting specific devices for input or output.
 pub mod devices;
-mod error;
-mod input;
-mod output;
-pub mod player;
-mod processing;
-mod processor;
-mod state;
-mod traits;
-mod utils;
 
-#[cfg(target_family = "wasm")]
-mod web_audio;
+/// Audio I/O module.
+///
+/// This module provides high-level builders and handles for audio capture
+/// and playback. Use [`io::input::AudioInputBuilder`] for audio input and
+/// [`io::output::AudioOutputBuilder`] for audio output.
+pub mod io;
+
+/// Audio file playback.
+///
+/// This module provides a framework-agnostic audio player supporting
+/// WAV and SEA codec files with automatic resampling and volume control.
+pub mod player;
+
+/// Public constants.
+///
+/// Contains audio processing constants like frame size.
+pub mod constants;
+
+/// Error types.
+///
+/// Contains error types used throughout the library.
+pub mod error;
+
+// =============================================================================
+// Internal modules (private)
+// =============================================================================
+
+/// Internal implementation details (not part of public API).
+mod internal;
+
+/// Platform-specific implementations (not part of public API).
+mod platform;
+
+// =============================================================================
+// Re-exports for backward compatibility
+// =============================================================================
 
 // Re-export device enumeration API
 pub use devices::{
@@ -205,9 +263,9 @@ pub use devices::{
     list_all_devices, list_input_devices, list_output_devices,
 };
 
-// Re-export audio input/output API
-pub use input::{AudioInputBuilder, AudioInputConfig, AudioInputHandle};
-pub use output::{AudioOutputBuilder, AudioOutputConfig, AudioOutputHandle};
+// Re-export audio input/output API (from new io module)
+pub use io::input::{AudioInputBuilder, AudioInputConfig, AudioInputHandle};
+pub use io::output::{AudioOutputBuilder, AudioOutputConfig, AudioOutputHandle};
 
 // Re-export error types
 pub use error::AudioError;
@@ -227,7 +285,12 @@ pub use sea_codec::codec::file::SeaFileHeader;
 ///
 /// Uses the standard audio engineering formula: `10^(dB / 20)`.
 /// Useful for volume control where 0 dB = unity gain.
-pub use utils::db_to_multiplier;
+pub use internal::utils::db_to_multiplier;
+
+/// Multiplies frame samples by a factor with automatic SIMD optimization.
+///
+/// Re-exported from internal module for backward compatibility.
+pub use internal::processing::wide_mul;
 
 // Re-export player API
 /// Framework-agnostic audio player for WAV and SEA codec files.
@@ -238,4 +301,4 @@ pub use player::{AudioPlayer, SoundHandle, wav_to_sea};
 
 // Re-export web audio types for WASM consumers
 #[cfg(target_family = "wasm")]
-pub use web_audio::{WebAudioInput, WebAudioWrapper};
+pub use platform::web_audio::{WebAudioInput, WebAudioWrapper};
