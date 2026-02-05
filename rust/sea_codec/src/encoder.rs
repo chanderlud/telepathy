@@ -33,7 +33,7 @@ impl Default for EncoderSettings {
 }
 
 pub struct SeaEncoder {
-    receiver: Receiver<[i16; 480]>,
+    receiver: Receiver<Bytes>,
     sender: Sender<Bytes>,
     file: SeaFile,
     pub state: SeaEncoderState,
@@ -45,7 +45,7 @@ impl SeaEncoder {
         channels: u8,
         sample_rate: u32,
         settings: EncoderSettings,
-        receiver: Receiver<[i16; 480]>,
+        receiver: Receiver<Bytes>,
         sender: Sender<Bytes>,
     ) -> Result<Self, SeaError> {
         let header = SeaFileHeader {
@@ -72,10 +72,16 @@ impl SeaEncoder {
 
         let frames = self.file.header.frames_per_chunk as usize;
 
-        let samples = self.receiver.recv()?;
+        let buffer = self.receiver.recv()?;
 
-        if !samples.is_empty() {
-            let encoded_chunk = self.file.make_chunk(samples.as_ref())?;
+        if !buffer.is_empty() {
+            let samples = unsafe {
+                std::slice::from_raw_parts(
+                    buffer.as_ptr() as *const i16,
+                    buffer.len() / size_of::<i16>(),
+                )
+            };
+            let encoded_chunk = self.file.make_chunk(samples)?;
 
             assert_eq!(encoded_chunk.len(), self.file.header.chunk_size as usize);
 

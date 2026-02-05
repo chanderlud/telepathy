@@ -42,8 +42,7 @@ use cpal::traits::{DeviceTrait, StreamTrait};
 use kanal::bounded;
 use kanal::{AsyncSender, unbounded};
 use log::{debug, error};
-use nnnoiseless::{DenoiseState, FRAME_SIZE, RnnModel};
-use std::ops::Not;
+use nnnoiseless::{DenoiseState, RnnModel};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::thread::{self, JoinHandle};
@@ -375,8 +374,7 @@ where
 
         // Create channels
         let (processor_to_callback_sender, processor_to_callback_receiver) = unbounded::<Bytes>();
-        let (processor_to_encoder_sender, processor_to_encoder_receiver) =
-            unbounded::<[i16; FRAME_SIZE]>();
+        let (processor_to_encoder_sender, processor_to_encoder_receiver) = unbounded::<Bytes>();
         let (encoded_sender, encoded_receiver) = unbounded::<Bytes>();
 
         // When denoise is enabled, the processor resamples to 48kHz for rnnoise
@@ -417,8 +415,11 @@ where
         let processor_handle = thread::spawn(move || {
             if let Err(e) = input_processor(
                 processor_input,
-                codec_enabled.then_some(processor_to_encoder_sender),
-                codec_enabled.not().then_some(network_sender),
+                if codec_enabled {
+                    processor_to_encoder_sender
+                } else {
+                    network_sender
+                },
                 input_sample_rate as f64,
                 denoiser,
                 state,

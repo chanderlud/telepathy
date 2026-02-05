@@ -169,10 +169,7 @@ impl SeaFile {
         Ok(output)
     }
 
-    pub fn samples_from_reader(
-        &mut self,
-        receiver: &Receiver<Bytes>,
-    ) -> Result<[i16; 480], SeaError> {
+    pub fn samples_from_reader(&mut self, receiver: &Receiver<Bytes>) -> Result<Bytes, SeaError> {
         let encoded = receiver.recv()?;
         let chunk = SeaChunk::from_slice(&encoded, &self.header)?;
 
@@ -192,7 +189,13 @@ impl SeaFile {
         if decoded.len() != expected_len {
             Err(SeaError::InvalidFrame)
         } else {
-            Ok(decoded.try_into().unwrap())
+            let bytes = unsafe {
+                std::slice::from_raw_parts(
+                    decoded.as_ptr() as *const u8,
+                    expected_len * size_of::<i16>(),
+                )
+            };
+            Ok(Bytes::from(bytes))
         }
     }
 }

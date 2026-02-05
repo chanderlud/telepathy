@@ -259,7 +259,7 @@ impl AudioOutputBuilder {
         let loss_sender = self.shared_loss.clone().unwrap_or_default();
 
         let (network_sender, network_receiver) = unbounded::<Bytes>();
-        let (decoded_sender, decoded_receiver) = unbounded::<[i16; 480]>();
+        let (decoded_sender, decoded_receiver) = unbounded::<Bytes>();
 
         // Calculate resampling ratio
         let ratio = output_sample_rate as f64 / self.config.sample_rate as f64;
@@ -271,27 +271,21 @@ impl AudioOutputBuilder {
         let codec_header = self.config.codec_header;
 
         // Spawn decoder thread if codec enabled, and select appropriate receiver for processor
-        let (decoder_handle, codec_receiver, network_receiver) = if codec_enabled {
+        let (decoder_handle, processor_receiver) = if codec_enabled {
             let handle = thread::spawn(move || {
                 if let Err(e) = decoder(network_receiver, decoded_sender, codec_header) {
                     error!("Decoder error: {}", e);
                 }
                 debug!("Decoder thread ended");
             });
-            (Some(handle), Some(decoded_receiver), None)
+            (Some(handle), decoded_receiver)
         } else {
-            (None, None, Some(network_receiver))
+            (None, network_receiver)
         };
 
         // Spawn processor thread
         let processor_handle = thread::spawn(move || {
-            if let Err(e) = output_processor(
-                codec_receiver,
-                network_receiver,
-                processor_output,
-                ratio,
-                state,
-            ) {
+            if let Err(e) = output_processor(processor_receiver, processor_output, ratio, state) {
                 error!("Output processor error: {}", e);
             }
             debug!("Output processor thread ended");

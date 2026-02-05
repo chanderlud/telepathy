@@ -12,16 +12,15 @@
 //!
 //! ## Frame Format
 //!
-//! - Input to encoder: `[i16; 480]` (480 samples, 10ms at 48kHz)
+//! - Input to encoder: `Bytes` (raw i16 samples as bytes, 960 bytes for 480 samples at 48kHz)
 //! - Output from encoder: `Bytes` (variable length, depends on settings)
 //! - Input to decoder: `Bytes` (encoded frames)
-//! - Output from decoder: `[i16; 480]` (reconstructed samples)
+//! - Output from decoder: `Bytes` (reconstructed i16 samples as bytes, 960 bytes for 480 samples)
 
 use crate::error::AudioError;
 use bytes::Bytes;
 use kanal::{Receiver, Sender};
 use log::info;
-use nnnoiseless::FRAME_SIZE;
 use sea_codec::codec::file::SeaFileHeader;
 use sea_codec::decoder::SeaDecoder;
 use sea_codec::encoder::{EncoderSettings, SeaEncoder, SeaEncoderState};
@@ -44,7 +43,7 @@ use sea_codec::encoder::{EncoderSettings, SeaEncoder, SeaEncoderState};
 ///
 /// Returns `Ok(())` when encoding completes, or an error if encoding fails.
 pub fn encoder(
-    receiver: Receiver<[i16; FRAME_SIZE]>,
+    receiver: Receiver<Bytes>,
     sender: Sender<Bytes>,
     sample_rate: u32,
     vbr: bool,
@@ -83,7 +82,7 @@ pub fn encoder(
 /// Returns `Ok(())` when decoding completes, or an error if decoding fails.
 pub fn decoder(
     receiver: Receiver<Bytes>,
-    sender: Sender<[i16; FRAME_SIZE]>,
+    sender: Sender<Bytes>,
     header: Option<SeaFileHeader>,
 ) -> Result<(), AudioError> {
     let mut decoder = SeaDecoder::new(receiver, sender, header)?;

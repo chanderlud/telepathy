@@ -18,7 +18,7 @@
 //! │ Stream      │    │ (thread)         │    │ (thread)    │    │ (thread) │
 //! └─────────────┘    └──────────────────┘    └─────────────┘    └──────────┘
 //!                            │
-//!                            │ codec_output: [i16; FRAME_SIZE]
+//!                            │ output: Bytes
 //!                            ▼
 //! ```
 //!
@@ -42,7 +42,7 @@
 //! │ Receiver    │    │ (thread)         │    │ (thread)         │    │ Stream │
 //! └─────────────┘    └──────────────────┘    └──────────────────┘    └────────┘
 //!                            │
-//!                            │ [i16; FRAME_SIZE]
+//!                            │ Bytes
 //!                            ▼
 //! ```
 //!
@@ -122,15 +122,13 @@ use rubato::Resampler;
 ///
 /// ## Channel Communication
 ///
-/// - Sends `[i16; FRAME_SIZE]` to codec_output when codec is enabled
-/// - Sends `Bytes` to network_output when codec is disabled
+/// - Sends `Bytes` (i16 samples as bytes) to the output channel
 /// - Channel closure causes function to return `Ok(())`
 ///
 /// # Arguments
 ///
 /// * `input` - The audio input source implementing `AudioInput`
-/// * `codec_output` - Channel for sending frames to codec encoder (`Some` when codec enabled)
-/// * `network_output` - Channel for sending raw bytes to network (`Some` when codec disabled)
+/// * `output` - Channel for sending processed audio frames (as `Bytes`)
 /// * `sample_rate` - Input sample rate in Hz (device's native rate)
 /// * `denoiser` - Optional noise suppression state (requires 48kHz input)
 /// * `state` - Shared state for volume, mute, and statistics
@@ -141,8 +139,7 @@ use rubato::Resampler;
 /// if processing fails.
 pub fn input_processor<I: AudioInput>(
     mut input: I,
-    codec_output: Option<Sender<[i16; FRAME_SIZE]>>,
-    network_output: Option<Sender<Bytes>>,
+    output: Sender<Bytes>,
     sample_rate: f64,
     mut denoiser: Option<Box<DenoiseState>>,
     state: InputProcessorState,
@@ -243,8 +240,7 @@ pub fn input_processor<I: AudioInput>(
                     // insert frame to cleanly transition down to silence
                     send_frame(
                         make_transition_down(TRANSITION_LENGTH, last_sample),
-                        &codec_output,
-                        &network_output,
+                        &output,
                     )?;
                 }
                 // don't transition down again
@@ -257,11 +253,7 @@ pub fn input_processor<I: AudioInput>(
             let first_sample = out_buf[0] as i16;
             if silence_length > 0 && first_sample > 0 {
                 // insert frame to transition up from silence to the audio
-                send_frame(
-                    make_transition_up(TRANSITION_LENGTH, first_sample),
-                    &codec_output,
-                    &network_output,
-                )?;
+                send_frame(make_transition_up(TRANSITION_LENGTH, first_sample), &output)?;
             }
 
             silence_length = 0;
@@ -270,7 +262,7 @@ pub fn input_processor<I: AudioInput>(
         // cast the f32 samples to i16
         int_buffer = out_buf.map(|x| x as i16);
         // send the frame to the next stage, either codec or network
-        send_frame(int_buffer, &codec_output, &network_output)?;
+        send_frame(int_buffer, &output)?;
     }
 
     debug!("Input processor ended");
@@ -295,15 +287,13 @@ pub fn input_processor<I: AudioInput>(
 ///
 /// ## Channel Communication
 ///
-/// - Receives `[i16; FRAME_SIZE]` from codec_input when codec is enabled
-/// - Receives `Bytes` from network_input when codec is disabled
+/// - Receives `Bytes` (i16 samples as bytes) from the input channel
 /// - Drops frames when output is full (tracks loss via state)
 /// - Ignores frames when deafened
 ///
 /// # Arguments
 ///
-/// * `codec_input` - Channel for receiving decoded frames from codec (`Some` when codec enabled)
-/// * `network_input` - Channel for receiving raw bytes from network (`Some` when codec disabled)
+/// * `input` - Channel for receiving audio frames (as `Bytes`)
 /// * `output` - The audio output destination implementing `AudioOutput`
 /// * `ratio` - Resampling ratio (output_rate / input_rate)
 /// * `state` - Shared state for volume, deafen, and statistics
@@ -312,16 +302,13 @@ pub fn input_processor<I: AudioInput>(
 ///
 /// Returns `Ok(())` when the input channel closes, or an error if processing fails.
 pub fn output_processor<O: AudioOutput>(
-    codec_input: Option<Receiver<[i16; FRAME_SIZE]>>,
-    network_input: Option<Receiver<Bytes>>,
+    input: Receiver<Bytes>,
     mut output: O,
     ratio: f64,
     state: OutputProcessorState,
 ) -> Result<(), AudioError> {
     // base scale to convert i16 to f32
     let scale = 1_f32 / i16::MAX as f32;
-    // size of i16 in bytes
-    let i16_size = size_of::<i16>();
     // rubato requires 10 extra spaces in the output buffer as a safety margin
     let post_len = (FRAME_SIZE as f64 * ratio + 10_f64) as usize;
 
@@ -335,47 +322,22 @@ pub fn output_processor<O: AudioOutput>(
     let mut post_buf = [post_vec];
 
     loop {
-        let mut network_message = None;
-        let mut codec_message = None;
-        if let Some(ref receiver) = codec_input {
-            if let Ok(message) = receiver.recv() {
-                codec_message = Some(message);
-            } else {
-                break;
-            }
-        } else if let Some(ref receiver) = network_input {
-            if let Ok(message) = receiver.recv() {
-                network_message = Some(message);
-            } else {
-                break;
-            }
-        }
+        let Ok(buffer) = input.recv() else {
+            break;
+        };
 
-        if state.is_deafened() {
+        if buffer.len() != FRAME_SIZE * 2 {
+            warn!("output frame != FRAME_SIZE: {}", buffer.len());
+            continue;
+        } else if state.is_deafened() {
             continue;
         } else if output.is_full() {
             state.send_loss(FRAME_SIZE);
             continue; // ignore frames while output is full
         }
 
-        let int_samples: &[i16] = match (&network_message, &codec_message) {
-            (Some(bytes), _) => {
-                // convert the bytes to 16-bit integers
-                unsafe {
-                    std::slice::from_raw_parts(bytes.as_ptr() as *const i16, bytes.len() / i16_size)
-                }
-            }
-            (_, Some(samples)) => samples,
-            (None, None) => {
-                warn!("invalid output processor config");
-                break;
-            }
-        };
-
-        if int_samples.len() != FRAME_SIZE {
-            warn!("output frame != FRAME_SIZE: {}", int_samples.len());
-            continue;
-        }
+        let int_samples =
+            unsafe { std::slice::from_raw_parts(buffer.as_ptr() as *const i16, FRAME_SIZE) };
 
         // convert the i16 samples to f32 & apply the output volume
         wide_i16_to_f32(int_samples, pre_buf[0], scale * state.output_volume());
@@ -402,41 +364,31 @@ pub fn output_processor<O: AudioOutput>(
     Ok(())
 }
 
-/// Sends an audio frame to either the codec encoder or network output.
+/// Sends an audio frame to the output channel.
 ///
-/// This helper function abstracts the logic of sending frames to the appropriate
-/// destination based on which output channel is configured.
+/// This helper function converts an i16 sample array to `Bytes` and sends it
+/// through the output channel. The conversion uses unsafe pointer casting for
+/// zero-copy transmission.
 ///
 /// # Arguments
 ///
 /// * `frame` - The audio frame to send (480 i16 samples)
-/// * `codec_output` - Optional sender for codec encoder
-/// * `network_output` - Optional sender for network transmission
+/// * `output` - Sender for the output channel
 ///
 /// # Returns
 ///
-/// Returns `Ok(())` if the frame was sent successfully, or an error if:
-/// - The channel send operation fails
-/// - Neither output channel is configured (should not happen in normal operation)
+/// Returns `Ok(())` if the frame was sent successfully, or an error if the
+/// channel send operation fails.
 ///
-/// # Behavior
+/// # Safety
 ///
-/// - If `codec_output` is `Some`, sends the frame as `[i16; FRAME_SIZE]`
-/// - Otherwise, if `network_output` is `Some`, converts to `Bytes` and sends
-/// - Exactly one of the two outputs should be `Some` in normal operation
-fn send_frame(
-    frame: [i16; FRAME_SIZE],
-    codec_output: &Option<Sender<[i16; FRAME_SIZE]>>,
-    network_output: &Option<Sender<Bytes>>,
-) -> Result<(), AudioError> {
-    if let Some(sender) = codec_output {
-        sender.send(frame)?;
-    } else if let Some(sender) = network_output {
-        let bytes = unsafe {
-            std::slice::from_raw_parts(frame.as_ptr() as *const u8, FRAME_SIZE * size_of::<i16>())
-        };
-        sender.send(Bytes::from(bytes))?;
-    }
-
+/// Uses `unsafe` to reinterpret the i16 array as a byte slice. This is safe
+/// because i16 has a well-defined memory layout and the slice lifetime is
+/// constrained to the function scope.
+fn send_frame(frame: [i16; FRAME_SIZE], output: &Sender<Bytes>) -> Result<(), AudioError> {
+    let bytes = unsafe {
+        std::slice::from_raw_parts(frame.as_ptr() as *const u8, FRAME_SIZE * size_of::<i16>())
+    };
+    output.send(Bytes::from(bytes))?;
     Ok(())
 }

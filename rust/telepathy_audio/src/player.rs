@@ -58,7 +58,7 @@ use wasm_sync::{Condvar, Mutex as WasmMutex};
 const FADE_FRAMES: usize = 60;
 
 /// Type alias for decoded audio receiver with sample count.
-type DecodedReceiver = (Receiver<[i16; FRAME_SIZE]>, usize);
+type DecodedReceiver = (Receiver<Bytes>, usize);
 
 /// Audio file header information parsed from WAV format.
 struct AudioHeader {
@@ -855,7 +855,10 @@ pub async fn wav_to_sea(bytes: &[u8], residual_bits: f32) -> Result<Vec<u8>, Aud
             buffer[written..].fill(0);
         }
 
-        input_sender.send(buffer).await?;
+        let bytes = unsafe {
+            std::slice::from_raw_parts(buffer.as_ptr() as *const u8, FRAME_SIZE * size_of::<i16>())
+        };
+        input_sender.send(Bytes::from(bytes)).await?;
     }
 
     drop(input_sender);

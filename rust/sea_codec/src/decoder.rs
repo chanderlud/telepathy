@@ -7,7 +7,7 @@ use kanal::{Receiver, Sender};
 
 pub struct SeaDecoder {
     receiver: Receiver<Bytes>,
-    sender: Sender<[i16; 480]>,
+    sender: Sender<Bytes>,
     file: SeaFile,
     frames_read: usize,
 }
@@ -15,7 +15,7 @@ pub struct SeaDecoder {
 impl SeaDecoder {
     pub fn new(
         receiver: Receiver<Bytes>,
-        sender: Sender<[i16; 480]>,
+        sender: Sender<Bytes>,
         header: Option<SeaFileHeader>,
     ) -> Result<Self, SeaError> {
         let file = SeaFile::from_reader(&receiver, header)?;
