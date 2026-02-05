@@ -38,7 +38,7 @@ use sea_codec::encoder::{EncoderSettings, SeaEncoder, SeaEncoderState};
 /// * `sample_rate` - Sample rate of the audio
 /// * `vbr` - Whether to use variable bit rate encoding
 /// * `residual_bits` - Number of residual bits for encoding quality
-/// * `room` - Whether this is a room call (skips Start state)
+/// * `skip_start` - Whether this stream skips Start state
 ///
 /// # Returns
 ///
@@ -49,7 +49,7 @@ pub fn encoder(
     sample_rate: u32,
     vbr: bool,
     residual_bits: f32,
-    room: bool,
+    skip_start: bool,
 ) -> Result<(), AudioError> {
     let settings = EncoderSettings {
         residual_bits,
@@ -57,8 +57,8 @@ pub fn encoder(
         ..Default::default()
     };
     let mut encoder = SeaEncoder::new(1, sample_rate, settings, receiver, sender)?;
-    if room {
-        // skip Start state in rooms
+    if skip_start {
+        // skip Start state (will not send header)
         encoder.state = SeaEncoderState::WritingFrames;
     }
     // encode frames until receiver closes
@@ -76,7 +76,7 @@ pub fn encoder(
 ///
 /// * `receiver` - Channel receiver for encoded audio frames
 /// * `sender` - Channel sender for decoded frames
-/// * `header` - Optional file header for rooms (hard-coded configuration)
+/// * `header` - File header used when encoder skips start
 ///
 /// # Returns
 ///

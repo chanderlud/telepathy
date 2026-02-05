@@ -102,11 +102,6 @@ pub struct AudioInputConfig {
     ///
     /// Higher values provide better quality but larger encoded size.
     pub codec_residual_bits: f32,
-    /// Whether this is a room call.
-    ///
-    /// When `true`, the encoder skips the Start state, allowing immediate
-    /// audio transmission without handshake. Used for multi-party calls.
-    pub is_room: bool,
     /// Optional notify handle for stream errors.
     ///
     /// When set, the notify is triggered via `notify_one()` whenever a
@@ -126,7 +121,6 @@ impl Default for AudioInputConfig {
             codec_enabled: false,
             codec_vbr: false,
             codec_residual_bits: 5.0,
-            is_room: false,
             error_notify: None,
         }
     }
@@ -288,14 +282,6 @@ where
         self
     }
 
-    /// Sets whether this is a room call.
-    ///
-    /// Room calls skip the encoder start state.
-    pub fn room(mut self, is_room: bool) -> Self {
-        self.config.is_room = is_room;
-        self
-    }
-
     /// Sets a notify handle to be triggered on stream errors.
     ///
     /// When set, the notify will be triggered via `notify_one()` whenever
@@ -417,7 +403,6 @@ where
         let codec_enabled = self.config.codec_enabled;
         let codec_vbr = self.config.codec_vbr;
         let codec_residual_bits = self.config.codec_residual_bits;
-        let is_room = self.config.is_room;
 
         // Determine network sender based on channel and codec state
         let network_sender = if let Some(ref sender) = self.channel
@@ -457,7 +442,7 @@ where
                     encoder_sample_rate,
                     codec_vbr,
                     codec_residual_bits,
-                    is_room,
+                    true,
                 ) {
                     error!("Encoder error: {}", e);
                 }

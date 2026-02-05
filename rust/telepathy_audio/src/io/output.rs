@@ -69,16 +69,9 @@ pub struct AudioOutputConfig {
     ///
     /// Values less than 1.0 reduce volume, greater than 1.0 amplify.
     pub volume: f32,
-    /// Whether codec decoding is enabled.
-    ///
-    /// When enabled, incoming data is decoded using the SEA codec before playback.
-    pub codec_enabled: bool,
-    /// Pre-defined SEA file header for room calls.
+    /// Pre-defined SEA file header.
     ///
     /// When `Some(header)`, uses the provided header for decoding.
-    /// When `None` and `codec_enabled` is `true`, a default header is
-    /// auto-constructed with: version=1, channels=1, chunk_size=960,
-    /// frames_per_chunk=480, and the configured sample_rate.
     pub codec_header: Option<SeaFileHeader>,
     /// Optional notify handle for stream errors.
     ///
@@ -94,7 +87,6 @@ impl Default for AudioOutputConfig {
             device_id: None,
             sample_rate: 48000,
             volume: 1.0,
-            codec_enabled: false,
             codec_header: None,
             error_notify: None,
         }
@@ -206,10 +198,8 @@ impl AudioOutputBuilder {
     ///
     /// # Arguments
     ///
-    /// * `enabled` - Whether to enable codec decoding
-    /// * `header` - Optional SEA file header for rooms
-    pub fn codec(mut self, enabled: bool, header: Option<SeaFileHeader>) -> Self {
-        self.config.codec_enabled = enabled;
+    /// * `header` - SEA file header specified when codec is enabled
+    pub fn codec(mut self, header: Option<SeaFileHeader>) -> Self {
         self.config.codec_header = header;
         self
     }
@@ -277,8 +267,7 @@ impl AudioOutputBuilder {
         let state =
             OutputProcessorState::new(&output_volume, rms_sender, &deafened, loss_sender.clone());
 
-        let codec_enabled = self.config.codec_enabled;
-        // Auto-construct room SEA header when codec is enabled and no header provided
+        let codec_enabled = self.config.codec_header.is_some();
         let codec_header = self.config.codec_header;
 
         // Spawn decoder thread if codec enabled, and select appropriate receiver for processor

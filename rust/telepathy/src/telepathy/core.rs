@@ -1035,7 +1035,7 @@ where
 
         // Setup input (stream is managed internally)
         let mut input_helper = self
-            .setup_input(codec_config, &statistics_state, false, end_call)
+            .setup_input(codec_config, &statistics_state, end_call)
             .await?;
 
         // Setup output (stream is managed internally)
@@ -1044,7 +1044,6 @@ where
                 call_state.remote_configuration.sample_rate as f64,
                 codec_config.0,
                 &statistics_state,
-                false,
                 end_call.clone(),
             )
             .await?;
@@ -1282,7 +1281,6 @@ where
             .setup_input(
                 (true, true, 5_f32), // hard coded room codec options
                 &statistics_state,
-                true,
                 &end_call,
             )
             .await?;
@@ -1327,7 +1325,6 @@ where
                                     state.remote_configuration.sample_rate as f64,
                                     true,
                                     &statistics_state,
-                                    true,
                                     end_call.clone(),
                                 )
                                 .await?;

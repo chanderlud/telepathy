@@ -284,7 +284,6 @@ where
         &self,
         codec_options: (bool, bool, f32),
         statistics_state: &StatisticsCollectorState,
-        is_room: bool,
         end_call: &Arc<Notify>,
     ) -> Result<InputHelper> {
         let (codec_enabled, vbr, residual_bits) = codec_options;
@@ -311,7 +310,6 @@ where
             .muted_shared(&self.core_state.muted)
             .rms_shared(&statistics_state.input_rms)
             .codec(codec_enabled, vbr, residual_bits)
-            .room(is_room)
             .on_error(end_call)
             .channel(sender);
 
@@ -335,14 +333,12 @@ where
         remote_sample_rate: f64,
         codec_enabled: bool,
         statistics_state: &StatisticsCollectorState,
-        is_room: bool,
         end_call: Arc<Notify>,
     ) -> Result<OutputHelper> {
         // Get device ID
         let device_id = self.core_state.output_device.lock().await.clone();
-
-        // In rooms, the SEA header is hard coded
-        let header = is_room.then_some(telepathy_audio::SeaFileHeader {
+        // Pass in the SEA configuration when codec is enabled
+        let header = codec_enabled.then_some(telepathy_audio::SeaFileHeader {
             version: 1,
             channels: 1,
             chunk_size: 960,
@@ -358,7 +354,7 @@ where
             .deafened_shared(&self.core_state.deafened)
             .rms_shared(&statistics_state.output_rms)
             .loss_shared(&statistics_state.loss)
-            .codec(codec_enabled, header)
+            .codec(header)
             .on_error(end_call)
             .build(&self.host)?;
 
