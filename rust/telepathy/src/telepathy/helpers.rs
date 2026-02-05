@@ -285,7 +285,7 @@ where
         codec_options: (bool, bool, f32),
         statistics_state: &StatisticsCollectorState,
         is_room: bool,
-        end_call: Arc<Notify>,
+        end_call: &Arc<Notify>,
     ) -> Result<InputHelper> {
         let (codec_enabled, vbr, residual_bits) = codec_options;
         let denoise = self.core_state.denoise.load(Relaxed);

@@ -226,7 +226,7 @@ impl Telepathy {
         self.handles.lock().await.push(spawn(async move {
             let stop_io = Default::default();
             if let Err(error) = self_clone
-                .room_controller(receiver, cancel, call_state, &stop_io, end_call)
+                .room_controller(receiver, cancel, &stop_io, end_call)
                 .await
             {
                 error!("error in room controller: {:?}", error);

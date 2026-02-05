@@ -300,8 +300,8 @@ where
     ///
     /// When set, the notify will be triggered via `notify_one()` whenever
     /// a stream error occurs, in addition to logging the error.
-    pub fn on_error(mut self, notify: Arc<Notify>) -> Self {
-        self.config.error_notify = Some(notify);
+    pub fn on_error(mut self, notify: &Arc<Notify>) -> Self {
+        self.config.error_notify = Some(notify.clone());
         self
     }
 
@@ -763,9 +763,8 @@ impl AudioInputHandle {
         if let Some(sender) = self.input_sender.take() {
             _ = sender.close();
         }
-
         // Drop the stream so its callback stops before joining threads
-        self._stream.take();
+        drop(self._stream.take());
 
         // Wait for threads to finish
         if let Some(handle) = self.processor_handle.take() {

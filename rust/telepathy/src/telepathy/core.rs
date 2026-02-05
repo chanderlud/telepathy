@@ -1033,12 +1033,12 @@ where
         // the two clients agree on these codec options
         let codec_config = call_state.codec_config();
 
-        // Setup input using the library (stream is managed internally)
+        // Setup input (stream is managed internally)
         let mut input_helper = self
-            .setup_input(codec_config, &statistics_state, false, end_call.clone())
+            .setup_input(codec_config, &statistics_state, false, end_call)
             .await?;
 
-        // Setup output using the library (stream is managed internally)
+        // Setup output (stream is managed internally)
         let output_helper = self
             .setup_output(
                 call_state.remote_configuration.sample_rate as f64,
@@ -1263,7 +1263,6 @@ where
         &self,
         mut receiver: MReceiver<RoomMessage>,
         end_sessions: CancellationToken,
-        _call_state: EarlyCallState,
         stop_io: &CancellationToken,
         end_call: Arc<Notify>,
     ) -> Result<()> {
@@ -1278,13 +1277,13 @@ where
         // tracks connection state for peers
         let mut connections = HashMap::new();
 
-        // Setup input using the library (stream is managed internally)
+        // Setup input (stream is managed internally)
         let mut input_helper = self
             .setup_input(
                 (true, true, 5_f32), // hard coded room codec options
                 &statistics_state,
                 true,
-                end_call.clone(),
+                &end_call,
             )
             .await?;
 
@@ -1322,7 +1321,7 @@ where
                             let (write, read) = (*audio_transport).split();
                             // this unwrap is safe because audio_input never panics
                             new_sockets.lock().unwrap().push((write, Instant::now()));
-                            // setup output stack using the library
+                            // setup output stack
                             let helper = self
                                 .setup_output(
                                     state.remote_configuration.sample_rate as f64,
