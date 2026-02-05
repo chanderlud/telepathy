@@ -36,7 +36,7 @@ use libp2p::{PeerId, Stream, StreamProtocol};
 use libp2p_stream::Control;
 use log::{debug, error, info, warn};
 use messages::{Attachment, AudioHeader, Message};
-use nnnoiseless::{FRAME_SIZE, RnnModel};
+use nnnoiseless::RnnModel;
 use sockets::{Transport, TransportStream};
 use std::mem;
 use std::net::IpAddr;
@@ -44,7 +44,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::time::Duration;
-use telepathy_audio::{AudioDeviceInfo, list_all_devices};
+use telepathy_audio::{AudioDeviceInfo, db_to_multiplier, list_all_devices};
 use tokio::select;
 use tokio::sync::mpsc::{Receiver as MReceiver, Sender as MSender, channel};
 use tokio::sync::{Mutex, Notify};
@@ -52,7 +52,6 @@ use tokio::sync::{Mutex, Notify};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
-use utils::*;
 use uuid::Uuid;
 #[cfg(target_family = "wasm")]
 use wasmtimer::tokio::interval;
@@ -60,8 +59,6 @@ use wasmtimer::tokio::interval;
 type Result<T> = std::result::Result<T, Error>;
 pub(crate) type SharedDeviceId = Arc<Mutex<Option<String>>>;
 
-/// The number of bytes in a single network audio frame
-const TRANSFER_BUFFER_SIZE: usize = FRAME_SIZE * size_of::<i16>();
 /// A timeout used when initializing the call
 const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 /// How often to keep-alive libp2p streams

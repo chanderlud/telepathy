@@ -1,21 +1,21 @@
-use crate::codec::{
+use crate::sea::codec::{
     common::SeaError,
     file::{SeaFile, SeaFileHeader},
 };
-use bytes::Bytes;
+use bytes::BytesMut;
 use kanal::{Receiver, Sender};
 
 pub struct SeaDecoder {
-    receiver: Receiver<Bytes>,
-    sender: Sender<Bytes>,
+    receiver: Receiver<BytesMut>,
+    sender: Sender<BytesMut>,
     file: SeaFile,
     frames_read: usize,
 }
 
 impl SeaDecoder {
     pub fn new(
-        receiver: Receiver<Bytes>,
-        sender: Sender<Bytes>,
+        receiver: Receiver<BytesMut>,
+        sender: Sender<BytesMut>,
         header: Option<SeaFileHeader>,
     ) -> Result<Self, SeaError> {
         let file = SeaFile::from_reader(&receiver, header)?;
@@ -34,10 +34,6 @@ impl SeaDecoder {
         self.frames_read += self.file.header.frames_per_chunk as usize;
         self.sender.send(message)?;
         Ok(())
-    }
-
-    pub fn finalize(&mut self) {
-        _ = self.sender.close();
     }
 
     pub fn get_header(&self) -> SeaFileHeader {

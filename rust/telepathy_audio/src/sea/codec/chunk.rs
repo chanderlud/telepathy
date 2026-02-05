@@ -1,4 +1,4 @@
-use crate::{
+use crate::sea::{
     codec::{bits::BitUnpacker, lms::LMS_LEN},
     encoder::EncoderSettings,
 };

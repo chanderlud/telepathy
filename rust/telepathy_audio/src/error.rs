@@ -206,8 +206,8 @@ impl From<kanal::CloseError> for AudioError {
 ///
 /// Occurs during encoding in [`encoder`](crate::encoder) or decoding in
 /// [`decoder`](crate::decoder) when the codec encounters invalid data.
-impl From<sea_codec::codec::common::SeaError> for AudioError {
-    fn from(err: sea_codec::codec::common::SeaError) -> Self {
+impl From<crate::sea::codec::common::SeaError> for AudioError {
+    fn from(err: crate::sea::codec::common::SeaError) -> Self {
         AudioError::Processing(format!("Codec error: {:?}", err))
     }
 }

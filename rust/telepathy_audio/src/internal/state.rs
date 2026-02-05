@@ -16,6 +16,7 @@
 //! value encountered, which can be read by the application for visualization
 //! or voice activity detection.
 
+use crate::internal::buffer_pool::BufferPool;
 use atomic_float::AtomicF32;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -31,6 +32,7 @@ pub struct InputProcessorState {
     pub(crate) rms_threshold: Arc<AtomicF32>,
     pub(crate) muted: Arc<AtomicBool>,
     pub(crate) rms_sender: Arc<AtomicF32>,
+    pub(crate) buffer_pool: Arc<BufferPool>,
 }
 
 impl InputProcessorState {
@@ -53,6 +55,7 @@ impl InputProcessorState {
             rms_threshold: rms_threshold.clone(),
             muted: muted.clone(),
             rms_sender,
+            buffer_pool: Arc::new(BufferPool::default()),
         }
     }
 
@@ -75,6 +78,11 @@ impl InputProcessorState {
     pub(crate) fn send_rms(&self, rms: f32) {
         self.rms_sender.fetch_max(rms, Relaxed);
     }
+
+    /// Returns a reference to the buffer pool.
+    pub(crate) fn buffer_pool(&self) -> &Arc<BufferPool> {
+        &self.buffer_pool
+    }
 }
 
 impl Default for InputProcessorState {
@@ -82,8 +90,9 @@ impl Default for InputProcessorState {
         Self {
             input_volume: Arc::new(AtomicF32::new(1.0)),
             rms_threshold: Arc::new(AtomicF32::new(1.0)),
-            muted: Arc::new(Default::default()),
-            rms_sender: Arc::new(Default::default()),
+            muted: Default::default(),
+            rms_sender: Default::default(),
+            buffer_pool: Default::default(),
         }
     }
 }

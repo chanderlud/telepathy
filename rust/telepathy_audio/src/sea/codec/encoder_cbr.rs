@@ -1,4 +1,4 @@
-use crate::encoder::EncoderSettings;
+use crate::sea::encoder::EncoderSettings;
 
 use super::{
     common::{EncodedSamples, SeaEncoderTrait, SeaResidualSize},

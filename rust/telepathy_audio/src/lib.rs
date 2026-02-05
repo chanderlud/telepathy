@@ -134,7 +134,7 @@
 //! ## With Codec Support
 //!
 //! ```rust,no_run
-//! use telepathy_audio::{AudioHost, AudioInputBuilder, AudioOutputBuilder};
+//! use telepathy_audio::{AudioHost, AudioInputBuilder, AudioOutputBuilder, SeaFileHeader};
 //!
 //! let host = AudioHost::new();
 //!
@@ -147,9 +147,16 @@
 //!     .build(&host)
 //!     .unwrap();
 //!
-//! // Output with codec decoding
+//! // Output with codec decoding - provide header for decoder initialization
+//! let header = SeaFileHeader {
+//!     version: 1,
+//!     channels: 1,
+//!     chunk_size: 960,
+//!     frames_per_chunk: 480,
+//!     sample_rate: 48000,
+//! };
 //! let output = AudioOutputBuilder::new()
-//!     .codec(true, None)  // enabled, no pre-defined header
+//!     .codec(Some(header))  // codec enabled with provided header
 //!     .build(&host)
 //!     .unwrap();
 //! ```
@@ -238,6 +245,7 @@ mod internal;
 
 /// Platform-specific implementations (not part of public API).
 mod platform;
+mod sea;
 
 // =============================================================================
 // Re-exports for backward compatibility
@@ -254,6 +262,17 @@ pub use devices::{
 pub use io::input::{AudioInputBuilder, AudioInputConfig, AudioInputHandle};
 pub use io::output::{AudioOutputBuilder, AudioOutputConfig, AudioOutputHandle};
 
+/// A pooled byte buffer that returns to the pool when dropped.
+///
+/// `PooledBytes` wraps a `Bytes` buffer and implements `Deref<Target=Bytes>`,
+/// allowing transparent access to the underlying data. When dropped, it
+/// attempts to return the buffer to the pool for reuse (if the reference
+/// count is 1).
+///
+/// This type is used by `AudioInputBuilder` callbacks and channels to
+/// enable efficient buffer reuse during audio processing.
+pub use internal::buffer_pool::{PooledBuffer, PooledBytes};
+
 // Re-export error types
 pub use error::AudioError;
 
@@ -264,7 +283,7 @@ pub use constants::FRAME_SIZE;
 ///
 /// Re-exported from `sea_codec` for consumers that need to construct
 /// custom codec configurations for room calls or file encoding.
-pub use sea_codec::codec::file::SeaFileHeader;
+pub use sea::codec::file::SeaFileHeader;
 
 // Re-export processing utilities
 

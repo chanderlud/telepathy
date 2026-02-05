@@ -4,19 +4,22 @@ use crate::flutter::callbacks::FrbStatisticsCallback;
 use crate::overlay::{CONNECTED, LATENCY, LOSS};
 use crate::telepathy::messages::Message;
 use crate::telepathy::sockets::{Transport, TransportStream};
-use crate::telepathy::{ConnectionState, StatisticsCollectorState, TRANSFER_BUFFER_SIZE};
+use crate::telepathy::{ConnectionState, StatisticsCollectorState};
+use bytes::BytesMut;
 use flutter_rust_bridge::for_generated::futures::{Sink, SinkExt};
 use kanal::AsyncReceiver;
 use libp2p::bytes::Bytes;
 use libp2p::futures::StreamExt;
 use libp2p::swarm::ConnectionId;
 use log::debug;
+use nnnoiseless::FRAME_SIZE;
 use speedy::{Readable, Writable};
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::time::Duration;
+use telepathy_audio::PooledBuffer;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::select;
 use tokio::sync::Notify;
@@ -27,9 +30,6 @@ use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tokio_util::sync::CancellationToken;
 #[cfg(target_family = "wasm")]
 use wasmtimer::tokio::interval;
-
-// Re-export from telepathy_audio library
-pub(crate) use telepathy_audio::db_to_multiplier;
 
 type Result<T> = std::result::Result<T, Error>;
 
@@ -134,8 +134,8 @@ pub(crate) async fn statistics_collector<C: FrbStatisticsCallback>(
 
 /// Used for audio tests, plays the input into the output
 pub(crate) async fn loopback(
-    input_receiver: AsyncReceiver<Bytes>,
-    output_sender: kanal::Sender<Bytes>,
+    input_receiver: AsyncReceiver<PooledBuffer>,
+    output_sender: kanal::Sender<BytesMut>,
     cancel: &CancellationToken,
     end_call: &Arc<Notify>,
 ) {
@@ -149,7 +149,7 @@ pub(crate) async fn loopback(
             },
             message = input_receiver.recv() => {
                 if let Ok(message) = message {
-                    if output_sender.try_send(message).is_err() {
+                    if output_sender.try_send(message.clone_inner()).is_err() {
                         break;
                     }
                 } else {
@@ -162,7 +162,7 @@ pub(crate) async fn loopback(
 
 pub(crate) fn stream_to_audio_transport(stream: libp2p::Stream) -> Transport<TransportStream> {
     LengthDelimitedCodec::builder()
-        .max_frame_length(TRANSFER_BUFFER_SIZE)
+        .max_frame_length(FRAME_SIZE * size_of::<i16>())
         .length_field_type::<u16>()
         .new_framed(stream.compat())
 }

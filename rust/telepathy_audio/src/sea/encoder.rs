@@ -1,15 +1,10 @@
-use crate::codec::{
+use crate::internal::buffer_pool::PooledBuffer;
+use crate::sea::codec::{
     common::SeaError,
     file::{SeaFile, SeaFileHeader},
 };
-use bytes::Bytes;
 use kanal::{Receiver, Sender};
-
-pub enum SeaEncoderState {
-    Start,
-    WritingFrames,
-    Finished,
-}
+use nnnoiseless::FRAME_SIZE;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct EncoderSettings {
@@ -33,10 +28,9 @@ impl Default for EncoderSettings {
 }
 
 pub struct SeaEncoder {
-    receiver: Receiver<Bytes>,
-    sender: Sender<Bytes>,
+    receiver: Receiver<PooledBuffer>,
+    sender: Sender<PooledBuffer>,
     file: SeaFile,
-    pub state: SeaEncoderState,
     written_frames: u32,
 }
 
@@ -45,8 +39,8 @@ impl SeaEncoder {
         channels: u8,
         sample_rate: u32,
         settings: EncoderSettings,
-        receiver: Receiver<Bytes>,
-        sender: Sender<Bytes>,
+        receiver: Receiver<PooledBuffer>,
+        sender: Sender<PooledBuffer>,
     ) -> Result<Self, SeaError> {
         let header = SeaFileHeader {
             version: 1,
@@ -58,7 +52,6 @@ impl SeaEncoder {
 
         Ok(SeaEncoder {
             file: SeaFile::new(header, &settings)?,
-            state: SeaEncoderState::Start,
             receiver,
             sender,
             written_frames: 0,
@@ -66,41 +59,26 @@ impl SeaEncoder {
     }
 
     pub fn encode_frame(&mut self) -> Result<(), SeaError> {
-        if matches!(self.state, SeaEncoderState::Finished) {
-            return Err(SeaError::EncoderClosed);
-        }
-
         let frames = self.file.header.frames_per_chunk as usize;
 
-        let buffer = self.receiver.recv()?;
+        let mut buffer = self.receiver.recv()?;
+        let inner = buffer.inner_mut();
 
-        if !buffer.is_empty() {
-            let samples = unsafe {
-                std::slice::from_raw_parts(
-                    buffer.as_ptr() as *const i16,
-                    buffer.len() / size_of::<i16>(),
-                )
-            };
-            let encoded_chunk = self.file.make_chunk(samples)?;
-
+        if !inner.is_empty() {
+            let encoded_chunk = self.file.make_chunk(unsafe {
+                std::slice::from_raw_parts(inner.as_ptr() as *const i16, FRAME_SIZE)
+            })?;
             assert_eq!(encoded_chunk.len(), self.file.header.chunk_size as usize);
 
-            // we need to write file header after the first chunk is generated
-            if matches!(self.state, SeaEncoderState::Start) {
-                self.sender
-                    .send(Bytes::from(self.file.header.serialize()))?;
-                self.state = SeaEncoderState::WritingFrames;
-            }
-
-            self.sender.send(Bytes::from(encoded_chunk))?;
+            // encoded chunk is smaller than the original buffer, truncate it
+            inner.resize(encoded_chunk.len(), 0);
+            // copy encoded data into truncated buffer
+            inner.copy_from_slice(&encoded_chunk);
+            // send the original buffer w/ encoded data inside it now
+            self.sender.send(buffer)?;
             self.written_frames += frames as u32;
         }
 
         Ok(())
-    }
-
-    pub fn finalize(&mut self) {
-        _ = self.sender.close();
-        self.state = SeaEncoderState::Finished;
     }
 }

@@ -35,15 +35,15 @@ use crate::internal::traits::AudioOutput;
 use crate::internal::traits::CHANNEL_SIZE;
 #[cfg(not(target_family = "wasm"))]
 use crate::internal::traits::ChannelOutput;
+use crate::sea::codec::file::SeaFileHeader;
 use atomic_float::AtomicF32;
-use bytes::Bytes;
+use bytes::BytesMut;
 #[cfg(not(target_family = "wasm"))]
 use cpal::SampleFormat;
 #[cfg(not(target_family = "wasm"))]
 use cpal::traits::{DeviceTrait, StreamTrait};
 use kanal::{Sender, unbounded};
 use log::{debug, error};
-use sea_codec::codec::file::SeaFileHeader;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
 use std::thread::{self, JoinHandle};
@@ -112,7 +112,7 @@ struct OutputBuildContext {
     output_volume: Arc<AtomicF32>,
     deafened: Arc<AtomicBool>,
     loss_sender: Arc<AtomicUsize>,
-    network_sender: Sender<Bytes>,
+    network_sender: Sender<BytesMut>,
     decoder_handle: Option<JoinHandle<()>>,
     processor_handle: JoinHandle<()>,
 }
@@ -258,8 +258,8 @@ impl AudioOutputBuilder {
         let rms_sender = self.shared_rms.clone().unwrap_or_default();
         let loss_sender = self.shared_loss.clone().unwrap_or_default();
 
-        let (network_sender, network_receiver) = unbounded::<Bytes>();
-        let (decoded_sender, decoded_receiver) = unbounded::<Bytes>();
+        let (network_sender, network_receiver) = unbounded::<BytesMut>();
+        let (decoded_sender, decoded_receiver) = unbounded::<BytesMut>();
 
         // Calculate resampling ratio
         let ratio = output_sample_rate as f64 / self.config.sample_rate as f64;
@@ -469,7 +469,7 @@ pub struct AudioOutputHandle {
     _web_buffer: Option<std::sync::Arc<wasm_sync::Mutex<Vec<f32>>>>,
     processor_handle: Option<JoinHandle<()>>,
     decoder_handle: Option<JoinHandle<()>>,
-    network_sender: Sender<Bytes>,
+    network_sender: Sender<BytesMut>,
     output_volume: Arc<AtomicF32>,
     deafened: Arc<AtomicBool>,
     loss_sender: Arc<AtomicUsize>,
@@ -479,7 +479,7 @@ impl AudioOutputHandle {
     /// Returns a sender for feeding audio data to the output.
     ///
     /// Use this sender to send `ProcessorMessage` frames to be played.
-    pub fn sender(&self) -> Sender<Bytes> {
+    pub fn sender(&self) -> Sender<BytesMut> {
         self.network_sender.clone()
     }
 

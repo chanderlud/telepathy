@@ -11,7 +11,7 @@ use crate::telepathy::{
     CHAT_PROTOCOL, EarlyCallState, Result, StartScreenshare, StatisticsCollectorState,
 };
 use crate::{Behaviour, BehaviourEvent};
-use bytes::Bytes;
+use bytes::BytesMut;
 #[cfg(not(target_family = "wasm"))]
 use cpal::traits::DeviceTrait;
 use libp2p::futures::StreamExt;
@@ -26,7 +26,9 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::Duration;
-use telepathy_audio::{AudioInputBuilder, AudioInputHandle, AudioOutputBuilder, AudioOutputHandle};
+use telepathy_audio::{
+    AudioInputBuilder, AudioInputHandle, AudioOutputBuilder, AudioOutputHandle, PooledBuffer,
+};
 #[cfg(not(target_family = "wasm"))]
 use tokio::fs::File;
 #[cfg(not(target_family = "wasm"))]
@@ -300,7 +302,7 @@ where
         let device_id = self.core_state.input_device.lock().await.clone();
 
         // Create a channel for receiving processed audio data
-        let (sender, receiver) = kanal::unbounded_async::<Bytes>();
+        let (sender, receiver) = kanal::unbounded_async();
 
         let builder = AudioInputBuilder::new()
             .device(device_id)
@@ -520,7 +522,7 @@ impl OutputHelper {
         Self { handle }
     }
 
-    pub(crate) fn sender(&self) -> kanal::Sender<Bytes> {
+    pub(crate) fn sender(&self) -> kanal::Sender<BytesMut> {
         self.handle.sender()
     }
 
@@ -533,19 +535,22 @@ impl OutputHelper {
 
 pub(crate) struct InputHelper {
     handle: AudioInputHandle,
-    receiver: Option<kanal::AsyncReceiver<Bytes>>,
+    receiver: Option<kanal::AsyncReceiver<PooledBuffer>>,
 }
 
 impl InputHelper {
     /// Creates a new InputHelper and stores the handle in the shared storage
-    pub(crate) fn new(handle: AudioInputHandle, receiver: kanal::AsyncReceiver<Bytes>) -> Self {
+    pub(crate) fn new(
+        handle: AudioInputHandle,
+        receiver: kanal::AsyncReceiver<PooledBuffer>,
+    ) -> Self {
         Self {
             handle,
             receiver: Some(receiver),
         }
     }
 
-    pub(crate) fn receiver(&mut self) -> kanal::AsyncReceiver<Bytes> {
+    pub(crate) fn receiver(&mut self) -> kanal::AsyncReceiver<PooledBuffer> {
         self.receiver.take().unwrap()
     }
 

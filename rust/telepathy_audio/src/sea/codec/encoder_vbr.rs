@@ -1,4 +1,4 @@
-use crate::{
+use crate::sea::{
     codec::{common::SeaResidualSize, lms::LMS_LEN},
     encoder::EncoderSettings,
 };

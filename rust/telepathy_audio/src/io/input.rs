@@ -25,6 +25,7 @@ use crate::devices::AudioHost;
 #[cfg(not(target_family = "wasm"))]
 use crate::devices::{DeviceError, get_input_device};
 use crate::error::AudioError;
+use crate::internal::buffer_pool::PooledBuffer;
 use crate::internal::codec::encoder;
 use crate::internal::processor::input_processor;
 use crate::internal::state::InputProcessorState;
@@ -33,7 +34,6 @@ use crate::internal::traits::{CHANNEL_SIZE, ChannelInput};
 #[cfg(target_family = "wasm")]
 use crate::platform::web_audio::WebAudioWrapper;
 use atomic_float::AtomicF32;
-use bytes::Bytes;
 #[cfg(not(target_family = "wasm"))]
 use cpal::SampleFormat;
 #[cfg(not(target_family = "wasm"))]
@@ -131,11 +131,11 @@ impl Default for AudioInputConfig {
 /// starting the stream.
 pub struct AudioInputBuilder<F>
 where
-    F: Fn(Bytes) + Send + 'static,
+    F: Fn(PooledBuffer) + Send + 'static,
 {
     config: AudioInputConfig,
     callback: Option<F>,
-    channel: Option<AsyncSender<Bytes>>,
+    channel: Option<AsyncSender<PooledBuffer>>,
     /// Optional shared atomic for input volume (enables real-time synchronization)
     shared_input_volume: Option<Arc<AtomicF32>>,
     /// Optional shared atomic for RMS threshold (enables real-time synchronization)
@@ -156,9 +156,9 @@ struct InputBuildContext {
     callback_handle: Option<JoinHandle<()>>,
 }
 
-impl AudioInputBuilder<fn(Bytes)> {
+impl AudioInputBuilder<fn(PooledBuffer)> {
     /// Creates a new audio input builder with default configuration.
-    pub fn new() -> AudioInputBuilder<fn(Bytes)> {
+    pub fn new() -> AudioInputBuilder<fn(PooledBuffer)> {
         AudioInputBuilder {
             config: AudioInputConfig::default(),
             channel: None,
@@ -171,7 +171,7 @@ impl AudioInputBuilder<fn(Bytes)> {
     }
 }
 
-impl Default for AudioInputBuilder<fn(Bytes)> {
+impl Default for AudioInputBuilder<fn(PooledBuffer)> {
     fn default() -> Self {
         Self::new()
     }
@@ -179,7 +179,7 @@ impl Default for AudioInputBuilder<fn(Bytes)> {
 
 impl<F> AudioInputBuilder<F>
 where
-    F: Fn(Bytes) + Send + 'static,
+    F: Fn(PooledBuffer) + Send + 'static,
 {
     /// Sets the input device by ID.
     ///
@@ -292,10 +292,10 @@ where
 
     /// Sets the callback for receiving processed audio data.
     ///
-    /// The callback receives processed audio frames as `Bytes`.
+    /// The callback receives processed audio frames as `PooledBuffer`.
     pub fn callback<G>(self, callback: G) -> AudioInputBuilder<G>
     where
-        G: Fn(Bytes) + Send + 'static,
+        G: Fn(PooledBuffer) + Send + 'static,
     {
         AudioInputBuilder {
             config: self.config,
@@ -310,8 +310,8 @@ where
 
     /// Sets the channel for receiving processed audio data.
     ///
-    /// The channel receives processed audio frames as `Bytes`.
-    pub fn channel(self, channel: AsyncSender<Bytes>) -> Self {
+    /// The channel receives processed audio frames as `PooledBuffer`.
+    pub fn channel(self, channel: AsyncSender<PooledBuffer>) -> Self {
         AudioInputBuilder {
             config: self.config,
             channel: Some(channel),
@@ -328,9 +328,6 @@ where
     /// This method handles all shared setup steps:
     /// - Creates shared atomic state (input_volume, rms_threshold, muted, rms_sender)
     /// - Creates unbounded channels for inter-thread communication:
-    ///   - processor → encoder: `[i16; FRAME_SIZE]` (when codec enabled)
-    ///   - processor → callback: `Bytes` (when codec disabled)
-    ///   - encoder → callback: `Bytes` (when codec enabled)
     /// - Calculates encoder sample rate based on denoise_enabled:
     ///   - 48kHz when denoise is enabled (RNNoise requirement)
     ///   - Device sample rate when denoise is disabled
@@ -372,10 +369,9 @@ where
             .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
         let rms_sender = self.shared_rms.clone().unwrap_or_default();
 
-        // Create channels
-        let (processor_to_callback_sender, processor_to_callback_receiver) = unbounded::<Bytes>();
-        let (processor_to_encoder_sender, processor_to_encoder_receiver) = unbounded::<Bytes>();
-        let (encoded_sender, encoded_receiver) = unbounded::<Bytes>();
+        let (processor_to_callback_sender, processor_to_callback_receiver) = unbounded();
+        let (processor_to_encoder_sender, processor_to_encoder_receiver) = unbounded();
+        let (encoded_sender, encoded_receiver) = unbounded();
 
         // When denoise is enabled, the processor resamples to 48kHz for rnnoise
         // processing and outputs 48kHz frames (no downsample back to device rate).
@@ -395,13 +391,12 @@ where
         } else {
             None
         };
-
+        // build input processor state
         let state = InputProcessorState::new(&input_volume, &rms_threshold, &muted, rms_sender);
-
+        // extract codec options
         let codec_enabled = self.config.codec_enabled;
         let codec_vbr = self.config.codec_vbr;
         let codec_residual_bits = self.config.codec_residual_bits;
-
         // Determine network sender based on channel and codec state
         let network_sender = if let Some(ref sender) = self.channel
             && !codec_enabled
@@ -443,7 +438,6 @@ where
                     encoder_sample_rate,
                     codec_vbr,
                     codec_residual_bits,
-                    true,
                 ) {
                     error!("Encoder error: {}", e);
                 }

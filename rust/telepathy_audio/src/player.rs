@@ -29,10 +29,14 @@
 //! ```
 
 use crate::error::AudioError;
+use crate::internal::NETWORK_FRAME;
+use crate::internal::buffer_pool::BufferPool;
 use crate::internal::processing::wide_mul;
 use crate::internal::utils::{db_to_multiplier, resampler_factory};
+use crate::sea::decoder::SeaDecoder;
+use crate::sea::encoder::{EncoderSettings, SeaEncoder};
 use atomic_float::AtomicF32;
-use bytes::Bytes;
+use bytes::BytesMut;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{DeviceId, Host, SampleFormat};
 use kanal::{Receiver, unbounded};
@@ -41,8 +45,6 @@ use kanal::{Sender, bounded};
 use log::{debug, error};
 use nnnoiseless::FRAME_SIZE;
 use rubato::Resampler;
-use sea_codec::decoder::SeaDecoder;
-use sea_codec::encoder::{EncoderSettings, SeaEncoder};
 use std::mem;
 use std::sync::Arc;
 #[cfg(target_family = "wasm")]
@@ -50,6 +52,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Relaxed;
 use tokio::select;
 use tokio::sync::{Mutex, Notify};
+use tokio::task::{spawn_blocking, JoinHandle};
 #[cfg(target_family = "wasm")]
 use wasm_sync::{Condvar, Mutex as WasmMutex};
 
@@ -58,7 +61,7 @@ use wasm_sync::{Condvar, Mutex as WasmMutex};
 const FADE_FRAMES: usize = 60;
 
 /// Type alias for decoded audio receiver with sample count.
-type DecodedReceiver = (Receiver<Bytes>, usize);
+type DecodedReceiver = (Receiver<BytesMut>, usize);
 
 /// Audio file header information parsed from WAV format.
 struct AudioHeader {
@@ -344,7 +347,7 @@ async fn play_sound_with_device(
             sample_format: SampleFormat::I16,
         });
         let mut samples = None;
-        let mut decoder_handle: Option<tokio::task::JoinHandle<()>> = None;
+        let mut decoder_handle: Option<JoinHandle<()>> = None;
 
         // If not valid WAV, try to handle as SEA codec file
         if !is_valid_wav {
@@ -352,11 +355,9 @@ async fn play_sound_with_device(
             let (output_sender, output_receiver) = unbounded();
             let input_sender = input_sender.to_async();
 
-            input_sender
-                .send(Bytes::copy_from_slice(&bytes[..14]))
-                .await?;
+            input_sender.send(BytesMut::from(&bytes[..14])).await?;
 
-            let decoder_future = tokio::task::spawn_blocking(move || {
+            let decoder_future = spawn_blocking(move || {
                 SeaDecoder::new(input_receiver, output_sender, None)
             });
 
@@ -369,12 +370,12 @@ async fn play_sound_with_device(
             spec.sample_rate = header.sample_rate;
             spec.channels = header.channels as u32;
 
-            decoder_handle = Some(tokio::task::spawn_blocking(move || {
+            decoder_handle = Some(spawn_blocking(move || {
                 while decoder.decode_frame().is_ok() {}
             }));
 
             for chunk in bytes[14..].chunks(header.chunk_size as usize) {
-                input_sender.send(Bytes::copy_from_slice(chunk)).await?;
+                input_sender.send(BytesMut::from(chunk)).await?;
             }
 
             samples = Some((output_receiver, sample_count));
@@ -475,7 +476,7 @@ async fn play_sound_with_device(
         // The sender used by the processor
         let sender = processed_sender.clone();
 
-        let processor_future = tokio::task::spawn_blocking(move || {
+        let processor_future = spawn_blocking(move || {
             processor(
                 (samples.is_none().then_some(bytes), samples),
                 spec.sample_format,
@@ -618,9 +619,9 @@ fn processor(
 
                 let scale = 1_f32 / i16::MAX as f32;
 
-                for (i, sample) in samples.chunks(channels_usize).enumerate() {
-                    for (j, channel) in sample.iter().enumerate() {
-                        let sample = *channel as f32 * scale;
+                for (i, sample) in samples.chunks(channels_usize * 2).enumerate() {
+                    for (j, channel) in sample.chunks(2).enumerate() {
+                        let sample = i16::from_le_bytes(channel.try_into()?) as f32 * scale;
                         pre_buf[j][i] = sample;
                     }
                 }
@@ -807,6 +808,9 @@ pub async fn wav_to_sea(bytes: &[u8], residual_bits: f32) -> Result<Vec<u8>, Aud
         _ => 1,
     };
 
+    // Create buffer pool for frame allocation
+    let buffer_pool = Arc::new(BufferPool::default());
+
     let (input_sender, input_receiver) = unbounded();
     let (output_sender, output_receiver) = unbounded();
     let input_sender = input_sender.to_async();
@@ -855,17 +859,20 @@ pub async fn wav_to_sea(bytes: &[u8], residual_bits: f32) -> Result<Vec<u8>, Aud
             buffer[written..].fill(0);
         }
 
-        let bytes = unsafe {
-            std::slice::from_raw_parts(buffer.as_ptr() as *const u8, FRAME_SIZE * size_of::<i16>())
-        };
-        input_sender.send(Bytes::from(bytes)).await?;
+        // Acquire a pooled buffer
+        let mut pooled = BufferPool::acquire(&buffer_pool);
+        // Copy frame data into the pooled buffer
+        pooled.inner_mut().copy_from_slice(unsafe {
+            std::slice::from_raw_parts(buffer.as_ptr() as *const u8, NETWORK_FRAME)
+        });
+        input_sender.send(pooled).await?;
     }
 
     drop(input_sender);
     let mut data: Vec<u8> = Vec::new();
 
     while let Ok(bytes) = output_receiver.recv().await {
-        data.extend(bytes.iter());
+        data.extend(bytes.as_ref());
     }
 
     Ok(data)

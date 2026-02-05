@@ -11,7 +11,6 @@ use libp2p::swarm::{DialError, SwarmEvent};
 use libp2p::{TransportBuilderError, TransportError};
 use libp2p_stream::{AlreadyRegistered, OpenStreamError};
 use rubato::{ResampleError, ResamplerConstructionError};
-use sea_codec::codec::common::SeaError;
 use telepathy_audio::{AudioError, devices::DeviceError};
 use tokio::task::JoinError;
 use tokio::time::error::Elapsed;
@@ -46,7 +45,6 @@ pub(crate) enum ErrorKind {
     IdentityParse(ParseError),
     Transport(TransportError<std::io::Error>),
     AlreadyRegistered(AlreadyRegistered),
-    SeaError(SeaError),
     AudioError(AudioError),
     #[cfg(target_family = "wasm")]
     Canceled(Canceled),
@@ -281,14 +279,6 @@ impl From<wasm_bindgen::JsValue> for Error {
     }
 }
 
-impl From<SeaError> for Error {
-    fn from(err: SeaError) -> Self {
-        Self {
-            kind: ErrorKind::SeaError(err),
-        }
-    }
-}
-
 impl From<AudioError> for Error {
     fn from(err: AudioError) -> Self {
         Self {
@@ -346,7 +336,6 @@ impl Display for Error {
                 ErrorKind::IdentityParse(ref err) => format!("Identity parse error: {}", err),
                 ErrorKind::Transport(ref err) => format!("Transport error: {}", err),
                 ErrorKind::AlreadyRegistered(ref err) => format!("Already registered: {}", err),
-                ErrorKind::SeaError(ref err) => format!("Sea error: {err:?}"),
                 ErrorKind::AudioError(ref err) => format!("Audio error: {err}"),
                 #[cfg(target_family = "wasm")]
                 ErrorKind::Canceled(ref err) => format!("Canceled: {}", err),

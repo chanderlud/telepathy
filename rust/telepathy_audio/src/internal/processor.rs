@@ -78,15 +78,18 @@
 
 use crate::constants::{MINIMUM_SILENCE_LENGTH, TRANSITION_LENGTH};
 use crate::error::AudioError;
+use crate::internal::NETWORK_FRAME;
+use crate::internal::buffer_pool::{BufferPool, PooledBuffer};
 use crate::internal::processing::*;
 use crate::internal::state::{InputProcessorState, OutputProcessorState};
 use crate::internal::traits::{AudioInput, AudioOutput};
 use crate::internal::utils::{make_transition_down, make_transition_up, resampler_factory};
-use bytes::Bytes;
+use bytes::BytesMut;
 use kanal::{Receiver, Sender};
 use log::{debug, warn};
 use nnnoiseless::{DenoiseState, FRAME_SIZE};
 use rubato::Resampler;
+use std::sync::Arc;
 
 /// Processes audio input and sends it to the output channel.
 ///
@@ -139,7 +142,7 @@ use rubato::Resampler;
 /// if processing fails.
 pub fn input_processor<I: AudioInput>(
     mut input: I,
-    output: Sender<Bytes>,
+    output: Sender<PooledBuffer>,
     sample_rate: f64,
     mut denoiser: Option<Box<DenoiseState>>,
     state: InputProcessorState,
@@ -241,6 +244,7 @@ pub fn input_processor<I: AudioInput>(
                     send_frame(
                         make_transition_down(TRANSITION_LENGTH, last_sample),
                         &output,
+                        state.buffer_pool(),
                     )?;
                 }
                 // don't transition down again
@@ -253,7 +257,11 @@ pub fn input_processor<I: AudioInput>(
             let first_sample = out_buf[0] as i16;
             if silence_length > 0 && first_sample > 0 {
                 // insert frame to transition up from silence to the audio
-                send_frame(make_transition_up(TRANSITION_LENGTH, first_sample), &output)?;
+                send_frame(
+                    make_transition_up(TRANSITION_LENGTH, first_sample),
+                    &output,
+                    state.buffer_pool(),
+                )?;
             }
 
             silence_length = 0;
@@ -262,7 +270,7 @@ pub fn input_processor<I: AudioInput>(
         // cast the f32 samples to i16
         int_buffer = out_buf.map(|x| x as i16);
         // send the frame to the next stage, either codec or network
-        send_frame(int_buffer, &output)?;
+        send_frame(int_buffer, &output, state.buffer_pool())?;
     }
 
     debug!("Input processor ended");
@@ -302,7 +310,7 @@ pub fn input_processor<I: AudioInput>(
 ///
 /// Returns `Ok(())` when the input channel closes, or an error if processing fails.
 pub fn output_processor<O: AudioOutput>(
-    input: Receiver<Bytes>,
+    input: Receiver<BytesMut>,
     mut output: O,
     ratio: f64,
     state: OutputProcessorState,
@@ -364,16 +372,21 @@ pub fn output_processor<O: AudioOutput>(
     Ok(())
 }
 
-/// Sends an audio frame to the output channel.
+/// Sends an audio frame to the output channel using a pooled buffer.
 ///
-/// This helper function converts an i16 sample array to `Bytes` and sends it
-/// through the output channel. The conversion uses unsafe pointer casting for
-/// zero-copy transmission.
+/// This helper function acquires a buffer from the pool, writes the i16 sample
+/// array into it, and sends it through the output channel.
+/// Using pooled buffers significantly reduces allocation pressure compared
+/// to creating new `Bytes` buffers for each frame (~100 frames/second at 48kHz).
+///
+/// When the receiver drops the `PooledBuffer`, it will attempt to return the
+/// underlying buffer to the pool (if not shared/cloned).
 ///
 /// # Arguments
 ///
 /// * `frame` - The audio frame to send (480 i16 samples)
 /// * `output` - Sender for the output channel
+/// * `pool` - Buffer pool for acquiring reusable buffers
 ///
 /// # Returns
 ///
@@ -385,10 +398,18 @@ pub fn output_processor<O: AudioOutput>(
 /// Uses `unsafe` to reinterpret the i16 array as a byte slice. This is safe
 /// because i16 has a well-defined memory layout and the slice lifetime is
 /// constrained to the function scope.
-fn send_frame(frame: [i16; FRAME_SIZE], output: &Sender<Bytes>) -> Result<(), AudioError> {
-    let bytes = unsafe {
-        std::slice::from_raw_parts(frame.as_ptr() as *const u8, FRAME_SIZE * size_of::<i16>())
-    };
-    output.send(Bytes::from(bytes))?;
+fn send_frame(
+    frame: [i16; FRAME_SIZE],
+    output: &Sender<PooledBuffer>,
+    pool: &Arc<BufferPool>,
+) -> Result<(), AudioError> {
+    // Acquire a buffer from the pool
+    let mut pooled = BufferPool::acquire(pool);
+    // Copy frame data into the pooled buffer
+    pooled.inner_mut().copy_from_slice(unsafe {
+        std::slice::from_raw_parts(frame.as_ptr() as *const u8, NETWORK_FRAME)
+    });
+    // Send buffer to encoder or network
+    output.send(pooled)?;
     Ok(())
 }

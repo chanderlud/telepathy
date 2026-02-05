@@ -12,18 +12,19 @@
 //!
 //! ## Frame Format
 //!
-//! - Input to encoder: `Bytes` (raw i16 samples as bytes, 960 bytes for 480 samples at 48kHz)
+//! - Input to encoder: `PooledBytes` (raw i16 samples as bytes, 960 bytes for 480 samples at 48kHz)
 //! - Output from encoder: `Bytes` (variable length, depends on settings)
 //! - Input to decoder: `Bytes` (encoded frames)
 //! - Output from decoder: `Bytes` (reconstructed i16 samples as bytes, 960 bytes for 480 samples)
 
 use crate::error::AudioError;
-use bytes::Bytes;
+use crate::internal::buffer_pool::PooledBuffer;
+use crate::sea::codec::file::SeaFileHeader;
+use crate::sea::decoder::SeaDecoder;
+use crate::sea::encoder::{EncoderSettings, SeaEncoder};
+use bytes::BytesMut;
 use kanal::{Receiver, Sender};
 use log::info;
-use sea_codec::codec::file::SeaFileHeader;
-use sea_codec::decoder::SeaDecoder;
-use sea_codec::encoder::{EncoderSettings, SeaEncoder, SeaEncoderState};
 
 /// Encodes audio frames using the SEA codec.
 ///
@@ -37,18 +38,16 @@ use sea_codec::encoder::{EncoderSettings, SeaEncoder, SeaEncoderState};
 /// * `sample_rate` - Sample rate of the audio
 /// * `vbr` - Whether to use variable bit rate encoding
 /// * `residual_bits` - Number of residual bits for encoding quality
-/// * `skip_start` - Whether this stream skips Start state
 ///
 /// # Returns
 ///
 /// Returns `Ok(())` when encoding completes, or an error if encoding fails.
 pub fn encoder(
-    receiver: Receiver<Bytes>,
-    sender: Sender<Bytes>,
+    receiver: Receiver<PooledBuffer>,
+    sender: Sender<PooledBuffer>,
     sample_rate: u32,
     vbr: bool,
     residual_bits: f32,
-    skip_start: bool,
 ) -> Result<(), AudioError> {
     let settings = EncoderSettings {
         residual_bits,
@@ -56,10 +55,6 @@ pub fn encoder(
         ..Default::default()
     };
     let mut encoder = SeaEncoder::new(1, sample_rate, settings, receiver, sender)?;
-    if skip_start {
-        // skip Start state (will not send header)
-        encoder.state = SeaEncoderState::WritingFrames;
-    }
     // encode frames until receiver closes
     while encoder.encode_frame().is_ok() {}
     info!("Encoder finished");
@@ -81,8 +76,8 @@ pub fn encoder(
 ///
 /// Returns `Ok(())` when decoding completes, or an error if decoding fails.
 pub fn decoder(
-    receiver: Receiver<Bytes>,
-    sender: Sender<Bytes>,
+    receiver: Receiver<BytesMut>,
+    sender: Sender<BytesMut>,
     header: Option<SeaFileHeader>,
 ) -> Result<(), AudioError> {
     let mut decoder = SeaDecoder::new(receiver, sender, header)?;

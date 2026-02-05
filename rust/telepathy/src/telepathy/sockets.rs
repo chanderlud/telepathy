@@ -12,6 +12,7 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+use telepathy_audio::PooledBuffer;
 use tokio::select;
 #[cfg(not(target_family = "wasm"))]
 use tokio::time::timeout;
@@ -31,7 +32,7 @@ pub(crate) type AudioSocket = SplitSink<Transport<TransportStream>, Bytes>;
 const MAX_AGE: u32 = 250;
 
 pub(crate) trait SendingSocket {
-    async fn send(&mut self, packet: Bytes) -> usize;
+    async fn send(&mut self, packet: &Bytes) -> usize;
 }
 
 /// Simple reusable `BytesMut` pool. This intentionally keeps allocations alive by:
@@ -86,9 +87,9 @@ impl ConstSocket {
 }
 
 impl SendingSocket for ConstSocket {
-    async fn send(&mut self, packet: Bytes) -> usize {
+    async fn send(&mut self, packet: &Bytes) -> usize {
         let mut buf = self.timestamp_buffers.take();
-        let prepared_packet = prepend_timestamp(&mut buf, &packet, timestamp(&self.start));
+        let prepared_packet = prepend_timestamp(&mut buf, packet, timestamp(&self.start));
         let ok = self.socket.send(prepared_packet).await.is_ok();
         // Return the buffer only after send completes so it retains capacity between packets.
         self.timestamp_buffers.give_back(buf);
@@ -105,7 +106,7 @@ pub(crate) struct SendingSockets {
 }
 
 impl SendingSocket for SendingSockets {
-    async fn send(&mut self, packet: Bytes) -> usize {
+    async fn send(&mut self, packet: &Bytes) -> usize {
         // this unwrap is safe because holders of SharedSockets do not panic
         for pair in self.new_sockets.lock().unwrap().drain(..) {
             self.sockets.push(pair);
@@ -123,7 +124,7 @@ impl SendingSocket for SendingSockets {
                 let now = timestamp(&socket.1);
                 socket
                     .0
-                    .send(prepend_timestamp(&mut buf, &packet, now))
+                    .send(prepend_timestamp(&mut buf, packet, now))
                     .await
             };
             // Return the buffer only after the send future has completed.
@@ -161,7 +162,7 @@ impl SendingSockets {
 
 /// Receives frames of audio data from the input processor and sends them to the socket
 pub(crate) async fn audio_input<S: SendingSocket>(
-    input_receiver: AsyncReceiver<Bytes>,
+    input_receiver: AsyncReceiver<PooledBuffer>,
     mut sockets: S,
     cancel: CancellationToken,
     bandwidth: Arc<AtomicUsize>,
@@ -178,20 +179,21 @@ pub(crate) async fn audio_input<S: SendingSocket>(
             }
         };
 
-        let bytes = match message {
-            Ok(Ok(bytes)) => bytes,
+        let (bytes_len, successful_sends) = match message {
+            Ok(Ok(buffer)) => {
+                // send the bytes to all connections, dropping any that error
+                let bytes = buffer.freeze();
+                (bytes.len(), sockets.send(bytes.as_ref()).await)
+            }
             // shutdown
             Ok(_) => {
                 debug!("audio_input ended with input shutdown");
                 break Ok(());
             }
             // send keep alive during extended silence
-            Err(_) => keep_alive.clone(),
+            Err(_) => (1, sockets.send(&keep_alive).await),
         };
 
-        let bytes_len = bytes.len();
-        // send the bytes to all connections, dropping any that error
-        let successful_sends = sockets.send(bytes).await;
         // update bandwidth based on successful sends only
         if successful_sends > 0 {
             bandwidth.fetch_add(bytes_len * successful_sends, Relaxed);
@@ -201,7 +203,7 @@ pub(crate) async fn audio_input<S: SendingSocket>(
 
 /// Receives audio data from the socket and sends it to the output processor
 pub(crate) async fn audio_output(
-    sender: Sender<Bytes>,
+    sender: Sender<BytesMut>,
     mut socket: SplitStream<Transport<TransportStream>>,
     cancel: CancellationToken,
     bandwidth: Arc<AtomicUsize>,
@@ -225,7 +227,7 @@ pub(crate) async fn audio_output(
 
                 if len >= 16 {
                     if message.get_u32().abs_diff(timestamp(&started_at)) < MAX_AGE {
-                        if sender.try_send(message.freeze()).is_err() {
+                        if sender.try_send(message).is_err() {
                             info!("audio_output ended with closed channel");
                             break Ok(());
                         }
