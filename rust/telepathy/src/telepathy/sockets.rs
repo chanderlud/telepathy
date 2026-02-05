@@ -7,7 +7,7 @@ use libp2p::futures::stream::{SplitSink, SplitStream};
 use libp2p::futures::{SinkExt, StreamExt};
 use log::{debug, error, info, warn};
 use nnnoiseless::FRAME_SIZE;
-use sea_codec::ProcessorMessage;
+
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::{Arc, Mutex};
@@ -161,7 +161,7 @@ impl SendingSockets {
 
 /// Receives frames of audio data from the input processor and sends them to the socket
 pub(crate) async fn audio_input<S: SendingSocket>(
-    input_receiver: AsyncReceiver<ProcessorMessage>,
+    input_receiver: AsyncReceiver<Bytes>,
     mut sockets: S,
     cancel: CancellationToken,
     bandwidth: Arc<AtomicUsize>,
@@ -179,7 +179,7 @@ pub(crate) async fn audio_input<S: SendingSocket>(
         };
 
         let bytes = match message {
-            Ok(Ok(ProcessorMessage::Data(bytes))) => bytes,
+            Ok(Ok(bytes)) => bytes,
             // shutdown
             Ok(_) => {
                 debug!("audio_input ended with input shutdown");
@@ -201,7 +201,7 @@ pub(crate) async fn audio_input<S: SendingSocket>(
 
 /// Receives audio data from the socket and sends it to the output processor
 pub(crate) async fn audio_output(
-    sender: Sender<ProcessorMessage>,
+    sender: Sender<Bytes>,
     mut socket: SplitStream<Transport<TransportStream>>,
     cancel: CancellationToken,
     bandwidth: Arc<AtomicUsize>,
@@ -225,10 +225,7 @@ pub(crate) async fn audio_output(
 
                 if len >= 16 {
                     if message.get_u32().abs_diff(timestamp(&started_at)) < MAX_AGE {
-                        if sender
-                            .try_send(ProcessorMessage::bytes(message.freeze()))
-                            .is_err()
-                        {
+                        if sender.try_send(message.freeze()).is_err() {
                             info!("audio_output ended with closed channel");
                             break Ok(());
                         }

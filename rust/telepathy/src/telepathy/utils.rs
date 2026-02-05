@@ -11,7 +11,6 @@ use libp2p::bytes::Bytes;
 use libp2p::futures::StreamExt;
 use libp2p::swarm::ConnectionId;
 use log::debug;
-use sea_codec::ProcessorMessage;
 use speedy::{Readable, Writable};
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -135,8 +134,8 @@ pub(crate) async fn statistics_collector<C: FrbStatisticsCallback>(
 
 /// Used for audio tests, plays the input into the output
 pub(crate) async fn loopback(
-    input_receiver: AsyncReceiver<ProcessorMessage>,
-    output_sender: kanal::Sender<ProcessorMessage>,
+    input_receiver: AsyncReceiver<Bytes>,
+    output_sender: kanal::Sender<Bytes>,
     cancel: &CancellationToken,
     end_call: &Arc<Notify>,
 ) {

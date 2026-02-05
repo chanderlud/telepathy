@@ -2,6 +2,7 @@ use crate::{
     codec::{bits::BitUnpacker, lms::LMS_LEN},
     encoder::EncoderSettings,
 };
+use log::warn;
 
 use super::{
     bits::BitPacker,
@@ -68,20 +69,26 @@ impl SeaChunk {
 
     pub fn from_slice(encoded: &[u8], file_header: &SeaFileHeader) -> Result<Self, SeaError> {
         if encoded.len() > file_header.chunk_size as usize {
+            warn!("case 2");
             return Err(SeaError::InvalidFrame);
         }
         if encoded.len() < 4 {
+            warn!("case 3");
             return Err(SeaError::InvalidFrame);
         }
 
         let chunk_type: SeaChunkType = match encoded[0] {
             0x01 => SeaChunkType::Cbr,
             0x02 => SeaChunkType::Vbr,
-            _ => return Err(SeaError::InvalidFrame),
+            _ => {
+                warn!("case 4");
+                return Err(SeaError::InvalidFrame);
+            }
         };
 
         let scale_factor_bits = encoded[1] >> 4;
         if scale_factor_bits == 0 || scale_factor_bits > 8 {
+            warn!("case 5");
             return Err(SeaError::InvalidFrame);
         }
 
@@ -89,6 +96,7 @@ impl SeaChunk {
             SeaResidualSize::try_from_u8(encoded[1] & 0b1111).ok_or(SeaError::InvalidFrame)?;
         let scale_factor_frames = encoded[2];
         if scale_factor_frames == 0 {
+            warn!("case 6");
             return Err(SeaError::InvalidFrame);
         }
         let _reserved = encoded[3];
@@ -99,6 +107,7 @@ impl SeaChunk {
         for _ in 0..file_header.channels as usize {
             let needed = LMS_LEN * 4;
             if encoded_index + needed > encoded.len() {
+                warn!("case 7");
                 return Err(SeaError::InvalidFrame);
             }
             let mut lms_bytes = [0u8; LMS_LEN * 4];
@@ -109,6 +118,7 @@ impl SeaChunk {
 
         let frames_in_this_chunk = file_header.frames_per_chunk as usize;
         if !frames_in_this_chunk.is_multiple_of(scale_factor_frames as usize) {
+            warn!("case 8");
             return Err(SeaError::InvalidFrame);
         }
 
@@ -120,6 +130,7 @@ impl SeaChunk {
                 (scale_factor_items * scale_factor_bits as usize).div_ceil(8);
 
             if encoded_index + packed_scale_factor_bytes > encoded.len() {
+                warn!("case 9");
                 return Err(SeaError::InvalidFrame);
             }
             let packed_scale_factors =
@@ -201,6 +212,7 @@ impl SeaChunk {
             };
 
             if encoded_index + packed_residuals_bytes > encoded.len() {
+                warn!("case 4");
                 return Err(SeaError::InvalidFrame);
             }
             let packed_residuals = &encoded[encoded_index..encoded_index + packed_residuals_bytes];

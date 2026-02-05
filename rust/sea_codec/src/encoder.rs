@@ -1,11 +1,9 @@
-use bytes::Bytes;
-use kanal::{Receiver, Sender};
-
-use crate::ProcessorMessage;
 use crate::codec::{
     common::SeaError,
     file::{SeaFile, SeaFileHeader},
 };
+use bytes::Bytes;
+use kanal::{Receiver, Sender};
 
 pub enum SeaEncoderState {
     Start,
@@ -35,8 +33,8 @@ impl Default for EncoderSettings {
 }
 
 pub struct SeaEncoder {
-    receiver: Receiver<ProcessorMessage>,
-    sender: Sender<ProcessorMessage>,
+    receiver: Receiver<[i16; 480]>,
+    sender: Sender<Bytes>,
     file: SeaFile,
     pub state: SeaEncoderState,
     written_frames: u32,
@@ -47,8 +45,8 @@ impl SeaEncoder {
         channels: u8,
         sample_rate: u32,
         settings: EncoderSettings,
-        receiver: Receiver<ProcessorMessage>,
-        sender: Sender<ProcessorMessage>,
+        receiver: Receiver<[i16; 480]>,
+        sender: Sender<Bytes>,
     ) -> Result<Self, SeaError> {
         let header = SeaFileHeader {
             version: 1,
@@ -74,10 +72,7 @@ impl SeaEncoder {
 
         let frames = self.file.header.frames_per_chunk as usize;
 
-        let samples = match self.receiver.recv()? {
-            ProcessorMessage::Samples(samples) => samples,
-            _ => return Err(SeaError::InvalidFrame),
-        };
+        let samples = self.receiver.recv()?;
 
         if !samples.is_empty() {
             let encoded_chunk = self.file.make_chunk(samples.as_ref())?;
@@ -86,14 +81,12 @@ impl SeaEncoder {
 
             // we need to write file header after the first chunk is generated
             if matches!(self.state, SeaEncoderState::Start) {
-                self.sender.send(ProcessorMessage::Data(Bytes::from(
-                    self.file.header.serialize(),
-                )))?;
+                self.sender
+                    .send(Bytes::from(self.file.header.serialize()))?;
                 self.state = SeaEncoderState::WritingFrames;
             }
 
-            self.sender
-                .send(ProcessorMessage::Data(Bytes::from(encoded_chunk)))?;
+            self.sender.send(Bytes::from(encoded_chunk))?;
             self.written_frames += frames as u32;
         }
 

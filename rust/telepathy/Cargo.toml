@@ -27,6 +27,7 @@ regex = "1" # TODO consider removing regex dep
 log-panics = "2"
 speedy = "=0.8.7"
 cfg-if = "1"
+bytes = "1"
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.21"

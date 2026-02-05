@@ -7,7 +7,8 @@ use super::{
     encoder_cbr::CbrEncoder,
     encoder_vbr::VbrEncoder,
 };
-use crate::{ProcessorMessage, codec::chunk::SeaChunk, encoder::EncoderSettings};
+use crate::{codec::chunk::SeaChunk, encoder::EncoderSettings};
+use bytes::Bytes;
 use kanal::Receiver;
 use std::io::Cursor;
 
@@ -35,12 +36,8 @@ impl SeaFileHeader {
         Ok(())
     }
 
-    pub fn from_reader(receiver: &Receiver<ProcessorMessage>) -> Result<Self, SeaError> {
-        let buffer = match receiver.recv()? {
-            ProcessorMessage::Data(data) => data,
-            _ => return Err(SeaError::InvalidFrame),
-        };
-
+    pub fn from_reader(receiver: &Receiver<Bytes>) -> Result<Self, SeaError> {
+        let buffer = receiver.recv()?;
         let mut reader = Cursor::new(buffer);
 
         let magic = read_u32_be(&mut reader)?;
@@ -115,7 +112,7 @@ impl SeaFile {
     }
 
     pub fn from_reader(
-        receiver: &Receiver<ProcessorMessage>,
+        receiver: &Receiver<Bytes>,
         header: Option<SeaFileHeader>,
     ) -> Result<Self, SeaError> {
         let header = match header {
@@ -174,13 +171,9 @@ impl SeaFile {
 
     pub fn samples_from_reader(
         &mut self,
-        receiver: &Receiver<ProcessorMessage>,
-    ) -> Result<ProcessorMessage, SeaError> {
-        let encoded = match receiver.recv()? {
-            ProcessorMessage::Data(data) => data,
-            _ => return Err(SeaError::InvalidFrame),
-        };
-
+        receiver: &Receiver<Bytes>,
+    ) -> Result<[i16; 480], SeaError> {
+        let encoded = receiver.recv()?;
         let chunk = SeaChunk::from_slice(&encoded, &self.header)?;
 
         if self.decoder.is_none() {
@@ -199,7 +192,7 @@ impl SeaFile {
         if decoded.len() != expected_len {
             Err(SeaError::InvalidFrame)
         } else {
-            Ok(ProcessorMessage::Samples(decoded.try_into().unwrap()))
+            Ok(decoded.try_into().unwrap())
         }
     }
 }

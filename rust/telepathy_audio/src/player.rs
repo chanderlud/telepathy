@@ -41,7 +41,6 @@ use kanal::{Sender, bounded};
 use log::{debug, error};
 use nnnoiseless::FRAME_SIZE;
 use rubato::Resampler;
-use sea_codec::ProcessorMessage;
 use sea_codec::decoder::SeaDecoder;
 use sea_codec::encoder::{EncoderSettings, SeaEncoder};
 use std::mem;
@@ -59,7 +58,7 @@ use wasm_sync::{Condvar, Mutex as WasmMutex};
 const FADE_FRAMES: usize = 60;
 
 /// Type alias for decoded audio receiver with sample count.
-type DecodedReceiver = (Receiver<ProcessorMessage>, usize);
+type DecodedReceiver = (Receiver<[i16; FRAME_SIZE]>, usize);
 
 /// Audio file header information parsed from WAV format.
 struct AudioHeader {
@@ -354,7 +353,7 @@ async fn play_sound_with_device(
             let input_sender = input_sender.to_async();
 
             input_sender
-                .send(ProcessorMessage::Data(Bytes::copy_from_slice(&bytes[..14])))
+                .send(Bytes::copy_from_slice(&bytes[..14]))
                 .await?;
 
             let decoder_future = tokio::task::spawn_blocking(move || {
@@ -375,9 +374,7 @@ async fn play_sound_with_device(
             }));
 
             for chunk in bytes[14..].chunks(header.chunk_size as usize) {
-                input_sender
-                    .send(ProcessorMessage::Data(Bytes::copy_from_slice(chunk)))
-                    .await?;
+                input_sender.send(Bytes::copy_from_slice(chunk)).await?;
             }
 
             samples = Some((output_receiver, sample_count));
@@ -615,7 +612,7 @@ fn processor(
     'outer: loop {
         match (byte_chunks.as_mut(), samples.as_ref()) {
             (None, Some((samples, _))) => {
-                let samples = if let Ok(ProcessorMessage::Samples(samples)) = samples.recv() {
+                let samples = if let Ok(samples) = samples.recv() {
                     samples
                 } else {
                     break 'outer;
@@ -860,13 +857,13 @@ pub async fn wav_to_sea(bytes: &[u8], residual_bits: f32) -> Result<Vec<u8>, Aud
             buffer[written..].fill(0);
         }
 
-        input_sender.send(ProcessorMessage::samples(buffer)).await?;
+        input_sender.send(buffer).await?;
     }
 
     drop(input_sender);
     let mut data: Vec<u8> = Vec::new();
 
-    while let Ok(ProcessorMessage::Data(bytes)) = output_receiver.recv().await {
+    while let Ok(bytes) = output_receiver.recv().await {
         data.extend(bytes.iter());
     }
 

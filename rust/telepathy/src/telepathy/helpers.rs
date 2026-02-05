@@ -3,7 +3,7 @@ use crate::audio::web_audio::WebAudioWrapper;
 use crate::error::ErrorKind;
 use crate::flutter::DartNotify;
 use crate::flutter::callbacks::{FrbCallbacks, FrbStatisticsCallback};
-use crate::telepathy::core::{ActiveInputHandle, ActiveOutputHandles, TelepathyCore};
+use crate::telepathy::core::TelepathyCore;
 use crate::telepathy::messages::{AudioHeader, Message};
 #[cfg(not(target_family = "wasm"))]
 use crate::telepathy::screenshare;
@@ -11,6 +11,7 @@ use crate::telepathy::{
     CHAT_PROTOCOL, EarlyCallState, Result, StartScreenshare, StatisticsCollectorState,
 };
 use crate::{Behaviour, BehaviourEvent};
+use bytes::Bytes;
 #[cfg(not(target_family = "wasm"))]
 use cpal::traits::DeviceTrait;
 use libp2p::futures::StreamExt;
@@ -21,7 +22,6 @@ use libp2p::tcp;
 use libp2p::{Multiaddr, PeerId, Swarm, autonat, dcutr, identify, noise, ping, yamux};
 use libp2p_stream::Control;
 use log::{debug, error, info, warn};
-use sea_codec::ProcessorMessage;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
@@ -32,7 +32,6 @@ use tokio::fs::File;
 #[cfg(not(target_family = "wasm"))]
 use tokio::io::AsyncReadExt;
 use tokio::sync::Notify;
-use uuid::Uuid;
 
 impl<C, S> TelepathyCore<C, S>
 where
@@ -302,11 +301,7 @@ where
         let device_id = self.core_state.input_device.lock().await.clone();
 
         // Create a channel for receiving processed audio data
-        let (sender, receiver) = kanal::unbounded_async::<ProcessorMessage>();
-        let sender_sync = sender.to_sync();
-
-        // Store statistics RMS sender (currently unused, but reserved for future use)
-        let _input_rms = statistics_state.input_rms.clone();
+        let (sender, receiver) = kanal::unbounded_async::<Bytes>();
 
         let builder = AudioInputBuilder::new()
             .device(device_id)
@@ -314,26 +309,24 @@ where
             .input_volume_shared(&self.core_state.input_volume)
             .rms_threshold_shared(&self.core_state.rms_threshold)
             .muted_shared(&self.core_state.muted)
+            .rms_shared(&statistics_state.input_rms)
             .codec(codec_enabled, vbr, residual_bits)
             .room(is_room)
             .on_error(end_call)
-            .callback(move |data| {
-                // Convert Bytes to ProcessorMessage
-                let message = ProcessorMessage::Data(data);
-                let _ = sender_sync.send(message);
-            });
+            .channel(sender);
 
         #[cfg(not(target_family = "wasm"))]
         let handle = builder.build(&self.host)?;
         #[cfg(target_family = "wasm")]
-        let handle = builder.build_async(&self.host).await?;
+        let handle = {
+            // Take the pre-initialized WebAudioWrapper from init_web_audio.
+            // This ensures we use the wrapper initialized on the correct thread,
+            // satisfying Web Audio API threading requirements.
+            let web_audio_wrapper = self.web_input.lock().await.take().map(std::sync::Arc::new);
+            builder.build_async(&self.host, web_audio_wrapper).await?
+        };
 
-        // Create InputHelper which stores the handle in CoreState for live control
-        Ok(InputHelper::new(
-            handle,
-            self.core_state.active_input_handle.clone(),
-            receiver,
-        ))
+        Ok(InputHelper::new(handle, receiver))
     }
 
     /// helper method to set up audio output stack using the telepathy_audio library
@@ -363,20 +356,13 @@ where
             .sample_rate(remote_sample_rate as u32)
             .output_volume_shared(&self.core_state.output_volume)
             .deafened_shared(&self.core_state.deafened)
+            .rms_shared(&statistics_state.output_rms)
+            .loss_shared(&statistics_state.loss)
             .codec(codec_enabled, header)
             .on_error(end_call)
             .build(&self.host)?;
 
-        // Store the loss receiver for statistics
-        let loss = handle.loss_receiver();
-        // Update the statistics state with the loss receiver
-        statistics_state.loss.store(loss.load(Relaxed), Relaxed);
-
-        // Create OutputHelper which stores the handle in CoreState for live control
-        Ok(OutputHelper::new(
-            handle,
-            self.core_state.active_output_handles.clone(),
-        ))
+        Ok(OutputHelper::new(handle))
     }
 
     /// helper method to set up EarlyCallState
@@ -529,119 +515,47 @@ where
 }
 
 pub(crate) struct OutputHelper {
-    /// Reference to the shared output handles storage in CoreState
-    output_handles: ActiveOutputHandles,
-    /// Unique ID for this output handle in the HashMap
-    id: Uuid,
-    /// Tracks whether the handle has been consumed by join()
-    consumed: bool,
+    handle: AudioOutputHandle,
 }
 
 impl OutputHelper {
     /// Creates a new OutputHelper and stores the handle in the shared storage
-    pub(crate) fn new(handle: AudioOutputHandle, output_handles: ActiveOutputHandles) -> Self {
-        let id = Uuid::new_v4();
-        output_handles
-            .lock()
-            .expect("output handles mutex poisoned")
-            .insert(id, handle);
-        Self {
-            output_handles,
-            id,
-            consumed: false,
-        }
+    pub(crate) fn new(handle: AudioOutputHandle) -> Self {
+        Self { handle }
     }
 
-    pub(crate) fn sender(&self) -> kanal::Sender<ProcessorMessage> {
-        self.output_handles
-            .lock()
-            .expect("output handles mutex poisoned")
-            .get(&self.id)
-            .expect("output handle should exist")
-            .sender()
+    pub(crate) fn sender(&self) -> kanal::Sender<Bytes> {
+        self.handle.sender()
     }
 
-    pub(crate) fn join(mut self) -> Result<()> {
+    pub(crate) fn join(self) -> Result<()> {
         debug!("stopping output handle via join");
-        self.consumed = true;
-        if let Some(handle) = self
-            .output_handles
-            .lock()
-            .expect("output handles mutex poisoned")
-            .remove(&self.id)
-        {
-            handle.stop();
-        }
+        self.handle.stop();
         Ok(())
-    }
-}
-
-impl Drop for OutputHelper {
-    fn drop(&mut self) {
-        // Only clean up if join() wasn't called
-        if !self.consumed {
-            debug!("cleaning up output handle via drop");
-            if let Ok(mut guard) = self.output_handles.lock()
-                && let Some(handle) = guard.remove(&self.id)
-            {
-                handle.stop();
-            }
-        }
     }
 }
 
 pub(crate) struct InputHelper {
-    /// Reference to the shared input handle storage in CoreState
-    input_handle: ActiveInputHandle,
-    receiver: Option<kanal::AsyncReceiver<ProcessorMessage>>,
-    /// Tracks whether the handle has been consumed by join()
-    consumed: bool,
+    handle: AudioInputHandle,
+    receiver: Option<kanal::AsyncReceiver<Bytes>>,
 }
 
 impl InputHelper {
     /// Creates a new InputHelper and stores the handle in the shared storage
-    pub(crate) fn new(
-        handle: AudioInputHandle,
-        input_handle: ActiveInputHandle,
-        receiver: kanal::AsyncReceiver<ProcessorMessage>,
-    ) -> Self {
-        *input_handle.lock().expect("input handle mutex poisoned") = Some(handle);
+    pub(crate) fn new(handle: AudioInputHandle, receiver: kanal::AsyncReceiver<Bytes>) -> Self {
         Self {
-            input_handle,
+            handle,
             receiver: Some(receiver),
-            consumed: false,
         }
     }
 
-    pub(crate) fn receiver(&mut self) -> kanal::AsyncReceiver<ProcessorMessage> {
+    pub(crate) fn receiver(&mut self) -> kanal::AsyncReceiver<Bytes> {
         self.receiver.take().unwrap()
     }
 
-    pub(crate) fn join(mut self) -> Result<()> {
+    pub(crate) fn join(self) -> Result<()> {
         debug!("stopping input handle via join");
-        self.consumed = true;
-        if let Some(handle) = self
-            .input_handle
-            .lock()
-            .expect("input handle mutex poisoned")
-            .take()
-        {
-            handle.stop();
-        }
+        self.handle.stop();
         Ok(())
-    }
-}
-
-impl Drop for InputHelper {
-    fn drop(&mut self) {
-        // Only clean up if join() wasn't called
-        if !self.consumed {
-            debug!("cleaning up input handle via drop");
-            if let Ok(mut guard) = self.input_handle.lock()
-                && let Some(handle) = guard.take()
-            {
-                handle.stop();
-            }
-        }
     }
 }

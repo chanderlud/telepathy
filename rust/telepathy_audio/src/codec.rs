@@ -5,9 +5,10 @@
 //! interface for the audio processing pipeline.
 
 use crate::error::AudioError;
+use bytes::Bytes;
 use kanal::{Receiver, Sender};
 use log::info;
-use sea_codec::ProcessorMessage;
+use nnnoiseless::FRAME_SIZE;
 use sea_codec::codec::file::SeaFileHeader;
 use sea_codec::decoder::SeaDecoder;
 use sea_codec::encoder::{EncoderSettings, SeaEncoder, SeaEncoderState};
@@ -30,8 +31,8 @@ use sea_codec::encoder::{EncoderSettings, SeaEncoder, SeaEncoderState};
 ///
 /// Returns `Ok(())` when encoding completes, or an error if encoding fails.
 pub fn encoder(
-    receiver: Receiver<ProcessorMessage>,
-    sender: Sender<ProcessorMessage>,
+    receiver: Receiver<[i16; FRAME_SIZE]>,
+    sender: Sender<Bytes>,
     sample_rate: u32,
     vbr: bool,
     residual_bits: f32,
@@ -68,8 +69,8 @@ pub fn encoder(
 ///
 /// Returns `Ok(())` when decoding completes, or an error if decoding fails.
 pub fn decoder(
-    receiver: Receiver<ProcessorMessage>,
-    sender: Sender<ProcessorMessage>,
+    receiver: Receiver<Bytes>,
+    sender: Sender<[i16; FRAME_SIZE]>,
     header: Option<SeaFileHeader>,
 ) -> Result<(), AudioError> {
     let mut decoder = SeaDecoder::new(receiver, sender, header)?;

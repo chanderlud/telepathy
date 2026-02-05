@@ -30,6 +30,8 @@ use crate::processor::input_processor;
 use crate::state::InputProcessorState;
 #[cfg(not(target_family = "wasm"))]
 use crate::traits::{CHANNEL_SIZE, ChannelInput};
+#[cfg(target_family = "wasm")]
+use crate::web_audio::WebAudioWrapper;
 use atomic_float::AtomicF32;
 use bytes::Bytes;
 #[cfg(not(target_family = "wasm"))]
@@ -38,10 +40,10 @@ use cpal::SampleFormat;
 use cpal::traits::{DeviceTrait, StreamTrait};
 #[cfg(not(target_family = "wasm"))]
 use kanal::bounded;
-use kanal::unbounded_async;
+use kanal::{AsyncSender, unbounded};
 use log::{debug, error};
-use nnnoiseless::{DenoiseState, RnnModel};
-use sea_codec::ProcessorMessage;
+use nnnoiseless::{DenoiseState, FRAME_SIZE, RnnModel};
+use std::ops::Not;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::thread::{self, JoinHandle};
@@ -140,12 +142,15 @@ where
 {
     config: AudioInputConfig,
     callback: Option<F>,
+    channel: Option<AsyncSender<Bytes>>,
     /// Optional shared atomic for input volume (enables real-time synchronization)
     shared_input_volume: Option<Arc<AtomicF32>>,
     /// Optional shared atomic for RMS threshold (enables real-time synchronization)
     shared_rms_threshold: Option<Arc<AtomicF32>>,
     /// Optional shared atomic for muted state (enables real-time synchronization)
     shared_muted: Option<Arc<AtomicBool>>,
+    /// Optional shared atomic for rms state (enables real-time synchronization)
+    shared_rms: Option<Arc<AtomicF32>>,
 }
 
 impl AudioInputBuilder<fn(Bytes)> {
@@ -153,10 +158,12 @@ impl AudioInputBuilder<fn(Bytes)> {
     pub fn new() -> AudioInputBuilder<fn(Bytes)> {
         AudioInputBuilder {
             config: AudioInputConfig::default(),
+            channel: None,
             callback: None,
             shared_input_volume: None,
             shared_rms_threshold: None,
             shared_muted: None,
+            shared_rms: None,
         }
     }
 }
@@ -252,6 +259,11 @@ where
         self
     }
 
+    pub fn rms_shared(mut self, shared: &Arc<AtomicF32>) -> Self {
+        self.shared_rms = Some(shared.clone());
+        self
+    }
+
     /// Configures codec encoding.
     ///
     /// # Arguments
@@ -292,10 +304,27 @@ where
     {
         AudioInputBuilder {
             config: self.config,
+            channel: None,
             callback: Some(callback),
             shared_input_volume: self.shared_input_volume,
             shared_rms_threshold: self.shared_rms_threshold,
             shared_muted: self.shared_muted,
+            shared_rms: self.shared_rms,
+        }
+    }
+
+    /// Sets the channel for receiving processed audio data.
+    ///
+    /// The channel receives processed audio frames as `Bytes`.
+    pub fn channel(self, channel: AsyncSender<Bytes>) -> Self {
+        AudioInputBuilder {
+            config: self.config,
+            channel: Some(channel),
+            callback: None,
+            shared_input_volume: self.shared_input_volume,
+            shared_rms_threshold: self.shared_rms_threshold,
+            shared_muted: self.shared_muted,
+            shared_rms: self.shared_rms,
         }
     }
 
@@ -313,10 +342,6 @@ where
     /// - The device uses an unsupported sample format
     #[cfg(not(target_family = "wasm"))]
     pub fn build(self, host: &AudioHost) -> Result<AudioInputHandle, AudioError> {
-        let callback = self
-            .callback
-            .ok_or(AudioError::Config("No callback set".to_string()))?;
-
         // Get the input device
         let device_handle =
             get_input_device(host, self.config.device_id.as_deref()).map_err(|e| match e {
@@ -353,12 +378,14 @@ where
             .shared_muted
             .clone()
             .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
-        let rms_sender = Arc::new(AtomicF32::new(0.0));
+        let rms_sender = self.shared_rms.clone().unwrap_or_default();
 
         // Create channels
         let (input_sender, input_receiver) = bounded::<f32>(CHANNEL_SIZE);
-        let (processed_sender, processed_receiver) = unbounded_async::<ProcessorMessage>();
-        let (encoded_sender, encoded_receiver) = unbounded_async::<ProcessorMessage>();
+        let (processor_to_callback_sender, processor_to_callback_receiver) = unbounded::<Bytes>();
+        let (processor_to_encoder_sender, processor_to_encoder_receiver) =
+            unbounded::<[i16; FRAME_SIZE]>();
+        let (encoded_sender, encoded_receiver) = unbounded::<Bytes>();
 
         // When denoise is enabled, the processor resamples to 48kHz for rnnoise
         // processing and outputs 48kHz frames (no downsample back to device rate).
@@ -388,14 +415,21 @@ where
 
         // Spawn processor thread
         let processor_input = ChannelInput::from(input_receiver);
-        let processed_sender_sync = processed_sender.to_sync();
+        let network_sender = if let Some(ref sender) = self.channel
+            && !codec_enabled
+        {
+            sender.clone_sync()
+        } else {
+            processor_to_callback_sender
+        };
+
         let processor_handle = thread::spawn(move || {
             if let Err(e) = input_processor(
                 processor_input,
-                processed_sender_sync,
+                codec_enabled.then_some(processor_to_encoder_sender),
+                codec_enabled.not().then_some(network_sender),
                 device_sample_rate as f64,
                 denoiser,
-                codec_enabled,
                 state,
             ) {
                 error!("Input processor error: {}", e);
@@ -405,11 +439,14 @@ where
 
         // Select the appropriate receiver for the callback and spawn encoder if needed
         let (encoder_handle, output_receiver) = if codec_enabled {
-            let processed_receiver_sync = processed_receiver.to_sync();
-            let encoded_sender_sync = encoded_sender.to_sync();
+            let encoded_sender_sync = if let Some(sender) = self.channel {
+                sender.to_sync()
+            } else {
+                encoded_sender
+            };
             let handle = thread::spawn(move || {
                 if let Err(e) = encoder(
-                    processed_receiver_sync,
+                    processor_to_encoder_receiver,
                     encoded_sender_sync,
                     encoder_sample_rate,
                     codec_vbr,
@@ -420,31 +457,21 @@ where
                 }
                 debug!("Encoder thread ended");
             });
-            (Some(handle), encoded_receiver.to_sync())
+            (Some(handle), encoded_receiver)
         } else {
-            (None, processed_receiver.to_sync())
+            (None, processor_to_callback_receiver)
         };
 
-        // Spawn callback thread
-        let callback_handle = thread::spawn(move || {
-            while let Ok(message) = output_receiver.recv() {
-                let bytes = match message {
-                    ProcessorMessage::Data(data) => data,
-                    ProcessorMessage::Samples(samples) => {
-                        let i16_size = size_of::<i16>();
-                        let bytes = unsafe {
-                            std::slice::from_raw_parts(
-                                samples.as_ptr() as *const u8,
-                                samples.len() * i16_size,
-                            )
-                        };
-                        Bytes::copy_from_slice(bytes)
-                    }
-                };
-                callback(bytes);
-            }
-            debug!("Callback thread ended");
-        });
+        let mut callback_handle = None;
+        if let Some(callback) = self.callback {
+            // Spawn callback thread
+            callback_handle = Some(thread::spawn(move || {
+                while let Ok(buffer) = output_receiver.recv() {
+                    callback(buffer)
+                }
+                debug!("Callback thread ended");
+            }));
+        }
 
         // Build the audio stream
         let input_sender_clone = input_sender.clone();
@@ -469,10 +496,10 @@ where
         stream.play()?;
 
         Ok(AudioInputHandle {
-            _stream: stream,
+            _stream: Some(stream),
             processor_handle: Some(processor_handle),
             encoder_handle,
-            callback_handle: Some(callback_handle),
+            callback_handle,
             input_sender: Some(input_sender),
             input_volume,
             rms_threshold,
@@ -506,6 +533,14 @@ where
     /// - Sets up an AudioWorklet processor for low-latency audio capture
     /// - The `AudioInputHandle` holds an `Arc<WebAudioWrapper>` to keep it alive
     ///
+    /// # Parameters
+    ///
+    /// * `web_audio_wrapper` - An optional pre-initialized `WebAudioWrapper`. When provided,
+    ///   this wrapper will be used instead of creating a new one. This is important for
+    ///   satisfying Web Audio API threading requirements, as the wrapper must be initialized
+    ///   on the correct thread (typically the main thread during user interaction).
+    ///   When `None`, a new wrapper will be created (useful for standalone usage).
+    ///
     /// # Example
     ///
     /// ```rust,no_run
@@ -514,32 +549,39 @@ where
     /// use telepathy_audio::{AudioHost, AudioInputBuilder};
     ///
     /// let host = AudioHost::new();
+    /// // Without pre-initialized wrapper (creates new one)
     /// let input = AudioInputBuilder::new()
     ///     .callback(|data| { /* process audio */ })
-    ///     .build_async(&host)
+    ///     .build_async(&host, None)
     ///     .await?;
     /// # Ok(())
     /// # }
     /// ```
     #[cfg(target_family = "wasm")]
-    pub async fn build_async(self, _host: &AudioHost) -> Result<AudioInputHandle, AudioError> {
-        use crate::web_audio::{WebAudioInput, WebAudioWrapper};
-        use std::sync::Arc;
+    pub async fn build_async(
+        self,
+        _host: &AudioHost,
+        web_audio_wrapper: Option<Arc<WebAudioWrapper>>,
+    ) -> Result<AudioInputHandle, AudioError> {
+        use crate::web_audio::WebAudioInput;
 
         let callback = self
             .callback
             .ok_or(AudioError::Config("No callback set".to_string()))?;
 
-        // Initialize WebAudioWrapper (requests microphone permission)
-        let web_audio = WebAudioWrapper::new()
-            .await
-            .map_err(|e| AudioError::Platform(format!("Web Audio init failed: {:?}", e)))?;
+        // Use provided WebAudioWrapper or initialize a new one (requests microphone permission)
+        let web_audio = match web_audio_wrapper {
+            Some(wrapper) => wrapper,
+            None => {
+                let wrapper = WebAudioWrapper::new()
+                    .await
+                    .map_err(|e| AudioError::Platform(format!("Web Audio init failed: {:?}", e)))?;
+                Arc::new(wrapper)
+            }
+        };
 
         let input_sample_rate = web_audio.sample_rate;
-        let processor_input = WebAudioInput::from(&web_audio);
-
-        // Store the wrapper to keep it alive
-        let web_audio = Arc::new(web_audio);
+        let processor_input = WebAudioInput::from(&*web_audio);
 
         // Create shared atomic state (use provided shared atomics or create new ones)
         let input_volume = self
@@ -696,7 +738,7 @@ where
 /// completion in a specific code location.
 pub struct AudioInputHandle {
     #[cfg(not(target_family = "wasm"))]
-    _stream: cpal::Stream,
+    _stream: Option<cpal::Stream>,
     #[cfg(target_family = "wasm")]
     _web_audio: Option<std::sync::Arc<crate::web_audio::WebAudioWrapper>>,
     processor_handle: Option<JoinHandle<()>>,
@@ -750,9 +792,36 @@ impl AudioInputHandle {
     ///
     /// This is called automatically when the handle is dropped, but can
     /// be called explicitly if you need to wait for completion.
+    #[cfg(not(target_family = "wasm"))]
     pub fn stop(mut self) {
-        // Drop the sender to signal threads to stop
-        self.input_sender.take();
+        // Close the sender to signal threads to stop (not just drop, so cloned senders see closure)
+        if let Some(sender) = self.input_sender.take() {
+            _ = sender.close();
+        }
+
+        // Drop the stream so its callback stops before joining threads
+        self._stream.take();
+
+        // Wait for threads to finish
+        if let Some(handle) = self.processor_handle.take() {
+            let _ = handle.join();
+        }
+        if let Some(handle) = self.encoder_handle.take() {
+            let _ = handle.join();
+        }
+        if let Some(handle) = self.callback_handle.take() {
+            let _ = handle.join();
+        }
+    }
+
+    /// Stops the audio input and waits for all threads to finish.
+    ///
+    /// This is called automatically when the handle is dropped, but can
+    /// be called explicitly if you need to wait for completion.
+    #[cfg(target_family = "wasm")]
+    pub fn stop(mut self) {
+        // Drop the WebAudioWrapper to set finished flag before joining threads
+        self._web_audio.take();
 
         // Wait for threads to finish
         if let Some(handle) = self.processor_handle.take() {
@@ -772,6 +841,16 @@ impl Drop for AudioInputHandle {
         // Close the sender to signal threads to stop
         if let Some(sender) = self.input_sender.take() {
             _ = sender.close();
+        }
+
+        // Drop the underlying source so its callback stops
+        #[cfg(not(target_family = "wasm"))]
+        {
+            self._stream.take();
+        }
+        #[cfg(target_family = "wasm")]
+        {
+            self._web_audio.take();
         }
 
         // Wait for threads to finish

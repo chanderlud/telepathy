@@ -45,7 +45,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::{Duration, Instant};
-use telepathy_audio::{AudioHost, AudioInputHandle, AudioOutputHandle};
+use telepathy_audio::AudioHost;
 use tokio::select;
 use tokio::sync::mpsc::{Receiver as MReceiver, Sender as MSender, channel};
 use tokio::sync::{Mutex, Notify, RwLock};
@@ -59,11 +59,6 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 #[cfg(target_family = "wasm")]
 use wasmtimer::tokio::{Interval, interval, timeout};
-
-/// Type alias for thread-safe storage of the active audio input handle
-pub(crate) type ActiveInputHandle = Arc<std::sync::Mutex<Option<AudioInputHandle>>>;
-/// Type alias for thread-safe storage of active audio output handles (multiple for rooms)
-pub(crate) type ActiveOutputHandles = Arc<std::sync::Mutex<HashMap<Uuid, AudioOutputHandle>>>;
 
 pub(crate) struct TelepathyCore<C, S>
 where
@@ -1489,14 +1484,6 @@ pub(crate) struct CoreState {
 
     /// configuration for audio codec, or lack thereof
     pub(crate) codec_config: CodecConfig,
-
-    /// The active audio input handle for live control during calls
-    /// Wrapped in std::sync::Mutex for sync access from setter methods
-    pub(crate) active_input_handle: ActiveInputHandle,
-
-    /// Active audio output handles for live control during calls
-    /// Uses HashMap with Uuid keys to support multiple outputs (rooms)
-    pub(crate) active_output_handles: ActiveOutputHandles,
 }
 
 /// a state used for session negotiation

@@ -30,20 +30,19 @@ use crate::devices::{DeviceError, get_output_device};
 use crate::error::AudioError;
 use crate::processor::output_processor;
 use crate::state::OutputProcessorState;
+use crate::traits::AudioOutput;
 #[cfg(not(target_family = "wasm"))]
 use crate::traits::CHANNEL_SIZE;
 #[cfg(not(target_family = "wasm"))]
 use crate::traits::ChannelOutput;
 use atomic_float::AtomicF32;
+use bytes::Bytes;
 #[cfg(not(target_family = "wasm"))]
 use cpal::SampleFormat;
 #[cfg(not(target_family = "wasm"))]
 use cpal::traits::{DeviceTrait, StreamTrait};
-#[cfg(not(target_family = "wasm"))]
-use kanal::bounded;
-use kanal::{Sender, unbounded_async};
+use kanal::{Sender, unbounded};
 use log::{debug, error};
-use sea_codec::ProcessorMessage;
 use sea_codec::codec::file::SeaFileHeader;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
@@ -112,6 +111,18 @@ pub struct AudioOutputBuilder {
     shared_output_volume: Option<Arc<AtomicF32>>,
     /// Optional shared atomic for deafened state (enables real-time synchronization)
     shared_deafened: Option<Arc<AtomicBool>>,
+    shared_rms: Option<Arc<AtomicF32>>,
+    shared_loss: Option<Arc<AtomicUsize>>,
+}
+
+/// Internal context for building audio output, shared between native and WASM
+struct OutputBuildContext {
+    output_volume: Arc<AtomicF32>,
+    deafened: Arc<AtomicBool>,
+    loss_sender: Arc<AtomicUsize>,
+    network_sender: Sender<Bytes>,
+    decoder_handle: Option<JoinHandle<()>>,
+    processor_handle: JoinHandle<()>,
 }
 
 impl AudioOutputBuilder {
@@ -121,6 +132,8 @@ impl AudioOutputBuilder {
             config: AudioOutputConfig::default(),
             shared_output_volume: None,
             shared_deafened: None,
+            shared_rms: None,
+            shared_loss: None,
         }
     }
 
@@ -179,6 +192,16 @@ impl AudioOutputBuilder {
         self
     }
 
+    pub fn rms_shared(mut self, rms: &Arc<AtomicF32>) -> Self {
+        self.shared_rms = Some(rms.clone());
+        self
+    }
+
+    pub fn loss_shared(mut self, loss: &Arc<AtomicUsize>) -> Self {
+        self.shared_loss = Some(loss.clone());
+        self
+    }
+
     /// Configures codec decoding.
     ///
     /// # Arguments
@@ -200,6 +223,80 @@ impl AudioOutputBuilder {
         self
     }
 
+    /// Common initialization logic shared between native and WASM builds.
+    ///
+    /// This method handles all shared setup steps:
+    /// - Creates shared atomic state (output_volume, deafened, rms_sender, loss_sender)
+    /// - Creates unbounded channels for network and decoded messages
+    /// - Calculates resampling ratio
+    /// - Creates OutputProcessorState
+    /// - Auto-constructs codec header when needed
+    /// - Spawns decoder thread (if codec enabled)
+    /// - Spawns processor thread with the provided output
+    fn build_common<O: AudioOutput + Send + 'static>(
+        self,
+        processor_output: O,
+        output_sample_rate: u32,
+    ) -> OutputBuildContext {
+        // Create shared atomic state (use provided shared atomics or create new ones)
+        let output_volume = self
+            .shared_output_volume
+            .clone()
+            .unwrap_or_else(|| Arc::new(AtomicF32::new(self.config.volume)));
+        let deafened = self.shared_deafened.clone().unwrap_or_default();
+        let rms_sender = self.shared_rms.clone().unwrap_or_default();
+        let loss_sender = self.shared_loss.clone().unwrap_or_default();
+
+        let (network_sender, network_receiver) = unbounded::<Bytes>();
+        let (decoded_sender, decoded_receiver) = unbounded::<[i16; 480]>();
+
+        // Calculate resampling ratio
+        let ratio = output_sample_rate as f64 / self.config.sample_rate as f64;
+
+        let state =
+            OutputProcessorState::new(&output_volume, rms_sender, &deafened, loss_sender.clone());
+
+        let codec_enabled = self.config.codec_enabled;
+        // Auto-construct room SEA header when codec is enabled and no header provided
+        let codec_header = self.config.codec_header;
+
+        // Spawn decoder thread if codec enabled, and select appropriate receiver for processor
+        let (decoder_handle, codec_receiver, network_receiver) = if codec_enabled {
+            let handle = thread::spawn(move || {
+                if let Err(e) = decoder(network_receiver, decoded_sender, codec_header) {
+                    error!("Decoder error: {}", e);
+                }
+                debug!("Decoder thread ended");
+            });
+            (Some(handle), Some(decoded_receiver), None)
+        } else {
+            (None, None, Some(network_receiver))
+        };
+
+        // Spawn processor thread
+        let processor_handle = thread::spawn(move || {
+            if let Err(e) = output_processor(
+                codec_receiver,
+                network_receiver,
+                processor_output,
+                ratio,
+                state,
+            ) {
+                error!("Output processor error: {}", e);
+            }
+            debug!("Output processor thread ended");
+        });
+
+        OutputBuildContext {
+            output_volume,
+            deafened,
+            loss_sender,
+            network_sender,
+            decoder_handle,
+            processor_handle,
+        }
+    }
+
     /// Builds and starts the audio output stream.
     ///
     /// This method creates and configures all necessary processing threads
@@ -213,6 +310,8 @@ impl AudioOutputBuilder {
     /// - The device uses an unsupported sample format
     #[cfg(not(target_family = "wasm"))]
     pub fn build(self, host: &AudioHost) -> Result<AudioOutputHandle, AudioError> {
+        use kanal::bounded;
+
         // Get the output device
         let device_handle =
             get_output_device(host, self.config.device_id.as_deref()).map_err(|e| match e {
@@ -236,71 +335,15 @@ impl AudioOutputBuilder {
         let output_channels = config.channels() as usize;
         let output_sample_rate = config.sample_rate();
 
-        // Create shared atomic state (use provided shared atomics or create new ones)
-        let output_volume = self
-            .shared_output_volume
-            .clone()
-            .unwrap_or_else(|| Arc::new(AtomicF32::new(self.config.volume)));
-        let deafened = self
-            .shared_deafened
-            .clone()
-            .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
-        let rms_sender = Arc::new(AtomicF32::new(0.0));
-        let loss_sender = Arc::new(AtomicUsize::new(0));
-
-        // Create channels
-        let (network_sender, network_receiver) = unbounded_async::<ProcessorMessage>();
-        let (decoded_sender, decoded_receiver) = unbounded_async::<ProcessorMessage>();
+        // Create bounded output channel for cpal stream
         let (output_sender, output_receiver) = bounded::<f32>(CHANNEL_SIZE * 4);
 
-        // Calculate resampling ratio
-        let ratio = output_sample_rate as f64 / self.config.sample_rate as f64;
-
-        let state =
-            OutputProcessorState::new(&output_volume, rms_sender, &deafened, loss_sender.clone());
-
-        let codec_enabled = self.config.codec_enabled;
-        // Auto-construct room SEA header when codec is enabled and no header provided
-        let codec_header = if codec_enabled && self.config.codec_header.is_none() {
-            Some(SeaFileHeader {
-                version: 1,
-                channels: 1,
-                chunk_size: 960,
-                frames_per_chunk: 480,
-                sample_rate: self.config.sample_rate,
-            })
-        } else {
-            self.config.codec_header.clone()
-        };
-
-        // Spawn decoder thread if codec enabled, and select appropriate receiver for processor
-        let (decoder_handle, processor_receiver_sync) = if codec_enabled {
-            let network_receiver_sync = network_receiver.to_sync();
-            let decoded_sender_sync = decoded_sender.to_sync();
-            let handle = thread::spawn(move || {
-                if let Err(e) = decoder(network_receiver_sync, decoded_sender_sync, codec_header) {
-                    error!("Decoder error: {}", e);
-                }
-                debug!("Decoder thread ended");
-            });
-            (Some(handle), decoded_receiver.to_sync())
-        } else {
-            (None, network_receiver.to_sync())
-        };
-
-        // Spawn processor thread
+        // Create processor output and build common components
         let processor_output = ChannelOutput::from(output_sender);
-        let processor_handle = thread::spawn(move || {
-            if let Err(e) =
-                output_processor(processor_receiver_sync, processor_output, ratio, state)
-            {
-                error!("Output processor error: {}", e);
-            }
-            debug!("Output processor thread ended");
-        });
+        let error_notify = self.config.error_notify.clone();
+        let context = self.build_common(processor_output, output_sample_rate);
 
         // Build the audio stream
-        let error_notify = self.config.error_notify.clone();
         let stream = device.build_output_stream(
             &config.into(),
             move |data: &mut [f32], _: &_| {
@@ -318,17 +361,16 @@ impl AudioOutputBuilder {
             },
             None,
         )?;
-
         stream.play()?;
 
         Ok(AudioOutputHandle {
             _stream: stream,
-            processor_handle: Some(processor_handle),
-            decoder_handle,
-            network_sender: network_sender.to_sync(),
-            output_volume,
-            deafened,
-            loss_sender,
+            processor_handle: Some(context.processor_handle),
+            decoder_handle: context.decoder_handle,
+            network_sender: context.network_sender,
+            output_volume: context.output_volume,
+            deafened: context.deafened,
+            loss_sender: context.loss_sender,
         })
     }
 
@@ -360,76 +402,20 @@ impl AudioOutputBuilder {
         let web_buffer: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
         let processor_output = WebOutput::new(web_buffer.clone());
 
-        // Create shared atomic state (use provided shared atomics or create new ones)
-        let output_volume = self
-            .shared_output_volume
-            .clone()
-            .unwrap_or_else(|| Arc::new(AtomicF32::new(self.config.volume)));
-        let deafened = self
-            .shared_deafened
-            .clone()
-            .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
-        let rms_sender = Arc::new(AtomicF32::new(0.0));
-        let loss_sender = Arc::new(AtomicUsize::new(0));
-
-        // Create channels
-        let (network_sender, network_receiver) = unbounded_async::<ProcessorMessage>();
-        let (decoded_sender, decoded_receiver) = unbounded_async::<ProcessorMessage>();
-
-        // Calculate resampling ratio (assume 48kHz output for web)
+        // Fixed 48kHz output for web audio context
         let output_sample_rate = 48000_u32;
-        let ratio = output_sample_rate as f64 / self.config.sample_rate as f64;
 
-        let state =
-            OutputProcessorState::new(&output_volume, rms_sender, &deafened, loss_sender.clone());
-
-        let codec_enabled = self.config.codec_enabled;
-        // Auto-construct room SEA header when codec is enabled and no header provided
-        let codec_header = if codec_enabled && self.config.codec_header.is_none() {
-            Some(SeaFileHeader {
-                version: 1,
-                channels: 1,
-                chunk_size: 960,
-                frames_per_chunk: 480,
-                sample_rate: self.config.sample_rate,
-            })
-        } else {
-            self.config.codec_header.clone()
-        };
-
-        // Spawn decoder thread if codec enabled, and select appropriate receiver for processor
-        let (decoder_handle, processor_receiver_sync) = if codec_enabled {
-            let network_receiver_sync = network_receiver.to_sync();
-            let decoded_sender_sync = decoded_sender.to_sync();
-            let handle = thread::spawn(move || {
-                if let Err(e) = decoder(network_receiver_sync, decoded_sender_sync, codec_header) {
-                    error!("Decoder error: {}", e);
-                }
-                debug!("Decoder thread ended");
-            });
-            (Some(handle), decoded_receiver.to_sync())
-        } else {
-            (None, network_receiver.to_sync())
-        };
-
-        // Spawn processor thread
-        let processor_handle = thread::spawn(move || {
-            if let Err(e) =
-                output_processor(processor_receiver_sync, processor_output, ratio, state)
-            {
-                error!("Output processor error: {}", e);
-            }
-            debug!("Output processor thread ended");
-        });
+        // Build common components (channels, threads, state)
+        let context = self.build_common(processor_output, output_sample_rate);
 
         Ok(AudioOutputHandle {
             _web_buffer: Some(web_buffer),
-            processor_handle: Some(processor_handle),
-            decoder_handle,
-            network_sender: network_sender.to_sync(),
-            output_volume,
-            deafened,
-            loss_sender,
+            processor_handle: Some(context.processor_handle),
+            decoder_handle: context.decoder_handle,
+            network_sender: context.network_sender,
+            output_volume: context.output_volume,
+            deafened: context.deafened,
+            loss_sender: context.loss_sender,
         })
     }
 }
@@ -479,7 +465,7 @@ pub struct AudioOutputHandle {
     _web_buffer: Option<std::sync::Arc<wasm_sync::Mutex<Vec<f32>>>>,
     processor_handle: Option<JoinHandle<()>>,
     decoder_handle: Option<JoinHandle<()>>,
-    network_sender: Sender<ProcessorMessage>,
+    network_sender: Sender<Bytes>,
     output_volume: Arc<AtomicF32>,
     deafened: Arc<AtomicBool>,
     loss_sender: Arc<AtomicUsize>,
@@ -489,7 +475,7 @@ impl AudioOutputHandle {
     /// Returns a sender for feeding audio data to the output.
     ///
     /// Use this sender to send `ProcessorMessage` frames to be played.
-    pub fn sender(&self) -> Sender<ProcessorMessage> {
+    pub fn sender(&self) -> Sender<Bytes> {
         self.network_sender.clone()
     }
 
@@ -526,11 +512,8 @@ impl AudioOutputHandle {
     /// This is called automatically when the handle is dropped, but can
     /// be called explicitly if you need to wait for completion.
     pub fn stop(mut self) {
-        // Drop the sender to signal threads to stop
-        drop(std::mem::replace(
-            &mut self.network_sender,
-            kanal::unbounded().0,
-        ));
+        // Close the sender to signal threads to stop (mirrors Drop implementation)
+        _ = self.network_sender.close();
 
         // Wait for threads to finish
         if let Some(handle) = self.decoder_handle.take() {

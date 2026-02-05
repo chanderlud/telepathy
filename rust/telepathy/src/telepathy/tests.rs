@@ -14,7 +14,7 @@ use nnnoiseless::DenoiseState;
 use rand::Rng;
 use rand::prelude::SliceRandom;
 use relay_server::{RelayInfo, spawn_relay};
-use sea_codec::ProcessorMessage;
+
 use std::collections::HashMap;
 use std::fs::read;
 use std::io::Write;

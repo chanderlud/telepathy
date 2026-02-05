@@ -46,11 +46,11 @@ use crate::processing::*;
 use crate::state::{InputProcessorState, OutputProcessorState};
 use crate::traits::{AudioInput, AudioOutput};
 use crate::utils::{make_transition_down, make_transition_up, resampler_factory};
+use bytes::Bytes;
 use kanal::{Receiver, Sender};
 use log::{debug, warn};
 use nnnoiseless::{DenoiseState, FRAME_SIZE};
 use rubato::Resampler;
-use sea_codec::ProcessorMessage;
 
 /// Processes audio input and sends it to the output channel.
 ///
@@ -95,15 +95,14 @@ use sea_codec::ProcessorMessage;
 /// if processing fails.
 pub fn input_processor<I: AudioInput>(
     mut input: I,
-    output: Sender<ProcessorMessage>,
+    codec_output: Option<Sender<[i16; FRAME_SIZE]>>,
+    network_output: Option<Sender<Bytes>>,
     sample_rate: f64,
     mut denoiser: Option<Box<DenoiseState>>,
-    codec_enabled: bool,
     state: InputProcessorState,
 ) -> Result<(), AudioError> {
     // the maximum value for i16 as f32
     let max_i16_f32 = i16::MAX as f32;
-    let i16_size = size_of::<i16>();
 
     let ratio = if denoiser.is_some() {
         // rnnoise requires a 48kHz sample rate
@@ -194,10 +193,11 @@ pub fn input_processor<I: AudioInput>(
                 silence_length += 1; // short silences are ignored
             } else if silence_length == MINIMUM_SILENCE_LENGTH {
                 // insert frame to cleanly transition down to silence
-                output.send(ProcessorMessage::samples(make_transition_down(
-                    TRANSITION_LENGTH,
-                    out_buf[0] as i16,
-                )))?;
+                send_frame(
+                    make_transition_down(TRANSITION_LENGTH, out_buf[0] as i16),
+                    &codec_output,
+                    &network_output,
+                )?;
                 // don't transition down again
                 silence_length += 1;
                 continue;
@@ -208,10 +208,11 @@ pub fn input_processor<I: AudioInput>(
             let first_sample = out_buf[0] as i16;
             if silence_length > 0 && first_sample > 0 {
                 // insert frame to transition up from silence to the audio
-                output.send(ProcessorMessage::samples(make_transition_up(
-                    TRANSITION_LENGTH,
-                    first_sample,
-                )))?;
+                send_frame(
+                    make_transition_up(TRANSITION_LENGTH, first_sample),
+                    &codec_output,
+                    &network_output,
+                )?;
             }
 
             silence_length = 0;
@@ -219,20 +220,8 @@ pub fn input_processor<I: AudioInput>(
 
         // cast the f32 samples to i16
         int_buffer = out_buf.map(|x| x as i16);
-
-        if codec_enabled {
-            output.send(ProcessorMessage::samples(int_buffer))?;
-        } else {
-            // convert the i16 samples to bytes
-            let bytes = unsafe {
-                std::slice::from_raw_parts(
-                    int_buffer.as_ptr() as *const u8,
-                    int_buffer.len() * i16_size,
-                )
-            };
-
-            output.send(ProcessorMessage::slice(bytes))?;
-        }
+        // send the frame to the next stage, either codec or network
+        send_frame(int_buffer, &codec_output, &network_output)?;
     }
 
     debug!("Input processor ended");
@@ -272,7 +261,8 @@ pub fn input_processor<I: AudioInput>(
 ///
 /// Returns `Ok(())` when the input channel closes, or an error if processing fails.
 pub fn output_processor<O: AudioOutput>(
-    input: Receiver<ProcessorMessage>,
+    codec_input: Option<Receiver<[i16; FRAME_SIZE]>>,
+    network_input: Option<Receiver<Bytes>>,
     mut output: O,
     ratio: f64,
     state: OutputProcessorState,
@@ -293,7 +283,23 @@ pub fn output_processor<O: AudioOutput>(
     post_vec.resize(post_len, 0_f32);
     let mut post_buf = [post_vec];
 
-    while let Ok(message) = input.recv() {
+    loop {
+        let mut network_message = None;
+        let mut codec_message = None;
+        if let Some(ref receiver) = codec_input {
+            if let Ok(message) = receiver.recv() {
+                codec_message = Some(message);
+            } else {
+                break;
+            }
+        } else if let Some(ref receiver) = network_input {
+            if let Ok(message) = receiver.recv() {
+                network_message = Some(message);
+            } else {
+                break;
+            }
+        }
+
         if state.is_deafened() {
             continue;
         } else if output.is_full() {
@@ -301,14 +307,18 @@ pub fn output_processor<O: AudioOutput>(
             continue; // ignore frames while output is full
         }
 
-        let int_samples: &[i16] = match &message {
-            ProcessorMessage::Data(bytes) => {
+        let int_samples: &[i16] = match (&network_message, &codec_message) {
+            (Some(bytes), _) => {
                 // convert the bytes to 16-bit integers
                 unsafe {
                     std::slice::from_raw_parts(bytes.as_ptr() as *const i16, bytes.len() / i16_size)
                 }
             }
-            ProcessorMessage::Samples(samples) => samples.as_ref(),
+            (_, Some(samples)) => samples,
+            (None, None) => {
+                warn!("invalid output processor config");
+                break;
+            }
         };
 
         if int_samples.len() != FRAME_SIZE {
@@ -338,5 +348,22 @@ pub fn output_processor<O: AudioOutput>(
     }
 
     debug!("Output processor ended");
+    Ok(())
+}
+
+fn send_frame(
+    frame: [i16; FRAME_SIZE],
+    codec_output: &Option<Sender<[i16; FRAME_SIZE]>>,
+    network_output: &Option<Sender<Bytes>>,
+) -> Result<(), AudioError> {
+    if let Some(sender) = codec_output {
+        sender.send(frame)?;
+    } else if let Some(sender) = network_output {
+        let bytes = unsafe {
+            std::slice::from_raw_parts(frame.as_ptr() as *const u8, FRAME_SIZE * size_of::<i16>())
+        };
+        sender.send(Bytes::from(bytes))?;
+    }
+
     Ok(())
 }

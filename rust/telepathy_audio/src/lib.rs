@@ -218,13 +218,6 @@ pub use state::{InputProcessorState, OutputProcessorState};
 // Re-export constants
 pub use constants::FRAME_SIZE;
 
-// Re-export sea_codec types needed by consumers
-/// Message type for passing audio data between processing stages.
-///
-/// Re-exported from `sea_codec` for consumers that need direct access to
-/// the inter-thread messaging API. Contains either raw bytes or i16 samples.
-pub use sea_codec::ProcessorMessage;
-
 /// SEA codec file header structure.
 ///
 /// Re-exported from `sea_codec` for consumers that need to construct
