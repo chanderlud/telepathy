@@ -30,7 +30,7 @@
 
 use crate::error::AudioError;
 use crate::processing::wide_mul;
-use crate::utils::{SendStream, db_to_multiplier, resampler_factory};
+use crate::utils::{db_to_multiplier, resampler_factory};
 use atomic_float::AtomicF32;
 use bytes::Bytes;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -412,67 +412,65 @@ async fn play_sound_with_device(
         // Used to provide a fade to 0 when the sound is canceled
         let f32_sample_rate = output_config.sample_rate() as f32;
 
-        let output_stream = SendStream {
-            stream: output_device.build_output_stream(
-                &output_config.into(),
-                move |output: &mut [f32], _| {
+        let output_stream = output_device.build_output_stream(
+            &output_config.into(),
+            move |output: &mut [f32], _| {
+                #[cfg(target_family = "wasm")]
+                let mut data = {
+                    audio_buffer.condvar.notify_one();
+                    audio_buffer.buffer.lock().unwrap()
+                };
+
+                for frame in output.chunks_mut(output_channels) {
+                    #[cfg(not(target_family = "wasm"))]
+                    let samples_result = processed_receiver.recv();
+                    #[cfg(not(target_family = "wasm"))]
+                    let canceled = samples_result.is_err();
+
                     #[cfg(target_family = "wasm")]
-                    let mut data = {
-                        audio_buffer.condvar.notify_one();
-                        audio_buffer.buffer.lock().unwrap()
+                    let canceled = {
+                        let mut canceled = audio_buffer.canceled.load(Relaxed);
+
+                        if !canceled && data.is_empty() {
+                            audio_buffer.canceled.store(true, Relaxed);
+                            canceled = true;
+                        }
+
+                        canceled
                     };
 
-                    for frame in output.chunks_mut(output_channels) {
-                        #[cfg(not(target_family = "wasm"))]
-                        let samples_result = processed_receiver.recv();
-                        #[cfg(not(target_family = "wasm"))]
-                        let canceled = samples_result.is_err();
-
-                        #[cfg(target_family = "wasm")]
-                        let canceled = {
-                            let mut canceled = audio_buffer.canceled.load(Relaxed);
-
-                            if !canceled && data.is_empty() {
-                                audio_buffer.canceled.store(true, Relaxed);
-                                canceled = true;
-                            }
-
-                            canceled
-                        };
-
-                        if canceled {
-                            // Fade each sample
-                            for sample in &mut last_samples {
-                                *sample *= (1_f32 - i as f32 / f32_sample_rate).max(0_f32);
-                            }
-
-                            // Play the samples
-                            frame.copy_from_slice(&last_samples);
-                            // Advance the counter
-                            i += 1;
-                            // Notify main thread once after the full fade has occurred
-                            if i == FADE_FRAMES {
-                                output_finished_clone.notify_one();
-                            }
-                        } else {
-                            // This unwrap is safe as the result was already checked for is_err
-                            #[cfg(not(target_family = "wasm"))]
-                            let samples = samples_result.unwrap();
-                            #[cfg(target_family = "wasm")]
-                            let samples: Vec<f32> = data.drain(..output_channels).collect();
-
-                            // Play the samples
-                            frame.copy_from_slice(&samples);
-                            last_samples = samples;
+                    if canceled {
+                        // Fade each sample
+                        for sample in &mut last_samples {
+                            *sample *= (1_f32 - i as f32 / f32_sample_rate).max(0_f32);
                         }
+
+                        // Play the samples
+                        frame.copy_from_slice(&last_samples);
+                        // Advance the counter
+                        i += 1;
+                        // Notify main thread once after the full fade has occurred
+                        if i == FADE_FRAMES {
+                            output_finished_clone.notify_one();
+                        }
+                    } else {
+                        // This unwrap is safe as the result was already checked for is_err
+                        #[cfg(not(target_family = "wasm"))]
+                        let samples = samples_result.unwrap();
+                        #[cfg(target_family = "wasm")]
+                        let samples: Vec<f32> = data.drain(..output_channels).collect();
+
+                        // Play the samples
+                        frame.copy_from_slice(&samples);
+                        last_samples = samples;
                     }
-                },
-                move |err| {
-                    error!("Error in player stream: {}", err);
-                },
-                None,
-            )?,
-        };
+                }
+            },
+            move |err| {
+                error!("Error in player stream: {}", err);
+            },
+            None,
+        )?;
 
         // The sender used by the processor
         let sender = processed_sender.clone();
@@ -489,7 +487,7 @@ async fn play_sound_with_device(
             )
         });
 
-        output_stream.stream.play()?; // Play the stream
+        output_stream.play()?; // Play the stream
 
         Ok((
             output_stream,

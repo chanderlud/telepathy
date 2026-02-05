@@ -1,9 +1,4 @@
 use super::*;
-use crate::audio::codec::{decoder, encoder};
-use crate::audio::{
-    ChannelInput, ChannelOutput, InputProcessorState, OutputProcessorState, input_processor,
-    output_processor,
-};
 use crate::flutter::callbacks::{
     FrbStatisticsCallback, MockFrbCallbacks, MockFrbStatisticsCallback,
 };
@@ -22,6 +17,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::process::Command;
 use std::thread::{sleep, spawn};
 use std::time::Instant;
+use telepathy_audio::AudioHost;
 use tokio::sync::OnceCell;
 use tokio::time::interval;
 
@@ -62,7 +58,7 @@ where
         let overlay = Overlay::default();
 
         Self::new(
-            Arc::new(Host::default()),
+            AudioHost::new(),
             network_config,
             &screenshare_config,
             &overlay,

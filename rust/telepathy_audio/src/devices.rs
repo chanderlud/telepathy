@@ -93,12 +93,6 @@ impl DeviceHandle {
     }
 }
 
-// TODO review whether this is still needed
-// Ensure DeviceHandle is Send + Sync
-// Note: cpal::Device is Send + Sync on most platforms
-unsafe impl Send for DeviceHandle {}
-unsafe impl Sync for DeviceHandle {}
-
 impl fmt::Debug for DeviceHandle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DeviceHandle")
@@ -182,11 +176,6 @@ impl From<Arc<cpal::Host>> for AudioHost {
         Self { host }
     }
 }
-
-// TODO review whether this is still needed
-// AudioHost is Send + Sync because Arc<cpal::Host> is Send + Sync
-unsafe impl Send for AudioHost {}
-unsafe impl Sync for AudioHost {}
 
 impl fmt::Debug for AudioHost {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

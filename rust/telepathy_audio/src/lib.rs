@@ -212,9 +212,6 @@ pub use output::{AudioOutputBuilder, AudioOutputConfig, AudioOutputHandle};
 // Re-export error types
 pub use error::AudioError;
 
-// Re-export state types for advanced usage
-pub use state::{InputProcessorState, OutputProcessorState};
-
 // Re-export constants
 pub use constants::FRAME_SIZE;
 
@@ -224,65 +221,13 @@ pub use constants::FRAME_SIZE;
 /// custom codec configurations for room calls or file encoding.
 pub use sea_codec::codec::file::SeaFileHeader;
 
-// Re-export processor functions for consumers that need direct access
-/// Core input processing function.
-///
-/// Re-exported for advanced consumers that need to implement custom
-/// processing pipelines. Handles resampling, noise suppression, and
-/// silence detection. See [`processor`] module for details.
-pub use processor::input_processor;
-
-/// Core output processing function.
-///
-/// Re-exported for advanced consumers that need to implement custom
-/// playback pipelines. Handles resampling and volume control.
-pub use processor::output_processor;
-
-// Re-export codec functions for consumers that need direct access
-/// SEA codec encoder function.
-///
-/// Re-exported for consumers that need direct encoder access outside
-/// of the standard input pipeline.
-pub use codec::encoder;
-
-/// SEA codec decoder function.
-///
-/// Re-exported for consumers that need direct decoder access outside
-/// of the standard output pipeline.
-pub use codec::decoder;
-
-// Re-export traits and channel implementations for consumers
-#[cfg(target_family = "wasm")]
-pub use traits::WebOutput;
-pub use traits::{AudioInput, AudioOutput, CHANNEL_SIZE, ChannelInput, ChannelOutput};
-
 // Re-export processing utilities
-/// SIMD-optimized audio sample multiplication with clamping.
-///
-/// Automatically selects the optimal implementation based on CPU features:
-/// - AVX-512 for 16-element aligned frames
-/// - AVX2 for 8-element aligned frames
-/// - Scalar fallback for other cases
-///
-/// Results are clamped to [-1.0, 1.0].
-pub use processing::wide_mul;
-
-/// Creates a resampler if needed based on the sample rate ratio.
-///
-/// Returns `None` if no resampling is needed (ratio == 1.0), avoiding
-/// unnecessary processing overhead.
-pub use utils::resampler_factory;
 
 /// Converts decibel values to linear multipliers.
 ///
 /// Uses the standard audio engineering formula: `10^(dB / 20)`.
 /// Useful for volume control where 0 dB = unity gain.
 pub use utils::db_to_multiplier;
-
-/// Wrapper for cpal streams to enable sending across thread boundaries.
-///
-/// See [`utils::SendStream`] for safety requirements.
-pub use utils::SendStream;
 
 // Re-export player API
 /// Framework-agnostic audio player for WAV and SEA codec files.
