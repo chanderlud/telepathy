@@ -287,9 +287,11 @@ pub use sea_codec::codec::file::SeaFileHeader;
 /// Useful for volume control where 0 dB = unity gain.
 pub use internal::utils::db_to_multiplier;
 
-/// Multiplies frame samples by a factor with automatic SIMD optimization.
+/// SIMD-optimized audio multiplication with automatic CPU feature detection.
 ///
-/// Re-exported from internal module for backward compatibility.
+/// Multiplies audio samples by a factor, using AVX-512, AVX2, or scalar
+/// implementations based on runtime CPU capabilities. Results are clamped
+/// to [-1.0, 1.0]. See [`internal::processing`] module for details.
 pub use internal::processing::wide_mul;
 
 // Re-export player API

@@ -2,6 +2,43 @@
 //!
 //! This module contains the state structures that manage configuration
 //! and statistics for audio processing pipelines.
+//!
+//! ## Purpose
+//!
+//! These state structures enable real-time control of audio processing
+//! parameters without stopping and restarting streams. All state is
+//! managed via atomic operations for lock-free, thread-safe access.
+//!
+//! ## Typical Usage
+//!
+//! State structures are typically created internally by `AudioInputBuilder`
+//! and `AudioOutputBuilder`. However, they can be constructed manually for
+//! advanced use cases:
+//!
+//! ```rust,no_run
+//! use telepathy_audio::internal::state::InputProcessorState;
+//! use std::sync::Arc;
+//! use atomic_float::AtomicF32;
+//! use std::sync::atomic::AtomicBool;
+//!
+//! // Create shared atomics
+//! let volume = Arc::new(AtomicF32::new(1.0));
+//! let threshold = Arc::new(AtomicF32::new(0.01));
+//! let muted = Arc::new(AtomicBool::new(false));
+//! let rms = Arc::new(AtomicF32::new(0.0));
+//!
+//! // Create state
+//! let state = InputProcessorState::new(&volume, &threshold, &muted, rms);
+//!
+//! // State can now be passed to input_processor function
+//! ```
+//!
+//! ## Statistics Collection
+//!
+//! Both state types include RMS (Root Mean Square) senders for audio level
+//! monitoring. The processor updates these atomics with the maximum RMS
+//! value encountered, which can be read by the application for visualization
+//! or voice activity detection.
 
 use atomic_float::AtomicF32;
 use std::sync::Arc;

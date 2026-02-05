@@ -3,6 +3,19 @@
 //! This module provides functions for encoding and decoding audio using
 //! the SEA codec. It wraps the sea_codec library and provides a simple
 //! interface for the audio processing pipeline.
+//!
+//! ## Threading Model
+//!
+//! Both [`encoder`] and [`decoder`] are designed to run in dedicated threads.
+//! They process frames in a loop until their input channel closes, making
+//! them suitable for long-running audio streams.
+//!
+//! ## Frame Format
+//!
+//! - Input to encoder: `[i16; 480]` (480 samples, 10ms at 48kHz)
+//! - Output from encoder: `Bytes` (variable length, depends on settings)
+//! - Input to decoder: `Bytes` (encoded frames)
+//! - Output from decoder: `[i16; 480]` (reconstructed samples)
 
 use crate::error::AudioError;
 use bytes::Bytes;

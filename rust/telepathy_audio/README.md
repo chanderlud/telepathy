@@ -121,7 +121,11 @@ let host = AudioHost::new();
 
 // Input with codec encoding
 let input = AudioInputBuilder::new()
-    .codec(true, false, 5.0)  // enabled, VBR disabled, 5 residual bits
+    .codec(
+        true,   // enabled: enable SEA codec encoding
+        false,  // vbr: use constant bit rate (CBR) instead of variable bit rate
+        5.0     // residual_bits: quality setting (1.0-8.0, higher = better quality)
+    )
     .callback(|encoded_data| {
         // Send encoded data over network
     })
@@ -139,6 +143,35 @@ let output = AudioOutputBuilder::new()
 > processor upsamples to 48kHz for RNNoise processing and outputs 48kHz frames. The
 > encoder sample rate automatically matches this. When denoise is disabled, the
 > processor passes through at the device's native sample rate.
+
+## Architecture Notes
+
+### Codec vs. No-Codec Paths
+
+The library supports two distinct processing paths:
+
+**With Codec Enabled:**
+```
+Input: Audio → Processor → Encoder → Callback/Network
+Output: Network → Decoder → Processor → Audio
+```
+
+**Without Codec (Raw Audio):**
+```
+Input: Audio → Processor → Callback/Network
+Output: Network → Processor → Audio
+```
+
+When codec is disabled, audio is transmitted as raw `Bytes` (i16 samples converted to bytes).
+When codec is enabled, audio is compressed using the SEA codec before transmission.
+
+### Thread Architecture
+
+Each audio stream spawns dedicated threads:
+- **Input**: 1 processor thread + optional encoder thread + optional callback thread
+- **Output**: 1 processor thread + optional decoder thread
+
+All threads communicate via lock-free channels (kanal) for low-latency operation.
 
 ## Module Organization
 
@@ -201,7 +234,8 @@ These are re-exported for consumers that need lower-level access:
 - `encoder` / `decoder` - Direct codec access
 - `wide_mul` - SIMD-optimized audio multiplication
 - `resampler_factory` - Create resamplers for sample rate conversion
-- `ProcessorMessage` - Message type for inter-thread communication
+- `InputProcessorState` / `OutputProcessorState` - State management for processors
+- `FRAME_SIZE` - Standard frame size constant (480 samples)
 - `SeaFileHeader` - SEA codec file header structure
 
 ## Dependencies
@@ -212,6 +246,65 @@ This library builds on several excellent Rust crates:
 - [rubato](https://docs.rs/rubato) - High-quality audio resampling
 - [nnnoiseless](https://docs.rs/nnnoiseless) - RNNoise-based noise suppression
 - [sea_codec](https://github.com/Daninet/sea-codec) - SEA audio codec for efficient transmission
+
+## WASM Migration Notes
+
+On WASM targets, use `build_async` instead of `build` for audio input, as
+microphone access requires async permission handling:
+
+```rust
+#[cfg(target_family = "wasm")]
+async fn setup_audio() -> Result<(), AudioError> {
+    use telepathy_audio::{AudioHost, AudioInputBuilder};
+    
+    let host = AudioHost::new();
+    
+    // Input requires async build on WASM
+    let input = AudioInputBuilder::new()
+        .callback(|data| { /* process audio */ })
+        .build_async(&host, None)  // None = create new WebAudioWrapper
+        .await?;
+    
+    // Output uses synchronous build even on WASM
+    let output = AudioOutputBuilder::new()
+        .sample_rate(48000)
+        .build(&host)?;
+    
+    Ok(())
+}
+```
+
+**Key WASM Differences:**
+
+1. **Input**: Must use `build_async` (browser permission dialog is async)
+2. **Output**: Uses `build` (no permissions needed)
+3. **Sample Rate**: Fixed at 48kHz for Web Audio API compatibility
+4. **Threading**: Uses Web Workers for processor threads
+5. **Buffer Management**: Output uses shared `Arc<Mutex<Vec<f32>>>` instead of cpal stream
+
+**WebAudioWrapper Reuse:**
+
+For better performance and to satisfy Web Audio API threading requirements,
+you can create and reuse a `WebAudioWrapper`:
+
+```rust
+use telepathy_audio::WebAudioWrapper;
+use std::sync::Arc;
+
+// Create wrapper once (must be on main thread during user interaction)
+let wrapper = Arc::new(WebAudioWrapper::new().await?);
+
+// Reuse for multiple inputs
+let input1 = AudioInputBuilder::new()
+    .callback(|data| { /* ... */ })
+    .build_async(&host, Some(wrapper.clone()))
+    .await?;
+
+let input2 = AudioInputBuilder::new()
+    .callback(|data| { /* ... */ })
+    .build_async(&host, Some(wrapper.clone()))
+    .await?;
+```
 
 ## License
 

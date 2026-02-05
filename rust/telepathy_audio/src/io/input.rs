@@ -342,13 +342,31 @@ where
     ///
     /// This method handles all shared setup steps:
     /// - Creates shared atomic state (input_volume, rms_threshold, muted, rms_sender)
-    /// - Creates unbounded channels for processor-to-encoder and encoder-to-callback communication
-    /// - Calculates encoder sample rate based on denoise_enabled
-    /// - Creates denoiser if needed
-    /// - Creates InputProcessorState
-    /// - Spawns processor thread with the native signature
-    /// - Spawns encoder thread (if codec enabled)
-    /// - Spawns callback thread (if callback set)
+    /// - Creates unbounded channels for inter-thread communication:
+    ///   - processor → encoder: `[i16; FRAME_SIZE]` (when codec enabled)
+    ///   - processor → callback: `Bytes` (when codec disabled)
+    ///   - encoder → callback: `Bytes` (when codec enabled)
+    /// - Calculates encoder sample rate based on denoise_enabled:
+    ///   - 48kHz when denoise is enabled (RNNoise requirement)
+    ///   - Device sample rate when denoise is disabled
+    /// - Creates denoiser if needed (DenoiseState with optional custom model)
+    /// - Creates InputProcessorState for atomic state management
+    /// - Spawns processor thread (calls `input_processor` function)
+    /// - Spawns encoder thread if codec is enabled (calls `encoder` function)
+    /// - Spawns callback thread if callback is set
+    ///
+    /// # Type Parameters
+    ///
+    /// * `I` - Type implementing `AudioInput` trait (e.g., `ChannelInput`, `WebAudioInput`)
+    ///
+    /// # Arguments
+    ///
+    /// * `processor_input` - The audio input source for the processor
+    /// * `input_sample_rate` - Device's native sample rate in Hz
+    ///
+    /// # Returns
+    ///
+    /// Returns `InputBuildContext` containing handles and state for the created threads
     fn build_common<I: crate::internal::traits::AudioInput + Send + 'static>(
         self,
         processor_input: I,

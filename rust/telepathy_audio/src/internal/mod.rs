@@ -1,7 +1,5 @@
 //! Internal implementation details.
 //!
-//! **This module is not part of the public API.**
-//!
 //! These modules contain internal implementation details used by the audio
 //! processing pipeline. They are not intended for external use and may change
 //! without notice between versions.

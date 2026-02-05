@@ -10,16 +10,52 @@
 //! dedicated threads. They perform blocking operations on channels and should
 //! not be called from async contexts without spawning a blocking task.
 //!
+//! ### Input Processing (with codec)
+//!
 //! ```text
 //! ┌─────────────┐    ┌──────────────────┐    ┌─────────────┐    ┌──────────┐
 //! │ Audio       │───▶│ input_processor  │───▶│ encoder     │───▶│ Callback │
 //! │ Stream      │    │ (thread)         │    │ (thread)    │    │ (thread) │
 //! └─────────────┘    └──────────────────┘    └─────────────┘    └──────────┘
+//!                            │
+//!                            │ codec_output: [i16; FRAME_SIZE]
+//!                            ▼
+//! ```
 //!
+//! ### Input Processing (without codec)
+//!
+//! ```text
+//! ┌─────────────┐    ┌──────────────────┐    ┌──────────┐
+//! │ Audio       │───▶│ input_processor  │───▶│ Callback │
+//! │ Stream      │    │ (thread)         │    │ (thread) │
+//! └─────────────┘    └──────────────────┘    └──────────┘
+//!                            │
+//!                            │ network_output: Bytes
+//!                            ▼
+//! ```
+//!
+//! ### Output Processing (with codec)
+//!
+//! ```text
 //! ┌─────────────┐    ┌──────────────────┐    ┌──────────────────┐    ┌────────┐
 //! │ Network     │───▶│ decoder          │───▶│ output_processor │───▶│ Output │
 //! │ Receiver    │    │ (thread)         │    │ (thread)         │    │ Stream │
 //! └─────────────┘    └──────────────────┘    └──────────────────┘    └────────┘
+//!                            │
+//!                            │ [i16; FRAME_SIZE]
+//!                            ▼
+//! ```
+//!
+//! ### Output Processing (without codec)
+//!
+//! ```text
+//! ┌─────────────┐    ┌──────────────────┐    ┌────────┐
+//! │ Network     │───▶│ output_processor │───▶│ Output │
+//! │ Receiver    │    │ (thread)         │    │ Stream │
+//! └─────────────┘    └──────────────────┘    └────────┘
+//!                            │
+//!                            │ Bytes
+//!                            ▼
 //! ```
 //!
 //! ## Channel Closure Behavior
@@ -63,10 +99,20 @@ use rubato::Resampler;
 /// - Silence transition handling
 /// - Converting to i16 samples for network transmission
 ///
-/// When denoise is enabled, the processor upsamples to 48kHz for rnnoise
-/// processing and outputs 48kHz frames (no downsample back to device rate).
-/// When denoise is disabled, the processor passes through at the device rate.
-/// The encoder sample rate must match the processor's output rate accordingly.
+/// ## Sample Rate Behavior
+///
+/// The processor's output sample rate depends on the denoise setting:
+///
+/// - **Denoise enabled**: Always outputs at 48kHz
+///   - Input is upsampled from `sample_rate` to 48kHz (required by RNNoise)
+///   - Output remains at 48kHz (no downsampling back to device rate)
+///   - Encoder/network must expect 48kHz frames
+///
+/// - **Denoise disabled**: Outputs at device's native `sample_rate`
+///   - No resampling occurs (pass-through)
+///   - Encoder/network must expect frames at `sample_rate`
+///
+/// This design avoids unnecessary resampling overhead when denoise is disabled.
 ///
 /// ## Threading
 ///
@@ -76,17 +122,17 @@ use rubato::Resampler;
 ///
 /// ## Channel Communication
 ///
-/// - Sends [`ProcessorMessage::samples`] when codec is enabled
-/// - Sends [`ProcessorMessage::slice`] when codec is disabled
+/// - Sends `[i16; FRAME_SIZE]` to codec_output when codec is enabled
+/// - Sends `Bytes` to network_output when codec is disabled
 /// - Channel closure causes function to return `Ok(())`
 ///
 /// # Arguments
 ///
 /// * `input` - The audio input source implementing `AudioInput`
-/// * `output` - Channel sender for processed audio frames
+/// * `codec_output` - Channel for sending frames to codec encoder (`Some` when codec enabled)
+/// * `network_output` - Channel for sending raw bytes to network (`Some` when codec disabled)
 /// * `sample_rate` - Input sample rate in Hz (device's native rate)
 /// * `denoiser` - Optional noise suppression state (requires 48kHz input)
-/// * `codec_enabled` - Whether the codec is enabled (affects output format)
 /// * `state` - Shared state for volume, mute, and statistics
 ///
 /// # Returns
@@ -249,13 +295,15 @@ pub fn input_processor<I: AudioInput>(
 ///
 /// ## Channel Communication
 ///
-/// - Receives [`ProcessorMessage`] containing either raw bytes or i16 samples
+/// - Receives `[i16; FRAME_SIZE]` from codec_input when codec is enabled
+/// - Receives `Bytes` from network_input when codec is disabled
 /// - Drops frames when output is full (tracks loss via state)
 /// - Ignores frames when deafened
 ///
 /// # Arguments
 ///
-/// * `input` - Channel receiver for incoming audio frames
+/// * `codec_input` - Channel for receiving decoded frames from codec (`Some` when codec enabled)
+/// * `network_input` - Channel for receiving raw bytes from network (`Some` when codec disabled)
 /// * `output` - The audio output destination implementing `AudioOutput`
 /// * `ratio` - Resampling ratio (output_rate / input_rate)
 /// * `state` - Shared state for volume, deafen, and statistics
@@ -354,6 +402,28 @@ pub fn output_processor<O: AudioOutput>(
     Ok(())
 }
 
+/// Sends an audio frame to either the codec encoder or network output.
+///
+/// This helper function abstracts the logic of sending frames to the appropriate
+/// destination based on which output channel is configured.
+///
+/// # Arguments
+///
+/// * `frame` - The audio frame to send (480 i16 samples)
+/// * `codec_output` - Optional sender for codec encoder
+/// * `network_output` - Optional sender for network transmission
+///
+/// # Returns
+///
+/// Returns `Ok(())` if the frame was sent successfully, or an error if:
+/// - The channel send operation fails
+/// - Neither output channel is configured (should not happen in normal operation)
+///
+/// # Behavior
+///
+/// - If `codec_output` is `Some`, sends the frame as `[i16; FRAME_SIZE]`
+/// - Otherwise, if `network_output` is `Some`, converts to `Bytes` and sends
+/// - Exactly one of the two outputs should be `Some` in normal operation
 fn send_frame(
     frame: [i16; FRAME_SIZE],
     codec_output: &Option<Sender<[i16; FRAME_SIZE]>>,

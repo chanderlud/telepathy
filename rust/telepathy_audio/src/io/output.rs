@@ -227,12 +227,33 @@ impl AudioOutputBuilder {
     ///
     /// This method handles all shared setup steps:
     /// - Creates shared atomic state (output_volume, deafened, rms_sender, loss_sender)
-    /// - Creates unbounded channels for network and decoded messages
-    /// - Calculates resampling ratio
-    /// - Creates OutputProcessorState
-    /// - Auto-constructs codec header when needed
-    /// - Spawns decoder thread (if codec enabled)
-    /// - Spawns processor thread with the provided output
+    /// - Creates unbounded channels for inter-thread communication:
+    ///   - network → decoder: `Bytes` (when codec enabled)
+    ///   - decoder → processor: `[i16; FRAME_SIZE]` (when codec enabled)
+    ///   - network → processor: `Bytes` (when codec disabled)
+    /// - Calculates resampling ratio: `output_sample_rate / config.sample_rate`
+    /// - Creates OutputProcessorState for atomic state management
+    /// - Auto-constructs SEA codec header when codec is enabled and no header provided:
+    ///   - version: 1
+    ///   - channels: 1 (mono)
+    ///   - chunk_size: 960
+    ///   - frames_per_chunk: 480
+    ///   - sample_rate: from config
+    /// - Spawns decoder thread if codec is enabled (calls `decoder` function)
+    /// - Spawns processor thread (calls `output_processor` function)
+    ///
+    /// # Type Parameters
+    ///
+    /// * `O` - Type implementing `AudioOutput` trait (e.g., `ChannelOutput`, `WebOutput`)
+    ///
+    /// # Arguments
+    ///
+    /// * `processor_output` - The audio output destination for the processor
+    /// * `output_sample_rate` - Device's native sample rate in Hz
+    ///
+    /// # Returns
+    ///
+    /// Returns `OutputBuildContext` containing handles and state for the created threads
     fn build_common<O: AudioOutput + Send + 'static>(
         self,
         processor_output: O,

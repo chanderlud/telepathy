@@ -225,3 +225,34 @@ pub(crate) fn make_transition_down(length: usize, sample: i16) -> [i16; FRAME_SI
 
     buf
 }
+
+#[cfg(test)]
+mod transition_tests {
+    use super::*;
+
+    #[test]
+    fn transition_up_creates_smooth_ramp() {
+        let transition = make_transition_up(10, 1000);
+
+        // First 470 samples should be zero
+        assert!(transition[..470].iter().all(|&x| x == 0));
+
+        // Last 10 samples should ramp from ~100 to 1000
+        assert!(transition[470] > 0 && transition[470] < 200);
+        assert!(transition[479] > 900 && transition[479] <= 1000);
+    }
+
+    #[test]
+    fn transition_down_creates_smooth_ramp() {
+        let transition = make_transition_down(10, 1000);
+
+        // First sample should be close to 1000
+        assert!(transition[0] > 900 && transition[0] <= 1000);
+
+        // 10th sample should be close to 0
+        assert!(transition[9] >= 0 && transition[9] < 200);
+
+        // Remaining samples should be zero
+        assert!(transition[10..].iter().all(|&x| x == 0));
+    }
+}
