@@ -153,6 +153,16 @@ where
     shared_rms: Option<Arc<AtomicF32>>,
 }
 
+/// Internal context for building audio input, shared between native and WASM
+struct InputBuildContext {
+    input_volume: Arc<AtomicF32>,
+    rms_threshold: Arc<AtomicF32>,
+    muted: Arc<AtomicBool>,
+    processor_handle: JoinHandle<()>,
+    encoder_handle: Option<JoinHandle<()>>,
+    callback_handle: Option<JoinHandle<()>>,
+}
+
 impl AudioInputBuilder<fn(Bytes)> {
     /// Creates a new audio input builder with default configuration.
     pub fn new() -> AudioInputBuilder<fn(Bytes)> {
@@ -328,6 +338,138 @@ where
         }
     }
 
+    /// Common initialization logic shared between native and WASM builds.
+    ///
+    /// This method handles all shared setup steps:
+    /// - Creates shared atomic state (input_volume, rms_threshold, muted, rms_sender)
+    /// - Creates unbounded channels for processor-to-encoder and encoder-to-callback communication
+    /// - Calculates encoder sample rate based on denoise_enabled
+    /// - Creates denoiser if needed
+    /// - Creates InputProcessorState
+    /// - Spawns processor thread with the native signature
+    /// - Spawns encoder thread (if codec enabled)
+    /// - Spawns callback thread (if callback set)
+    fn build_common<I: crate::traits::AudioInput + Send + 'static>(
+        self,
+        processor_input: I,
+        input_sample_rate: u32,
+    ) -> InputBuildContext {
+        // Create shared atomic state (use provided shared atomics or create new ones)
+        let input_volume = self
+            .shared_input_volume
+            .clone()
+            .unwrap_or_else(|| Arc::new(AtomicF32::new(self.config.volume)));
+        let rms_threshold = self
+            .shared_rms_threshold
+            .clone()
+            .unwrap_or_else(|| Arc::new(AtomicF32::new(self.config.rms_threshold)));
+        let muted = self
+            .shared_muted
+            .clone()
+            .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
+        let rms_sender = self.shared_rms.clone().unwrap_or_default();
+
+        // Create channels
+        let (processor_to_callback_sender, processor_to_callback_receiver) = unbounded::<Bytes>();
+        let (processor_to_encoder_sender, processor_to_encoder_receiver) =
+            unbounded::<[i16; FRAME_SIZE]>();
+        let (encoded_sender, encoded_receiver) = unbounded::<Bytes>();
+
+        // When denoise is enabled, the processor resamples to 48kHz for rnnoise
+        // processing and outputs 48kHz frames (no downsample back to device rate).
+        // When denoise is disabled, the processor passes through at device rate.
+        // The encoder sample rate must match the processor's output rate.
+        let encoder_sample_rate = if self.config.denoise_enabled {
+            48_000
+        } else {
+            input_sample_rate
+        };
+
+        // Create denoiser if needed
+        let denoiser = if self.config.denoise_enabled {
+            Some(DenoiseState::from_model(
+                self.config.denoise_model.clone().unwrap_or_default(),
+            ))
+        } else {
+            None
+        };
+
+        let state = InputProcessorState::new(&input_volume, &rms_threshold, &muted, rms_sender);
+
+        let codec_enabled = self.config.codec_enabled;
+        let codec_vbr = self.config.codec_vbr;
+        let codec_residual_bits = self.config.codec_residual_bits;
+        let is_room = self.config.is_room;
+
+        // Determine network sender based on channel and codec state
+        let network_sender = if let Some(ref sender) = self.channel
+            && !codec_enabled
+        {
+            sender.clone_sync()
+        } else {
+            processor_to_callback_sender
+        };
+
+        // Spawn processor thread
+        let processor_handle = thread::spawn(move || {
+            if let Err(e) = input_processor(
+                processor_input,
+                codec_enabled.then_some(processor_to_encoder_sender),
+                codec_enabled.not().then_some(network_sender),
+                input_sample_rate as f64,
+                denoiser,
+                state,
+            ) {
+                error!("Input processor error: {}", e);
+            }
+            debug!("Input processor thread ended");
+        });
+
+        // Select the appropriate receiver for the callback and spawn encoder if needed
+        let (encoder_handle, output_receiver) = if codec_enabled {
+            let encoded_sender_sync = if let Some(ref sender) = self.channel {
+                sender.clone().to_sync()
+            } else {
+                encoded_sender
+            };
+            let handle = thread::spawn(move || {
+                if let Err(e) = encoder(
+                    processor_to_encoder_receiver,
+                    encoded_sender_sync,
+                    encoder_sample_rate,
+                    codec_vbr,
+                    codec_residual_bits,
+                    is_room,
+                ) {
+                    error!("Encoder error: {}", e);
+                }
+                debug!("Encoder thread ended");
+            });
+            (Some(handle), encoded_receiver)
+        } else {
+            (None, processor_to_callback_receiver)
+        };
+
+        // Spawn callback thread if callback is set
+        let callback_handle = self.callback.map(|callback| {
+            thread::spawn(move || {
+                while let Ok(buffer) = output_receiver.recv() {
+                    callback(buffer)
+                }
+                debug!("Callback thread ended");
+            })
+        });
+
+        InputBuildContext {
+            input_volume,
+            rms_threshold,
+            muted,
+            processor_handle,
+            encoder_handle,
+            callback_handle,
+        }
+    }
+
     /// Builds and starts the audio input stream.
     ///
     /// This method creates and configures all necessary processing threads
@@ -342,6 +484,12 @@ where
     /// - The device uses an unsupported sample format
     #[cfg(not(target_family = "wasm"))]
     pub fn build(self, host: &AudioHost) -> Result<AudioInputHandle, AudioError> {
+        if self.callback.is_none() && self.channel.is_none() {
+            return Err(AudioError::Config(
+                "either callback or channel must be set".to_string(),
+            ));
+        }
+
         // Get the input device
         let device_handle =
             get_input_device(host, self.config.device_id.as_deref()).map_err(|e| match e {
@@ -365,117 +513,18 @@ where
         let input_channels = config.channels() as usize;
         let device_sample_rate = config.sample_rate();
 
-        // Create shared atomic state (use provided shared atomics or create new ones)
-        let input_volume = self
-            .shared_input_volume
-            .clone()
-            .unwrap_or_else(|| Arc::new(AtomicF32::new(self.config.volume)));
-        let rms_threshold = self
-            .shared_rms_threshold
-            .clone()
-            .unwrap_or_else(|| Arc::new(AtomicF32::new(self.config.rms_threshold)));
-        let muted = self
-            .shared_muted
-            .clone()
-            .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
-        let rms_sender = self.shared_rms.clone().unwrap_or_default();
-
-        // Create channels
+        // Create channel for cpal stream to processor
         let (input_sender, input_receiver) = bounded::<f32>(CHANNEL_SIZE);
-        let (processor_to_callback_sender, processor_to_callback_receiver) = unbounded::<Bytes>();
-        let (processor_to_encoder_sender, processor_to_encoder_receiver) =
-            unbounded::<[i16; FRAME_SIZE]>();
-        let (encoded_sender, encoded_receiver) = unbounded::<Bytes>();
 
-        // When denoise is enabled, the processor resamples to 48kHz for rnnoise
-        // processing and outputs 48kHz frames (no downsample back to device rate).
-        // When denoise is disabled, the processor passes through at device rate.
-        // The encoder sample rate must match the processor's output rate.
-        let encoder_sample_rate = if self.config.denoise_enabled {
-            48_000
-        } else {
-            device_sample_rate
-        };
-
-        // Create denoiser if needed
-        let denoiser = if self.config.denoise_enabled {
-            Some(DenoiseState::from_model(
-                self.config.denoise_model.unwrap_or_default(),
-            ))
-        } else {
-            None
-        };
-
-        let state = InputProcessorState::new(&input_volume, &rms_threshold, &muted, rms_sender);
-
-        let codec_enabled = self.config.codec_enabled;
-        let codec_vbr = self.config.codec_vbr;
-        let codec_residual_bits = self.config.codec_residual_bits;
-        let is_room = self.config.is_room;
-
-        // Spawn processor thread
+        // Create processor input and extract error_notify before consuming self
         let processor_input = ChannelInput::from(input_receiver);
-        let network_sender = if let Some(ref sender) = self.channel
-            && !codec_enabled
-        {
-            sender.clone_sync()
-        } else {
-            processor_to_callback_sender
-        };
+        let error_notify = self.config.error_notify.clone();
 
-        let processor_handle = thread::spawn(move || {
-            if let Err(e) = input_processor(
-                processor_input,
-                codec_enabled.then_some(processor_to_encoder_sender),
-                codec_enabled.not().then_some(network_sender),
-                device_sample_rate as f64,
-                denoiser,
-                state,
-            ) {
-                error!("Input processor error: {}", e);
-            }
-            debug!("Input processor thread ended");
-        });
-
-        // Select the appropriate receiver for the callback and spawn encoder if needed
-        let (encoder_handle, output_receiver) = if codec_enabled {
-            let encoded_sender_sync = if let Some(sender) = self.channel {
-                sender.to_sync()
-            } else {
-                encoded_sender
-            };
-            let handle = thread::spawn(move || {
-                if let Err(e) = encoder(
-                    processor_to_encoder_receiver,
-                    encoded_sender_sync,
-                    encoder_sample_rate,
-                    codec_vbr,
-                    codec_residual_bits,
-                    is_room,
-                ) {
-                    error!("Encoder error: {}", e);
-                }
-                debug!("Encoder thread ended");
-            });
-            (Some(handle), encoded_receiver)
-        } else {
-            (None, processor_to_callback_receiver)
-        };
-
-        let mut callback_handle = None;
-        if let Some(callback) = self.callback {
-            // Spawn callback thread
-            callback_handle = Some(thread::spawn(move || {
-                while let Ok(buffer) = output_receiver.recv() {
-                    callback(buffer)
-                }
-                debug!("Callback thread ended");
-            }));
-        }
+        // Build common components (channels, threads, state)
+        let context = self.build_common(processor_input, device_sample_rate);
 
         // Build the audio stream
         let input_sender_clone = input_sender.clone();
-        let error_notify = self.config.error_notify.clone();
         let stream = device.build_input_stream(
             &config.into(),
             move |data: &[f32], _: &_| {
@@ -497,13 +546,13 @@ where
 
         Ok(AudioInputHandle {
             _stream: Some(stream),
-            processor_handle: Some(processor_handle),
-            encoder_handle,
-            callback_handle,
+            processor_handle: Some(context.processor_handle),
+            encoder_handle: context.encoder_handle,
+            callback_handle: context.callback_handle,
             input_sender: Some(input_sender),
-            input_volume,
-            rms_threshold,
-            muted,
+            input_volume: context.input_volume,
+            rms_threshold: context.rms_threshold,
+            muted: context.muted,
         })
     }
 
@@ -565,9 +614,11 @@ where
     ) -> Result<AudioInputHandle, AudioError> {
         use crate::web_audio::WebAudioInput;
 
-        let callback = self
-            .callback
-            .ok_or(AudioError::Config("No callback set".to_string()))?;
+        if self.callback.is_none() && self.channel.is_none() {
+            return Err(AudioError::Config(
+                "either callback or channel must be set".to_string(),
+            ));
+        }
 
         // Use provided WebAudioWrapper or initialize a new one (requests microphone permission)
         let web_audio = match web_audio_wrapper {
@@ -583,125 +634,21 @@ where
         let input_sample_rate = web_audio.sample_rate;
         let processor_input = WebAudioInput::from(&*web_audio);
 
-        // Create shared atomic state (use provided shared atomics or create new ones)
-        let input_volume = self
-            .shared_input_volume
-            .clone()
-            .unwrap_or_else(|| Arc::new(AtomicF32::new(self.config.volume)));
-        let rms_threshold = self
-            .shared_rms_threshold
-            .clone()
-            .unwrap_or_else(|| Arc::new(AtomicF32::new(self.config.rms_threshold)));
-        let muted = self
-            .shared_muted
-            .clone()
-            .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
-        let rms_sender = Arc::new(AtomicF32::new(0.0));
-
-        // Create channels
-        let (processed_sender, processed_receiver) = unbounded_async::<ProcessorMessage>();
-        let (encoded_sender, encoded_receiver) = unbounded_async::<ProcessorMessage>();
-
-        // When denoise is enabled, the processor resamples to 48kHz for rnnoise
-        // processing and outputs 48kHz frames (no downsample back to device rate).
-        // When denoise is disabled, the processor passes through at device rate.
-        // The encoder sample rate must match the processor's output rate.
-        let encoder_sample_rate = if self.config.denoise_enabled {
-            48_000
-        } else {
-            input_sample_rate
-        };
-
-        // Create denoiser if needed
-        let denoiser = if self.config.denoise_enabled {
-            let model = if let Some(model_bytes) = &self.config.denoise_model {
-                RnnModel::from_bytes(model_bytes).unwrap_or_default()
-            } else {
-                RnnModel::default()
-            };
-            Some(DenoiseState::from_model(model))
-        } else {
-            None
-        };
-
-        let state = InputProcessorState::new(&input_volume, &rms_threshold, &muted, rms_sender);
-
-        let codec_enabled = self.config.codec_enabled;
-        let codec_vbr = self.config.codec_vbr;
-        let codec_residual_bits = self.config.codec_residual_bits;
-        let is_room = self.config.is_room;
-
-        // Spawn processor thread
-        let processed_sender_sync = processed_sender.to_sync();
-        let processor_handle = thread::spawn(move || {
-            if let Err(e) = input_processor(
-                processor_input,
-                processed_sender_sync,
-                input_sample_rate as f64,
-                denoiser,
-                codec_enabled,
-                state,
-            ) {
-                error!("Input processor error: {}", e);
-            }
-            debug!("Input processor thread ended");
-        });
-
-        // Select the appropriate receiver for the callback and spawn encoder if needed
-        let (encoder_handle, output_receiver) = if codec_enabled {
-            let processed_receiver_sync = processed_receiver.to_sync();
-            let encoded_sender_sync = encoded_sender.to_sync();
-            let handle = thread::spawn(move || {
-                if let Err(e) = encoder(
-                    processed_receiver_sync,
-                    encoded_sender_sync,
-                    encoder_sample_rate,
-                    codec_vbr,
-                    codec_residual_bits,
-                    is_room,
-                ) {
-                    error!("Encoder error: {}", e);
-                }
-                debug!("Encoder thread ended");
-            });
-            (Some(handle), encoded_receiver.to_sync())
-        } else {
-            (None, processed_receiver.to_sync())
-        };
-
-        // Spawn callback thread
-        let callback_handle = thread::spawn(move || {
-            while let Ok(message) = output_receiver.recv() {
-                let bytes = match message {
-                    ProcessorMessage::Data(data) => data,
-                    ProcessorMessage::Samples(samples) => {
-                        let i16_size = size_of::<i16>();
-                        let bytes = unsafe {
-                            std::slice::from_raw_parts(
-                                samples.as_ptr() as *const u8,
-                                samples.len() * i16_size,
-                            )
-                        };
-                        Bytes::copy_from_slice(bytes)
-                    }
-                };
-                callback(bytes);
-            }
-            debug!("Callback thread ended");
-        });
+        // Build common components (channels, threads, state)
+        let context = self.build_common(processor_input, input_sample_rate as u32);
 
         // Resume the audio context
         web_audio.resume();
 
         Ok(AudioInputHandle {
             _web_audio: Some(web_audio),
-            processor_handle: Some(processor_handle),
-            encoder_handle,
-            callback_handle: Some(callback_handle),
+            processor_handle: Some(context.processor_handle),
+            encoder_handle: context.encoder_handle,
+            callback_handle: context.callback_handle,
             input_sender: None, // No sender for WASM - controlled via web_audio
-            input_volume,
-            rms_threshold,
-            muted,
+            input_volume: context.input_volume,
+            rms_threshold: context.rms_threshold,
+            muted: context.muted,
         })
     }
 }
