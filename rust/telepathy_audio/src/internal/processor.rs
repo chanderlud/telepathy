@@ -174,9 +174,7 @@ pub fn input_processor<I: AudioInput>(
     let mut post_buf = [post_vec];
     // the output for rnnoise
     let mut out_buf = [0_f32; FRAME_SIZE];
-
-    // output for 16 bit samples. the compiler does not recognize that it is used
-    #[allow(unused_assignments)]
+    // output for 16 bit samples
     let mut int_buffer = [0; FRAME_SIZE];
 
     // the position in pre_buf
@@ -267,8 +265,8 @@ pub fn input_processor<I: AudioInput>(
             silence_length = 0;
         }
 
-        // cast the f32 samples to i16
-        int_buffer = out_buf.map(|x| x as i16);
+        // Use SIMD-accelerated f32 to i16 conversion
+        wide_f32_to_i16(&out_buf, &mut int_buffer);
         // send the frame to the next stage, either codec or network
         send_frame(int_buffer, &output, state.buffer_pool())?;
     }
@@ -398,6 +396,7 @@ pub fn output_processor<O: AudioOutput>(
 /// Uses `unsafe` to reinterpret the i16 array as a byte slice. This is safe
 /// because i16 has a well-defined memory layout and the slice lifetime is
 /// constrained to the function scope.
+#[inline]
 fn send_frame(
     frame: [i16; FRAME_SIZE],
     output: &Sender<PooledBuffer>,

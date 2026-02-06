@@ -3,14 +3,13 @@ use std::fmt::{Display, Formatter};
 use std::net::AddrParseError;
 
 use crate::BehaviourEvent;
-use cpal::{BuildStreamError, DefaultStreamConfigError, DevicesError, PlayStreamError};
+use cpal::DefaultStreamConfigError;
 #[cfg(target_family = "wasm")]
 use flutter_rust_bridge::for_generated::futures::channel::oneshot::Canceled;
 use libp2p::identity::{DecodingError, ParseError};
 use libp2p::swarm::{DialError, SwarmEvent};
 use libp2p::{TransportBuilderError, TransportError};
 use libp2p_stream::{AlreadyRegistered, OpenStreamError};
-use rubato::{ResampleError, ResamplerConstructionError};
 use telepathy_audio::{AudioError, devices::DeviceError};
 use tokio::task::JoinError;
 use tokio::time::error::Elapsed;
@@ -26,11 +25,6 @@ pub(crate) enum ErrorKind {
     Io(std::io::Error),
     MessageCodec(speedy::Error),
     StreamConfig(DefaultStreamConfigError),
-    BuildStream(BuildStreamError),
-    PlayStream(PlayStreamError),
-    Devices(DevicesError),
-    ResamplerConstruction(ResamplerConstructionError),
-    Resample(ResampleError),
     KanalSend(kanal::SendError),
     KanalReceive(kanal::ReceiveError),
     KanalClose(kanal::CloseError),
@@ -92,38 +86,6 @@ impl From<DefaultStreamConfigError> for Error {
     }
 }
 
-impl From<BuildStreamError> for Error {
-    fn from(err: BuildStreamError) -> Self {
-        Self {
-            kind: ErrorKind::BuildStream(err),
-        }
-    }
-}
-
-impl From<PlayStreamError> for Error {
-    fn from(err: PlayStreamError) -> Self {
-        Self {
-            kind: ErrorKind::PlayStream(err),
-        }
-    }
-}
-
-impl From<ResamplerConstructionError> for Error {
-    fn from(err: ResamplerConstructionError) -> Self {
-        Self {
-            kind: ErrorKind::ResamplerConstruction(err),
-        }
-    }
-}
-
-impl From<ResampleError> for Error {
-    fn from(err: ResampleError) -> Self {
-        Self {
-            kind: ErrorKind::Resample(err),
-        }
-    }
-}
-
 impl From<kanal::SendError> for Error {
     fn from(err: kanal::SendError) -> Self {
         Self {
@@ -152,14 +114,6 @@ impl From<JoinError> for Error {
     fn from(err: JoinError) -> Self {
         Self {
             kind: ErrorKind::Join(err),
-        }
-    }
-}
-
-impl From<DevicesError> for Error {
-    fn from(err: DevicesError) -> Self {
-        Self {
-            kind: ErrorKind::Devices(err),
         }
     }
 }
@@ -315,12 +269,6 @@ impl Display for Error {
                 ErrorKind::Io(ref err) => format!("IO error: {}", err),
                 ErrorKind::MessageCodec(ref err) => format!("Message codec error: {}", err),
                 ErrorKind::StreamConfig(ref err) => format!("Stream config error: {}", err),
-                ErrorKind::BuildStream(ref err) => format!("Build stream error: {}", err),
-                ErrorKind::PlayStream(ref err) => format!("Play stream error: {}", err),
-                ErrorKind::Devices(ref err) => format!("Devices error: {}", err),
-                ErrorKind::ResamplerConstruction(ref err) =>
-                    format!("Resampler construction error: {}", err),
-                ErrorKind::Resample(ref err) => format!("Resample error: {}", err),
                 ErrorKind::KanalSend(ref err) => format!("Kanal send error: {}", err),
                 ErrorKind::KanalReceive(ref err) => format!("Kanal receive error: {}", err),
                 ErrorKind::KanalClose(ref err) => format!("Kanal close error: {}", err),
@@ -373,7 +321,7 @@ impl Error {
     pub(crate) fn is_audio_error(&self) -> bool {
         matches!(
             self.kind,
-            ErrorKind::NoInputDevice | ErrorKind::BuildStream(_) | ErrorKind::StreamConfig(_)
+            ErrorKind::NoInputDevice | ErrorKind::StreamConfig(_)
         )
     }
 }

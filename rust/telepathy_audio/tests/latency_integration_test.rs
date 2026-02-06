@@ -13,7 +13,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 use telepathy_audio::FRAME_SIZE;
 use telepathy_audio::error::AudioError;
-use telepathy_audio::internal::buffer_pool::PooledBuffer;
+use telepathy_audio::internal::buffer_pool::{DEFAULT_POOL_CAPACITY, PooledBuffer};
 use telepathy_audio::internal::processor::{input_processor, output_processor};
 use telepathy_audio::internal::state::{InputProcessorState, OutputProcessorState};
 use telepathy_audio::internal::traits::{AudioInput, AudioOutput};
@@ -185,7 +185,13 @@ fn test_input_processor_mute() {
     let rms_threshold = Arc::new(AtomicF32::new(1.0)); // High threshold = always silent
     let rms_sender = Arc::new(AtomicF32::new(0.0));
 
-    let state = InputProcessorState::new(&input_volume, &rms_threshold, &muted, rms_sender);
+    let state = InputProcessorState::new(
+        &input_volume,
+        &rms_threshold,
+        &muted,
+        rms_sender,
+        DEFAULT_POOL_CAPACITY,
+    );
 
     let handle =
         thread::spawn(move || input_processor(mock_input, output_tx, 48_000.0, None, state));

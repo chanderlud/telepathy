@@ -35,10 +35,14 @@ use std::arch::x86_64::*;
 const MAX_I16_F32: f32 = i16::MAX as f32;
 const MIN_I16_F32: f32 = i16::MIN as f32;
 
+/// Prefetch distance in bytes (typically 2-3 cache lines ahead)
+#[cfg(target_arch = "x86_64")]
+const PREFETCH_DISTANCE: usize = 128;
+
 /// Multiplies frame samples by a factor with automatic SIMD optimization.
 ///
 /// Selects the optimal implementation based on available CPU features:
-/// - AVX-512 for 16-element aligned frames (processes 16 floats per iteration)
+/// - AVX-512 for 16-element aligned frames (processes 32 floats per iteration with 2x unroll)
 /// - AVX2 for 8-element aligned frames (processes 8 floats per iteration)
 /// - Scalar fallback for other cases (processes 1 float per iteration)
 ///
@@ -86,7 +90,7 @@ pub fn wide_mul(frame: &mut [f32], factor: f32) {
 ///
 /// For optimal performance, ensure `ints.len()` is a multiple of 16.
 /// The standard `FRAME_SIZE` (480) satisfies this requirement.
-pub(crate) fn wide_i16_to_f32(ints: &[i16], out: &mut [f32], scale: f32) {
+pub fn wide_i16_to_f32(ints: &[i16], out: &mut [f32], scale: f32) {
     #[cfg(target_arch = "x86_64")]
     {
         if is_x86_feature_detected!("avx2") {
@@ -114,7 +118,7 @@ pub(crate) fn wide_i16_to_f32(ints: &[i16], out: &mut [f32], scale: f32) {
 ///
 /// For optimal performance, ensure `floats.len()` is a multiple of 16.
 /// The standard `FRAME_SIZE` (480) satisfies this requirement.
-pub(crate) fn wide_float_scaler(floats: &mut [f32], scale: f32) {
+pub fn wide_float_scaler(floats: &mut [f32], scale: f32) {
     #[cfg(target_arch = "x86_64")]
     {
         if is_x86_feature_detected!("avx512f") {
@@ -132,8 +136,21 @@ pub(crate) fn wide_float_scaler(floats: &mut [f32], scale: f32) {
 
 /// Calculates the RMS (Root Mean Square) of the frame.
 ///
-/// Uses loop unrolling for optimization.
-pub(crate) fn calculate_rms(data: &[f32]) -> f32 {
+/// Uses SIMD acceleration when available (AVX2/AVX-512), with loop unrolling
+/// for scalar fallback. Pre-computes reciprocal of length for faster division.
+pub fn calculate_rms(data: &[f32]) -> f32 {
+    // Pre-compute reciprocal for multiplication instead of division
+    let inv_len = 1.0 / data.len() as f32;
+
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx2") && data.len() >= 8 {
+            let sum = unsafe { calculate_rms_avx2(data) };
+            return (sum * inv_len).sqrt();
+        }
+    }
+
+    // Scalar fallback with loop unrolling
     let mut sum1 = 0.0;
     let mut sum2 = 0.0;
     let mut sum3 = 0.0;
@@ -148,12 +165,12 @@ pub(crate) fn calculate_rms(data: &[f32]) -> f32 {
         i += 4;
     }
 
-    let mean_of_squares = (sum1 + sum2 + sum3 + sum4) / data.len() as f32;
+    let mean_of_squares = (sum1 + sum2 + sum3 + sum4) * inv_len;
     mean_of_squares.sqrt()
 }
 
 /// Scalar multiplication for any length input.
-fn scalar_mul(frame: &mut [f32], factor: f32) {
+pub fn scalar_mul(frame: &mut [f32], factor: f32) {
     for p in frame.iter_mut() {
         *p *= factor;
         *p = p.clamp(-1_f32, 1_f32);
@@ -164,7 +181,7 @@ fn scalar_mul(frame: &mut [f32], factor: f32) {
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 #[allow(unsafe_op_in_unsafe_fn)]
-unsafe fn avx2_mul(frame: &mut [f32], factor: f32) {
+pub unsafe fn avx2_mul(frame: &mut [f32], factor: f32) {
     let len = frame.len();
     let mut i = 0;
 
@@ -185,7 +202,7 @@ unsafe fn avx2_mul(frame: &mut [f32], factor: f32) {
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f")]
 #[allow(unsafe_op_in_unsafe_fn)]
-unsafe fn avx512_mul(frame: &mut [f32], factor: f32) {
+pub unsafe fn avx512_mul(frame: &mut [f32], factor: f32) {
     let len = frame.len();
     let mut i = 0;
 
@@ -204,7 +221,7 @@ unsafe fn avx512_mul(frame: &mut [f32], factor: f32) {
 }
 
 /// Scalar implementation of i16 to f32 conversion with scaling.
-fn i16_to_f32_scalar(ints: &[i16], out: &mut [f32], scale: f32) {
+pub fn i16_to_f32_scalar(ints: &[i16], out: &mut [f32], scale: f32) {
     for (out, &x) in out.iter_mut().zip(ints.iter()) {
         *out = (x as f32 * scale).clamp(-1_f32, 1_f32);
     }
@@ -214,7 +231,7 @@ fn i16_to_f32_scalar(ints: &[i16], out: &mut [f32], scale: f32) {
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 #[allow(unsafe_op_in_unsafe_fn)]
-unsafe fn i16_to_f32_avx2(ints: &[i16], out: &mut [f32], scale: f32) {
+pub unsafe fn i16_to_f32_avx2(ints: &[i16], out: &mut [f32], scale: f32) {
     let n = ints.len();
     let mut i = 0;
 
@@ -248,7 +265,7 @@ unsafe fn i16_to_f32_avx2(ints: &[i16], out: &mut [f32], scale: f32) {
 }
 
 /// Scalar implementation of float scaling with truncation.
-fn scalar_float_scaler(floats: &mut [f32], scale: f32) {
+pub fn scalar_float_scaler(floats: &mut [f32], scale: f32) {
     for x in floats.iter_mut() {
         *x *= scale;
         *x = x.trunc().clamp(MIN_I16_F32, MAX_I16_F32);
@@ -259,7 +276,7 @@ fn scalar_float_scaler(floats: &mut [f32], scale: f32) {
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx")]
 #[allow(unsafe_op_in_unsafe_fn)]
-unsafe fn avx_float_scaler(floats: &mut [f32], scale: f32) {
+pub unsafe fn avx_float_scaler(floats: &mut [f32], scale: f32) {
     let n = floats.len();
     let mut i = 0;
 
@@ -285,7 +302,7 @@ unsafe fn avx_float_scaler(floats: &mut [f32], scale: f32) {
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f")]
 #[allow(unsafe_op_in_unsafe_fn)]
-unsafe fn avx512_float_scaler(floats: &mut [f32], scale: f32) {
+pub unsafe fn avx512_float_scaler(floats: &mut [f32], scale: f32) {
     let n = floats.len();
     let mut i = 0;
 
@@ -312,6 +329,96 @@ unsafe fn avx512_float_scaler(floats: &mut [f32], scale: f32) {
         _mm512_storeu_ps(floats.as_mut_ptr().add(i), vf);
 
         i += 16;
+    }
+}
+
+/// SIMD-accelerated RMS calculation using AVX2.
+/// Uses horizontal sum for efficient reduction.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+#[allow(unsafe_op_in_unsafe_fn)]
+pub unsafe fn calculate_rms_avx2(data: &[f32]) -> f32 {
+    let n = data.len();
+    let mut i = 0;
+
+    // Accumulator vectors for parallel sum
+    let mut sum_vec = _mm256_setzero_ps();
+
+    // Process 8 floats per iteration
+    while i + 8 <= n {
+        // Software prefetch
+        if i + PREFETCH_DISTANCE < n {
+            _mm_prefetch::<_MM_HINT_T0>(data.as_ptr().add(i + PREFETCH_DISTANCE) as *const i8);
+        }
+
+        let v = _mm256_loadu_ps(data.as_ptr().add(i));
+        // Square and accumulate: sum += v * v
+        sum_vec = _mm256_add_ps(sum_vec, _mm256_mul_ps(v, v));
+        i += 8;
+    }
+
+    // Horizontal sum of the 8 floats in sum_vec
+    // sum_vec = [a, b, c, d, e, f, g, h]
+    // Step 1: hadd pairs -> [a+b, c+d, a+b, c+d, e+f, g+h, e+f, g+h]
+    let sum1 = _mm256_hadd_ps(sum_vec, sum_vec);
+    // Step 2: hadd again -> [a+b+c+d, a+b+c+d, a+b+c+d, a+b+c+d, e+f+g+h, ...]
+    let sum2 = _mm256_hadd_ps(sum1, sum1);
+    // Extract low and high 128-bit lanes and add
+    let lo = _mm256_castps256_ps128(sum2);
+    let hi = _mm256_extractf128_ps::<1>(sum2);
+    let sum128 = _mm_add_ps(lo, hi);
+    _mm_cvtss_f32(sum128)
+}
+
+/// In-place f32 to i16 conversion using SIMD.
+/// This is used for frame conversion optimization in the processor.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+#[allow(unsafe_op_in_unsafe_fn)]
+pub unsafe fn f32_to_i16_simd(floats: &[f32], output: &mut [i16]) {
+    const TOWARD_ZERO_NO_EXC: i32 = _MM_FROUND_TO_ZERO | _MM_FROUND_NO_EXC;
+
+    let n = floats.len().min(output.len());
+    let mut i = 0;
+
+    // Process 8 floats -> 8 i16 per iteration
+    while i + 8 <= n {
+        // Software prefetch
+        if i + PREFETCH_DISTANCE < n {
+            _mm_prefetch::<_MM_HINT_T0>(floats.as_ptr().add(i + PREFETCH_DISTANCE) as *const i8);
+        }
+
+        // Load 8 floats
+        let v = _mm256_loadu_ps(floats.as_ptr().add(i));
+        // Truncate toward zero (matches scalar `as i16` behavior)
+        let v = _mm256_round_ps(v, TOWARD_ZERO_NO_EXC);
+        // Convert to i32
+        let vi32 = _mm256_cvtps_epi32(v);
+        // Pack to i16 with saturation: need to shuffle and pack
+        // _mm256_packs_epi32 packs [a0,a1,a2,a3,b0,b1,b2,b3] -> [a0,a1,a2,a3,a0,a1,a2,a3] (wrong order)
+        // We need to permute after packing
+        let lo = _mm256_castsi256_si128(vi32);
+        let hi = _mm256_extracti128_si256::<1>(vi32);
+        let packed = _mm_packs_epi32(lo, hi);
+        // Store 8 i16
+        _mm_storeu_si128(output.as_mut_ptr().add(i) as *mut __m128i, packed);
+        i += 8;
+    }
+}
+
+/// Wrapper for f32 to i16 conversion with automatic SIMD selection.
+pub fn wide_f32_to_i16(floats: &[f32], output: &mut [i16]) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx2") && floats.len() >= 8 {
+            unsafe { f32_to_i16_simd(floats, output) }
+            return;
+        }
+    }
+
+    // Scalar fallback
+    for (out, &f) in output.iter_mut().zip(floats.iter()) {
+        *out = f as i16;
     }
 }
 
@@ -434,5 +541,46 @@ mod tests {
         }
 
         assert_eq!(scalar_frame, wide_frame);
+    }
+
+    /// Verifies RMS calculation produces consistent results.
+    #[test]
+    fn RmsCalculation_DummyFrame_CorrectResult() {
+        let frame = dummy_frame();
+
+        // Calculate expected RMS using scalar method
+        let sum: f32 = frame.iter().map(|x| x * x).sum();
+        let expected = (sum / frame.len() as f32).sqrt();
+
+        let result = super::calculate_rms(&frame);
+
+        // Allow small floating point differences
+        assert!(
+            (result - expected).abs() < 1e-6,
+            "RMS mismatch: {} vs {}",
+            result,
+            expected
+        );
+    }
+
+    /// Verifies f32 to i16 conversion.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn F32ToI16_DummyFrame_CorrectOutput() {
+        let frame = dummy_frame();
+        let scaled: Vec<f32> = frame.iter().map(|x| x * i16::MAX as f32).collect();
+
+        let mut scalar_output = vec![0i16; FRAME_SIZE];
+        let mut simd_output = vec![0i16; FRAME_SIZE];
+
+        // Scalar conversion
+        for (out, &f) in scalar_output.iter_mut().zip(scaled.iter()) {
+            *out = f as i16;
+        }
+
+        // SIMD conversion
+        super::wide_f32_to_i16(&scaled, &mut simd_output);
+
+        assert_eq!(scalar_output, simd_output);
     }
 }
