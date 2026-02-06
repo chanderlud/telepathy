@@ -106,7 +106,11 @@ fn bench_input_throughput(c: &mut Criterion) {
                     let (processor_to_encoder_tx, processor_to_encoder_rx) = kanal::unbounded();
                     let (encoder_to_output_tx, encoder_to_output_rx) = kanal::unbounded();
                     let denoiser = config.denoise.then_some(denoiser.clone());
-                    let state = InputProcessorState::default();
+                    let a = Default::default();
+                    let b = Default::default();
+                    let c = Default::default();
+                    let d = Default::default();
+                    let state = InputProcessorState::new(&a, &b, &c, d, 1024);
 
                     let (processor_output, encoder_handle) = if config.codec {
                         let encoder_rate = if config.denoise { 48_000 } else { input_rate };

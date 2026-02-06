@@ -16,6 +16,7 @@
 //! value encountered, which can be read by the application for visualization
 //! or voice activity detection.
 
+use crate::internal::NETWORK_FRAME;
 use crate::internal::buffer_pool::BufferPool;
 use atomic_float::AtomicF32;
 use std::sync::Arc;
@@ -49,13 +50,14 @@ impl InputProcessorState {
         rms_threshold: &Arc<AtomicF32>,
         muted: &Arc<AtomicBool>,
         rms_sender: Arc<AtomicF32>,
+        pool_size: usize,
     ) -> Self {
         Self {
             input_volume: input_volume.clone(),
             rms_threshold: rms_threshold.clone(),
             muted: muted.clone(),
             rms_sender,
-            buffer_pool: Arc::new(BufferPool::default()),
+            buffer_pool: Arc::new(BufferPool::new(pool_size, NETWORK_FRAME)),
         }
     }
 

@@ -25,7 +25,7 @@ use crate::devices::AudioHost;
 #[cfg(not(target_family = "wasm"))]
 use crate::devices::{DeviceError, get_input_device};
 use crate::error::AudioError;
-use crate::internal::buffer_pool::PooledBuffer;
+use crate::internal::buffer_pool::{DEFAULT_POOL_CAPACITY, PooledBuffer};
 use crate::internal::codec::encoder;
 use crate::internal::processor::input_processor;
 use crate::internal::state::InputProcessorState;
@@ -392,7 +392,13 @@ where
             None
         };
         // build input processor state
-        let state = InputProcessorState::new(&input_volume, &rms_threshold, &muted, rms_sender);
+        let state = InputProcessorState::new(
+            &input_volume,
+            &rms_threshold,
+            &muted,
+            rms_sender,
+            DEFAULT_POOL_CAPACITY,
+        );
         // extract codec options
         let codec_enabled = self.config.codec_enabled;
         let codec_vbr = self.config.codec_vbr;
