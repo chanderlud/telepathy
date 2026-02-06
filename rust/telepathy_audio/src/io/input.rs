@@ -15,7 +15,7 @@
 //!     .volume(1.0)
 //!     .callback(|data| {
 //!         // Handle processed audio data
-//!         println!("Received {} bytes", data.len());
+//!         println!("Received {} bytes", data.as_ref().len());
 //!     })
 //!     .build(&host)
 //!     .unwrap();

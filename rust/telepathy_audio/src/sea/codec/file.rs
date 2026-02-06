@@ -7,11 +7,11 @@ use super::{
     encoder_cbr::CbrEncoder,
     encoder_vbr::VbrEncoder,
 };
+use crate::internal::NETWORK_FRAME;
 use crate::sea::{codec::chunk::SeaChunk, encoder::EncoderSettings};
 use bytes::BytesMut;
 use kanal::Receiver;
 use std::io::Cursor;
-use crate::internal::NETWORK_FRAME;
 
 #[derive(Debug, Clone)]
 pub struct SeaFileHeader {
@@ -195,10 +195,7 @@ impl SeaFile {
         } else {
             encoded.clear();
             encoded.extend_from_slice(unsafe {
-                std::slice::from_raw_parts(
-                    decoded.as_ptr() as *const u8,
-                    NETWORK_FRAME,
-                )
+                std::slice::from_raw_parts(decoded.as_ptr() as *const u8, NETWORK_FRAME)
             });
             Ok(encoded)
         }

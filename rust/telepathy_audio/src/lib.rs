@@ -72,7 +72,7 @@
 //!     .rms_threshold(0.01)  // Silence detection
 //!     .callback(|data| {
 //!         // Process or transmit the audio data
-//!         println!("Received {} bytes", data.len());
+//!         println!("Received {} bytes", data.as_ref().len());
 //!     })
 //!     .build(&host)
 //!     .unwrap();
@@ -240,10 +240,12 @@ pub mod error;
 // Internal modules (private)
 // =============================================================================
 
-/// Internal implementation details (not part of public API).
-mod internal;
+/// Internal implementation details
+/// Exposed publicly for benchmarks but not intended for external use.
+#[doc(hidden)]
+pub mod internal;
 
-/// Platform-specific implementations (not part of public API).
+/// Platform-specific implementations
 mod platform;
 mod sea;
 

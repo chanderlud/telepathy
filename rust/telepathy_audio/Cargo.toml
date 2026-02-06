@@ -53,3 +53,8 @@ tokio = { version = "1", features = ["time", "io-util", "macros", "process", "ne
 
 [dev-dependencies]
 tokio-test = "0.4"
+criterion = "0.7"
+
+[[bench]]
+name = "throughput_bench"
+harness = false

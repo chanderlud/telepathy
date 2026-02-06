@@ -52,7 +52,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Relaxed;
 use tokio::select;
 use tokio::sync::{Mutex, Notify};
-use tokio::task::{spawn_blocking, JoinHandle};
+use tokio::task::{JoinHandle, spawn_blocking};
 #[cfg(target_family = "wasm")]
 use wasm_sync::{Condvar, Mutex as WasmMutex};
 
@@ -357,9 +357,8 @@ async fn play_sound_with_device(
 
             input_sender.send(BytesMut::from(&bytes[..14])).await?;
 
-            let decoder_future = spawn_blocking(move || {
-                SeaDecoder::new(input_receiver, output_sender, None)
-            });
+            let decoder_future =
+                spawn_blocking(move || SeaDecoder::new(input_receiver, output_sender, None));
 
             let mut decoder = decoder_future
                 .await
@@ -370,9 +369,11 @@ async fn play_sound_with_device(
             spec.sample_rate = header.sample_rate;
             spec.channels = header.channels as u32;
 
-            decoder_handle = Some(spawn_blocking(move || {
-                while decoder.decode_frame().is_ok() {}
-            }));
+            decoder_handle = Some(spawn_blocking(
+                move || {
+                    while decoder.decode_frame().is_ok() {}
+                },
+            ));
 
             for chunk in bytes[14..].chunks(header.chunk_size as usize) {
                 input_sender.send(BytesMut::from(chunk)).await?;
