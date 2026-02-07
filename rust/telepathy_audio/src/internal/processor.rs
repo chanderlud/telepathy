@@ -84,7 +84,9 @@ use crate::internal::processing::*;
 use crate::internal::state::{InputProcessorState, OutputProcessorState};
 use crate::internal::traits::{AudioInput, AudioOutput};
 use crate::internal::utils::{make_transition_down, make_transition_up, resampler_factory};
-use bytes::BytesMut;
+use crate::sea::decoder::SeaDecoder;
+use crate::sea::encoder::SeaEncoder;
+use bytes::Bytes;
 use kanal::{Receiver, Sender};
 use log::{debug, warn};
 use nnnoiseless::{DenoiseState, FRAME_SIZE};
@@ -146,6 +148,7 @@ pub fn input_processor<I: AudioInput>(
     sample_rate: f64,
     mut denoiser: Option<Box<DenoiseState>>,
     state: InputProcessorState,
+    mut encoder_option: Option<SeaEncoder>,
 ) -> Result<(), AudioError> {
     // the maximum value for i16 as f32
     let max_i16_f32 = i16::MAX as f32;
@@ -243,6 +246,7 @@ pub fn input_processor<I: AudioInput>(
                         make_transition_down(TRANSITION_LENGTH, last_sample),
                         &output,
                         state.buffer_pool(),
+                        &mut encoder_option,
                     )?;
                 }
                 // don't transition down again
@@ -259,6 +263,7 @@ pub fn input_processor<I: AudioInput>(
                     make_transition_up(TRANSITION_LENGTH, first_sample),
                     &output,
                     state.buffer_pool(),
+                    &mut encoder_option,
                 )?;
             }
 
@@ -268,7 +273,12 @@ pub fn input_processor<I: AudioInput>(
         // Use SIMD-accelerated f32 to i16 conversion
         wide_f32_to_i16(&out_buf, &mut int_buffer);
         // send the frame to the next stage, either codec or network
-        send_frame(int_buffer, &output, state.buffer_pool())?;
+        send_frame(
+            int_buffer,
+            &output,
+            state.buffer_pool(),
+            &mut encoder_option,
+        )?;
     }
 
     debug!("Input processor ended");
@@ -308,16 +318,18 @@ pub fn input_processor<I: AudioInput>(
 ///
 /// Returns `Ok(())` when the input channel closes, or an error if processing fails.
 pub fn output_processor<O: AudioOutput>(
-    input: Receiver<BytesMut>,
+    input: Receiver<Bytes>,
     mut output: O,
     ratio: f64,
     state: OutputProcessorState,
+    mut decoder_option: Option<SeaDecoder>,
 ) -> Result<(), AudioError> {
     // base scale to convert i16 to f32
     let scale = 1_f32 / i16::MAX as f32;
     // rubato requires 10 extra spaces in the output buffer as a safety margin
     let post_len = (FRAME_SIZE as f64 * ratio + 10_f64) as usize;
 
+    let mut decoded_buf = [0_i16; FRAME_SIZE];
     // resampler is Some if resampling is needed
     let mut resampler_option = resampler_factory(ratio, 1, FRAME_SIZE)?;
     // the input for the resampler
@@ -332,18 +344,20 @@ pub fn output_processor<O: AudioOutput>(
             break;
         };
 
-        if buffer.len() != FRAME_SIZE * 2 {
-            warn!("output frame != FRAME_SIZE: {}", buffer.len());
-            continue;
-        } else if state.is_deafened() {
+        let int_samples = if state.is_deafened() {
             continue;
         } else if output.is_full() {
             state.send_loss(FRAME_SIZE);
             continue; // ignore frames while output is full
-        }
-
-        let int_samples =
-            unsafe { std::slice::from_raw_parts(buffer.as_ptr() as *const i16, FRAME_SIZE) };
+        } else if let Some(decoder) = &mut decoder_option {
+            decoder.decode_frame(&buffer, &mut decoded_buf)?;
+            &decoded_buf
+        } else if buffer.len() != NETWORK_FRAME {
+            warn!("output frame != FRAME_SIZE: {}", buffer.len());
+            continue;
+        } else {
+            unsafe { std::slice::from_raw_parts(buffer.as_ptr() as *const i16, FRAME_SIZE) }
+        };
 
         // convert the i16 samples to f32 & apply the output volume
         wide_i16_to_f32(int_samples, pre_buf[0], scale * state.output_volume());
@@ -401,13 +415,19 @@ fn send_frame(
     frame: [i16; FRAME_SIZE],
     output: &Sender<PooledBuffer>,
     pool: &Arc<BufferPool>,
+    encoder_option: &mut Option<SeaEncoder>,
 ) -> Result<(), AudioError> {
     // Acquire a buffer from the pool
     let mut pooled = BufferPool::acquire(pool);
-    // Copy frame data into the pooled buffer
-    pooled.inner_mut().copy_from_slice(unsafe {
-        std::slice::from_raw_parts(frame.as_ptr() as *const u8, NETWORK_FRAME)
-    });
+    if let Some(encoder) = encoder_option {
+        // Encode frame into the pooled buffer
+        encoder.encode_frame(frame, pooled.inner_mut())?;
+    } else {
+        // Copy frame data into the pooled buffer
+        pooled.inner_mut().copy_from_slice(unsafe {
+            std::slice::from_raw_parts(frame.as_ptr() as *const u8, NETWORK_FRAME)
+        });
+    }
     // Send buffer to encoder or network
     output.send(pooled)?;
     Ok(())

@@ -2,37 +2,33 @@ use crate::sea::codec::{
     common::SeaError,
     file::{SeaFile, SeaFileHeader},
 };
-use bytes::BytesMut;
-use kanal::{Receiver, Sender};
+use nnnoiseless::FRAME_SIZE;
 
 pub struct SeaDecoder {
-    receiver: Receiver<BytesMut>,
-    sender: Sender<BytesMut>,
     file: SeaFile,
     frames_read: usize,
 }
 
 impl SeaDecoder {
-    pub fn new(
-        receiver: Receiver<BytesMut>,
-        sender: Sender<BytesMut>,
-        header: Option<SeaFileHeader>,
-    ) -> Result<Self, SeaError> {
-        let file = SeaFile::from_reader(&receiver, header)?;
-
+    pub fn new(header: SeaFileHeader) -> Result<Self, SeaError> {
         Ok(Self {
-            receiver,
-            sender,
-            file,
+            file: SeaFile {
+                header,
+                decoder: None,
+                encoder: None,
+                encoder_settings: None,
+            },
             frames_read: 0,
         })
     }
 
-    pub fn decode_frame(&mut self) -> Result<(), SeaError> {
-        let message = self.file.samples_from_reader(&self.receiver)?;
-
+    pub fn decode_frame(
+        &mut self,
+        frame: &[u8],
+        output: &mut [i16; FRAME_SIZE],
+    ) -> Result<(), SeaError> {
+        self.file.samples_from_frame(frame, output)?;
         self.frames_read += self.file.header.frames_per_chunk as usize;
-        self.sender.send(message)?;
         Ok(())
     }
 

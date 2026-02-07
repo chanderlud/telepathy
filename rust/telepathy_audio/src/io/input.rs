@@ -26,13 +26,13 @@ use crate::devices::AudioHost;
 use crate::devices::{DeviceError, get_input_device};
 use crate::error::AudioError;
 use crate::internal::buffer_pool::{DEFAULT_POOL_CAPACITY, PooledBuffer};
-use crate::internal::codec::encoder;
 use crate::internal::processor::input_processor;
 use crate::internal::state::InputProcessorState;
 #[cfg(not(target_family = "wasm"))]
 use crate::internal::traits::{CHANNEL_SIZE, ChannelInput};
 #[cfg(target_family = "wasm")]
 use crate::platform::web_audio::WebAudioWrapper;
+use crate::sea::encoder::{EncoderSettings, SeaEncoder};
 use atomic_float::AtomicF32;
 #[cfg(not(target_family = "wasm"))]
 use cpal::SampleFormat;
@@ -152,7 +152,6 @@ struct InputBuildContext {
     rms_threshold: Arc<AtomicF32>,
     muted: Arc<AtomicBool>,
     processor_handle: JoinHandle<()>,
-    encoder_handle: Option<JoinHandle<()>>,
     callback_handle: Option<JoinHandle<()>>,
 }
 
@@ -369,18 +368,11 @@ where
             .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
         let rms_sender = self.shared_rms.clone().unwrap_or_default();
 
-        let (processor_to_callback_sender, processor_to_callback_receiver) = unbounded();
-        let (processor_to_encoder_sender, processor_to_encoder_receiver) = unbounded();
-        let (encoded_sender, encoded_receiver) = unbounded();
-
-        // When denoise is enabled, the processor resamples to 48kHz for rnnoise
-        // processing and outputs 48kHz frames (no downsample back to device rate).
-        // When denoise is disabled, the processor passes through at device rate.
-        // The encoder sample rate must match the processor's output rate.
-        let encoder_sample_rate = if self.config.denoise_enabled {
-            48_000
+        let (processor_sender, output_receiver) = if let Some(sender) = self.channel {
+            (sender.to_sync(), None)
         } else {
-            input_sample_rate
+            let (processor_sender, processor_receiver) = unbounded();
+            (processor_sender, Some(processor_receiver))
         };
 
         // Create denoiser if needed
@@ -399,69 +391,50 @@ where
             rms_sender,
             DEFAULT_POOL_CAPACITY,
         );
-        // extract codec options
-        let codec_enabled = self.config.codec_enabled;
-        let codec_vbr = self.config.codec_vbr;
-        let codec_residual_bits = self.config.codec_residual_bits;
-        // Determine network sender based on channel and codec state
-        let network_sender = if let Some(ref sender) = self.channel
-            && !codec_enabled
-        {
-            sender.clone_sync()
+
+        let encoder = if self.config.codec_enabled {
+            SeaEncoder::new(
+                1,
+                if self.config.denoise_enabled {
+                    48_000
+                } else {
+                    input_sample_rate
+                },
+                EncoderSettings {
+                    residual_bits: self.config.codec_residual_bits,
+                    vbr: self.config.codec_vbr,
+                    ..Default::default()
+                },
+            )
+            .ok()
         } else {
-            processor_to_callback_sender
+            None
         };
 
         // Spawn processor thread
         let processor_handle = thread::spawn(move || {
             if let Err(e) = input_processor(
                 processor_input,
-                if codec_enabled {
-                    processor_to_encoder_sender
-                } else {
-                    network_sender
-                },
+                processor_sender,
                 input_sample_rate as f64,
                 denoiser,
                 state,
+                encoder,
             ) {
                 error!("Input processor error: {}", e);
             }
             debug!("Input processor thread ended");
         });
 
-        // Select the appropriate receiver for the callback and spawn encoder if needed
-        let (encoder_handle, output_receiver) = if codec_enabled {
-            let encoded_sender_sync = if let Some(ref sender) = self.channel {
-                sender.clone().to_sync()
-            } else {
-                encoded_sender
-            };
-            let handle = thread::spawn(move || {
-                if let Err(e) = encoder(
-                    processor_to_encoder_receiver,
-                    encoded_sender_sync,
-                    encoder_sample_rate,
-                    codec_vbr,
-                    codec_residual_bits,
-                ) {
-                    error!("Encoder error: {}", e);
-                }
-                debug!("Encoder thread ended");
-            });
-            (Some(handle), encoded_receiver)
-        } else {
-            (None, processor_to_callback_receiver)
-        };
-
         // Spawn callback thread if callback is set
-        let callback_handle = self.callback.map(|callback| {
-            thread::spawn(move || {
-                while let Ok(buffer) = output_receiver.recv() {
+        let callback_handle = self.callback.and_then(|callback| {
+            let receiver = output_receiver?;
+            Some(thread::spawn(move || {
+                while let Ok(buffer) = receiver.recv() {
                     callback(buffer)
                 }
                 debug!("Callback thread ended");
-            })
+            }))
         });
 
         InputBuildContext {
@@ -469,7 +442,6 @@ where
             rms_threshold,
             muted,
             processor_handle,
-            encoder_handle,
             callback_handle,
         }
     }
@@ -551,7 +523,6 @@ where
         Ok(AudioInputHandle {
             _stream: Some(stream),
             processor_handle: Some(context.processor_handle),
-            encoder_handle: context.encoder_handle,
             callback_handle: context.callback_handle,
             input_sender: Some(input_sender),
             input_volume: context.input_volume,
@@ -693,7 +664,6 @@ pub struct AudioInputHandle {
     #[cfg(target_family = "wasm")]
     _web_audio: Option<std::sync::Arc<crate::platform::web_audio::WebAudioWrapper>>,
     processor_handle: Option<JoinHandle<()>>,
-    encoder_handle: Option<JoinHandle<()>>,
     callback_handle: Option<JoinHandle<()>>,
     input_sender: Option<kanal::Sender<f32>>,
     input_volume: Arc<AtomicF32>,
@@ -756,9 +726,6 @@ impl AudioInputHandle {
         if let Some(handle) = self.processor_handle.take() {
             let _ = handle.join();
         }
-        if let Some(handle) = self.encoder_handle.take() {
-            let _ = handle.join();
-        }
         if let Some(handle) = self.callback_handle.take() {
             let _ = handle.join();
         }
@@ -805,9 +772,6 @@ impl Drop for AudioInputHandle {
 
         // Wait for threads to finish
         if let Some(handle) = self.processor_handle.take() {
-            let _ = handle.join();
-        }
-        if let Some(handle) = self.encoder_handle.take() {
             let _ = handle.join();
         }
         if let Some(handle) = self.callback_handle.take() {

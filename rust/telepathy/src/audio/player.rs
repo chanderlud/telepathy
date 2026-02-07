@@ -140,7 +140,7 @@ pub async fn load_ringtone(path: String) -> Result<(), DartError> {
                 .read_to_end(&mut wav_bytes)
                 .await
                 .map_err(|error| error.to_string())?;
-            let sea_bytes = wav_to_sea(&wav_bytes, 5_f32)
+            let sea_bytes = wav_to_sea(wav_bytes, 5_f32)
                 .await
                 .map_err(|error| error.to_string())?;
             output_file
@@ -205,9 +205,10 @@ mod tests {
             wav_file.read_to_end(&mut wav_bytes).await.unwrap();
 
             let now = Instant::now();
-            let other_data = wav_to_sea(&wav_bytes, 5.0).await.unwrap();
+            let len = wav_bytes.len();
+            let other_data = wav_to_sea(wav_bytes, 5.0).await.unwrap();
             println!("wav to sea took {:?}", now.elapsed());
-            println!("{}%", other_data.len() as f32 / wav_bytes.len() as f32);
+            println!("{}%", other_data.len() as f32 / len as f32);
 
             let mut output_file = File::create(wav_file_str.replace(".wav", ".sea"))
                 .await

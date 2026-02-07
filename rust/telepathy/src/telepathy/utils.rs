@@ -5,7 +5,6 @@ use crate::overlay::{CONNECTED, LATENCY, LOSS};
 use crate::telepathy::messages::Message;
 use crate::telepathy::sockets::{Transport, TransportStream};
 use crate::telepathy::{ConnectionState, StatisticsCollectorState};
-use bytes::BytesMut;
 use flutter_rust_bridge::for_generated::futures::{Sink, SinkExt};
 use kanal::AsyncReceiver;
 use libp2p::bytes::Bytes;
@@ -135,7 +134,7 @@ pub(crate) async fn statistics_collector<C: FrbStatisticsCallback>(
 /// Used for audio tests, plays the input into the output
 pub(crate) async fn loopback(
     input_receiver: AsyncReceiver<PooledBuffer>,
-    output_sender: kanal::Sender<BytesMut>,
+    output_sender: kanal::Sender<Bytes>,
     cancel: &CancellationToken,
     end_call: &Arc<Notify>,
 ) {
@@ -149,7 +148,7 @@ pub(crate) async fn loopback(
             },
             message = input_receiver.recv() => {
                 if let Ok(message) = message {
-                    if output_sender.try_send(message.clone_inner()).is_err() {
+                    if output_sender.try_send(message.clone_inner().freeze()).is_err() {
                         break;
                     }
                 } else {

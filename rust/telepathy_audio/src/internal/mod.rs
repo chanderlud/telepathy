@@ -6,7 +6,6 @@
 //!
 //! ## Modules
 //!
-//! - `codec` - SEA codec encoding and decoding functions
 //! - `processing` - SIMD-optimized audio processing functions
 //! - `processor` - Core audio processor functions for input/output
 //! - `state` - Processor state structures
@@ -16,7 +15,6 @@
 use nnnoiseless::FRAME_SIZE;
 
 pub mod buffer_pool;
-pub mod codec;
 pub mod processing;
 pub mod processor;
 pub mod state;

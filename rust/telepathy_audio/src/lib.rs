@@ -247,7 +247,8 @@ pub mod internal;
 
 /// Platform-specific implementations
 mod platform;
-mod sea;
+#[doc(hidden)]
+pub mod sea;
 
 // =============================================================================
 // Re-exports for backward compatibility

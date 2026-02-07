@@ -58,6 +58,7 @@ pub enum AudioError {
     /// Occurs for platform restrictions, such as calling synchronous `build`
     /// on WASM where async initialization is required.
     Platform(String),
+    JoinError(String),
     /// Invalid WAV file error.
     ///
     /// Occurs when a WAV file has an invalid or corrupted header,
@@ -79,6 +80,7 @@ impl fmt::Display for AudioError {
             AudioError::Channel(msg) => write!(f, "Channel error: {}", msg),
             AudioError::Config(msg) => write!(f, "Configuration error: {}", msg),
             AudioError::Platform(msg) => write!(f, "Platform error: {}", msg),
+            AudioError::JoinError(msg) => write!(f, "Join error: {}", msg),
             AudioError::InvalidWav => write!(f, "Invalid WAV file"),
             AudioError::UnknownSampleFormat => write!(f, "Unknown sample format"),
         }
@@ -231,6 +233,12 @@ impl From<std::array::TryFromSliceError> for AudioError {
 impl From<std::io::Error> for AudioError {
     fn from(err: std::io::Error) -> Self {
         AudioError::Processing(format!("IO error: {}", err))
+    }
+}
+
+impl From<tokio::task::JoinError> for AudioError {
+    fn from(err: tokio::task::JoinError) -> Self {
+        AudioError::JoinError(format!("JoinError: {}", err))
     }
 }
 

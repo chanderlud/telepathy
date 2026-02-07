@@ -11,7 +11,7 @@ use crate::telepathy::{
     CHAT_PROTOCOL, EarlyCallState, Result, StartScreenshare, StatisticsCollectorState,
 };
 use crate::{Behaviour, BehaviourEvent};
-use bytes::BytesMut;
+use bytes::Bytes;
 #[cfg(not(target_family = "wasm"))]
 use cpal::traits::DeviceTrait;
 use libp2p::futures::StreamExt;
@@ -522,7 +522,7 @@ impl OutputHelper {
         Self { handle }
     }
 
-    pub(crate) fn sender(&self) -> kanal::Sender<BytesMut> {
+    pub(crate) fn sender(&self) -> kanal::Sender<Bytes> {
         self.handle.sender()
     }
 

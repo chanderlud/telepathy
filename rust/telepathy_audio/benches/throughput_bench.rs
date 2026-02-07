@@ -17,10 +17,11 @@ use nnnoiseless::DenoiseState;
 use std::hint::black_box;
 use std::thread;
 use std::time::Duration;
-use telepathy_audio::FRAME_SIZE;
-use telepathy_audio::internal::codec::encoder;
 use telepathy_audio::internal::processor::{input_processor, output_processor};
 use telepathy_audio::internal::state::{InputProcessorState, OutputProcessorState};
+use telepathy_audio::sea::decoder::SeaDecoder;
+use telepathy_audio::sea::encoder::{EncoderSettings, SeaEncoder};
+use telepathy_audio::{FRAME_SIZE, SeaFileHeader};
 
 /// Number of frames to process in each benchmark iteration.
 const BENCHMARK_FRAMES: usize = 1000;
@@ -38,6 +39,13 @@ struct InputBenchConfig {
     name: &'static str,
     codec: bool,
     denoise: bool,
+    resample: bool,
+}
+
+#[derive(Clone)]
+struct OutputBenchConfig {
+    name: &'static str,
+    codec: bool,
     resample: bool,
 }
 
@@ -103,8 +111,7 @@ fn bench_input_throughput(c: &mut Criterion) {
                     } else {
                         (MockAudioInput::new_48khz(Some(benchmark_samples())), 48_000)
                     };
-                    let (processor_to_encoder_tx, processor_to_encoder_rx) = kanal::unbounded();
-                    let (encoder_to_output_tx, encoder_to_output_rx) = kanal::unbounded();
+                    let (processor_tx, processor_rx) = kanal::unbounded();
                     let denoiser = config.denoise.then_some(denoiser.clone());
                     let a = Default::default();
                     let b = Default::default();
@@ -112,50 +119,38 @@ fn bench_input_throughput(c: &mut Criterion) {
                     let d = Default::default();
                     let state = InputProcessorState::new(&a, &b, &c, d, 1024);
 
-                    let (processor_output, encoder_handle) = if config.codec {
-                        let encoder_rate = if config.denoise { 48_000 } else { input_rate };
-
-                        let encoder_handle = thread::spawn(move || {
-                            encoder(
-                                processor_to_encoder_rx,
-                                encoder_to_output_tx,
-                                encoder_rate,
-                                true,
-                                5.0,
-                            )
-                        });
-
-                        (processor_to_encoder_tx, Some(encoder_handle))
+                    let encoder = if config.codec {
+                        SeaEncoder::new(
+                            1,
+                            if config.denoise { 48_000 } else { input_rate },
+                            EncoderSettings::default(),
+                        )
+                        .ok()
                     } else {
-                        (encoder_to_output_tx, None)
+                        None
                     };
 
                     let processor_handle = thread::spawn(move || {
                         input_processor(
                             mock_input,
-                            processor_output,
+                            processor_tx,
                             input_rate as f64,
                             denoiser,
                             state,
+                            encoder,
                         )
                     });
 
                     let mut count = 0;
                     while count < BENCHMARK_FRAMES {
-                        if encoder_to_output_rx
-                            .recv_timeout(Duration::from_secs(1))
-                            .is_ok()
-                        {
+                        if processor_rx.recv_timeout(Duration::from_secs(1)).is_ok() {
                             count += 1;
                         } else {
                             break;
                         }
                     }
 
-                    drop(encoder_to_output_rx);
-                    if let Some(handle) = encoder_handle {
-                        _ = handle.join();
-                    }
+                    drop(processor_rx);
                     let _ = processor_handle.join();
                     black_box(count)
                 });
@@ -172,29 +167,75 @@ fn bench_output_throughput(c: &mut Criterion) {
     group.sample_size(20);
     group.measurement_time(Duration::from_secs(10));
 
-    for (ratio, label) in [(0.9, "48kHz downsample"), (1.0, "48kHz_to_48kHz")] {
-        group.bench_function(label, |b| {
-            b.iter(|| {
-                let (input_tx, input_rx) = kanal::unbounded::<BytesMut>();
-                let mock_output = NullOutput::new();
-                let state = OutputProcessorState::default();
+    let configs = vec![
+        OutputBenchConfig {
+            name: "pure",
+            codec: false,
+            resample: false,
+        },
+        OutputBenchConfig {
+            name: "resample",
+            codec: false,
+            resample: true,
+        },
+        OutputBenchConfig {
+            name: "codec",
+            codec: true,
+            resample: false,
+        },
+        OutputBenchConfig {
+            name: "codec_resample",
+            codec: true,
+            resample: true,
+        },
+    ];
 
-                let handle =
-                    thread::spawn(move || output_processor(input_rx, mock_output, ratio, state));
+    for config in configs {
+        group.bench_with_input(
+            BenchmarkId::new("output_throughput", config.name),
+            &config,
+            |b, config| {
+                let config = config.clone();
 
-                for _ in 0..BENCHMARK_FRAMES {
-                    let mut frame = BytesMut::with_capacity(FRAME_SIZE * 2);
-                    frame.resize(FRAME_SIZE * 2, 0);
-                    if input_tx.send(frame).is_err() {
-                        break;
+                b.iter(|| {
+                    let (input_tx, input_rx) = kanal::unbounded();
+                    let mock_output = NullOutput::new();
+                    let state = OutputProcessorState::default();
+
+                    let decoder = if config.codec {
+                        SeaDecoder::new(SeaFileHeader {
+                            version: 1,
+                            channels: 1,
+                            chunk_size: 960,
+                            frames_per_chunk: 480,
+                            sample_rate: 48_000,
+                        })
+                        .ok()
+                    } else {
+                        None
+                    };
+
+                    let ratio = if config.resample { 0.9 } else { 1.0 };
+
+                    let handle = thread::spawn(move || {
+                        output_processor(input_rx, mock_output, ratio, state, decoder)
+                    });
+
+                    // TODO generate real frames and encoded frames
+                    for _ in 0..BENCHMARK_FRAMES {
+                        let mut frame = BytesMut::with_capacity(FRAME_SIZE * 2);
+                        frame.resize(FRAME_SIZE * 2, 0);
+                        // if input_tx.send(frame).is_err() {
+                        //     break;
+                        // }
                     }
-                }
 
-                drop(input_tx);
-                let _ = handle.join();
-                black_box(BENCHMARK_FRAMES)
-            });
-        });
+                    drop(input_tx);
+                    let _ = handle.join();
+                    black_box(BENCHMARK_FRAMES)
+                });
+            },
+        );
     }
 
     group.finish();

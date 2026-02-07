@@ -28,9 +28,8 @@
 //! }
 //! ```
 
+use crate::SeaFileHeader;
 use crate::error::AudioError;
-use crate::internal::NETWORK_FRAME;
-use crate::internal::buffer_pool::BufferPool;
 use crate::internal::processing::wide_mul;
 use crate::internal::utils::{db_to_multiplier, resampler_factory};
 use crate::sea::decoder::SeaDecoder;
@@ -39,10 +38,9 @@ use atomic_float::AtomicF32;
 use bytes::BytesMut;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{DeviceId, Host, SampleFormat};
-use kanal::{Receiver, unbounded};
 #[cfg(not(target_family = "wasm"))]
 use kanal::{Sender, bounded};
-use log::{debug, error};
+use log::{debug, error, info};
 use nnnoiseless::FRAME_SIZE;
 use rubato::Resampler;
 use std::mem;
@@ -50,18 +48,16 @@ use std::sync::Arc;
 #[cfg(target_family = "wasm")]
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Relaxed;
+use std::time::Instant;
 use tokio::select;
 use tokio::sync::{Mutex, Notify};
-use tokio::task::{JoinHandle, spawn_blocking};
+use tokio::task::spawn_blocking;
 #[cfg(target_family = "wasm")]
 use wasm_sync::{Condvar, Mutex as WasmMutex};
 
 /// Number of frames to fade out when canceling playback.
 /// This prevents audio pops/clicks when stopping playback abruptly.
 const FADE_FRAMES: usize = 60;
-
-/// Type alias for decoded audio receiver with sample count.
-type DecodedReceiver = (Receiver<BytesMut>, usize);
 
 /// Audio file header information parsed from WAV format.
 struct AudioHeader {
@@ -324,7 +320,7 @@ async fn get_output_device(
 /// have been completed by the caller. It signals initialization success or failure
 /// via the `init_tx` channel before continuing with playback.
 async fn play_sound_with_device(
-    bytes: Vec<u8>,
+    mut bytes: Vec<u8>,
     cancel: Arc<Notify>,
     output_device: cpal::Device,
     output_config: cpal::SupportedStreamConfig,
@@ -347,39 +343,31 @@ async fn play_sound_with_device(
             sample_format: SampleFormat::I16,
         });
         let mut samples = None;
-        let mut decoder_handle: Option<JoinHandle<()>> = None;
 
         // If not valid WAV, try to handle as SEA codec file
         if !is_valid_wav {
-            let (input_sender, input_receiver) = unbounded();
-            let (output_sender, output_receiver) = unbounded();
-            let input_sender = input_sender.to_async();
-
-            input_sender.send(BytesMut::from(&bytes[..14])).await?;
-
-            let decoder_future =
-                spawn_blocking(move || SeaDecoder::new(input_receiver, output_sender, None));
-
-            let mut decoder = decoder_future
-                .await
-                .map_err(|e| AudioError::Processing(format!("Decoder task error: {}", e)))??;
-            let header = decoder.get_header();
-            let sample_count = (bytes.len() - 14) / header.chunk_size as usize * FRAME_SIZE
-                / header.channels as usize;
-            spec.sample_rate = header.sample_rate;
+            let now = Instant::now();
+            let local_bytes = mem::take(&mut bytes);
+            let header = SeaFileHeader::from_frame(&local_bytes[..14])?;
+            let chunk_size = header.chunk_size as usize;
             spec.channels = header.channels as u32;
+            spec.sample_rate = header.sample_rate;
+            let mut decoder = SeaDecoder::new(header)?;
 
-            decoder_handle = Some(spawn_blocking(
-                move || {
-                    while decoder.decode_frame().is_ok() {}
-                },
-            ));
+            let handle = spawn_blocking(move || {
+                let mut decoded = Vec::new();
+                let mut buffer = [0_i16; FRAME_SIZE];
 
-            for chunk in bytes[14..].chunks(header.chunk_size as usize) {
-                input_sender.send(BytesMut::from(chunk)).await?;
-            }
+                for chunk in local_bytes[14..].chunks(chunk_size) {
+                    decoder.decode_frame(chunk, &mut buffer)?;
+                    decoded.push(buffer);
+                }
 
-            samples = Some((output_receiver, sample_count));
+                Ok::<Vec<[i16; FRAME_SIZE]>, AudioError>(decoded)
+            });
+
+            samples = Some(handle.await??);
+            info!("decoding sound took {:?}", now.elapsed());
         }
 
         // Validate that we have valid audio parameters before proceeding
@@ -496,24 +484,23 @@ async fn play_sound_with_device(
             output_finished,
             processed_sender,
             processor_future,
-            decoder_handle,
         ))
     }
     .await;
 
     // Signal initialization result to the caller
-    let (output_stream, output_finished, processed_sender, mut processor_future, decoder_handle) =
-        match init_result {
-            Ok(state) => {
-                let _ = init_tx.send(Ok(()));
-                state
-            }
-            Err(e) => {
-                let err_msg = e.to_string();
-                let _ = init_tx.send(Err(AudioError::Processing(err_msg)));
-                return Err(e);
-            }
-        };
+    let (output_stream, output_finished, processed_sender, mut processor_future) = match init_result
+    {
+        Ok(state) => {
+            let _ = init_tx.send(Ok(()));
+            state
+        }
+        Err(e) => {
+            let err_msg = e.to_string();
+            let _ = init_tx.send(Err(AudioError::Processing(err_msg)));
+            return Err(e);
+        }
+    };
 
     // Keep the stream alive
     let _output_stream = output_stream;
@@ -542,12 +529,6 @@ async fn play_sound_with_device(
     // Wait for playback to complete before tearing down
     output_finished.notified().await;
     debug!("starting to tear down player stack");
-    // Join the decoder task if there was one
-    if let Some(handle) = decoder_handle {
-        handle
-            .await
-            .map_err(|e| AudioError::Processing(format!("Decoder join error: {}", e)))?;
-    }
     // Join the processor task
     match processor_join {
         Some(result) => {
@@ -563,7 +544,7 @@ async fn play_sound_with_device(
 
 /// Processes audio data (WAV or decoded SEA).
 fn processor(
-    input: (Option<Vec<u8>>, Option<DecodedReceiver>),
+    input: (Option<Vec<u8>>, Option<Vec<[i16; FRAME_SIZE]>>),
     sample_format: SampleFormat,
     spec: AudioHeader,
     output_volume: Arc<AtomicF32>,
@@ -580,7 +561,7 @@ fn processor(
     let sample_count = bytes
         .as_ref()
         .map(|b| (b.len() - 44) / sample_size / channels_usize)
-        .or_else(|| samples.as_ref().map(|(_, l)| *l))
+        .or_else(|| Some(samples.as_ref()?.len() * FRAME_SIZE / channels_usize))
         .unwrap_or_default();
     // The number of audio samples which will be played
     let audio_len = (sample_count as f64 * ratio) as f32;
@@ -609,10 +590,12 @@ fn processor(
         .as_ref()
         .map(|bytes| bytes[44..].chunks(FRAME_SIZE * sample_size));
 
+    let mut sample_chunks = samples.as_ref().map(|samples| samples.iter());
+
     'outer: loop {
-        match (byte_chunks.as_mut(), samples.as_ref()) {
-            (None, Some((samples, _))) => {
-                let samples = if let Ok(samples) = samples.recv() {
+        match (byte_chunks.as_mut(), sample_chunks.as_mut()) {
+            (None, Some(samples)) => {
+                let samples = if let Some(samples) = samples.next() {
                     samples
                 } else {
                     break 'outer;
@@ -620,9 +603,9 @@ fn processor(
 
                 let scale = 1_f32 / i16::MAX as f32;
 
-                for (i, sample) in samples.chunks(channels_usize * 2).enumerate() {
-                    for (j, channel) in sample.chunks(2).enumerate() {
-                        let sample = i16::from_le_bytes(channel.try_into()?) as f32 * scale;
+                for (i, sample) in samples.chunks(channels_usize).enumerate() {
+                    for (j, channel) in sample.iter().enumerate() {
+                        let sample = *channel as f32 * scale;
                         pre_buf[j][i] = sample;
                     }
                 }
@@ -792,7 +775,7 @@ fn processor(
 /// # Errors
 ///
 /// Returns `AudioError` if the WAV data is invalid or encoding fails.
-pub async fn wav_to_sea(bytes: &[u8], residual_bits: f32) -> Result<Vec<u8>, AudioError> {
+pub async fn wav_to_sea(bytes: Vec<u8>, residual_bits: f32) -> Result<Vec<u8>, AudioError> {
     if bytes.len() < 44 {
         return Err(AudioError::Processing("WAV data too short".to_string()));
     }
@@ -809,15 +792,7 @@ pub async fn wav_to_sea(bytes: &[u8], residual_bits: f32) -> Result<Vec<u8>, Aud
         _ => 1,
     };
 
-    // Create buffer pool for frame allocation
-    let buffer_pool = Arc::new(BufferPool::default());
-
-    let (input_sender, input_receiver) = unbounded();
-    let (output_sender, output_receiver) = unbounded();
-    let input_sender = input_sender.to_async();
-    let output_receiver = output_receiver.to_async();
-
-    tokio::task::spawn_blocking(move || {
+    let handle = spawn_blocking(move || {
         let settings = EncoderSettings {
             frames_per_chunk: FRAME_SIZE as u16 / channels as u16,
             vbr: true,
@@ -825,58 +800,41 @@ pub async fn wav_to_sea(bytes: &[u8], residual_bits: f32) -> Result<Vec<u8>, Aud
             ..Default::default()
         };
 
-        let mut encoder = SeaEncoder::new(
-            channels as u8,
-            sample_rate,
-            settings,
-            input_receiver,
-            output_sender,
-        )
-        .unwrap();
-        while encoder.encode_frame().is_ok() {}
-        encoder
-    });
+        let mut encoder = SeaEncoder::new(channels as u8, sample_rate, settings)?;
 
-    let mut buffer = [0; FRAME_SIZE];
+        let mut samples = [0; FRAME_SIZE];
+        let mut buffer = BytesMut::new();
+        let mut data: Vec<u8> = Vec::new();
 
-    for chunk in bytes[44..].chunks(FRAME_SIZE * sample_size) {
-        let written = match spec.sample_format {
-            SampleFormat::U8 => {
-                for (j, sample) in chunk.iter().enumerate() {
-                    buffer[j] = ((*sample as i16) - 128) << 8;
+        for chunk in bytes[44..].chunks(FRAME_SIZE * sample_size) {
+            let written = match spec.sample_format {
+                SampleFormat::U8 => {
+                    for (j, sample) in chunk.iter().enumerate() {
+                        samples[j] = ((*sample as i16) - 128) << 8;
+                    }
+                    chunk.len()
                 }
-                chunk.len()
-            }
-            SampleFormat::I16 => {
-                for (i, sample_bytes) in chunk.chunks_exact(2).enumerate() {
-                    buffer[i] = i16::from_le_bytes([sample_bytes[0], sample_bytes[1]]);
+                SampleFormat::I16 => {
+                    for (i, sample_bytes) in chunk.chunks_exact(2).enumerate() {
+                        samples[i] = i16::from_le_bytes([sample_bytes[0], sample_bytes[1]]);
+                    }
+                    chunk.len() / 2
                 }
-                chunk.len() / 2
-            }
-            _ => break,
-        };
+                _ => break,
+            };
 
-        if written < FRAME_SIZE {
-            buffer[written..].fill(0);
+            if written < FRAME_SIZE {
+                samples[written..].fill(0);
+            }
+
+            encoder.encode_frame(samples, &mut buffer)?;
+            data.extend_from_slice(bytes.as_ref());
         }
 
-        // Acquire a pooled buffer
-        let mut pooled = BufferPool::acquire(&buffer_pool);
-        // Copy frame data into the pooled buffer
-        pooled.inner_mut().copy_from_slice(unsafe {
-            std::slice::from_raw_parts(buffer.as_ptr() as *const u8, NETWORK_FRAME)
-        });
-        input_sender.send(pooled).await?;
-    }
+        Ok::<Vec<u8>, AudioError>(data)
+    });
 
-    drop(input_sender);
-    let mut data: Vec<u8> = Vec::new();
-
-    while let Ok(bytes) = output_receiver.recv().await {
-        data.extend(bytes.as_ref());
-    }
-
-    Ok(data)
+    handle.await?
 }
 
 #[cfg(test)]

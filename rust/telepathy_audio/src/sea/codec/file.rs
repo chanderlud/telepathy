@@ -7,10 +7,7 @@ use super::{
     encoder_cbr::CbrEncoder,
     encoder_vbr::VbrEncoder,
 };
-use crate::internal::NETWORK_FRAME;
 use crate::sea::{codec::chunk::SeaChunk, encoder::EncoderSettings};
-use bytes::BytesMut;
-use kanal::Receiver;
 use std::io::Cursor;
 
 #[derive(Debug, Clone)]
@@ -37,9 +34,8 @@ impl SeaFileHeader {
         Ok(())
     }
 
-    pub fn from_reader(receiver: &Receiver<BytesMut>) -> Result<Self, SeaError> {
-        let buffer = receiver.recv()?;
-        let mut reader = Cursor::new(buffer);
+    pub fn from_frame(frame: &[u8]) -> Result<Self, SeaError> {
+        let mut reader = Cursor::new(frame);
 
         let magic = read_u32_be(&mut reader)?;
         if magic != SEAC_MAGIC {
@@ -77,7 +73,7 @@ impl SeaFileHeader {
     }
 }
 
-enum ActiveEncoder {
+pub(crate) enum ActiveEncoder {
     Cbr(CbrEncoder),
     Vbr(VbrEncoder),
 }
@@ -85,10 +81,10 @@ enum ActiveEncoder {
 pub struct SeaFile {
     pub header: SeaFileHeader,
 
-    decoder: Option<Decoder>,
+    pub(crate) decoder: Option<Decoder>,
 
-    encoder: Option<ActiveEncoder>,
-    encoder_settings: Option<EncoderSettings>,
+    pub(crate) encoder: Option<ActiveEncoder>,
+    pub(crate) encoder_settings: Option<EncoderSettings>,
 }
 
 impl SeaFile {
@@ -109,26 +105,6 @@ impl SeaFile {
             decoder: None,
             encoder,
             encoder_settings: Some(encoder_settings.clone()),
-        })
-    }
-
-    pub fn from_reader(
-        receiver: &Receiver<BytesMut>,
-        header: Option<SeaFileHeader>,
-    ) -> Result<Self, SeaError> {
-        let header = match header {
-            Some(h) => {
-                h.validate()?;
-                h
-            }
-            None => SeaFileHeader::from_reader(receiver)?,
-        };
-
-        Ok(SeaFile {
-            header,
-            decoder: None,
-            encoder: None,
-            encoder_settings: None,
         })
     }
 
@@ -170,12 +146,12 @@ impl SeaFile {
         Ok(output)
     }
 
-    pub fn samples_from_reader(
+    pub fn samples_from_frame(
         &mut self,
-        receiver: &Receiver<BytesMut>,
-    ) -> Result<BytesMut, SeaError> {
-        let mut encoded = receiver.recv()?;
-        let chunk = SeaChunk::from_slice(&encoded, &self.header)?;
+        frame: &[u8],
+        output: &mut [i16; 480],
+    ) -> Result<(), SeaError> {
+        let chunk = SeaChunk::from_slice(frame, &self.header)?;
 
         if self.decoder.is_none() {
             self.decoder = Some(Decoder::init(
@@ -193,11 +169,8 @@ impl SeaFile {
         if decoded.len() != expected_len {
             Err(SeaError::InvalidFrame)
         } else {
-            encoded.clear();
-            encoded.extend_from_slice(unsafe {
-                std::slice::from_raw_parts(decoded.as_ptr() as *const u8, NETWORK_FRAME)
-            });
-            Ok(encoded)
+            output.copy_from_slice(decoded.as_slice());
+            Ok(())
         }
     }
 }

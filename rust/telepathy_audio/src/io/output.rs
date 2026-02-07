@@ -27,7 +27,6 @@ use crate::devices::AudioHost;
 #[cfg(not(target_family = "wasm"))]
 use crate::devices::{DeviceError, get_output_device};
 use crate::error::AudioError;
-use crate::internal::codec::decoder;
 use crate::internal::processor::output_processor;
 use crate::internal::state::OutputProcessorState;
 use crate::internal::traits::AudioOutput;
@@ -36,8 +35,9 @@ use crate::internal::traits::CHANNEL_SIZE;
 #[cfg(not(target_family = "wasm"))]
 use crate::internal::traits::ChannelOutput;
 use crate::sea::codec::file::SeaFileHeader;
+use crate::sea::decoder::SeaDecoder;
 use atomic_float::AtomicF32;
-use bytes::BytesMut;
+use bytes::Bytes;
 #[cfg(not(target_family = "wasm"))]
 use cpal::SampleFormat;
 #[cfg(not(target_family = "wasm"))]
@@ -112,8 +112,7 @@ struct OutputBuildContext {
     output_volume: Arc<AtomicF32>,
     deafened: Arc<AtomicBool>,
     loss_sender: Arc<AtomicUsize>,
-    network_sender: Sender<BytesMut>,
-    decoder_handle: Option<JoinHandle<()>>,
+    network_sender: Sender<Bytes>,
     processor_handle: JoinHandle<()>,
 }
 
@@ -258,8 +257,7 @@ impl AudioOutputBuilder {
         let rms_sender = self.shared_rms.clone().unwrap_or_default();
         let loss_sender = self.shared_loss.clone().unwrap_or_default();
 
-        let (network_sender, network_receiver) = unbounded::<BytesMut>();
-        let (decoded_sender, decoded_receiver) = unbounded::<BytesMut>();
+        let (network_sender, network_receiver) = unbounded();
 
         // Calculate resampling ratio
         let ratio = output_sample_rate as f64 / self.config.sample_rate as f64;
@@ -267,25 +265,17 @@ impl AudioOutputBuilder {
         let state =
             OutputProcessorState::new(&output_volume, rms_sender, &deafened, loss_sender.clone());
 
-        let codec_enabled = self.config.codec_header.is_some();
-        let codec_header = self.config.codec_header;
-
-        // Spawn decoder thread if codec enabled, and select appropriate receiver for processor
-        let (decoder_handle, processor_receiver) = if codec_enabled {
-            let handle = thread::spawn(move || {
-                if let Err(e) = decoder(network_receiver, decoded_sender, codec_header) {
-                    error!("Decoder error: {}", e);
-                }
-                debug!("Decoder thread ended");
-            });
-            (Some(handle), decoded_receiver)
+        let decoder = if let Some(header) = self.config.codec_header {
+            SeaDecoder::new(header).ok()
         } else {
-            (None, network_receiver)
+            None
         };
 
         // Spawn processor thread
         let processor_handle = thread::spawn(move || {
-            if let Err(e) = output_processor(processor_receiver, processor_output, ratio, state) {
+            if let Err(e) =
+                output_processor(network_receiver, processor_output, ratio, state, decoder)
+            {
                 error!("Output processor error: {}", e);
             }
             debug!("Output processor thread ended");
@@ -296,7 +286,6 @@ impl AudioOutputBuilder {
             deafened,
             loss_sender,
             network_sender,
-            decoder_handle,
             processor_handle,
         }
     }
@@ -370,7 +359,6 @@ impl AudioOutputBuilder {
         Ok(AudioOutputHandle {
             _stream: stream,
             processor_handle: Some(context.processor_handle),
-            decoder_handle: context.decoder_handle,
             network_sender: context.network_sender,
             output_volume: context.output_volume,
             deafened: context.deafened,
@@ -468,8 +456,7 @@ pub struct AudioOutputHandle {
     #[cfg(target_family = "wasm")]
     _web_buffer: Option<std::sync::Arc<wasm_sync::Mutex<Vec<f32>>>>,
     processor_handle: Option<JoinHandle<()>>,
-    decoder_handle: Option<JoinHandle<()>>,
-    network_sender: Sender<BytesMut>,
+    network_sender: Sender<Bytes>,
     output_volume: Arc<AtomicF32>,
     deafened: Arc<AtomicBool>,
     loss_sender: Arc<AtomicUsize>,
@@ -479,7 +466,7 @@ impl AudioOutputHandle {
     /// Returns a sender for feeding audio data to the output.
     ///
     /// Use this sender to send `ProcessorMessage` frames to be played.
-    pub fn sender(&self) -> Sender<BytesMut> {
+    pub fn sender(&self) -> Sender<Bytes> {
         self.network_sender.clone()
     }
 
@@ -519,10 +506,6 @@ impl AudioOutputHandle {
         // Close the sender to signal threads to stop (mirrors Drop implementation)
         _ = self.network_sender.close();
 
-        // Wait for threads to finish
-        if let Some(handle) = self.decoder_handle.take() {
-            let _ = handle.join();
-        }
         if let Some(handle) = self.processor_handle.take() {
             let _ = handle.join();
         }
@@ -540,10 +523,6 @@ impl Drop for AudioOutputHandle {
         // to ensure the receiver loops can exit and threads can join cleanly
         _ = self.network_sender.close();
 
-        // Wait for threads to finish
-        if let Some(handle) = self.decoder_handle.take() {
-            let _ = handle.join();
-        }
         if let Some(handle) = self.processor_handle.take() {
             let _ = handle.join();
         }

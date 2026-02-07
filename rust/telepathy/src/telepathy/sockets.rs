@@ -18,7 +18,7 @@ use telepathy_audio::{PooledBuffer, PooledBytes};
 use tokio::select;
 #[cfg(not(target_family = "wasm"))]
 use tokio::time::timeout;
-use tokio_util::bytes::{Buf, BufMut, BytesMut};
+use tokio_util::bytes::{Buf, BufMut};
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 use tokio_util::compat::Compat;
 use tokio_util::sync::CancellationToken;
@@ -181,7 +181,7 @@ pub(crate) async fn audio_input<S: SendingSocket>(
 
 /// Receives audio data from the socket and sends it to the output processor
 pub(crate) async fn audio_output(
-    sender: Sender<BytesMut>,
+    sender: Sender<Bytes>,
     mut socket: SplitStream<Transport<TransportStream>>,
     cancel: CancellationToken,
     bandwidth: Arc<AtomicUsize>,
@@ -212,7 +212,7 @@ pub(crate) async fn audio_output(
                         .min(current_ts.wrapping_sub(packet_ts));
 
                     if age < MAX_AGE {
-                        if sender.try_send(message).is_err() {
+                        if sender.try_send(message.freeze()).is_err() {
                             info!("audio_output ended with closed channel");
                             break Ok(());
                         }
