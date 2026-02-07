@@ -152,8 +152,8 @@ The library supports two distinct processing paths:
 
 **With Codec Enabled:**
 ```
-Input: Audio → Processor → Encoder → Callback/Network
-Output: Network → Decoder → Processor → Audio
+Input: Audio → Processor (with encoding) → Callback/Network
+Output: Network → Processor (with decoding) → Audio
 ```
 
 **Without Codec (Raw Audio):**
@@ -168,10 +168,10 @@ When codec is enabled, audio is compressed using the SEA codec before transmissi
 ### Thread Architecture
 
 Each audio stream spawns dedicated threads:
-- **Input**: 1 processor thread + optional encoder thread + optional callback thread
-- **Output**: 1 processor thread + optional decoder thread
+- **Input**: 1 processor thread (with optional encoding) + optional callback thread
+- **Output**: 1 processor thread (with optional decoding)
 
-All threads communicate via lock-free channels (kanal) for low-latency operation.
+Encoding/decoding happens within the processor threads for better performance and reduced context switching. All threads communicate via lock-free channels (kanal) for low-latency operation.
 
 ## Module Organization
 

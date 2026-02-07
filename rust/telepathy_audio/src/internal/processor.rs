@@ -10,54 +10,6 @@
 //! dedicated threads. They perform blocking operations on channels and should
 //! not be called from async contexts without spawning a blocking task.
 //!
-//! ### Input Processing (with codec)
-//!
-//! ```text
-//! ┌─────────────┐    ┌──────────────────┐    ┌─────────────┐    ┌──────────┐
-//! │ Audio       │───▶│ input_processor  │───▶│ encoder     │───▶│ Callback │
-//! │ Stream      │    │ (thread)         │    │ (thread)    │    │ (thread) │
-//! └─────────────┘    └──────────────────┘    └─────────────┘    └──────────┘
-//!                            │
-//!                            │ output: Bytes
-//!                            ▼
-//! ```
-//!
-//! ### Input Processing (without codec)
-//!
-//! ```text
-//! ┌─────────────┐    ┌──────────────────┐    ┌──────────┐
-//! │ Audio       │───▶│ input_processor  │───▶│ Callback │
-//! │ Stream      │    │ (thread)         │    │ (thread) │
-//! └─────────────┘    └──────────────────┘    └──────────┘
-//!                            │
-//!                            │ network_output: Bytes
-//!                            ▼
-//! ```
-//!
-//! ### Output Processing (with codec)
-//!
-//! ```text
-//! ┌─────────────┐    ┌──────────────────┐    ┌──────────────────┐    ┌────────┐
-//! │ Network     │───▶│ decoder          │───▶│ output_processor │───▶│ Output │
-//! │ Receiver    │    │ (thread)         │    │ (thread)         │    │ Stream │
-//! └─────────────┘    └──────────────────┘    └──────────────────┘    └────────┘
-//!                            │
-//!                            │ Bytes
-//!                            ▼
-//! ```
-//!
-//! ### Output Processing (without codec)
-//!
-//! ```text
-//! ┌─────────────┐    ┌──────────────────┐    ┌────────┐
-//! │ Network     │───▶│ output_processor │───▶│ Output │
-//! │ Receiver    │    │ (thread)         │    │ Stream │
-//! └─────────────┘    └──────────────────┘    └────────┘
-//!                            │
-//!                            │ Bytes
-//!                            ▼
-//! ```
-//!
 //! ## Channel Closure Behavior
 //!
 //! When the input channel closes (sender dropped), both processors return

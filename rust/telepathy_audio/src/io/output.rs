@@ -216,10 +216,7 @@ impl AudioOutputBuilder {
     ///
     /// This method handles all shared setup steps:
     /// - Creates shared atomic state (output_volume, deafened, rms_sender, loss_sender)
-    /// - Creates unbounded channels for inter-thread communication:
-    ///   - network → decoder: `Bytes` (when codec enabled)
-    ///   - decoder → processor: `[i16; FRAME_SIZE]` (when codec enabled)
-    ///   - network → processor: `Bytes` (when codec disabled)
+    /// - Creates unbounded channel for network → processor communication
     /// - Calculates resampling ratio: `output_sample_rate / config.sample_rate`
     /// - Creates OutputProcessorState for atomic state management
     /// - Auto-constructs SEA codec header when codec is enabled and no header provided:
@@ -228,8 +225,8 @@ impl AudioOutputBuilder {
     ///   - chunk_size: 960
     ///   - frames_per_chunk: 480
     ///   - sample_rate: from config
-    /// - Spawns decoder thread if codec is enabled (calls `decoder` function)
-    /// - Spawns processor thread (calls `output_processor` function)
+    /// - Creates decoder if codec is enabled and passes it to the processor thread
+    /// - Spawns processor thread (calls `output_processor` function with optional decoder)
     ///
     /// # Type Parameters
     ///
@@ -403,7 +400,6 @@ impl AudioOutputBuilder {
         Ok(AudioOutputHandle {
             _web_buffer: Some(web_buffer),
             processor_handle: Some(context.processor_handle),
-            decoder_handle: context.decoder_handle,
             network_sender: context.network_sender,
             output_volume: context.output_volume,
             deafened: context.deafened,

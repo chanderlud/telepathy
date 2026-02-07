@@ -326,14 +326,14 @@ where
     ///
     /// This method handles all shared setup steps:
     /// - Creates shared atomic state (input_volume, rms_threshold, muted, rms_sender)
-    /// - Creates unbounded channels for inter-thread communication:
+    /// - Creates unbounded channels for inter-thread communication
     /// - Calculates encoder sample rate based on denoise_enabled:
     ///   - 48kHz when denoise is enabled (RNNoise requirement)
     ///   - Device sample rate when denoise is disabled
     /// - Creates denoiser if needed (DenoiseState with optional custom model)
     /// - Creates InputProcessorState for atomic state management
-    /// - Spawns processor thread (calls `input_processor` function)
-    /// - Spawns encoder thread if codec is enabled (calls `encoder` function)
+    /// - Creates encoder if codec is enabled and passes it to the processor thread
+    /// - Spawns processor thread (calls `input_processor` function with optional encoder)
     /// - Spawns callback thread if callback is set
     ///
     /// # Type Parameters
@@ -618,7 +618,6 @@ where
         Ok(AudioInputHandle {
             _web_audio: Some(web_audio),
             processor_handle: Some(context.processor_handle),
-            encoder_handle: context.encoder_handle,
             callback_handle: context.callback_handle,
             input_sender: None, // No sender for WASM - controlled via web_audio
             input_volume: context.input_volume,
@@ -637,10 +636,10 @@ where
 ///
 /// - **Creation**: Created by [`AudioInputBuilder::build`] (native) or
 ///   [`AudioInputBuilder::build_async`] (WASM)
-/// - **Running**: Audio is captured, processed, and delivered via callback
+/// - **Running**: Audio is captured, processed (with optional encoding), and delivered via callback
 /// - **Cleanup**: When dropped, the handle:
 ///   1. Closes the input channel to signal threads to stop
-///   2. Waits for processor, encoder (if enabled), and callback threads to join
+///   2. Waits for processor and callback (if enabled) threads to join
 ///   3. Stops the underlying audio stream
 ///
 /// ## Thread Safety
@@ -742,9 +741,6 @@ impl AudioInputHandle {
 
         // Wait for threads to finish
         if let Some(handle) = self.processor_handle.take() {
-            let _ = handle.join();
-        }
-        if let Some(handle) = self.encoder_handle.take() {
             let _ = handle.join();
         }
         if let Some(handle) = self.callback_handle.take() {
