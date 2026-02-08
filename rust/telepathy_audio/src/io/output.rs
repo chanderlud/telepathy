@@ -43,6 +43,8 @@ use bytes::Bytes;
 use cpal::SampleFormat;
 #[cfg(not(target_family = "wasm"))]
 use cpal::traits::{DeviceTrait, StreamTrait};
+#[cfg(not(target_family = "wasm"))]
+use cpal::Sample;
 use kanal::{Sender, unbounded};
 use log::{debug, error};
 use nnnoiseless::FRAME_SIZE;
@@ -321,12 +323,9 @@ impl AudioOutputBuilder {
         let device = device_handle.device();
         let config = device.default_output_config()?;
 
-        if config.sample_format() != SampleFormat::F32 {
-            return Err(AudioError::Config("Unsupported sample format".to_string()));
-        }
-
         let output_channels = config.channels() as usize;
         let output_sample_rate = config.sample_rate();
+        let sample_format = config.sample_format();
 
         // Create bounded output channel for cpal stream
         let (output_sender, output_receiver) = bounded::<f32>(CHANNEL_SIZE * 4);
@@ -336,23 +335,80 @@ impl AudioOutputBuilder {
         let error_notify = self.config.error_notify.clone();
         let context = self.build_common(processor_output, output_sample_rate)?;
 
-        // Build the audio stream
-        let stream = device.build_output_stream(
-            &config.into(),
-            move |data: &mut [f32], _: &_| {
-                for frame in data.chunks_mut(output_channels) {
-                    // Write the same sample to all channels (mono to stereo)
-                    frame.fill(output_receiver.try_recv().unwrap_or(None).unwrap_or(0_f32));
-                }
-            },
-            move |err| {
-                error!("Output stream error: {}", err);
-                if let Some(ref notify) = error_notify {
-                    notify.notify_one();
-                }
-            },
-            None,
-        )?;
+        // Build the audio stream with the appropriate sample format
+        let stream = match sample_format {
+            SampleFormat::I8 => build_output_stream_with_format::<i8>(
+                device,
+                &config.into(),
+                output_receiver,
+                output_channels,
+                error_notify,
+            )?,
+            SampleFormat::I16 => build_output_stream_with_format::<i16>(
+                device,
+                &config.into(),
+                output_receiver,
+                output_channels,
+                error_notify,
+            )?,
+            SampleFormat::I32 => build_output_stream_with_format::<i32>(
+                device,
+                &config.into(),
+                output_receiver,
+                output_channels,
+                error_notify,
+            )?,
+            SampleFormat::I64 => build_output_stream_with_format::<i64>(
+                device,
+                &config.into(),
+                output_receiver,
+                output_channels,
+                error_notify,
+            )?,
+            SampleFormat::U8 => build_output_stream_with_format::<u8>(
+                device,
+                &config.into(),
+                output_receiver,
+                output_channels,
+                error_notify,
+            )?,
+            SampleFormat::U16 => build_output_stream_with_format::<u16>(
+                device,
+                &config.into(),
+                output_receiver,
+                output_channels,
+                error_notify,
+            )?,
+            SampleFormat::U32 => build_output_stream_with_format::<u32>(
+                device,
+                &config.into(),
+                output_receiver,
+                output_channels,
+                error_notify,
+            )?,
+            SampleFormat::U64 => build_output_stream_with_format::<u64>(
+                device,
+                &config.into(),
+                output_receiver,
+                output_channels,
+                error_notify,
+            )?,
+            SampleFormat::F32 => build_output_stream_with_format::<f32>(
+                device,
+                &config.into(),
+                output_receiver,
+                output_channels,
+                error_notify,
+            )?,
+            SampleFormat::F64 => build_output_stream_with_format::<f64>(
+                device,
+                &config.into(),
+                output_receiver,
+                output_channels,
+                error_notify,
+            )?,
+            _ => return Err(AudioError::Config("Unsupported sample format".to_string())),
+        };
         stream.play()?;
 
         Ok(AudioOutputHandle {
@@ -525,4 +581,56 @@ impl Drop for AudioOutputHandle {
             let _ = handle.join();
         }
     }
+}
+
+/// Builds an output stream with automatic sample format conversion.
+///
+/// This helper function creates a cpal output stream that converts f32 samples
+/// from the processing pipeline to the device's native sample format T.
+///
+/// # Type Parameters
+///
+/// * `T` - The device's native sample format (e.g., i16, f32, u16)
+///
+/// # Arguments
+///
+/// * `device` - The cpal device to build the stream on
+/// * `config` - Stream configuration (sample rate, channels, etc.)
+/// * `output_receiver` - Channel receiver for f32 samples from the processor
+/// * `output_channels` - Number of output channels
+/// * `error_notify` - Optional notify handle for stream errors
+#[cfg(not(target_family = "wasm"))]
+fn build_output_stream_with_format<T>(
+    device: &cpal::Device,
+    config: &cpal::StreamConfig,
+    output_receiver: kanal::Receiver<f32>,
+    output_channels: usize,
+    error_notify: Option<Arc<Notify>>,
+) -> Result<cpal::Stream, AudioError>
+where
+    T: Sample + cpal::SizedSample + cpal::FromSample<f32> + Send + 'static,
+{
+    use cpal::traits::DeviceTrait;
+
+    let stream = device.build_output_stream(
+        config,
+        move |data: &mut [T], _: &_| {
+            for frame in data.chunks_mut(output_channels) {
+                // Get f32 sample from processor, convert to device format T
+                let sample_f32 = output_receiver.try_recv().unwrap_or(None).unwrap_or(0_f32);
+                let sample_t = T::from_sample(sample_f32);
+                // Write the same sample to all channels (mono to multichannel)
+                frame.fill(sample_t);
+            }
+        },
+        move |err| {
+            error!("Output stream error: {}", err);
+            if let Some(ref notify) = error_notify {
+                notify.notify_one();
+            }
+        },
+        None,
+    )?;
+
+    Ok(stream)
 }

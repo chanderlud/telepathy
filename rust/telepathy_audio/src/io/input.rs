@@ -40,6 +40,8 @@ use cpal::SampleFormat;
 #[cfg(not(target_family = "wasm"))]
 use cpal::traits::{DeviceTrait, StreamTrait};
 #[cfg(not(target_family = "wasm"))]
+use cpal::Sample;
+#[cfg(not(target_family = "wasm"))]
 use kanal::bounded;
 use kanal::{AsyncSender, unbounded};
 use log::{debug, error};
@@ -519,12 +521,9 @@ where
         let device = device_handle.device();
         let config = device.default_input_config()?;
 
-        if config.sample_format() != SampleFormat::F32 {
-            return Err(AudioError::Config("Unsupported sample format".to_string()));
-        }
-
         let input_channels = config.channels() as usize;
         let device_sample_rate = config.sample_rate();
+        let sample_format = config.sample_format();
 
         // Create channel for cpal stream to processor
         let (input_sender, input_receiver) = bounded::<f32>(CHANNEL_SIZE);
@@ -532,28 +531,83 @@ where
         // Create processor input and extract error_notify before consuming self
         let processor_input = ChannelInput::from(input_receiver);
         let error_notify = self.config.error_notify.clone();
-
         // Build common components (channels, threads, state)
         let context = self.build_common(processor_input, device_sample_rate)?;
 
-        // Build the audio stream
-        let input_sender_clone = input_sender.clone();
-        let stream = device.build_input_stream(
-            &config.into(),
-            move |data: &[f32], _: &_| {
-                for frame in data.chunks(input_channels) {
-                    // Send only the first channel (mono)
-                    let _ = input_sender_clone.try_send(frame[0]);
-                }
-            },
-            move |err| {
-                error!("Input stream error: {}", err);
-                if let Some(ref notify) = error_notify {
-                    notify.notify_one();
-                }
-            },
-            None,
-        )?;
+        // Build the audio stream with the appropriate sample format
+        let stream = match sample_format {
+            SampleFormat::I8 => build_input_stream_with_format::<i8>(
+                device,
+                &config.into(),
+                input_sender,
+                input_channels,
+                error_notify,
+            )?,
+            SampleFormat::I16 => build_input_stream_with_format::<i16>(
+                device,
+                &config.into(),
+                input_sender,
+                input_channels,
+                error_notify,
+            )?,
+            SampleFormat::I32 => build_input_stream_with_format::<i32>(
+                device,
+                &config.into(),
+                input_sender,
+                input_channels,
+                error_notify,
+            )?,
+            SampleFormat::I64 => build_input_stream_with_format_64::<i64>(
+                device,
+                &config.into(),
+                input_sender,
+                input_channels,
+                error_notify,
+            )?,
+            SampleFormat::U8 => build_input_stream_with_format::<u8>(
+                device,
+                &config.into(),
+                input_sender,
+                input_channels,
+                error_notify,
+            )?,
+            SampleFormat::U16 => build_input_stream_with_format::<u16>(
+                device,
+                &config.into(),
+                input_sender,
+                input_channels,
+                error_notify,
+            )?,
+            SampleFormat::U32 => build_input_stream_with_format::<u32>(
+                device,
+                &config.into(),
+                input_sender,
+                input_channels,
+                error_notify,
+            )?,
+            SampleFormat::U64 => build_input_stream_with_format_64::<u64>(
+                device,
+                &config.into(),
+                input_sender,
+                input_channels,
+                error_notify,
+            )?,
+            SampleFormat::F32 => build_input_stream_with_format::<f32>(
+                device,
+                &config.into(),
+                input_sender,
+                input_channels,
+                error_notify,
+            )?,
+            SampleFormat::F64 => build_input_stream_with_format_64::<f64>(
+                device,
+                &config.into(),
+                input_sender,
+                input_channels,
+                error_notify,
+            )?,
+            _ => return Err(AudioError::Config("Unsupported sample format".to_string())),
+        };
 
         stream.play()?;
 
@@ -561,7 +615,6 @@ where
             _stream: Some(stream),
             processor_handle: Some(context.processor_handle),
             callback_handle: context.callback_handle,
-            input_sender: Some(input_sender),
             input_volume: context.input_volume,
             rms_threshold: context.rms_threshold,
             muted: context.muted,
@@ -701,7 +754,6 @@ pub struct AudioInputHandle {
     _web_audio: Option<std::sync::Arc<crate::platform::web_audio::WebAudioWrapper>>,
     processor_handle: Option<JoinHandle<()>>,
     callback_handle: Option<JoinHandle<()>>,
-    input_sender: Option<kanal::Sender<f32>>,
     input_volume: Arc<AtomicF32>,
     rms_threshold: Arc<AtomicF32>,
     muted: Arc<AtomicBool>,
@@ -751,10 +803,6 @@ impl AudioInputHandle {
     /// be called explicitly if you need to wait for completion.
     #[cfg(not(target_family = "wasm"))]
     pub fn stop(mut self) {
-        // Close the sender to signal threads to stop (not just drop, so cloned senders see closure)
-        if let Some(sender) = self.input_sender.take() {
-            _ = sender.close();
-        }
         // Drop the stream so its callback stops before joining threads
         drop(self._stream.take());
 
@@ -788,11 +836,6 @@ impl AudioInputHandle {
 
 impl Drop for AudioInputHandle {
     fn drop(&mut self) {
-        // Close the sender to signal threads to stop
-        if let Some(sender) = self.input_sender.take() {
-            _ = sender.close();
-        }
-
         // Drop the underlying source so its callback stops
         #[cfg(not(target_family = "wasm"))]
         {
@@ -811,4 +854,94 @@ impl Drop for AudioInputHandle {
             let _ = handle.join();
         }
     }
+}
+
+/// Builds an input stream with automatic sample format conversion.
+///
+/// This helper function creates a cpal input stream that converts the device's
+/// native sample format T to f32 for the processing pipeline using cpal's
+/// `to_float_sample()` method.
+///
+/// # Type Parameters
+///
+/// * `T` - The device's native sample format (e.g., i16, f32, u16)
+///
+/// # Arguments
+///
+/// * `device` - The cpal device to build the stream on
+/// * `config` - Stream configuration (sample rate, channels, etc.)
+/// * `input_sender` - Channel sender for f32 samples to the processor
+/// * `input_channels` - Number of input channels
+/// * `error_notify` - Optional notify handle for stream errors
+#[cfg(not(target_family = "wasm"))]
+fn build_input_stream_with_format<T>(
+    device: &cpal::Device,
+    config: &cpal::StreamConfig,
+    input_sender: kanal::Sender<f32>,
+    input_channels: usize,
+    error_notify: Option<Arc<Notify>>,
+) -> Result<cpal::Stream, AudioError>
+where
+    T: Sample<Float = f32> + cpal::SizedSample + Send + 'static,
+{
+    use cpal::traits::DeviceTrait;
+
+    let stream = device.build_input_stream(
+        config,
+        move |data: &[T], _: &_| {
+            for frame in data.chunks(input_channels) {
+                // Convert device format T to f32 and send only first channel (mono)
+                let sample_f32 = frame[0].to_float_sample();
+                let _ = input_sender.try_send(sample_f32);
+            }
+        },
+        move |err| {
+            log::error!("Input stream error: {}", err);
+            if let Some(ref notify) = error_notify {
+                notify.notify_one();
+            }
+        },
+        None,
+    )?;
+
+    Ok(stream)
+}
+
+/// Builds an input stream for 64-bit sample formats (i64, u64, f64).
+///
+/// These types use f64 as their intermediate float type, so we need a separate
+/// helper that converts f64 to f32.
+#[cfg(not(target_family = "wasm"))]
+fn build_input_stream_with_format_64<T>(
+    device: &cpal::Device,
+    config: &cpal::StreamConfig,
+    input_sender: kanal::Sender<f32>,
+    input_channels: usize,
+    error_notify: Option<Arc<Notify>>,
+) -> Result<cpal::Stream, AudioError>
+where
+    T: Sample<Float = f64> + cpal::SizedSample + Send + 'static,
+{
+    use cpal::traits::DeviceTrait;
+
+    let stream = device.build_input_stream(
+        config,
+        move |data: &[T], _: &_| {
+            for frame in data.chunks(input_channels) {
+                // Convert device format T to f64, then to f32
+                let sample_f64 = frame[0].to_float_sample();
+                let sample_f32 = sample_f64 as f32;
+                let _ = input_sender.try_send(sample_f32);
+            }
+        },
+        move |err| {
+            log::error!("Input stream error: {}", err);
+            if let Some(ref notify) = error_notify {
+                notify.notify_one();
+            }
+        },
+        None,
+    )?;
+
+    Ok(stream)
 }
