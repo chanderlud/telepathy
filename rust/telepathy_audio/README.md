@@ -134,7 +134,7 @@ let input = AudioInputBuilder::new()
 
 // Output with codec decoding
 let output = AudioOutputBuilder::new()
-    .codec(true, None)  // enabled, no pre-defined header
+    .codec(true)  // Enable codec decoding
     .build(&host)
     .unwrap();
 ```
@@ -249,7 +249,6 @@ These are re-exported for consumers that need lower-level access:
 - `resampler_factory` - Create resamplers for sample rate conversion
 - `InputProcessorState` / `OutputProcessorState` - State management for processors
 - `FRAME_SIZE` - Standard frame size constant (480 samples)
-- `SeaFileHeader` - SEA codec file header structure
 
 ## Dependencies
 

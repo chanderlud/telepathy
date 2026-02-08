@@ -339,14 +339,6 @@ where
     ) -> Result<OutputHelper> {
         // Get device ID
         let device_id = self.core_state.output_device.lock().await.clone();
-        // Pass in the SEA configuration when codec is enabled
-        let header = codec_enabled.then_some(telepathy_audio::SeaFileHeader {
-            version: 1,
-            channels: 1,
-            chunk_size: 960,
-            frames_per_chunk: 480,
-            sample_rate: remote_sample_rate as u32,
-        });
 
         // Create the audio output using the builder
         let handle = AudioOutputBuilder::new()
@@ -356,7 +348,7 @@ where
             .deafened_shared(&self.core_state.deafened)
             .rms_shared(&statistics_state.output_rms)
             .loss_shared(&statistics_state.loss)
-            .codec(header)
+            .codec(codec_enabled)
             .on_error(end_call)
             .build(&self.host)?;
 

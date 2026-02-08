@@ -134,7 +134,7 @@
 //! ## With Codec Support
 //!
 //! ```rust,no_run
-//! use telepathy_audio::{AudioHost, AudioInputBuilder, AudioOutputBuilder, SeaFileHeader};
+//! use telepathy_audio::{AudioHost, AudioInputBuilder, AudioOutputBuilder};
 //!
 //! let host = AudioHost::new();
 //!
@@ -147,16 +147,9 @@
 //!     .build(&host)
 //!     .unwrap();
 //!
-//! // Output with codec decoding - provide header for decoder initialization
-//! let header = SeaFileHeader {
-//!     version: 1,
-//!     channels: 1,
-//!     chunk_size: 960,
-//!     frames_per_chunk: 480,
-//!     sample_rate: 48000,
-//! };
+//! // Output with codec decoding
 //! let output = AudioOutputBuilder::new()
-//!     .codec(Some(header))  // codec enabled with provided header
+//!     .codec(true)  // Enable codec decoding
 //!     .build(&host)
 //!     .unwrap();
 //! ```
@@ -281,14 +274,6 @@ pub use error::AudioError;
 
 // Re-export constants
 pub use constants::FRAME_SIZE;
-
-/// SEA codec file header structure.
-///
-/// Re-exported from `sea_codec` for consumers that need to construct
-/// custom codec configurations for room calls or file encoding.
-pub use sea::codec::file::SeaFileHeader;
-
-// Re-export processing utilities
 
 /// Converts decibel values to linear multipliers.
 ///

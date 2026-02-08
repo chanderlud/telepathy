@@ -27,6 +27,7 @@ use crate::devices::AudioHost;
 #[cfg(not(target_family = "wasm"))]
 use crate::devices::{DeviceError, get_output_device};
 use crate::error::AudioError;
+use crate::internal::NETWORK_FRAME;
 use crate::internal::processor::output_processor;
 use crate::internal::state::OutputProcessorState;
 use crate::internal::traits::AudioOutput;
@@ -44,6 +45,7 @@ use cpal::SampleFormat;
 use cpal::traits::{DeviceTrait, StreamTrait};
 use kanal::{Sender, unbounded};
 use log::{debug, error};
+use nnnoiseless::FRAME_SIZE;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
 use std::thread::{self, JoinHandle};
@@ -69,10 +71,8 @@ pub struct AudioOutputConfig {
     ///
     /// Values less than 1.0 reduce volume, greater than 1.0 amplify.
     pub volume: f32,
-    /// Pre-defined SEA file header.
-    ///
-    /// When `Some(header)`, uses the provided header for decoding.
-    pub codec_header: Option<SeaFileHeader>,
+    /// Set to true when codec is enabled
+    pub codec_enabled: bool,
     /// Optional notify handle for stream errors.
     ///
     /// When set, the notify is triggered via `notify_one()` whenever a
@@ -85,9 +85,9 @@ impl Default for AudioOutputConfig {
     fn default() -> Self {
         Self {
             device_id: None,
-            sample_rate: 48000,
+            sample_rate: 48_000,
             volume: 1.0,
-            codec_header: None,
+            codec_enabled: false,
             error_notify: None,
         }
     }
@@ -193,13 +193,9 @@ impl AudioOutputBuilder {
         self
     }
 
-    /// Configures codec decoding.
-    ///
-    /// # Arguments
-    ///
-    /// * `header` - SEA file header specified when codec is enabled
-    pub fn codec(mut self, header: Option<SeaFileHeader>) -> Self {
-        self.config.codec_header = header;
+    /// Enables codec decoding
+    pub fn codec(mut self, enabled: bool) -> Self {
+        self.config.codec_enabled = enabled;
         self
     }
 
@@ -262,8 +258,15 @@ impl AudioOutputBuilder {
         let state =
             OutputProcessorState::new(&output_volume, rms_sender, &deafened, loss_sender.clone());
 
-        let decoder = if let Some(header) = self.config.codec_header {
-            SeaDecoder::new(header).ok()
+        let decoder = if self.config.codec_enabled {
+            SeaDecoder::new(SeaFileHeader {
+                version: 1,
+                channels: 1,
+                chunk_size: NETWORK_FRAME as u16,
+                frames_per_chunk: FRAME_SIZE as u16,
+                sample_rate: self.config.sample_rate,
+            })
+            .ok()
         } else {
             None
         };

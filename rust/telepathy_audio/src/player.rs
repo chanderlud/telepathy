@@ -28,10 +28,10 @@
 //! }
 //! ```
 
-use crate::SeaFileHeader;
 use crate::error::AudioError;
 use crate::internal::processing::wide_mul;
 use crate::internal::utils::{db_to_multiplier, resampler_factory};
+use crate::sea::codec::file::SeaFileHeader;
 use crate::sea::decoder::SeaDecoder;
 use crate::sea::encoder::{EncoderSettings, SeaEncoder};
 use atomic_float::AtomicF32;
