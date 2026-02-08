@@ -40,11 +40,11 @@ use crate::sea::decoder::SeaDecoder;
 use atomic_float::AtomicF32;
 use bytes::Bytes;
 #[cfg(not(target_family = "wasm"))]
+use cpal::Sample;
+#[cfg(not(target_family = "wasm"))]
 use cpal::SampleFormat;
 #[cfg(not(target_family = "wasm"))]
 use cpal::traits::{DeviceTrait, StreamTrait};
-#[cfg(not(target_family = "wasm"))]
-use cpal::Sample;
 use kanal::{Sender, unbounded};
 use log::{debug, error};
 use nnnoiseless::FRAME_SIZE;

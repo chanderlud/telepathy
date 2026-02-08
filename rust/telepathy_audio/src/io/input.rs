@@ -36,11 +36,11 @@ use crate::platform::web_audio::WebAudioWrapper;
 use crate::sea::encoder::{EncoderSettings, SeaEncoder};
 use atomic_float::AtomicF32;
 #[cfg(not(target_family = "wasm"))]
+use cpal::Sample;
+#[cfg(not(target_family = "wasm"))]
 use cpal::SampleFormat;
 #[cfg(not(target_family = "wasm"))]
 use cpal::traits::{DeviceTrait, StreamTrait};
-#[cfg(not(target_family = "wasm"))]
-use cpal::Sample;
 #[cfg(not(target_family = "wasm"))]
 use kanal::bounded;
 use kanal::{AsyncSender, unbounded};
