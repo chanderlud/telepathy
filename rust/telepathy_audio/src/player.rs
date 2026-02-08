@@ -828,7 +828,7 @@ pub async fn wav_to_sea(bytes: Vec<u8>, residual_bits: f32) -> Result<Vec<u8>, A
             }
 
             encoder.encode_frame(samples, &mut buffer)?;
-            data.extend_from_slice(bytes.as_ref());
+            data.extend_from_slice(buffer.as_ref());
         }
 
         Ok::<Vec<u8>, AudioError>(data)
