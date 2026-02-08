@@ -28,6 +28,7 @@ use crate::error::AudioError;
 use crate::internal::buffer_pool::{DEFAULT_POOL_CAPACITY, PooledBuffer};
 use crate::internal::processor::input_processor;
 use crate::internal::state::InputProcessorState;
+use crate::internal::traits::AudioInput;
 #[cfg(not(target_family = "wasm"))]
 use crate::internal::traits::{CHANNEL_SIZE, ChannelInput};
 #[cfg(target_family = "wasm")]
@@ -107,6 +108,16 @@ pub struct AudioInputConfig {
     /// stream error occurs, in addition to logging the error. Useful for
     /// async error handling and reconnection logic.
     pub error_notify: Option<Arc<Notify>>,
+    /// Optional output sample rate override (only used when denoise is disabled).
+    ///
+    /// When set and `denoise_enabled` is `false`, the processor will resample
+    /// to this rate instead of passing through at the device's native rate.
+    /// This is useful for matching network requirements (e.g., 48kHz) without
+    /// the CPU overhead of noise suppression.
+    ///
+    /// When `denoise_enabled` is `true`, this field is ignored and output is
+    /// always 48kHz (RNNoise requirement).
+    pub output_sample_rate: Option<u32>,
 }
 
 impl Default for AudioInputConfig {
@@ -121,6 +132,7 @@ impl Default for AudioInputConfig {
             codec_vbr: false,
             codec_residual_bits: 5.0,
             error_notify: None,
+            output_sample_rate: None,
         }
     }
 }
@@ -195,6 +207,7 @@ where
     /// * `enabled` - Whether to enable noise suppression
     /// * `model` - Optional custom RNNoise model bytes (None for default model)
     pub fn denoise(mut self, enabled: bool, model: Option<RnnModel>) -> Self {
+        self.config.output_sample_rate = None;
         self.config.denoise_enabled = enabled;
         self.config.denoise_model = model;
         self
@@ -289,6 +302,32 @@ where
         self
     }
 
+    /// Sets the output sample rate when denoising is disabled.
+    ///
+    /// This allows forcing a specific output sample rate (e.g., 48kHz for network
+    /// compatibility) without enabling noise suppression. When denoise is enabled,
+    /// this setting is ignored as RNNoise requires 48kHz.
+    ///
+    /// # Arguments
+    ///
+    /// * `sample_rate` - The desired output sample rate in Hz (e.g., 48000)
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use telepathy_audio::AudioInputBuilder;
+    ///
+    /// let builder = AudioInputBuilder::new()
+    ///     .denoise(false, None)      // Disable denoising first
+    ///     .output_sample_rate(48000); // Then set custom output rate
+    /// ```
+    pub fn output_sample_rate(mut self, sample_rate: u32) -> Self {
+        if !self.config.denoise_enabled {
+            self.config.output_sample_rate = Some(sample_rate);
+        }
+        self
+    }
+
     /// Sets the callback for receiving processed audio data.
     ///
     /// The callback receives processed audio frames as `PooledBuffer`.
@@ -310,16 +349,9 @@ where
     /// Sets the channel for receiving processed audio data.
     ///
     /// The channel receives processed audio frames as `PooledBuffer`.
-    pub fn channel(self, channel: AsyncSender<PooledBuffer>) -> Self {
-        AudioInputBuilder {
-            config: self.config,
-            channel: Some(channel),
-            callback: None,
-            shared_input_volume: self.shared_input_volume,
-            shared_rms_threshold: self.shared_rms_threshold,
-            shared_muted: self.shared_muted,
-            shared_rms: self.shared_rms,
-        }
+    pub fn channel(mut self, channel: AsyncSender<PooledBuffer>) -> Self {
+        self.channel = Some(channel);
+        self
     }
 
     /// Common initialization logic shared between native and WASM builds.
@@ -327,13 +359,14 @@ where
     /// This method handles all shared setup steps:
     /// - Creates shared atomic state (input_volume, rms_threshold, muted, rms_sender)
     /// - Creates unbounded channels for inter-thread communication
-    /// - Calculates encoder sample rate based on denoise_enabled:
-    ///   - 48kHz when denoise is enabled (RNNoise requirement)
-    ///   - Device sample rate when denoise is disabled
+    /// - Calculates output sample rate and resampling ratio with the following precedence:
+    ///   1. **Denoise enabled**: Always 48kHz (RNNoise requirement)
+    ///   2. **Custom output_sample_rate**: Uses the specified rate
+    ///   3. **Neither**: Uses device's native sample rate (pass-through)
     /// - Creates denoiser if needed (DenoiseState with optional custom model)
     /// - Creates InputProcessorState for atomic state management
-    /// - Creates encoder if codec is enabled and passes it to the processor thread
-    /// - Spawns processor thread (calls `input_processor` function with optional encoder)
+    /// - Creates encoder if codec is enabled (sample rate matches processor output)
+    /// - Spawns processor thread (calls `input_processor` with calculated ratio)
     /// - Spawns callback thread if callback is set
     ///
     /// # Type Parameters
@@ -348,7 +381,7 @@ where
     /// # Returns
     ///
     /// Returns `InputBuildContext` containing handles and state for the created threads
-    fn build_common<I: crate::internal::traits::AudioInput + Send + 'static>(
+    fn build_common<I: AudioInput + Send + 'static>(
         self,
         processor_input: I,
         input_sample_rate: u32,
@@ -375,7 +408,7 @@ where
             (processor_sender, Some(processor_receiver))
         };
 
-        // Create denoiser if needed
+        // create denoiser if needed
         let denoiser = if self.config.denoise_enabled {
             Some(DenoiseState::from_model(
                 self.config.denoise_model.clone().unwrap_or_default(),
@@ -391,15 +424,19 @@ where
             rms_sender,
             DEFAULT_POOL_CAPACITY,
         );
-
+        // determine the output sample rate
+        let sample_rate = if self.config.denoise_enabled {
+            48_000
+        } else {
+            self.config.output_sample_rate.unwrap_or(input_sample_rate)
+        };
+        // calculate the required ratio
+        let ratio = sample_rate as f64 / input_sample_rate as f64;
+        // create the encoder if needed
         let encoder = if self.config.codec_enabled {
             SeaEncoder::new(
                 1,
-                if self.config.denoise_enabled {
-                    48_000
-                } else {
-                    input_sample_rate
-                },
+                sample_rate,
                 EncoderSettings {
                     residual_bits: self.config.codec_residual_bits,
                     vbr: self.config.codec_vbr,
@@ -411,12 +448,12 @@ where
             None
         };
 
-        // Spawn processor thread
+        // spawn processor thread
         let processor_handle = thread::spawn(move || {
             if let Err(e) = input_processor(
                 processor_input,
                 processor_sender,
-                input_sample_rate as f64,
+                ratio,
                 denoiser,
                 state,
                 encoder,
@@ -426,7 +463,7 @@ where
             debug!("Input processor thread ended");
         });
 
-        // Spawn callback thread if callback is set
+        // spawn callback thread if callback is set
         let callback_handle = self.callback.and_then(|callback| {
             let receiver = output_receiver?;
             Some(thread::spawn(move || {

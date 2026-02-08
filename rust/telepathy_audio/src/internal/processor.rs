@@ -58,18 +58,21 @@ use std::sync::Arc;
 ///
 /// ## Sample Rate Behavior
 ///
-/// The processor's output sample rate depends on the denoise setting:
+/// The processor's output sample rate is determined by the `ratio` parameter,
+/// which is calculated by the caller (typically in `build_common`). The ratio
+/// determines the resampling behavior:
 ///
-/// - **Denoise enabled**: Always outputs at 48kHz
-///   - Input is upsampled from `sample_rate` to 48kHz (required by RNNoise)
-///   - Output remains at 48kHz (no downsampling back to device rate)
-///   - Encoder/network must expect 48kHz frames
+/// - **ratio = 1.0**: No resampling (pass-through)
+/// - **ratio > 1.0**: Upsampling (e.g., 44.1kHz → 48kHz when denoise enabled)
+/// - **ratio < 1.0**: Downsampling
 ///
-/// - **Denoise disabled**: Outputs at device's native `sample_rate`
-///   - No resampling occurs (pass-through)
-///   - Encoder/network must expect frames at `sample_rate`
+/// The caller determines the appropriate ratio based on:
+/// - **Denoise enabled**: ratio = 48000 / input_rate (always upsample to 48kHz)
+/// - **Custom output_sample_rate**: ratio = output_rate / input_rate
+/// - **Neither**: ratio = 1.0 (pass-through at device rate)
 ///
-/// This design avoids unnecessary resampling overhead when denoise is disabled.
+/// This design moves ratio calculation to the caller for improved testability
+/// and flexibility, allowing custom output rates when denoising is disabled.
 ///
 /// ## Threading
 ///
@@ -86,9 +89,11 @@ use std::sync::Arc;
 ///
 /// * `input` - The audio input source implementing `AudioInput`
 /// * `output` - Channel for sending processed audio frames (as `Bytes`)
-/// * `sample_rate` - Input sample rate in Hz (device's native rate)
+/// * `ratio` - Resampling ratio (output_rate / input_rate). Calculated by caller
+///   based on denoise setting and optional custom output sample rate.
 /// * `denoiser` - Optional noise suppression state (requires 48kHz input)
 /// * `state` - Shared state for volume, mute, and statistics
+/// * `encoder_option` - Optional SEA encoder for codec encoding
 ///
 /// # Returns
 ///
@@ -97,21 +102,13 @@ use std::sync::Arc;
 pub fn input_processor<I: AudioInput>(
     mut input: I,
     output: Sender<PooledBuffer>,
-    sample_rate: f64,
+    ratio: f64,
     mut denoiser: Option<Box<DenoiseState>>,
     state: InputProcessorState,
     mut encoder_option: Option<SeaEncoder>,
 ) -> Result<(), AudioError> {
     // the maximum value for i16 as f32
     let max_i16_f32 = i16::MAX as f32;
-
-    let ratio = if denoiser.is_some() {
-        // rnnoise requires a 48kHz sample rate
-        48_000_f64 / sample_rate
-    } else {
-        // do not resample if not using rnnoise
-        1_f64
-    };
 
     // rubato requires 10 extra spaces in the output buffer as a safety margin
     let post_len = (FRAME_SIZE as f64 + 10_f64) as usize;

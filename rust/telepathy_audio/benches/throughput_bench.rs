@@ -1,9 +1,11 @@
-//! Latency benchmarks for telepathy_audio processing stacks.
+//! Throughput benchmarks for telepathy_audio processing stacks.
 //!
-//! Measures end-to-end latency for both input and output processing stacks
-//! using simulated audio through mock implementations.
+//! Measures throughput for both input and output processing stacks
+//! using simulated audio through mock implementations. Uses cosine waves
+//! instead of pink noise for simpler, more deterministic, and easier to
+//! verify benchmark inputs.
 //!
-//! Run with: `cargo bench --bench latency_bench`
+//! Run with: `cargo bench --bench throughput_bench`
 
 mod mock_input;
 mod mock_output;
@@ -11,77 +13,23 @@ mod mock_output;
 use bytes::{Bytes, BytesMut};
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use kanal;
+use mock_input::MockAudioInput;
 use mock_output::NullOutput;
 use nnnoiseless::DenoiseState;
 use std::f32::consts::PI;
 use std::hint::black_box;
 use std::thread;
 use std::time::Duration;
+use telepathy_audio::internal::NETWORK_FRAME;
 use telepathy_audio::internal::processor::{input_processor, output_processor};
 use telepathy_audio::internal::state::{InputProcessorState, OutputProcessorState};
 use telepathy_audio::sea::codec::common::SeaError;
 use telepathy_audio::sea::decoder::SeaDecoder;
 use telepathy_audio::sea::encoder::{EncoderSettings, SeaEncoder};
 use telepathy_audio::{FRAME_SIZE, SeaFileHeader};
-use telepathy_audio::internal::NETWORK_FRAME;
-use crate::mock_input::PinkNoiseInput;
 
 /// Number of frames to process in each benchmark iteration.
 const BENCHMARK_FRAMES: usize = 1000;
-
-/// Type of noise to generate for benchmarks
-#[derive(Clone, Copy)]
-enum NoiseType {
-    /// Cosine wave at 440 Hz
-    Cosine,
-    /// Pink noise (Voss-McCartney algorithm)
-    PinkNoise,
-}
-
-/// Pink noise generator state for Voss-McCartney algorithm.
-struct PinkNoiseGenerator {
-    rows: [f32; 16],
-    index: u32,
-    rng_state: u64,
-    amplitude: f32,
-}
-
-impl PinkNoiseGenerator {
-    fn new() -> Self {
-        Self {
-            rows: [0.0; 16],
-            index: 0,
-            rng_state: 0x12345678,
-            amplitude: 0.3,
-        }
-    }
-
-    /// Simple LCG random number generator.
-    fn next_random(&mut self) -> f32 {
-        self.rng_state = self
-            .rng_state
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1);
-        ((self.rng_state >> 33) as i32 as f32) / (i32::MAX as f32)
-    }
-
-    /// Generates the next pink noise sample using Voss-McCartney algorithm.
-    fn next_sample(&mut self) -> f32 {
-        let last_index = self.index;
-        self.index = self.index.wrapping_add(1);
-        let diff = last_index ^ self.index;
-
-        let mut sum = 0.0;
-        for i in 0..16 {
-            if diff & (1 << i) != 0 {
-                self.rows[i] = self.next_random();
-            }
-            sum += self.rows[i];
-        }
-
-        sum * self.amplitude / 4.0
-    }
-}
 
 #[derive(Clone)]
 struct InputBenchConfig {
@@ -96,7 +44,6 @@ struct OutputBenchConfig {
     name: &'static str,
     codec: bool,
     resample: bool,
-    noise_type: NoiseType,
 }
 
 /// Benchmarks input stack throughput
@@ -155,11 +102,11 @@ fn bench_input_throughput(c: &mut Criterion) {
                 b.iter(|| {
                     let (mock_input, input_rate) = if config.resample {
                         (
-                            PinkNoiseInput::new(44_100_f64, Some(benchmark_samples())),
+                            MockAudioInput::new_44100hz(Some(benchmark_samples())),
                             44_100,
                         )
                     } else {
-                        (PinkNoiseInput::new_48khz(Some(benchmark_samples())), 48_000)
+                        (MockAudioInput::new_48khz(Some(benchmark_samples())), 48_000)
                     };
                     let (processor_tx, processor_rx) = kanal::unbounded();
                     let denoiser = config.denoise.then_some(denoiser.clone());
@@ -222,25 +169,21 @@ fn bench_output_throughput(c: &mut Criterion) {
             name: "pure",
             codec: false,
             resample: false,
-            noise_type: NoiseType::PinkNoise,
         },
         OutputBenchConfig {
             name: "resample",
             codec: false,
             resample: true,
-            noise_type: NoiseType::PinkNoise,
         },
         OutputBenchConfig {
             name: "codec",
             codec: true,
             resample: false,
-            noise_type: NoiseType::PinkNoise,
         },
         OutputBenchConfig {
             name: "codec_resample",
             codec: true,
             resample: true,
-            noise_type: NoiseType::PinkNoise,
         },
     ];
 
@@ -252,10 +195,7 @@ fn bench_output_throughput(c: &mut Criterion) {
                 let config = config.clone();
 
                 // Pre-generate raw audio frames based on noise type
-                let raw_frames = match config.noise_type {
-                    NoiseType::Cosine => generate_cos_frames(BENCHMARK_FRAMES),
-                    NoiseType::PinkNoise => generate_pink_noise_frames(BENCHMARK_FRAMES),
-                };
+                let raw_frames = generate_cos_frames(BENCHMARK_FRAMES);
 
                 // Pre-encode frames based on codec setting
                 let pre_encoded_frames: Vec<Bytes> = if config.codec {
@@ -335,26 +275,6 @@ fn generate_cos_frames(num_frames: usize) -> Vec<[i16; FRAME_SIZE]> {
     frames
 }
 
-/// Generates pink noise frames using Voss-McCartney algorithm.
-///
-/// Pre-generates frames to avoid measuring generation overhead in benchmarks.
-fn generate_pink_noise_frames(num_frames: usize) -> Vec<[i16; FRAME_SIZE]> {
-    let mut generator = PinkNoiseGenerator::new();
-    let mut frames = Vec::with_capacity(num_frames);
-
-    for _ in 0..num_frames {
-        let mut frame = [0i16; FRAME_SIZE];
-        for sample in frame.iter_mut() {
-            let f32_sample = generator.next_sample();
-            // Convert f32 [-1.0, 1.0] to i16 range, clamping to prevent overflow
-            *sample = (f32_sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
-        }
-        frames.push(frame);
-    }
-
-    frames
-}
-
 /// Converts i16 frames to raw Bytes for non-codec benchmarks.
 ///
 /// Each frame is converted to NETWORK_FRAME (960) bytes.
@@ -363,9 +283,8 @@ fn frames_to_bytes(frames: &[[i16; FRAME_SIZE]]) -> Vec<Bytes> {
         .iter()
         .map(|frame| {
             // Safety: i16 slice can be reinterpreted as u8 slice
-            let bytes = unsafe {
-                std::slice::from_raw_parts(frame.as_ptr() as *const u8, NETWORK_FRAME)
-            };
+            let bytes =
+                unsafe { std::slice::from_raw_parts(frame.as_ptr() as *const u8, NETWORK_FRAME) };
             Bytes::copy_from_slice(bytes)
         })
         .collect()
@@ -396,8 +315,6 @@ fn benchmark_samples() -> usize {
     FRAME_SIZE * (BENCHMARK_FRAMES + 10) // Extra buffer for resampling
 }
 
-criterion_group!(benches,
-    bench_input_throughput,
-    bench_output_throughput,);
+criterion_group!(benches, bench_input_throughput, bench_output_throughput,);
 
 criterion_main!(benches);

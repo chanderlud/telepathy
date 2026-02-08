@@ -4,7 +4,7 @@
 //! pipeline and measures total end-to-end latency.
 
 use atomic_float::AtomicF32;
-use bytes::BytesMut;
+use bytes::{Bytes, BytesMut};
 use kanal;
 use nnnoiseless::DenoiseState;
 use std::sync::Arc;
@@ -100,7 +100,7 @@ fn test_input_processor_with_denoise() {
     let start = Instant::now();
 
     let handle =
-        thread::spawn(move || input_processor(mock_input, output_tx, 48_000.0, denoiser, state));
+        thread::spawn(move || input_processor(mock_input, output_tx, 1.0, denoiser, state, None));
 
     let mut frames_received = 0;
     while frames_received < TEST_FRAMES {
@@ -136,21 +136,21 @@ fn test_input_processor_with_denoise() {
 /// Tests output processor with resampling.
 #[test]
 fn test_output_processor_with_resampling() {
-    let (input_tx, input_rx) = kanal::unbounded::<BytesMut>();
+    let (input_tx, input_rx) = kanal::unbounded::<Bytes>();
     let (mock_output, _, frames_counter) = TestAudioOutput::new();
     let state = OutputProcessorState::default();
 
     // Resample from 48kHz to 44.1kHz
     let ratio = 44_100.0 / 48_000.0;
 
-    let handle = thread::spawn(move || output_processor(input_rx, mock_output, ratio, state));
+    let handle = thread::spawn(move || output_processor(input_rx, mock_output, ratio, state, None));
 
     let start = Instant::now();
 
     for _ in 0..TEST_FRAMES {
         let mut frame = BytesMut::with_capacity(FRAME_SIZE * 2);
         frame.resize(FRAME_SIZE * 2, 0);
-        input_tx.send(frame).expect("Failed to send frame");
+        input_tx.send(frame.freeze()).expect("Failed to send frame");
     }
 
     drop(input_tx);
@@ -194,7 +194,7 @@ fn test_input_processor_mute() {
     );
 
     let handle =
-        thread::spawn(move || input_processor(mock_input, output_tx, 48_000.0, None, state));
+        thread::spawn(move || input_processor(mock_input, output_tx, 1.0, None, state, None));
 
     // Try to receive frames - should timeout since muted
     let result = output_rx.recv_timeout(Duration::from_millis(500));
@@ -213,7 +213,7 @@ fn test_input_processor_mute() {
 /// Tests that deafening stops audio output.
 #[test]
 fn test_output_processor_deafen() {
-    let (input_tx, input_rx) = kanal::unbounded::<BytesMut>();
+    let (input_tx, input_rx) = kanal::unbounded::<Bytes>();
     let (mock_output, samples_counter, _) = TestAudioOutput::new();
 
     // Create state with deafened = true
@@ -224,13 +224,13 @@ fn test_output_processor_deafen() {
 
     let state = OutputProcessorState::new(&output_volume, rms_sender, &deafened, loss_sender);
 
-    let handle = thread::spawn(move || output_processor(input_rx, mock_output, 1.0, state));
+    let handle = thread::spawn(move || output_processor(input_rx, mock_output, 1.0, state, None));
 
     // Send frames
     for _ in 0..10 {
         let mut frame = BytesMut::with_capacity(FRAME_SIZE * 2);
         frame.resize(FRAME_SIZE * 2, 0);
-        input_tx.send(frame).expect("Failed to send frame");
+        input_tx.send(frame.freeze()).expect("Failed to send frame");
     }
 
     // Small delay to let processor run

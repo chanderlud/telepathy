@@ -139,10 +139,23 @@ let output = AudioOutputBuilder::new()
     .unwrap();
 ```
 
-> **Note on Sample Rates**: When noise suppression (`denoise`) is enabled, the input
-> processor upsamples to 48kHz for RNNoise processing and outputs 48kHz frames. The
-> encoder sample rate automatically matches this. When denoise is disabled, the
-> processor passes through at the device's native sample rate.
+> **Note on Sample Rates**: The processor's output sample rate depends on the configuration:
+>
+> - **Denoise enabled**: Always outputs at 48kHz (required by RNNoise). Input is upsampled to 48kHz for noise suppression processing.
+> - **Denoise disabled with custom `output_sample_rate`**: Uses the specified rate. Useful for matching network requirements without denoising.
+> - **Denoise disabled without custom rate**: Uses the device's native sample rate (pass-through, no resampling).
+>
+> The encoder sample rate automatically matches the processor's output rate.
+>
+> ```rust
+> // Example: Custom output sample rate without denoising
+> let input = AudioInputBuilder::new()
+>     .denoise(false, None)      // Disable denoising
+>     .output_sample_rate(48000) // Force 48kHz output for network compatibility
+>     .callback(|data| { /* ... */ })
+>     .build(&host)
+>     .unwrap();
+> ```
 
 ## Architecture Notes
 
