@@ -3,7 +3,7 @@ use crate::flutter::Statistics;
 use crate::flutter::callbacks::FrbStatisticsCallback;
 use crate::overlay::{CONNECTED, LATENCY, LOSS};
 use crate::telepathy::messages::Message;
-use crate::telepathy::sockets::{Transport, TransportStream};
+use crate::telepathy::sockets::{TIMESTAMP_BUFFER_CAPACITY, Transport, TransportStream};
 use crate::telepathy::{ConnectionState, StatisticsCollectorState};
 use flutter_rust_bridge::for_generated::futures::{Sink, SinkExt};
 use kanal::AsyncReceiver;
@@ -11,7 +11,6 @@ use libp2p::bytes::Bytes;
 use libp2p::futures::StreamExt;
 use libp2p::swarm::ConnectionId;
 use log::debug;
-use nnnoiseless::FRAME_SIZE;
 use speedy::{Readable, Writable};
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -161,7 +160,7 @@ pub(crate) async fn loopback(
 
 pub(crate) fn stream_to_audio_transport(stream: libp2p::Stream) -> Transport<TransportStream> {
     LengthDelimitedCodec::builder()
-        .max_frame_length(FRAME_SIZE * size_of::<i16>())
+        .max_frame_length(TIMESTAMP_BUFFER_CAPACITY)
         .length_field_type::<u16>()
         .new_framed(stream.compat())
 }

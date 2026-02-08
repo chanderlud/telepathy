@@ -7,7 +7,6 @@ use libp2p::futures::stream::{SplitSink, SplitStream};
 use libp2p::futures::{SinkExt, StreamExt};
 use log::{debug, error, info, warn};
 use nnnoiseless::FRAME_SIZE;
-
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::{Arc, Mutex};
@@ -34,7 +33,7 @@ pub(crate) type AudioSocket = SplitSink<Transport<TransportStream>, Bytes>;
 const MAX_AGE: u32 = 250;
 
 /// Pre-computed exact capacity for timestamp buffers (4 + FRAME_SIZE * 2)
-const TIMESTAMP_BUFFER_CAPACITY: usize = 4 + NETWORK_FRAME;
+pub(crate) const TIMESTAMP_BUFFER_CAPACITY: usize = 4 + NETWORK_FRAME;
 
 /// Pool size for timestamp buffers - increased from 2 to 8 for better pipelining
 const TIMESTAMP_POOL_SIZE: usize = 8;

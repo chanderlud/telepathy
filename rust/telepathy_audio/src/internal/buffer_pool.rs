@@ -286,12 +286,8 @@ impl Drop for PooledBytes {
         // Try to recover the buffer and return it to the pool
         if let Some(bytes) = self.inner.take() {
             // try_into_mut() succeeds only if refcount == 1 (we're the only owner)
-            if let Ok(mut buffer) = bytes.try_into_mut() {
-                // Clear the buffer to avoid data leakage, then return to pool
-                buffer.clear();
-                buffer.resize(self.pool.buffer_size, 0);
-                // Return to pool (ignore if full - buffer will be dropped)
-                let _ = self.pool.queue.push(buffer);
+            if let Ok(buffer) = bytes.try_into_mut() {
+                self.pool.return_buffer(buffer);
             }
             // If try_into_mut() fails, the Bytes was cloned/shared, just drop it
         }
