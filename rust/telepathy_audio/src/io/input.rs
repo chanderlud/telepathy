@@ -380,12 +380,13 @@ where
     ///
     /// # Returns
     ///
-    /// Returns `InputBuildContext` containing handles and state for the created threads
+    /// Returns `Result<InputBuildContext, AudioError>` containing handles and state for the created threads,
+    /// or an error if codec initialization fails.
     fn build_common<I: AudioInput + Send + 'static>(
         self,
         processor_input: I,
         input_sample_rate: u32,
-    ) -> InputBuildContext {
+    ) -> Result<InputBuildContext, AudioError> {
         // Create shared atomic state (use provided shared atomics or create new ones)
         let input_volume = self
             .shared_input_volume
@@ -434,7 +435,7 @@ where
         let ratio = sample_rate as f64 / input_sample_rate as f64;
         // create the encoder if needed
         let encoder = if self.config.codec_enabled {
-            SeaEncoder::new(
+            Some(SeaEncoder::new(
                 1,
                 sample_rate,
                 EncoderSettings {
@@ -442,8 +443,7 @@ where
                     vbr: self.config.codec_vbr,
                     ..Default::default()
                 },
-            )
-            .ok()
+            )?)
         } else {
             None
         };
@@ -474,13 +474,13 @@ where
             }))
         });
 
-        InputBuildContext {
+        Ok(InputBuildContext {
             input_volume,
             rms_threshold,
             muted,
             processor_handle,
             callback_handle,
-        }
+        })
     }
 
     /// Builds and starts the audio input stream.
@@ -534,7 +534,7 @@ where
         let error_notify = self.config.error_notify.clone();
 
         // Build common components (channels, threads, state)
-        let context = self.build_common(processor_input, device_sample_rate);
+        let context = self.build_common(processor_input, device_sample_rate)?;
 
         // Build the audio stream
         let input_sender_clone = input_sender.clone();
@@ -647,7 +647,7 @@ where
         let processor_input = WebAudioInput::from(&*web_audio);
 
         // Build common components (channels, threads, state)
-        let context = self.build_common(processor_input, input_sample_rate as u32);
+        let context = self.build_common(processor_input, input_sample_rate as u32)?;
 
         // Resume the audio context
         web_audio.resume();

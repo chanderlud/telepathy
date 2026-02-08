@@ -235,12 +235,13 @@ impl AudioOutputBuilder {
     ///
     /// # Returns
     ///
-    /// Returns `OutputBuildContext` containing handles and state for the created threads
+    /// Returns `Result<OutputBuildContext, AudioError>` containing handles and state for the created threads,
+    /// or an error if codec initialization fails.
     fn build_common<O: AudioOutput + Send + 'static>(
         self,
         processor_output: O,
         output_sample_rate: u32,
-    ) -> OutputBuildContext {
+    ) -> Result<OutputBuildContext, AudioError> {
         // Create shared atomic state (use provided shared atomics or create new ones)
         let output_volume = self
             .shared_output_volume
@@ -259,14 +260,13 @@ impl AudioOutputBuilder {
             OutputProcessorState::new(&output_volume, rms_sender, &deafened, loss_sender.clone());
 
         let decoder = if self.config.codec_enabled {
-            SeaDecoder::new(SeaFileHeader {
+            Some(SeaDecoder::new(SeaFileHeader {
                 version: 1,
                 channels: 1,
                 chunk_size: NETWORK_FRAME as u16,
                 frames_per_chunk: FRAME_SIZE as u16,
                 sample_rate: self.config.sample_rate,
-            })
-            .ok()
+            })?)
         } else {
             None
         };
@@ -281,13 +281,13 @@ impl AudioOutputBuilder {
             debug!("Output processor thread ended");
         });
 
-        OutputBuildContext {
+        Ok(OutputBuildContext {
             output_volume,
             deafened,
             loss_sender,
             network_sender,
             processor_handle,
-        }
+        })
     }
 
     /// Builds and starts the audio output stream.
@@ -334,7 +334,7 @@ impl AudioOutputBuilder {
         // Create processor output and build common components
         let processor_output = ChannelOutput::from(output_sender);
         let error_notify = self.config.error_notify.clone();
-        let context = self.build_common(processor_output, output_sample_rate);
+        let context = self.build_common(processor_output, output_sample_rate)?;
 
         // Build the audio stream
         let stream = device.build_output_stream(
@@ -397,7 +397,7 @@ impl AudioOutputBuilder {
         let output_sample_rate = 48000_u32;
 
         // Build common components (channels, threads, state)
-        let context = self.build_common(processor_output, output_sample_rate);
+        let context = self.build_common(processor_output, output_sample_rate)?;
 
         Ok(AudioOutputHandle {
             _web_buffer: Some(web_buffer),
