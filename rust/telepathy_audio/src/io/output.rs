@@ -341,9 +341,8 @@ impl AudioOutputBuilder {
             &config.into(),
             move |data: &mut [f32], _: &_| {
                 for frame in data.chunks_mut(output_channels) {
-                    let sample = output_receiver.recv().unwrap_or(0.0);
                     // Write the same sample to all channels (mono to stereo)
-                    frame.fill(sample);
+                    frame.fill(output_receiver.try_recv().unwrap_or(None).unwrap_or(0_f32));
                 }
             },
             move |err| {
