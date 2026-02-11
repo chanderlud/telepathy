@@ -34,7 +34,7 @@ use crate::internal::traits::AudioOutput;
 #[cfg(not(target_family = "wasm"))]
 use crate::internal::traits::CHANNEL_SIZE;
 #[cfg(not(target_family = "wasm"))]
-use crate::internal::traits::ChannelOutput;
+use crate::internal::traits::RingBufferOutput;
 use crate::sea::codec::file::SeaFileHeader;
 use crate::sea::decoder::SeaDecoder;
 use atomic_float::AtomicF32;
@@ -228,7 +228,7 @@ impl AudioOutputBuilder {
     ///
     /// # Type Parameters
     ///
-    /// * `O` - Type implementing `AudioOutput` trait (e.g., `ChannelOutput`, `WebOutput`)
+    /// * `O` - Type implementing `AudioOutput` trait (e.g., `RingBufferOutput`, `WebOutput`)
     ///
     /// # Arguments
     ///
@@ -305,7 +305,7 @@ impl AudioOutputBuilder {
     /// - The device uses an unsupported sample format
     #[cfg(not(target_family = "wasm"))]
     pub fn build(self, host: &AudioHost) -> Result<AudioOutputHandle, AudioError> {
-        use kanal::bounded;
+        use rtrb::RingBuffer;
 
         // Get the output device
         let device_handle =
@@ -327,11 +327,11 @@ impl AudioOutputBuilder {
         let output_sample_rate = config.sample_rate();
         let sample_format = config.sample_format();
 
-        // Create bounded output channel for cpal stream
-        let (output_sender, output_receiver) = bounded::<f32>(CHANNEL_SIZE * 4);
+        // Create ring buffer for lock-free producer/consumer communication
+        let (output_producer, output_consumer) = RingBuffer::<f32>::new(CHANNEL_SIZE * 4);
 
         // Create processor output and build common components
-        let processor_output = ChannelOutput::from(output_sender);
+        let processor_output = RingBufferOutput::new(output_producer);
         let error_notify = self.config.error_notify.clone();
         let context = self.build_common(processor_output, output_sample_rate)?;
 
@@ -340,70 +340,70 @@ impl AudioOutputBuilder {
             SampleFormat::I8 => build_output_stream_with_format::<i8>(
                 device,
                 &config.into(),
-                output_receiver,
+                output_consumer,
                 output_channels,
                 error_notify,
             )?,
             SampleFormat::I16 => build_output_stream_with_format::<i16>(
                 device,
                 &config.into(),
-                output_receiver,
+                output_consumer,
                 output_channels,
                 error_notify,
             )?,
             SampleFormat::I32 => build_output_stream_with_format::<i32>(
                 device,
                 &config.into(),
-                output_receiver,
+                output_consumer,
                 output_channels,
                 error_notify,
             )?,
             SampleFormat::I64 => build_output_stream_with_format::<i64>(
                 device,
                 &config.into(),
-                output_receiver,
+                output_consumer,
                 output_channels,
                 error_notify,
             )?,
             SampleFormat::U8 => build_output_stream_with_format::<u8>(
                 device,
                 &config.into(),
-                output_receiver,
+                output_consumer,
                 output_channels,
                 error_notify,
             )?,
             SampleFormat::U16 => build_output_stream_with_format::<u16>(
                 device,
                 &config.into(),
-                output_receiver,
+                output_consumer,
                 output_channels,
                 error_notify,
             )?,
             SampleFormat::U32 => build_output_stream_with_format::<u32>(
                 device,
                 &config.into(),
-                output_receiver,
+                output_consumer,
                 output_channels,
                 error_notify,
             )?,
             SampleFormat::U64 => build_output_stream_with_format::<u64>(
                 device,
                 &config.into(),
-                output_receiver,
+                output_consumer,
                 output_channels,
                 error_notify,
             )?,
             SampleFormat::F32 => build_output_stream_with_format::<f32>(
                 device,
                 &config.into(),
-                output_receiver,
+                output_consumer,
                 output_channels,
                 error_notify,
             )?,
             SampleFormat::F64 => build_output_stream_with_format::<f64>(
                 device,
                 &config.into(),
-                output_receiver,
+                output_consumer,
                 output_channels,
                 error_notify,
             )?,
@@ -588,6 +588,9 @@ impl Drop for AudioOutputHandle {
 /// This helper function creates a cpal output stream that converts f32 samples
 /// from the processing pipeline to the device's native sample format T.
 ///
+/// Uses `rtrb::Consumer` with the chunks API for efficient bulk reads from the
+/// lock-free ring buffer, matching the producer-side `RingBufferOutput` pattern.
+///
 /// # Type Parameters
 ///
 /// * `T` - The device's native sample format (e.g., i16, f32, u16)
@@ -596,14 +599,14 @@ impl Drop for AudioOutputHandle {
 ///
 /// * `device` - The cpal device to build the stream on
 /// * `config` - Stream configuration (sample rate, channels, etc.)
-/// * `output_receiver` - Channel receiver for f32 samples from the processor
+/// * `output_consumer` - Ring buffer consumer for f32 samples from the processor
 /// * `output_channels` - Number of output channels
 /// * `error_notify` - Optional notify handle for stream errors
 #[cfg(not(target_family = "wasm"))]
 fn build_output_stream_with_format<T>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
-    output_receiver: kanal::Receiver<f32>,
+    mut output_consumer: rtrb::Consumer<f32>,
     output_channels: usize,
     error_notify: Option<Arc<Notify>>,
 ) -> Result<cpal::Stream, AudioError>
@@ -615,12 +618,20 @@ where
     let stream = device.build_output_stream(
         config,
         move |data: &mut [T], _: &_| {
-            for frame in data.chunks_mut(output_channels) {
-                // Get f32 sample from processor, convert to device format T
-                let sample_f32 = output_receiver.try_recv().unwrap_or(None).unwrap_or(0_f32);
-                let sample_t = T::from_sample(sample_f32);
-                // Write the same sample to all channels (mono to multichannel)
-                frame.fill(sample_t);
+            // Number of mono samples needed (one per frame/channel-group)
+            let num_frames = data.len() / output_channels;
+            match output_consumer.read_chunk(num_frames) {
+                Ok(chunk) => {
+                    for (sample_f32, frame) in chunk.into_iter().zip(data.chunks_mut(output_channels)) {
+                        let sample_t = T::from_sample(sample_f32);
+                        frame.fill(sample_t);
+                    }
+                }
+                Err(_) => {
+                    // Not enough samples available; fill with silence
+                    let silence = T::from_sample(0.0f32);
+                    data.fill(silence);
+                }
             }
         },
         move |err| {

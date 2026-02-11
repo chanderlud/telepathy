@@ -1,7 +1,7 @@
 //! Audio input/output traits and platform-specific implementations.
 //!
 //! This module defines the core traits for audio input and output operations,
-//! along with platform-specific implementations using ring buffers, channels, and web audio.
+//! along with platform-specific implementations using ring buffers and web audio.
 //!
 //! ## Traits
 //!
@@ -11,7 +11,7 @@
 //! ## Implementations
 //!
 //! - [`RingBufferInput`] - Lock-free ring buffer input for native platforms (uses rtrb)
-//! - [`ChannelOutput`] - Channel-based output for native platforms (uses kanal)
+//! - [`RingBufferOutput`] - Lock-free ring buffer output for native platforms (uses rtrb)
 //! - [`WebOutput`] - Shared buffer output for WASM (uses Arc<Mutex<Vec<f32>>>)
 //!
 //! ## Buffer Size
@@ -21,8 +21,6 @@
 
 use crate::error::AudioError;
 
-#[cfg(not(target_family = "wasm"))]
-use kanal::Sender;
 use std::sync::Arc;
 #[cfg(not(target_family = "wasm"))]
 use std::sync::{Condvar, Mutex};
@@ -30,7 +28,7 @@ use std::sync::{Condvar, Mutex};
 /// Buffer size for audio data (2,400 samples).
 ///
 /// This value is used as the capacity for:
-/// - Native: rtrb ring buffer capacity (input), kanal channel bounds (output)
+/// - Native: rtrb ring buffer capacity (input and output)
 /// - WASM: WebOutput shared buffer maximum size
 ///
 /// At 48kHz sample rate, this represents 50ms of audio (2400 / 48000 = 0.05s).
@@ -131,36 +129,64 @@ impl AudioInput for RingBufferInput {
     }
 }
 
-/// Channel-based audio output for native platforms.
+/// Lock-free ring buffer audio output for native platforms.
+///
+/// Uses `rtrb::Producer` with the chunks API (`write_chunk_uninit()`) for
+/// efficient bulk writes, eliminating per-sample overhead compared to
+/// channel-based approaches.
+///
+/// ## Non-blocking Behavior
+///
+/// Unlike [`RingBufferInput`], this output is fully non-blocking and does not
+/// use a `Condvar`. When the ring buffer is full, samples are simply dropped
+/// rather than blocking the producer thread. This is the correct behavior for
+/// audio output: it is better to drop samples than to block the processor
+/// thread and cause cascading latency.
+///
+/// ## Chunk-based Writes
+///
+/// The `write_samples` implementation uses `write_chunk_uninit()` to acquire a
+/// contiguous writable region, then fills it using `fill_from_iter()`. The chunk
+/// is automatically committed when dropped, requiring only 1-2 atomic operations
+/// regardless of sample count.
 #[cfg(not(target_family = "wasm"))]
-pub struct ChannelOutput {
-    /// The sender for audio samples.
-    pub sender: Sender<f32>,
+pub struct RingBufferOutput {
+    /// The producer end of the ring buffer for audio samples.
+    producer: rtrb::Producer<f32>,
 }
 
 #[cfg(not(target_family = "wasm"))]
-impl From<Sender<f32>> for ChannelOutput {
-    fn from(sender: Sender<f32>) -> Self {
-        Self { sender }
+impl RingBufferOutput {
+    /// Creates a new `RingBufferOutput` wrapping the given producer.
+    ///
+    /// # Arguments
+    ///
+    /// * `producer` - The producer end of an `rtrb::RingBuffer<f32>`
+    pub fn new(producer: rtrb::Producer<f32>) -> Self {
+        Self { producer }
     }
 }
 
 #[cfg(not(target_family = "wasm"))]
-impl AudioOutput for ChannelOutput {
+impl AudioOutput for RingBufferOutput {
     fn is_full(&self) -> bool {
-        self.sender.is_full()
+        self.producer.slots() == 0
     }
 
     fn write_samples(&mut self, samples: &[f32]) -> Result<usize, AudioError> {
-        let mut failed = 0usize;
-
-        for &sample in samples {
-            if !self.sender.try_send(sample)? {
-                failed += 1;
-            }
+        let available = self.producer.slots();
+        if available == 0 {
+            return Ok(samples.len());
         }
 
-        Ok(failed)
+        let to_write = samples.len().min(available);
+        match self.producer.write_chunk_uninit(to_write) {
+            Ok(chunk) => {
+                chunk.fill_from_iter(samples[..to_write].iter().copied());
+                Ok(samples.len() - to_write)
+            }
+            Err(_) => Ok(samples.len()),
+        }
     }
 }
 
