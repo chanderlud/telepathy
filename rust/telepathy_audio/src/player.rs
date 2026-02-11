@@ -59,6 +59,84 @@ use wasm_sync::{Condvar, Mutex as WasmMutex};
 /// This prevents audio pops/clicks when stopping playback abruptly.
 const FADE_FRAMES: usize = 60;
 
+/// Trait for converting audio samples from various formats to a target type.
+///
+/// This trait provides methods for converting from each WAV sample format
+/// (U8, I16, I32, F32, F64) to the target type. It handles the appropriate
+/// scaling and normalization for each format.
+///
+/// # Implementations
+///
+/// - `i16`: Converts samples to 16-bit signed integers with appropriate scaling.
+///   - U8: Bias adjustment and bit shifting
+///   - I16: Direct pass-through
+///   - I32: Downscaling from 32-bit to 16-bit range
+///   - F32/F64: Multiplication by i16::MAX with clamping
+///
+/// - `f32`: Normalizes samples to the [-1.0, 1.0] range.
+///   - U8: Normalizes [0, 255] to [-1.0, 1.0]
+///   - I16/I32: Divides by MAX value
+///   - F32: Direct pass-through
+///   - F64: Conversion to f32
+trait SampleConversion: Sized {
+    fn from_u8_sample(value: u8) -> Self;
+    fn from_i16_sample(value: i16) -> Self;
+    fn from_i32_sample(value: i32) -> Self;
+    fn from_f32_sample(value: f32) -> Self;
+    fn from_f64_sample(value: f64) -> Self;
+}
+
+impl SampleConversion for i16 {
+    fn from_u8_sample(value: u8) -> Self {
+        // Convert U8 [0, 255] to I16 [-32768, 32767] with bias adjustment
+        ((value as i16) - 128) << 8
+    }
+
+    fn from_i16_sample(value: i16) -> Self {
+        value
+    }
+
+    fn from_i32_sample(value: i32) -> Self {
+        // Downscale from i32::MAX to i16::MAX (shift right by 16 bits)
+        (value >> 16) as i16
+    }
+
+    fn from_f32_sample(value: f32) -> Self {
+        // Multiply by i16::MAX and clamp to valid range
+        (value * i16::MAX as f32).clamp(i16::MIN as f32, i16::MAX as f32) as i16
+    }
+
+    fn from_f64_sample(value: f64) -> Self {
+        // Convert to f32 first, then apply f32 logic
+        Self::from_f32_sample(value as f32)
+    }
+}
+
+impl SampleConversion for f32 {
+    fn from_u8_sample(value: u8) -> Self {
+        // Normalize [0, 255] to [-1.0, 1.0]
+        (value as f32 / u8::MAX as f32) * 2.0 - 1.0
+    }
+
+    fn from_i16_sample(value: i16) -> Self {
+        // Normalize to [-1.0, 1.0]
+        value as f32 / i16::MAX as f32
+    }
+
+    fn from_i32_sample(value: i32) -> Self {
+        // Normalize to [-1.0, 1.0]
+        value as f32 / i32::MAX as f32
+    }
+
+    fn from_f32_sample(value: f32) -> Self {
+        value
+    }
+
+    fn from_f64_sample(value: f64) -> Self {
+        value as f32
+    }
+}
+
 /// Audio file header information parsed from WAV format.
 struct AudioHeader {
     /// Number of audio channels (1 for mono, 2 for stereo).
@@ -298,6 +376,102 @@ impl SoundHandle {
     }
 }
 
+/// Converts WAV bytes to SEA codec bytes.
+///
+/// This function encodes WAV audio data into the SEA codec format,
+/// which provides efficient compression for audio transmission.
+/// Multichannel audio is automatically downmixed to mono by averaging
+/// all channels.
+///
+/// # Arguments
+///
+/// * `bytes` - The WAV file bytes (must include 44-byte header).
+/// * `residual_bits` - Quality parameter for encoding (higher = better quality).
+///
+/// # Returns
+///
+/// The encoded SEA file bytes (mono, regardless of input channel count).
+///
+/// # Errors
+///
+/// Returns `AudioError` if the WAV data is invalid or encoding fails.
+pub async fn wav_to_sea(bytes: Vec<u8>, residual_bits: f32) -> Result<Vec<u8>, AudioError> {
+    if bytes.len() < 44 {
+        return Err(AudioError::Processing("WAV data too short".to_string()));
+    }
+
+    let spec = AudioHeader::try_from(&bytes[0..44])?;
+    let channels = spec.channels;
+    let sample_rate = spec.sample_rate;
+
+    let sample_size = match spec.sample_format {
+        SampleFormat::U8 => 1,
+        SampleFormat::I16 => 2,
+        SampleFormat::I32 | SampleFormat::F32 => 4,
+        SampleFormat::F64 => 8,
+        _ => 1,
+    };
+
+    let sample_format = spec.sample_format;
+
+    let handle = spawn_blocking(move || {
+        let settings = EncoderSettings {
+            frames_per_chunk: FRAME_SIZE as u16,
+            vbr: true,
+            residual_bits,
+            ..Default::default()
+        };
+
+        let mut encoder = SeaEncoder::new(1, sample_rate, settings)?;
+
+        let mut samples = [0_i16; FRAME_SIZE];
+        let mut buffer = BytesMut::new();
+        let mut data: Vec<u8> = SeaFileHeader {
+            version: 1,
+            channels: 1,
+            chunk_size: 0,
+            frames_per_chunk: FRAME_SIZE as u16,
+            sample_rate,
+        }
+        .serialize();
+
+        // Create planar buffers for channel-aware unpacking
+        let mut planar_buf: Vec<Vec<i16>> = vec![Vec::with_capacity(FRAME_SIZE); channels as usize];
+
+        for chunk in bytes[44..].chunks(FRAME_SIZE * sample_size * channels as usize) {
+            // Unpack interleaved bytes to planar i16 buffers
+            unpack_wav_frame(chunk, sample_format, channels as usize, &mut planar_buf)?;
+
+            // Downmix all channels to mono by averaging
+            for idx in 0..FRAME_SIZE.min(planar_buf.first().map(|b| b.len()).unwrap_or(0)) {
+                let mut sum = 0_i32;
+                for channel in &planar_buf {
+                    if idx < channel.len() {
+                        sum += channel[idx] as i32;
+                    }
+                }
+                samples[idx] = (sum / channels as i32) as i16;
+            }
+
+            let actual_samples = planar_buf.first().map(|b| b.len()).unwrap_or(0);
+            if actual_samples < FRAME_SIZE {
+                for sample in samples.iter_mut().take(FRAME_SIZE).skip(actual_samples) {
+                    *sample = 0;
+                }
+            }
+
+            encoder.encode_frame(samples, &mut buffer)?;
+            data.extend_from_slice(buffer.as_ref());
+        }
+
+        // update the header with the real chunk size
+        data[6..=7].copy_from_slice(encoder.chunk_size().to_le_bytes().as_ref());
+        Ok::<Vec<u8>, AudioError>(data)
+    });
+
+    handle.await?
+}
+
 /// Gets the output device based on the configured device ID.
 async fn get_output_device(
     output_device: &Arc<Mutex<Option<DeviceId>>>,
@@ -349,6 +523,7 @@ async fn play_sound_with_device(
             let now = Instant::now();
             let local_bytes = mem::take(&mut bytes);
             let header = SeaFileHeader::from_frame(&local_bytes[..14])?;
+            info!("loaded header {:?}", header);
             let chunk_size = header.chunk_size as usize;
             spec.channels = header.channels as u32;
             spec.sample_rate = header.sample_rate;
@@ -578,12 +753,11 @@ fn processor(
     // The output for the resampler
     let mut post_buf = vec![vec![0_f32; post_len]; channels_usize];
     // The input for the resampler
-    let mut pre_buf = vec![vec![0_f32; FRAME_SIZE / spec.channels as usize]; channels_usize];
+    let mut pre_buf = vec![vec![0_f32; FRAME_SIZE / channels_usize]; channels_usize];
     // Groups of samples ready to be sent to the output
     let mut out_buf = Vec::with_capacity(output_channels);
 
-    let mut resampler =
-        resampler_factory(ratio, channels_usize, FRAME_SIZE / spec.channels as usize)?;
+    let mut resampler = resampler_factory(ratio, channels_usize, FRAME_SIZE / channels_usize)?;
     let output_volume = output_volume.load(Relaxed);
 
     let mut byte_chunks = bytes
@@ -593,7 +767,7 @@ fn processor(
     let mut sample_chunks = samples.as_ref().map(|samples| samples.iter());
 
     'outer: loop {
-        match (byte_chunks.as_mut(), sample_chunks.as_mut()) {
+        let actual_frame_count = match (byte_chunks.as_mut(), sample_chunks.as_mut()) {
             (None, Some(samples)) => {
                 let samples = if let Some(samples) = samples.next() {
                     samples
@@ -603,12 +777,14 @@ fn processor(
 
                 let scale = 1_f32 / i16::MAX as f32;
 
-                for (i, sample) in samples.chunks(channels_usize).enumerate() {
-                    for (j, channel) in sample.iter().enumerate() {
-                        let sample = *channel as f32 * scale;
-                        pre_buf[j][i] = sample;
-                    }
+                // De-interleave samples into planar buffers
+                for (i, sample) in samples.iter().enumerate() {
+                    let channel_idx = i % channels_usize;
+                    let scaled_sample = (*sample as f32) * scale;
+                    pre_buf[channel_idx][i / channels_usize] = scaled_sample;
                 }
+
+                FRAME_SIZE / channels_usize
             }
             (Some(chunks), None) => {
                 let chunk = if let Some(chunk) = chunks.next() {
@@ -617,52 +793,13 @@ fn processor(
                     break 'outer;
                 };
 
-                match sample_format {
-                    SampleFormat::U8 => {
-                        let scale = 1_f32 / u8::MAX as f32;
-
-                        for (i, sample) in chunk.chunks(channels_usize).enumerate() {
-                            for (j, channel) in sample.iter().enumerate() {
-                                let sample = *channel as f32 * scale;
-                                pre_buf[j][i] = sample;
-                            }
-                        }
-                    }
-                    SampleFormat::I16 => {
-                        let scale = 1_f32 / i16::MAX as f32;
-
-                        for (i, sample) in chunk.chunks(2 * channels_usize).enumerate() {
-                            for (j, channel) in sample.chunks(2).enumerate() {
-                                let sample = i16::from_le_bytes(channel.try_into()?) as f32 * scale;
-                                pre_buf[j][i] = sample;
-                            }
-                        }
-                    }
-                    SampleFormat::I32 => {
-                        let scale = 1_f32 / i32::MAX as f32;
-
-                        for (i, sample) in chunk.chunks(4 * channels_usize).enumerate() {
-                            for (j, channel) in sample.chunks(4).enumerate() {
-                                let sample = i32::from_le_bytes(channel.try_into()?) as f32 * scale;
-                                pre_buf[j][i] = sample;
-                            }
-                        }
-                    }
-                    SampleFormat::F32 => {
-                        for (i, sample) in chunk.chunks(4 * channels_usize).enumerate() {
-                            for (j, channel) in sample.chunks(4).enumerate() {
-                                let sample = f32::from_le_bytes(channel.try_into()?);
-                                pre_buf[j][i] = sample;
-                            }
-                        }
-                    }
-                    SampleFormat::F64 => {
-                        for (i, sample) in chunk.chunks(8 * channels_usize).enumerate() {
-                            for (j, channel) in sample.chunks(8).enumerate() {
-                                let sample = f64::from_le_bytes(channel.try_into()?) as f32;
-                                pre_buf[j][i] = sample;
-                            }
-                        }
+                let frame_count = match sample_format {
+                    SampleFormat::U8
+                    | SampleFormat::I16
+                    | SampleFormat::I32
+                    | SampleFormat::F32
+                    | SampleFormat::F64 => {
+                        unpack_wav_frame(chunk, sample_format, channels_usize, &mut pre_buf)?
                     }
                     _ => {
                         return Err(AudioError::Processing(format!(
@@ -670,10 +807,21 @@ fn processor(
                             sample_format
                         )));
                     }
+                };
+
+                // Extend pre_buf channels to expected length for resampler compatibility,
+                // padding with zeros if too short, but never truncating to preserve all decoded frames
+                let expected_len = frame_count;
+                for channel in pre_buf.iter_mut() {
+                    if channel.len() < expected_len {
+                        channel.resize(expected_len, 0.0);
+                    }
                 }
+
+                frame_count
             }
             _ => break 'outer,
-        }
+        };
 
         for channel in pre_buf.iter_mut() {
             wide_mul(channel, output_volume);
@@ -683,7 +831,7 @@ fn processor(
             let processed = resampler.process_into_buffer(&pre_buf, &mut post_buf, None)?;
             (&mut post_buf, processed.1)
         } else {
-            (&mut pre_buf, FRAME_SIZE / spec.channels as usize)
+            (&mut pre_buf, actual_frame_count)
         };
 
         // I'm not sure how to refactor this loop to pass the needless range test
@@ -758,83 +906,101 @@ fn processor(
     Ok(())
 }
 
-/// Converts WAV bytes to SEA codec bytes.
+/// Unpacks WAV audio data from interleaved bytes to planar channel buffers.
 ///
-/// This function encodes WAV audio data into the SEA codec format,
-/// which provides efficient compression for audio transmission.
+/// This function properly handles multi-channel audio by:
+/// 1. Chunking input bytes based on `bytes_per_sample * channels` to extract complete sample frames
+/// 2. Converting each interleaved frame to planar format by distributing samples to channel buffers
+/// 3. Using the `SampleConversion` trait to support both i16 and f32 output types
 ///
 /// # Arguments
 ///
-/// * `bytes` - The WAV file bytes (must include 44-byte header).
-/// * `residual_bits` - Quality parameter for encoding (higher = better quality).
+/// * `chunk` - The raw WAV byte data (excluding header)
+/// * `sample_format` - The sample format of the input data (U8, I16, I32, F32, F64)
+/// * `channels` - Number of audio channels
+/// * `output` - Pre-allocated planar buffers, one Vec per channel. Buffers are cleared and filled.
 ///
 /// # Returns
 ///
-/// The encoded SEA file bytes.
+/// The number of sample frames successfully processed, or an error for unsupported formats.
 ///
-/// # Errors
+/// # Example
 ///
-/// Returns `AudioError` if the WAV data is invalid or encoding fails.
-pub async fn wav_to_sea(bytes: Vec<u8>, residual_bits: f32) -> Result<Vec<u8>, AudioError> {
-    if bytes.len() < 44 {
-        return Err(AudioError::Processing("WAV data too short".to_string()));
+/// ```rust,ignore
+/// let mut planar_buf = vec![vec![0_f32; frame_count]; channels];
+/// let frames = unpack_wav_frame(&chunk, SampleFormat::I16, 2, &mut planar_buf)?;
+/// // planar_buf[0] contains left channel samples
+/// // planar_buf[1] contains right channel samples
+/// ```
+fn unpack_wav_frame<T: SampleConversion>(
+    chunk: &[u8],
+    sample_format: SampleFormat,
+    channels: usize,
+    output: &mut [Vec<T>],
+) -> Result<usize, AudioError> {
+    let bytes_per_sample = sample_format.sample_size();
+    let bytes_per_frame = bytes_per_sample * channels;
+
+    // Clear output buffers
+    for channel_buf in output.iter_mut() {
+        channel_buf.clear();
     }
 
-    let spec = AudioHeader::try_from(&bytes[0..44])?;
-    let channels = spec.channels;
-    let sample_rate = spec.sample_rate;
+    let mut frame_count = 0;
 
-    let sample_size = match spec.sample_format {
-        SampleFormat::U8 => 1,
-        SampleFormat::I16 => 2,
-        SampleFormat::I32 | SampleFormat::F32 => 4,
-        SampleFormat::F64 => 8,
-        _ => 1,
-    };
-
-    let handle = spawn_blocking(move || {
-        let settings = EncoderSettings {
-            frames_per_chunk: FRAME_SIZE as u16 / channels as u16,
-            vbr: true,
-            residual_bits,
-            ..Default::default()
-        };
-
-        let mut encoder = SeaEncoder::new(channels as u8, sample_rate, settings)?;
-
-        let mut samples = [0; FRAME_SIZE];
-        let mut buffer = BytesMut::new();
-        let mut data: Vec<u8> = Vec::new();
-
-        for chunk in bytes[44..].chunks(FRAME_SIZE * sample_size) {
-            let written = match spec.sample_format {
-                SampleFormat::U8 => {
-                    for (j, sample) in chunk.iter().enumerate() {
-                        samples[j] = ((*sample as i16) - 128) << 8;
-                    }
-                    chunk.len()
-                }
-                SampleFormat::I16 => {
-                    for (i, sample_bytes) in chunk.chunks_exact(2).enumerate() {
-                        samples[i] = i16::from_le_bytes([sample_bytes[0], sample_bytes[1]]);
-                    }
-                    chunk.len() / 2
-                }
-                _ => break,
-            };
-
-            if written < FRAME_SIZE {
-                samples[written..].fill(0);
-            }
-
-            encoder.encode_frame(samples, &mut buffer)?;
-            data.extend_from_slice(buffer.as_ref());
+    // Process complete frames only
+    for frame in chunk.chunks(bytes_per_frame) {
+        if frame.len() < bytes_per_frame {
+            break; // Skip incomplete frames at the end
         }
 
-        Ok::<Vec<u8>, AudioError>(data)
-    });
+        for (ch_idx, sample_bytes) in frame.chunks(bytes_per_sample).enumerate() {
+            if ch_idx >= output.len() {
+                break;
+            }
 
-    handle.await?
+            let sample =
+                match sample_format {
+                    SampleFormat::U8 => T::from_u8_sample(sample_bytes[0]),
+                    SampleFormat::I16 => {
+                        let value = i16::from_le_bytes(sample_bytes.try_into().map_err(|_| {
+                            AudioError::Processing("Invalid I16 sample".to_string())
+                        })?);
+                        T::from_i16_sample(value)
+                    }
+                    SampleFormat::I32 => {
+                        let value = i32::from_le_bytes(sample_bytes.try_into().map_err(|_| {
+                            AudioError::Processing("Invalid I32 sample".to_string())
+                        })?);
+                        T::from_i32_sample(value)
+                    }
+                    SampleFormat::F32 => {
+                        let value = f32::from_le_bytes(sample_bytes.try_into().map_err(|_| {
+                            AudioError::Processing("Invalid F32 sample".to_string())
+                        })?);
+                        T::from_f32_sample(value)
+                    }
+                    SampleFormat::F64 => {
+                        let value = f64::from_le_bytes(sample_bytes.try_into().map_err(|_| {
+                            AudioError::Processing("Invalid F64 sample".to_string())
+                        })?);
+                        T::from_f64_sample(value)
+                    }
+                    _ => {
+                        return Err(AudioError::Processing(format!(
+                            "Unsupported sample format: {:?}",
+                            sample_format
+                        )));
+                    }
+                };
+
+            output[ch_idx].push(sample);
+        }
+
+        frame_count += 1;
+    }
+
+    Ok(frame_count)
 }
 
 #[cfg(test)]
@@ -880,5 +1046,288 @@ mod tests {
     fn test_audio_header_too_short() {
         let short_header = vec![0u8; 20];
         assert!(AudioHeader::try_from(&short_header[..]).is_err());
+    }
+
+    // Tests for SampleConversion trait
+
+    #[test]
+    fn test_sample_conversion_i16_from_u8() {
+        // U8 128 (center) should become I16 0
+        assert_eq!(i16::from_u8_sample(128), 0);
+        // U8 0 should become I16 -32768
+        assert_eq!(i16::from_u8_sample(0), -32768);
+        // U8 255 should become I16 32512 (close to max)
+        assert_eq!(i16::from_u8_sample(255), 32512);
+    }
+
+    #[test]
+    fn test_sample_conversion_i16_from_i16() {
+        assert_eq!(i16::from_i16_sample(0), 0);
+        assert_eq!(i16::from_i16_sample(i16::MAX), i16::MAX);
+        assert_eq!(i16::from_i16_sample(i16::MIN), i16::MIN);
+    }
+
+    #[test]
+    fn test_sample_conversion_i16_from_i32() {
+        // i32::MAX should become i16::MAX (approximately)
+        assert_eq!(i16::from_i32_sample(i32::MAX), i16::MAX);
+        // i32::MIN should become i16::MIN
+        assert_eq!(i16::from_i32_sample(i32::MIN), i16::MIN);
+        // 0 should remain 0
+        assert_eq!(i16::from_i32_sample(0), 0);
+    }
+
+    #[test]
+    fn test_sample_conversion_i16_from_f32() {
+        // 1.0 should clamp to i16::MAX
+        assert_eq!(i16::from_f32_sample(1.0), i16::MAX);
+        // -1.0 should become -i16::MAX (clamped)
+        assert_eq!(i16::from_f32_sample(-1.0), -i16::MAX);
+        // 0.0 should remain 0
+        assert_eq!(i16::from_f32_sample(0.0), 0);
+        // Values beyond range should clamp
+        assert_eq!(i16::from_f32_sample(2.0), i16::MAX);
+        assert_eq!(i16::from_f32_sample(-2.0), i16::MIN);
+    }
+
+    #[test]
+    fn test_sample_conversion_f32_from_u8() {
+        // U8 0 should become -1.0
+        assert!((f32::from_u8_sample(0) - (-1.0)).abs() < 0.01);
+        // U8 255 should become 1.0
+        assert!((f32::from_u8_sample(255) - 1.0).abs() < 0.01);
+        // U8 128 should become approximately 0.0
+        assert!(f32::from_u8_sample(128).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_sample_conversion_f32_from_i16() {
+        // i16::MAX should become approximately 1.0
+        assert!((f32::from_i16_sample(i16::MAX) - 1.0).abs() < 0.001);
+        // i16::MIN should become approximately -1.0
+        assert!(f32::from_i16_sample(i16::MIN) < -0.99);
+        // 0 should remain 0
+        assert!((f32::from_i16_sample(0)).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_sample_conversion_f32_from_i32() {
+        // i32::MAX should become approximately 1.0
+        assert!((f32::from_i32_sample(i32::MAX) - 1.0).abs() < 0.001);
+        // 0 should remain 0
+        assert!((f32::from_i32_sample(0)).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_sample_conversion_f32_from_f32() {
+        assert_eq!(f32::from_f32_sample(0.5), 0.5);
+        assert_eq!(f32::from_f32_sample(-0.5), -0.5);
+        assert_eq!(f32::from_f32_sample(1.0), 1.0);
+    }
+
+    #[test]
+    fn test_sample_conversion_f32_from_f64() {
+        assert!((f32::from_f64_sample(0.5_f64) - 0.5).abs() < 0.001);
+        assert!((f32::from_f64_sample(-0.5_f64) - (-0.5)).abs() < 0.001);
+    }
+
+    // Tests for unpack_wav_frame function
+
+    #[test]
+    fn test_unpack_wav_frame_u8_mono() {
+        // Mono U8 audio: 3 samples [64, 128, 192]
+        let chunk = vec![64_u8, 128, 192];
+        let mut output: Vec<Vec<f32>> = vec![Vec::new()];
+
+        let frames = unpack_wav_frame(&chunk, SampleFormat::U8, 1, &mut output).unwrap();
+
+        assert_eq!(frames, 3);
+        assert_eq!(output.len(), 1);
+        assert_eq!(output[0].len(), 3);
+        // 64/255*2-1 ≈ -0.498, 128/255*2-1 ≈ 0.004, 192/255*2-1 ≈ 0.506
+        assert!(output[0][0] < 0.0); // 64 is below center
+        assert!(output[0][1].abs() < 0.02); // 128 is center
+        assert!(output[0][2] > 0.0); // 192 is above center
+    }
+
+    #[test]
+    fn test_unpack_wav_frame_u8_stereo() {
+        // Stereo U8: [L1, R1, L2, R2] = [64, 192, 128, 255]
+        let chunk = vec![64_u8, 192, 128, 255];
+        let mut output: Vec<Vec<f32>> = vec![Vec::new(), Vec::new()];
+
+        let frames = unpack_wav_frame(&chunk, SampleFormat::U8, 2, &mut output).unwrap();
+
+        assert_eq!(frames, 2);
+        assert_eq!(output[0].len(), 2); // Left channel
+        assert_eq!(output[1].len(), 2); // Right channel
+        // Verify interleaved to planar conversion
+        assert!(output[0][0] < 0.0); // L1 = 64
+        assert!(output[1][0] > 0.0); // R1 = 192
+    }
+
+    #[test]
+    fn test_unpack_wav_frame_i16_mono() {
+        // Mono I16 audio: 2 samples in little-endian
+        let mut chunk = Vec::new();
+        chunk.extend_from_slice(&1000_i16.to_le_bytes());
+        chunk.extend_from_slice(&(-1000_i16).to_le_bytes());
+
+        let mut output: Vec<Vec<f32>> = vec![Vec::new()];
+        let frames = unpack_wav_frame(&chunk, SampleFormat::I16, 1, &mut output).unwrap();
+
+        assert_eq!(frames, 2);
+        assert!(output[0][0] > 0.0); // Positive sample
+        assert!(output[0][1] < 0.0); // Negative sample
+    }
+
+    #[test]
+    fn test_unpack_wav_frame_i16_stereo() {
+        // Stereo I16: [L1, R1, L2, R2]
+        let mut chunk = Vec::new();
+        chunk.extend_from_slice(&10000_i16.to_le_bytes()); // L1
+        chunk.extend_from_slice(&(-10000_i16).to_le_bytes()); // R1
+        chunk.extend_from_slice(&5000_i16.to_le_bytes()); // L2
+        chunk.extend_from_slice(&(-5000_i16).to_le_bytes()); // R2
+
+        let mut output: Vec<Vec<f32>> = vec![Vec::new(), Vec::new()];
+        let frames = unpack_wav_frame(&chunk, SampleFormat::I16, 2, &mut output).unwrap();
+
+        assert_eq!(frames, 2);
+        assert_eq!(output[0].len(), 2);
+        assert_eq!(output[1].len(), 2);
+        // Left channel should be positive, right channel negative
+        assert!(output[0][0] > 0.0 && output[0][1] > 0.0);
+        assert!(output[1][0] < 0.0 && output[1][1] < 0.0);
+    }
+
+    #[test]
+    fn test_unpack_wav_frame_i32_mono() {
+        let mut chunk = Vec::new();
+        chunk.extend_from_slice(&(i32::MAX / 2).to_le_bytes());
+
+        let mut output: Vec<Vec<f32>> = vec![Vec::new()];
+        let frames = unpack_wav_frame(&chunk, SampleFormat::I32, 1, &mut output).unwrap();
+
+        assert_eq!(frames, 1);
+        assert!((output[0][0] - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_unpack_wav_frame_f32_stereo() {
+        let mut chunk = Vec::new();
+        chunk.extend_from_slice(&0.75_f32.to_le_bytes()); // L1
+        chunk.extend_from_slice(&(-0.25_f32).to_le_bytes()); // R1
+
+        let mut output: Vec<Vec<f32>> = vec![Vec::new(), Vec::new()];
+        let frames = unpack_wav_frame(&chunk, SampleFormat::F32, 2, &mut output).unwrap();
+
+        assert_eq!(frames, 1);
+        assert!((output[0][0] - 0.75).abs() < 0.001);
+        assert!((output[1][0] - (-0.25)).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_unpack_wav_frame_f64_mono() {
+        let mut chunk = Vec::new();
+        chunk.extend_from_slice(&0.333_f64.to_le_bytes());
+
+        let mut output: Vec<Vec<f32>> = vec![Vec::new()];
+        let frames = unpack_wav_frame(&chunk, SampleFormat::F64, 1, &mut output).unwrap();
+
+        assert_eq!(frames, 1);
+        assert!((output[0][0] - 0.333).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_unpack_wav_frame_surround_51() {
+        // 5.1 surround (6 channels) with I16 samples
+        let channels = 6;
+        let mut chunk = Vec::new();
+        // One frame with 6 channel samples
+        for i in 0..channels {
+            chunk.extend_from_slice(&((i as i16 + 1) * 1000).to_le_bytes());
+        }
+
+        let mut output: Vec<Vec<f32>> = vec![Vec::new(); channels];
+        let frames = unpack_wav_frame(&chunk, SampleFormat::I16, channels, &mut output).unwrap();
+
+        assert_eq!(frames, 1);
+        for (i, channel) in output.iter().enumerate() {
+            assert_eq!(channel.len(), 1);
+            // Each channel should have its unique value
+            let expected = (i as i16 + 1) * 1000;
+            let expected_f32 = expected as f32 / i16::MAX as f32;
+            assert!((channel[0] - expected_f32).abs() < 0.001);
+        }
+    }
+
+    #[test]
+    fn test_unpack_wav_frame_empty_chunk() {
+        let chunk: Vec<u8> = Vec::new();
+        let mut output: Vec<Vec<f32>> = vec![Vec::new(), Vec::new()];
+
+        let frames = unpack_wav_frame(&chunk, SampleFormat::I16, 2, &mut output).unwrap();
+
+        assert_eq!(frames, 0);
+        assert!(output[0].is_empty());
+        assert!(output[1].is_empty());
+    }
+
+    #[test]
+    fn test_unpack_wav_frame_partial_frame() {
+        // Stereo I16 requires 4 bytes per frame, provide only 3
+        let chunk = vec![0_u8, 0, 0]; // Incomplete frame
+
+        let mut output: Vec<Vec<f32>> = vec![Vec::new(), Vec::new()];
+        let frames = unpack_wav_frame(&chunk, SampleFormat::I16, 2, &mut output).unwrap();
+
+        // Should skip incomplete frame
+        assert_eq!(frames, 0);
+    }
+
+    #[test]
+    fn test_unpack_wav_frame_to_i16() {
+        // Test unpacking to i16 output (used by wav_to_sea)
+        let mut chunk = Vec::new();
+        chunk.extend_from_slice(&i16::MAX.to_le_bytes()); // L1
+        chunk.extend_from_slice(&i16::MIN.to_le_bytes()); // R1
+
+        let mut output: Vec<Vec<i16>> = vec![Vec::new(), Vec::new()];
+        let frames = unpack_wav_frame(&chunk, SampleFormat::I16, 2, &mut output).unwrap();
+
+        assert_eq!(frames, 1);
+        assert_eq!(output[0][0], i16::MAX);
+        assert_eq!(output[1][0], i16::MIN);
+    }
+
+    #[test]
+    fn test_unpack_wav_frame_u8_to_i16() {
+        // U8 to i16 conversion
+        let chunk = vec![0_u8, 128, 255]; // Min, center, max
+
+        let mut output: Vec<Vec<i16>> = vec![Vec::new()];
+        let frames = unpack_wav_frame(&chunk, SampleFormat::U8, 1, &mut output).unwrap();
+
+        assert_eq!(frames, 3);
+        assert_eq!(output[0][0], -32768); // 0 -> -32768
+        assert_eq!(output[0][1], 0); // 128 -> 0
+        assert_eq!(output[0][2], 32512); // 255 -> 32512
+    }
+
+    #[test]
+    fn test_unpack_wav_frame_f32_to_i16() {
+        let mut chunk = Vec::new();
+        chunk.extend_from_slice(&1.0_f32.to_le_bytes());
+        chunk.extend_from_slice(&0.0_f32.to_le_bytes());
+        chunk.extend_from_slice(&(-1.0_f32).to_le_bytes());
+
+        let mut output: Vec<Vec<i16>> = vec![Vec::new()];
+        let frames = unpack_wav_frame(&chunk, SampleFormat::F32, 1, &mut output).unwrap();
+
+        assert_eq!(frames, 3);
+        assert_eq!(output[0][0], i16::MAX);
+        assert_eq!(output[0][1], 0);
+        assert_eq!(output[0][2], -i16::MAX);
     }
 }

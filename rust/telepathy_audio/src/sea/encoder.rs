@@ -69,4 +69,8 @@ impl SeaEncoder {
 
         Ok(())
     }
+
+    pub fn chunk_size(&self) -> u16 {
+        self.file.header.chunk_size
+    }
 }

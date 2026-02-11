@@ -27,7 +27,6 @@ use crate::devices::AudioHost;
 #[cfg(not(target_family = "wasm"))]
 use crate::devices::{DeviceError, get_output_device};
 use crate::error::AudioError;
-use crate::internal::NETWORK_FRAME;
 use crate::internal::processor::output_processor;
 use crate::internal::state::OutputProcessorState;
 use crate::internal::traits::AudioOutput;
@@ -265,7 +264,7 @@ impl AudioOutputBuilder {
             Some(SeaDecoder::new(SeaFileHeader {
                 version: 1,
                 channels: 1,
-                chunk_size: NETWORK_FRAME as u16,
+                chunk_size: 0,
                 frames_per_chunk: FRAME_SIZE as u16,
                 sample_rate: self.config.sample_rate,
             })?)
