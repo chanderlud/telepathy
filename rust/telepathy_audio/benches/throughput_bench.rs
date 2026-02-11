@@ -20,13 +20,14 @@ use std::f32::consts::PI;
 use std::hint::black_box;
 use std::thread;
 use std::time::Duration;
+use telepathy_audio::FRAME_SIZE;
 use telepathy_audio::internal::NETWORK_FRAME;
 use telepathy_audio::internal::processor::{input_processor, output_processor};
 use telepathy_audio::internal::state::{InputProcessorState, OutputProcessorState};
 use telepathy_audio::sea::codec::common::SeaError;
+use telepathy_audio::sea::codec::file::SeaFileHeader;
 use telepathy_audio::sea::decoder::SeaDecoder;
 use telepathy_audio::sea::encoder::{EncoderSettings, SeaEncoder};
-use telepathy_audio::{FRAME_SIZE, SeaFileHeader};
 
 /// Number of frames to process in each benchmark iteration.
 const BENCHMARK_FRAMES: usize = 1000;
@@ -50,7 +51,7 @@ struct OutputBenchConfig {
 fn bench_input_throughput(c: &mut Criterion) {
     let mut group = c.benchmark_group("input_throughput");
     group.sample_size(40);
-    group.measurement_time(Duration::from_secs(50));
+    group.measurement_time(Duration::from_secs(60));
 
     let configs = vec![
         InputBenchConfig {
@@ -64,6 +65,12 @@ fn bench_input_throughput(c: &mut Criterion) {
             codec: true,
             denoise: false,
             resample: false,
+        },
+        InputBenchConfig {
+            name: "resample",
+            codec: false,
+            denoise: false,
+            resample: true,
         },
         InputBenchConfig {
             name: "denoise",
@@ -116,26 +123,21 @@ fn bench_input_throughput(c: &mut Criterion) {
                     let d = Default::default();
                     let state = InputProcessorState::new(&a, &b, &c, d, 1024);
 
+                    let sample_rate = if config.denoise || config.resample {
+                        48_000
+                    } else {
+                        input_rate
+                    };
+                    let ratio = sample_rate as f64 / input_rate as f64;
+
                     let encoder = if config.codec {
-                        SeaEncoder::new(
-                            1,
-                            if config.denoise { 48_000 } else { input_rate },
-                            EncoderSettings::default(),
-                        )
-                        .ok()
+                        SeaEncoder::new(1, sample_rate, EncoderSettings::default()).ok()
                     } else {
                         None
                     };
 
                     let processor_handle = thread::spawn(move || {
-                        input_processor(
-                            mock_input,
-                            processor_tx,
-                            input_rate as f64,
-                            denoiser,
-                            state,
-                            encoder,
-                        )
+                        input_processor(mock_input, processor_tx, ratio, denoiser, state, encoder)
                     });
 
                     let mut count = 0;
