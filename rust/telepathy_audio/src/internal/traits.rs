@@ -1,7 +1,7 @@
-//! Audio input/output traits and channel-based implementations.
+//! Audio input/output traits and platform-specific implementations.
 //!
 //! This module defines the core traits for audio input and output operations,
-//! along with platform-specific implementations using channels and web audio.
+//! along with platform-specific implementations using ring buffers, channels, and web audio.
 //!
 //! ## Traits
 //!
@@ -10,26 +10,27 @@
 //!
 //! ## Implementations
 //!
-//! - [`ChannelInput`] - Channel-based input for native platforms (uses kanal)
+//! - [`RingBufferInput`] - Lock-free ring buffer input for native platforms (uses rtrb)
 //! - [`ChannelOutput`] - Channel-based output for native platforms (uses kanal)
 //! - [`WebOutput`] - Shared buffer output for WASM (uses Arc<Mutex<Vec<f32>>>)
 //!
 //! ## Buffer Size
 //!
-//! [`CHANNEL_SIZE`] (2,400 samples) defines the buffer capacity for audio channels.
+//! [`CHANNEL_SIZE`] (2,400 samples) defines the buffer capacity for audio buffers.
 //! At 48kHz, this represents 50ms of audio data.
 
 use crate::error::AudioError;
 
 #[cfg(not(target_family = "wasm"))]
-use kanal::{Receiver, Sender};
-#[cfg(target_family = "wasm")]
+use kanal::Sender;
 use std::sync::Arc;
+#[cfg(not(target_family = "wasm"))]
+use std::sync::{Condvar, Mutex};
 
-/// Channel buffer size for audio data (2,400 samples).
+/// Buffer size for audio data (2,400 samples).
 ///
 /// This value is used as the capacity for:
-/// - Native: kanal channel bounds
+/// - Native: rtrb ring buffer capacity (input), kanal channel bounds (output)
 /// - WASM: WebOutput shared buffer maximum size
 ///
 /// At 48kHz sample rate, this represents 50ms of audio (2400 / 48000 = 0.05s).
@@ -55,11 +56,79 @@ pub trait AudioOutput {
     fn write_samples(&mut self, samples: &[f32]) -> Result<usize, AudioError>;
 }
 
-/// Channel-based audio input for native platforms.
+/// Lock-free ring buffer audio input for native platforms.
+///
+/// Uses `rtrb::Consumer` with the chunks API for efficient bulk reads,
+/// reducing per-sample overhead compared to channel-based approaches.
+///
+/// ## Blocking Behavior
+///
+/// The `read_into` implementation blocks using a `Condvar` when insufficient
+/// samples are available. This is appropriate for the non-real-time processor
+/// thread and prevents busy-waiting. The producer (audio stream callback)
+/// notifies the condvar after each write, ensuring low-latency wakeup.
+///
+/// ## EOF Detection
+///
+/// When the producer is dropped, `is_abandoned()` returns `true`, signaling
+/// end-of-stream.
 #[cfg(not(target_family = "wasm"))]
-pub struct ChannelInput {
-    /// The receiver for audio samples.
-    pub receiver: Receiver<f32>,
+pub struct RingBufferInput {
+    /// The consumer end of the ring buffer for audio samples.
+    consumer: rtrb::Consumer<f32>,
+
+    /// Condvar for signaling when new samples are available.
+    ///
+    /// The producer (audio stream callback) calls `notify_one()` after writing
+    /// samples. The consumer waits on this condvar when the ring buffer doesn't
+    /// have enough samples available.
+    notify: Arc<Condvar>,
+
+    /// Mutex required for condvar wait protocol.
+    ///
+    /// This is a dummy mutex (contains no data) used solely to satisfy the
+    /// condvar API requirements. The actual synchronization is handled by the
+    /// lock-free ring buffer.
+    mutex: Mutex<()>,
+}
+
+#[cfg(not(target_family = "wasm"))]
+impl RingBufferInput {
+    pub fn new(consumer: rtrb::Consumer<f32>, notify: Arc<Condvar>) -> Self {
+        Self {
+            consumer,
+            notify,
+            mutex: Mutex::new(()),
+        }
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+impl AudioInput for RingBufferInput {
+    fn read_into(&mut self, dst: &mut [f32]) -> Result<usize, AudioError> {
+        // block until enough slots are available
+        let target = dst.len();
+        loop {
+            let available = self.consumer.slots();
+            if available >= target {
+                break; // there are enough slots available
+            } else if self.consumer.is_abandoned() {
+                return Ok(0); // EOF
+            }
+            let guard = self.mutex.lock().unwrap();
+            drop(self.notify.wait(guard).unwrap());
+            continue;
+        }
+        // read at most the number of samples that will fit in dst
+        let chunk = self.consumer.read_chunk(target)?;
+        // written will be <= dst.len()
+        let written = chunk.len();
+        // copy samples into dst, consuming chunk
+        for (i, o) in chunk.into_iter().zip(dst) {
+            *o = i;
+        }
+        Ok(written)
+    }
 }
 
 /// Channel-based audio output for native platforms.
@@ -67,86 +136,6 @@ pub struct ChannelInput {
 pub struct ChannelOutput {
     /// The sender for audio samples.
     pub sender: Sender<f32>,
-}
-
-/// Web-based audio output using a shared buffer.
-///
-/// This struct provides audio output for WASM targets by writing samples to a
-/// shared buffer that can be consumed by a Web Audio API AudioWorklet or
-/// ScriptProcessorNode.
-///
-/// ## Architecture
-///
-/// ```text
-/// ┌─────────────┐     ┌──────────────────┐     ┌──────────────┐
-/// │ Processor   │────▶│ WebOutput        │────▶│ AudioWorklet │
-/// │ Thread      │     │ (shared buffer)  │     │ (JS)         │
-/// └─────────────┘     └──────────────────┘     └──────────────┘
-///                      Arc<Mutex<Vec<f32>>>
-/// ```
-///
-/// ## Buffer Behavior
-///
-/// - Maximum capacity: [`CHANNEL_SIZE`] (2,400 samples)
-/// - [`is_full()`](Self::is_full) returns `true` when buffer length >= CHANNEL_SIZE
-/// - [`write_samples()`](AudioOutput::write_samples) drops samples when buffer is full
-/// - The buffer should be drained by the consumer (AudioWorklet) regularly
-///
-/// ## Example Usage
-///
-/// ```rust,no_run
-/// # #[cfg(target_family = "wasm")]
-/// # fn example() {
-/// use std::sync::Arc;
-/// use wasm_sync::Mutex;
-///
-/// // Create shared buffer
-/// let buffer: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
-///
-/// // Pass to WebOutput (internal use)
-/// // let output = WebOutput::new(buffer.clone());
-///
-/// // In AudioWorklet: drain samples from buffer
-/// // if let Ok(mut data) = buffer.lock() {
-/// //     let samples: Vec<f32> = data.drain(..).collect();
-/// //     // ... use samples
-/// // }
-/// # }
-/// ```
-#[cfg(target_family = "wasm")]
-#[derive(Default)]
-pub struct WebOutput {
-    /// The shared buffer for audio samples.
-    ///
-    /// Protected by a mutex for thread-safe access between the processor
-    /// thread and the JavaScript audio callback.
-    pub buf: Arc<wasm_sync::Mutex<Vec<f32>>>,
-}
-
-#[cfg(not(target_family = "wasm"))]
-impl From<Receiver<f32>> for ChannelInput {
-    fn from(receiver: Receiver<f32>) -> Self {
-        Self { receiver }
-    }
-}
-
-#[cfg(not(target_family = "wasm"))]
-impl AudioInput for ChannelInput {
-    fn read_into(&mut self, dst: &mut [f32]) -> Result<usize, AudioError> {
-        let mut written = 0;
-
-        for slot in dst.iter_mut() {
-            match self.receiver.recv() {
-                Ok(sample) => {
-                    *slot = sample;
-                    written += 1;
-                }
-                Err(_) => break, // channel closed
-            }
-        }
-
-        Ok(written) // 0 => end-of-stream
-    }
 }
 
 #[cfg(not(target_family = "wasm"))]
@@ -173,6 +162,27 @@ impl AudioOutput for ChannelOutput {
 
         Ok(failed)
     }
+}
+
+/// Web-based audio output using a shared buffer.
+///
+/// This struct provides audio output for WASM targets by writing samples to a
+/// shared buffer that can be consumed by cpal
+///
+/// ## Buffer Behavior
+///
+/// - Maximum capacity: [`CHANNEL_SIZE`] (2,400 samples)
+/// - [`is_full()`](Self::is_full) returns `true` when buffer length >= CHANNEL_SIZE
+/// - [`write_samples()`](AudioOutput::write_samples) drops samples when buffer is full
+/// - The buffer should be drained by the consumer regularly
+#[cfg(target_family = "wasm")]
+#[derive(Default)]
+pub struct WebOutput {
+    /// The shared buffer for audio samples.
+    ///
+    /// Protected by a mutex for thread-safe access between the processor
+    /// thread and the JavaScript audio callback.
+    pub buf: Arc<wasm_sync::Mutex<Vec<f32>>>,
 }
 
 #[cfg(target_family = "wasm")]

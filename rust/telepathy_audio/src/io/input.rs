@@ -30,7 +30,7 @@ use crate::internal::processor::input_processor;
 use crate::internal::state::InputProcessorState;
 use crate::internal::traits::AudioInput;
 #[cfg(not(target_family = "wasm"))]
-use crate::internal::traits::{CHANNEL_SIZE, ChannelInput};
+use crate::internal::traits::{CHANNEL_SIZE, RingBufferInput};
 #[cfg(target_family = "wasm")]
 use crate::platform::web_audio::WebAudioWrapper;
 use crate::sea::encoder::{EncoderSettings, SeaEncoder};
@@ -41,13 +41,13 @@ use cpal::Sample;
 use cpal::SampleFormat;
 #[cfg(not(target_family = "wasm"))]
 use cpal::traits::{DeviceTrait, StreamTrait};
-#[cfg(not(target_family = "wasm"))]
-use kanal::bounded;
 use kanal::{AsyncSender, unbounded};
 use log::{debug, error};
 use nnnoiseless::{DenoiseState, RnnModel};
-use std::sync::Arc;
+#[cfg(not(target_family = "wasm"))]
+use rtrb::RingBuffer;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+use std::sync::{Arc, Condvar};
 use std::thread::{self, JoinHandle};
 use tokio::sync::Notify;
 
@@ -373,7 +373,7 @@ where
     ///
     /// # Type Parameters
     ///
-    /// * `I` - Type implementing `AudioInput` trait (e.g., `ChannelInput`, `WebAudioInput`)
+    /// * `I` - Type implementing `AudioInput` trait (e.g., `RingBufferInput`, `WebAudioInput`)
     ///
     /// # Arguments
     ///
@@ -525,11 +525,17 @@ where
         let device_sample_rate = config.sample_rate();
         let sample_format = config.sample_format();
 
-        // Create channel for cpal stream to processor
-        let (input_sender, input_receiver) = bounded::<f32>(CHANNEL_SIZE);
-
+        // Create ring buffer for cpal stream to processor
+        let (input_producer, input_consumer) = RingBuffer::<f32>::new(CHANNEL_SIZE);
+        // Create condvar to wake input processor when the ring buffer changes
+        let input_notify = Arc::new(Condvar::new());
+        // Create sender for input stream to input processor
+        let input_sender = RingBufferSender {
+            producer: input_producer,
+            notify: input_notify.clone(),
+        };
         // Create processor input and extract error_notify before consuming self
-        let processor_input = ChannelInput::from(input_receiver);
+        let processor_input = RingBufferInput::new(input_consumer, input_notify);
         let error_notify = self.config.error_notify.clone();
         // Build common components (channels, threads, state)
         let context = self.build_common(processor_input, device_sample_rate)?;
@@ -739,7 +745,7 @@ where
 ///
 /// ## Platform Differences
 ///
-/// - **Native**: Uses cpal stream and kanal channels for communication
+/// - **Native**: Uses cpal stream and rtrb ring buffer for input communication
 /// - **WASM**: Uses WebAudioWrapper and Web Audio API; requires `build_async`
 ///
 /// ## Drop vs stop()
@@ -856,6 +862,21 @@ impl Drop for AudioInputHandle {
     }
 }
 
+/// Lock free sender for native targets
+///
+/// Crucially, when the sender is dropped, the input processor is woken up
+#[cfg(not(target_family = "wasm"))]
+struct RingBufferSender {
+    producer: rtrb::Producer<f32>,
+    notify: Arc<Condvar>,
+}
+
+impl Drop for RingBufferSender {
+    fn drop(&mut self) {
+        self.notify.notify_one();
+    }
+}
+
 /// Builds an input stream with automatic sample format conversion.
 ///
 /// This helper function creates a cpal input stream that converts the device's
@@ -870,14 +891,14 @@ impl Drop for AudioInputHandle {
 ///
 /// * `device` - The cpal device to build the stream on
 /// * `config` - Stream configuration (sample rate, channels, etc.)
-/// * `input_sender` - Channel sender for f32 samples to the processor
+/// * `input_producer` - Ring buffer producer for f32 samples to the processor
 /// * `input_channels` - Number of input channels
 /// * `error_notify` - Optional notify handle for stream errors
 #[cfg(not(target_family = "wasm"))]
 fn build_input_stream_with_format<T>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
-    input_sender: kanal::Sender<f32>,
+    mut input_sender: RingBufferSender,
     input_channels: usize,
     error_notify: Option<Arc<Notify>>,
 ) -> Result<cpal::Stream, AudioError>
@@ -889,11 +910,18 @@ where
     let stream = device.build_input_stream(
         config,
         move |data: &[T], _: &_| {
-            for frame in data.chunks(input_channels) {
-                // Convert device format T to f32 and send only first channel (mono)
-                let sample_f32 = frame[0].to_float_sample();
-                let _ = input_sender.try_send(sample_f32);
-            }
+            let Ok(chunk) = input_sender
+                .producer
+                .write_chunk_uninit(data.len() / input_channels)
+            else {
+                return;
+            };
+
+            chunk.fill_from_iter(data.chunks(input_channels).map(|frame| {
+                // Convert device format T to f32
+                frame[0].to_float_sample()
+            }));
+            input_sender.notify.notify_one();
         },
         move |err| {
             log::error!("Input stream error: {}", err);
@@ -915,7 +943,7 @@ where
 fn build_input_stream_with_format_64<T>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
-    input_sender: kanal::Sender<f32>,
+    mut input_sender: RingBufferSender,
     input_channels: usize,
     error_notify: Option<Arc<Notify>>,
 ) -> Result<cpal::Stream, AudioError>
@@ -927,12 +955,19 @@ where
     let stream = device.build_input_stream(
         config,
         move |data: &[T], _: &_| {
-            for frame in data.chunks(input_channels) {
+            let Ok(chunk) = input_sender
+                .producer
+                .write_chunk_uninit(data.len() / input_channels)
+            else {
+                return;
+            };
+
+            chunk.fill_from_iter(data.chunks(input_channels).map(|frame| {
                 // Convert device format T to f64, then to f32
                 let sample_f64 = frame[0].to_float_sample();
-                let sample_f32 = sample_f64 as f32;
-                let _ = input_sender.try_send(sample_f32);
-            }
+                sample_f64 as f32
+            }));
+            input_sender.notify.notify_one();
         },
         move |err| {
             log::error!("Input stream error: {}", err);

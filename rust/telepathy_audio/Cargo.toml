@@ -50,6 +50,7 @@ wasm_sync = "0.1"
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 tokio = { version = "1", features = ["time", "io-util", "macros", "process", "net", "rt-multi-thread", "fs", "sync"] }
+rtrb = "0.3"
 
 [dev-dependencies]
 tokio-test = "0.4"

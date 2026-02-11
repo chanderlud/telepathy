@@ -7,8 +7,8 @@
 //! ## Threading Model
 //!
 //! Both [`input_processor`] and [`output_processor`] are designed to run in
-//! dedicated threads. They perform blocking operations on channels and should
-//! not be called from async contexts without spawning a blocking task.
+//! dedicated threads. They perform blocking operations on ring buffers/channels
+//! and should not be called from async contexts without spawning a blocking task.
 //!
 //! ## Channel Closure Behavior
 //!
