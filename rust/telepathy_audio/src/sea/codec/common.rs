@@ -1,6 +1,3 @@
-use kanal::{ReceiveError, SendError};
-use std::io;
-
 pub const SEAC_MAGIC: u32 = u32::from_be_bytes(*b"seac"); // 0x73 0x65 0x61 0x63
 
 #[inline(always)]
@@ -76,58 +73,6 @@ pub enum SeaError {
     UnsupportedVersion,
     TooManyFrames,
     MetadataTooLarge,
-    IoError(io::Error),
-    SendError(SendError),
-    ReceiveError(ReceiveError),
-}
-
-impl From<io::Error> for SeaError {
-    fn from(error: io::Error) -> Self {
-        SeaError::IoError(error)
-    }
-}
-
-impl From<SendError> for SeaError {
-    fn from(error: SendError) -> Self {
-        SeaError::SendError(error)
-    }
-}
-
-impl From<ReceiveError> for SeaError {
-    fn from(error: ReceiveError) -> Self {
-        SeaError::ReceiveError(error)
-    }
-}
-
-#[inline(always)]
-pub fn read_bytes<R: io::Read, const BYTES: usize>(mut reader: R) -> io::Result<[u8; BYTES]> {
-    let mut buf = [0_u8; BYTES];
-    reader.read_exact(&mut buf)?;
-    Ok(buf)
-}
-
-#[inline(always)]
-pub fn read_u8<R: io::Read>(reader: R) -> io::Result<u8> {
-    let data: [u8; 1] = read_bytes(reader)?;
-    Ok(data[0])
-}
-
-#[inline(always)]
-pub fn read_u16_le<R: io::Read>(reader: R) -> io::Result<u16> {
-    let data = read_bytes(reader)?;
-    Ok(u16::from_le_bytes(data))
-}
-
-#[inline(always)]
-pub fn read_u32_be<R: io::Read>(reader: R) -> io::Result<u32> {
-    let data = read_bytes(reader)?;
-    Ok(u32::from_be_bytes(data))
-}
-
-#[inline(always)]
-pub fn read_u32_le<R: io::Read>(reader: R) -> io::Result<u32> {
-    let data = read_bytes(reader)?;
-    Ok(u32::from_le_bytes(data))
 }
 
 #[derive(Debug)]

@@ -1,5 +1,3 @@
-#[cfg(target_family = "wasm")]
-use crate::audio::web_audio::WebAudioWrapper;
 use crate::error::ErrorKind;
 use crate::flutter::DartNotify;
 use crate::flutter::callbacks::{FrbCallbacks, FrbStatisticsCallback};
@@ -26,6 +24,8 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::Duration;
+#[cfg(target_family = "wasm")]
+use telepathy_audio::WebAudioWrapper;
 use telepathy_audio::{
     AudioInputBuilder, AudioInputHandle, AudioOutputBuilder, AudioOutputHandle, PooledBuffer,
 };
@@ -315,16 +315,23 @@ where
             .on_error(end_call)
             .channel(sender);
 
-        #[cfg(not(target_family = "wasm"))]
-        let handle = builder.build(&self.host)?;
-        #[cfg(target_family = "wasm")]
-        let handle = {
-            // Take the pre-initialized WebAudioWrapper from init_web_audio.
-            // This ensures we use the wrapper initialized on the correct thread,
-            // satisfying Web Audio API threading requirements.
-            let web_audio_wrapper = self.web_input.lock().await.take().map(std::sync::Arc::new);
-            builder.build_async(&self.host, web_audio_wrapper).await?
-        };
+        cfg_if::cfg_if! {
+            if #[cfg(target_family = "wasm")] {
+                let wrapper = self
+                    .web_input
+                    .lock()
+                    .await
+                    .take()
+                    .ok_or(ErrorKind::NoInputDevice)?;
+
+                let handle = builder
+                    .web_audio_wrapper(wrapper)
+                    .build(&self.host)?;
+            } else {
+                 let handle = builder
+                    .build(&self.host)?;
+            }
+        }
 
         Ok(InputHelper::new(handle, receiver))
     }

@@ -43,8 +43,10 @@
 //!
 //! ## Usage
 //!
-//! This module is used internally by [`AudioInputBuilder::build_async`](crate::AudioInputBuilder::build_async).
-//! Direct usage is not typically needed.
+//! Create a [`WebAudioWrapper`] via [`WebAudioWrapper::new()`] (async, must be called on the
+//! main thread during a user interaction), then pass it to
+//! [`AudioInputBuilder::web_audio_wrapper()`](crate::AudioInputBuilder::web_audio_wrapper)
+//! before calling [`AudioInputBuilder::build()`](crate::AudioInputBuilder::build).
 
 #![cfg(target_family = "wasm")]
 
@@ -97,7 +99,7 @@ use web_sys::BlobPropertyBag;
 pub struct WebAudioWrapper {
     pair: Arc<(Mutex<Vec<f32>>, Condvar)>,
     finished: Arc<AtomicBool>,
-    pub(crate) sample_rate: f32,
+    pub sample_rate: f32,
     audio_ctx: web_sys::AudioContext,
     _source: web_sys::MediaStreamAudioSourceNode,
     _media_devices: web_sys::MediaDevices,

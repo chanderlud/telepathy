@@ -1,8 +1,6 @@
 use crate::BehaviourEvent;
 #[cfg(target_os = "ios")]
 use crate::audio::ios::{configure_audio_session, deactivate_audio_session};
-#[cfg(target_family = "wasm")]
-use crate::audio::web_audio::WebAudioWrapper;
 use crate::error::ErrorKind;
 use crate::flutter::callbacks::{FrbCallbacks, FrbStatisticsCallback};
 use crate::flutter::{
@@ -46,6 +44,8 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::{Duration, Instant};
 use telepathy_audio::AudioHost;
+#[cfg(target_family = "wasm")]
+use telepathy_audio::WebAudioWrapper;
 use tokio::select;
 use tokio::sync::mpsc::{Receiver as MReceiver, Sender as MSender, channel};
 use tokio::sync::{Mutex, Notify, RwLock};

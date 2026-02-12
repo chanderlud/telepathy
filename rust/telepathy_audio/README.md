@@ -9,9 +9,6 @@ A standalone audio processing library for the Telepathy project, providing devic
 - **Audio Playback**: Low-latency audio output with automatic resampling
 - **Codec Support**: SEA codec encoding/decoding for efficient network transmission
 - **SIMD Optimization**: Hardware-accelerated audio processing with automatic CPU feature detection
-  - AVX-512 for 16-element aligned frames (where supported)
-  - AVX2 for 8-element aligned frames (where supported)
-  - Scalar fallback for all other cases
 - **Cross-Platform**: Native support for Windows, macOS, Linux, iOS, Android, and WebAssembly
 
 ## Usage
@@ -259,23 +256,25 @@ This library builds on several excellent Rust crates:
 - [nnnoiseless](https://docs.rs/nnnoiseless) - RNNoise-based noise suppression
 - [sea_codec](https://github.com/Daninet/sea-codec) - SEA audio codec for efficient transmission
 
-## WASM Migration Notes
+## WASM Notes
 
-On WASM targets, use `build_async` instead of `build` for audio input, as
-microphone access requires async permission handling:
+On WASM targets, a `WebAudioWrapper` must be created ahead of time (async,
+on the main thread during a user interaction) and provided to the builder
+via `web_audio_wrapper()` before calling `build()`:
 
 ```rust
 #[cfg(target_family = "wasm")]
-async fn setup_audio() -> Result<(), AudioError> {
+fn setup_audio(wrapper: WebAudioWrapper) -> Result<(), AudioError> {
     use telepathy_audio::{AudioHost, AudioInputBuilder};
+    use std::sync::Arc;
     
     let host = AudioHost::new();
     
-    // Input requires async build on WASM
+    // Input requires a pre-initialized WebAudioWrapper on WASM
     let input = AudioInputBuilder::new()
+        .web_audio_wrapper(wrapper)
         .callback(|data| { /* process audio */ })
-        .build_async(&host, None)  // None = create new WebAudioWrapper
-        .await?;
+        .build(&host)?;
     
     // Output uses synchronous build even on WASM
     let output = AudioOutputBuilder::new()
@@ -288,7 +287,7 @@ async fn setup_audio() -> Result<(), AudioError> {
 
 **Key WASM Differences:**
 
-1. **Input**: Must use `build_async` (browser permission dialog is async)
+1. **Input**: Must set `WebAudioWrapper` via `web_audio_wrapper()` before `build()`
 2. **Output**: Uses `build` (no permissions needed)
 3. **Sample Rate**: Fixed at 48kHz for Web Audio API compatibility
 4. **Threading**: Uses Web Workers for processor threads (via `wasm_thread` crate)
@@ -333,30 +332,6 @@ rustflags = ["-C", "target-feature=+atomics,+bulk-memory,+mutable-globals"]
 
 [unstable]
 build-std = ["std", "panic_abort"]
-```
-
-**WebAudioWrapper Reuse:**
-
-For better performance and to satisfy Web Audio API threading requirements,
-you can create and reuse a `WebAudioWrapper`:
-
-```rust
-use telepathy_audio::WebAudioWrapper;
-use std::sync::Arc;
-
-// Create wrapper once (must be on main thread during user interaction)
-let wrapper = Arc::new(WebAudioWrapper::new().await?);
-
-// Reuse for multiple inputs
-let input1 = AudioInputBuilder::new()
-    .callback(|data| { /* ... */ })
-    .build_async(&host, Some(wrapper.clone()))
-    .await?;
-
-let input2 = AudioInputBuilder::new()
-    .callback(|data| { /* ... */ })
-    .build_async(&host, Some(wrapper.clone()))
-    .await?;
 ```
 
 ## License

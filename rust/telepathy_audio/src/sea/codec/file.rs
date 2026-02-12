@@ -1,14 +1,11 @@
 use super::{
     chunk::SeaChunkType,
-    common::{
-        SEAC_MAGIC, SeaEncoderTrait, SeaError, read_u8, read_u16_le, read_u32_be, read_u32_le,
-    },
+    common::{SEAC_MAGIC, SeaEncoderTrait, SeaError},
     decoder::Decoder,
     encoder_cbr::CbrEncoder,
     encoder_vbr::VbrEncoder,
 };
 use crate::sea::{codec::chunk::SeaChunk, encoder::EncoderSettings};
-use std::io::Cursor;
 
 #[derive(Debug, Clone)]
 pub struct SeaFileHeader {
@@ -35,19 +32,21 @@ impl SeaFileHeader {
     }
 
     pub fn from_frame(frame: &[u8]) -> Result<Self, SeaError> {
-        let mut reader = Cursor::new(frame);
+        if frame.len() < 14 {
+            return Err(SeaError::InvalidFile);
+        }
 
-        let magic = read_u32_be(&mut reader)?;
+        let magic = u32::from_be_bytes([frame[0], frame[1], frame[2], frame[3]]);
         if magic != SEAC_MAGIC {
             return Err(SeaError::InvalidFile);
         }
-        let version = read_u8(&mut reader)?;
-        let channels = read_u8(&mut reader)?;
-        let chunk_size = read_u16_le(&mut reader)?;
-        let frames_per_chunk = read_u16_le(&mut reader)?;
-        let sample_rate = read_u32_le(&mut reader)?;
+        let version = frame[4];
+        let channels = frame[5];
+        let chunk_size = u16::from_le_bytes([frame[6], frame[7]]);
+        let frames_per_chunk = u16::from_le_bytes([frame[8], frame[9]]);
+        let sample_rate = u32::from_le_bytes([frame[10], frame[11], frame[12], frame[13]]);
 
-        let res: SeaFileHeader = Self {
+        let res = Self {
             version,
             channels,
             chunk_size,

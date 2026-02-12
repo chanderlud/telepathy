@@ -4,7 +4,7 @@
 //! It handles device selection, resampling, noise suppression, codec encoding,
 //! and delivers processed audio through a callback mechanism.
 //!
-//! # Example
+//! # Example (Native)
 //!
 //! ```rust,no_run
 //! use telepathy_audio::{AudioHost, AudioInputBuilder};
@@ -15,6 +15,30 @@
 //!     .volume(1.0)
 //!     .callback(|data| {
 //!         // Handle processed audio data
+//!         println!("Received {} bytes", data.as_ref().len());
+//!     })
+//!     .build(&host)
+//!     .unwrap();
+//! ```
+//!
+//! # Example (WASM)
+//!
+//! On WASM targets, a [`WebAudioWrapper`](crate::platform::web_audio::WebAudioWrapper)
+//! must be created ahead of time (async) and provided to the builder before calling
+//! [`build`](AudioInputBuilder::build):
+//!
+//! ```rust,ignore
+//! use telepathy_audio::{AudioHost, AudioInputBuilder};
+//! use telepathy_audio::platform::web_audio::WebAudioWrapper;
+//! use std::sync::Arc;
+//!
+//! // WebAudioWrapper::new() is async and must be called on the main thread
+//! let wrapper = WebAudioWrapper::new().await.unwrap();
+//! let host = AudioHost::new();
+//! let input = AudioInputBuilder::new()
+//!     .web_audio_wrapper(&wrapper)
+//!     .volume(1.0)
+//!     .callback(|data| {
 //!         println!("Received {} bytes", data.as_ref().len());
 //!     })
 //!     .build(&host)
@@ -160,6 +184,9 @@ where
     shared_muted: Option<Arc<AtomicBool>>,
     /// Optional shared atomic for rms state (enables real-time synchronization)
     shared_rms: Option<Arc<AtomicF32>>,
+    /// Pre-initialized WebAudioWrapper for WASM audio input
+    #[cfg(target_family = "wasm")]
+    web_audio_wrapper: Option<WebAudioWrapper>,
 }
 
 /// Internal context for building audio input, shared between native and WASM
@@ -182,6 +209,8 @@ impl AudioInputBuilder<fn(PooledBuffer)> {
             shared_rms_threshold: None,
             shared_muted: None,
             shared_rms: None,
+            #[cfg(target_family = "wasm")]
+            web_audio_wrapper: None,
         }
     }
 }
@@ -332,6 +361,36 @@ where
         self
     }
 
+    /// Sets a pre-initialized [`WebAudioWrapper`] for WASM audio input.
+    ///
+    /// This method is **required** on WASM targets before calling [`build`](Self::build).
+    /// The wrapper must be initialized on the main thread during a user interaction
+    /// (e.g., a button click) to satisfy browser autoplay policies.
+    ///
+    /// Create the wrapper using [`WebAudioWrapper::new()`] before building the input:
+    ///
+    /// ```rust,no_run
+    /// # #[cfg(target_family = "wasm")]
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// use telepathy_audio::{AudioHost, AudioInputBuilder};
+    /// use telepathy_audio::platform::web_audio::WebAudioWrapper;
+    /// use std::sync::Arc;
+    ///
+    /// let host = AudioHost::new();
+    /// let wrapper = WebAudioWrapper::new().await?;
+    /// let input = AudioInputBuilder::new()
+    ///     .web_audio_wrapper(&wrapper)
+    ///     .callback(|data| { /* process audio */ })
+    ///     .build(&host)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[cfg(target_family = "wasm")]
+    pub fn web_audio_wrapper(mut self, wrapper: WebAudioWrapper) -> Self {
+        self.web_audio_wrapper = Some(wrapper);
+        self
+    }
+
     /// Sets the callback for receiving processed audio data.
     ///
     /// The callback receives processed audio frames as `PooledBuffer`.
@@ -347,6 +406,8 @@ where
             shared_rms_threshold: self.shared_rms_threshold,
             shared_muted: self.shared_muted,
             shared_rms: self.shared_rms,
+            #[cfg(target_family = "wasm")]
+            web_audio_wrapper: self.web_audio_wrapper,
         }
     }
 
@@ -632,62 +693,41 @@ where
         })
     }
 
-    /// Builds and starts the audio input stream (WASM version - sync stub).
+    /// Builds and starts the audio input stream (WASM version).
     ///
-    /// **WASM Note**: This method always returns an error on WASM targets.
-    /// Use [`build_async`](Self::build_async) instead, as microphone access
-    /// requires async permission handling via the Web Audio API.
+    /// On WASM targets, a [`WebAudioWrapper`] must be set via
+    /// [`web_audio_wrapper`](Self::web_audio_wrapper) before calling this method.
+    /// The wrapper handles the Web Audio API setup including microphone access
+    /// and AudioWorklet registration.
     ///
     /// # Errors
     ///
-    /// Always returns `AudioError::Platform` on WASM targets.
-    #[cfg(target_family = "wasm")]
-    pub fn build(self, _host: &AudioHost) -> Result<AudioInputHandle, AudioError> {
-        Err(AudioError::Platform("Use build_async for WASM".to_string()))
-    }
-
-    /// Builds and starts the audio input stream asynchronously (WASM version).
-    ///
-    /// This method handles the async initialization required for Web Audio API
-    /// access, including requesting microphone permissions from the browser.
-    ///
-    /// # WASM-Specific Behavior
-    ///
-    /// - Creates a `WebAudioWrapper` that manages the AudioContext and AudioWorklet
-    /// - Requests microphone permission (browser will show permission dialog)
-    /// - Sets up an AudioWorklet processor for low-latency audio capture
-    /// - The `AudioInputHandle` holds an `Arc<WebAudioWrapper>` to keep it alive
-    ///
-    /// # Parameters
-    ///
-    /// * `web_audio_wrapper` - An optional pre-initialized `WebAudioWrapper`. When provided,
-    ///   this wrapper will be used instead of creating a new one. This is important for
-    ///   satisfying Web Audio API threading requirements, as the wrapper must be initialized
-    ///   on the correct thread (typically the main thread during user interaction).
-    ///   When `None`, a new wrapper will be created (useful for standalone usage).
+    /// Returns an error if:
+    /// - No callback or channel was set
+    /// - No `WebAudioWrapper` was set via [`web_audio_wrapper`](Self::web_audio_wrapper)
+    /// - Common build steps fail (codec initialization, thread spawning, etc.)
     ///
     /// # Example
     ///
     /// ```rust,no_run
     /// # #[cfg(target_family = "wasm")]
-    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// use telepathy_audio::{AudioHost, AudioInputBuilder};
+    /// use telepathy_audio::platform::web_audio::WebAudioWrapper;
+    /// use std::sync::Arc;
     ///
     /// let host = AudioHost::new();
-    /// // Without pre-initialized wrapper (creates new one)
+    /// // wrapper must be created ahead of time on the main thread
+    /// let wrapper = WebAudioWrapper::new().await;
     /// let input = AudioInputBuilder::new()
+    ///     .web_audio_wrapper(&wrapper)
     ///     .callback(|data| { /* process audio */ })
-    ///     .build_async(&host, None)
-    ///     .await?;
+    ///     .build(&host)?;
     /// # Ok(())
     /// # }
     /// ```
     #[cfg(target_family = "wasm")]
-    pub async fn build_async(
-        self,
-        _host: &AudioHost,
-        web_audio_wrapper: Option<Arc<WebAudioWrapper>>,
-    ) -> Result<AudioInputHandle, AudioError> {
+    pub fn build(mut self, _host: &AudioHost) -> Result<AudioInputHandle, AudioError> {
         use crate::platform::web_audio::WebAudioInput;
 
         if self.callback.is_none() && self.channel.is_none() {
@@ -696,22 +736,17 @@ where
             ));
         }
 
-        // Use provided WebAudioWrapper or initialize a new one (requests microphone permission)
-        let web_audio = match web_audio_wrapper {
-            Some(wrapper) => wrapper,
-            None => {
-                let wrapper = WebAudioWrapper::new()
-                    .await
-                    .map_err(|e| AudioError::Platform(format!("Web Audio init failed: {:?}", e)))?;
-                Arc::new(wrapper)
-            }
+        let Some(web_audio) = self.web_audio_wrapper.take() else {
+            return Err(AudioError::Config(
+                "WebAudioWrapper must be set via web_audio_wrapper() method before calling build() on WASM targets. Initialize the wrapper using WebAudioWrapper::new().await on the main thread.".to_string(),
+            ));
         };
 
-        let input_sample_rate = web_audio.sample_rate;
-        let processor_input = WebAudioInput::from(&*web_audio);
+        let input_sample_rate = web_audio.sample_rate as u32;
+        let processor_input = WebAudioInput::from(&web_audio);
 
         // Build common components (channels, threads, state)
-        let context = self.build_common(processor_input, input_sample_rate as u32)?;
+        let context = self.build_common(processor_input, input_sample_rate)?;
 
         // Resume the audio context
         web_audio.resume();
@@ -734,8 +769,7 @@ where
 ///
 /// ## Lifecycle
 ///
-/// - **Creation**: Created by [`AudioInputBuilder::build`] (native) or
-///   [`AudioInputBuilder::build_async`] (WASM)
+/// - **Creation**: Created by [`AudioInputBuilder::build`] on all platforms
 /// - **Running**: Audio is captured, processed (with optional encoding), and delivered via callback
 /// - **Cleanup**: When dropped, the handle:
 ///   1. Closes the input channel to signal threads to stop
@@ -750,7 +784,9 @@ where
 /// ## Platform Differences
 ///
 /// - **Native**: Uses cpal stream and rtrb ring buffer for input communication
-/// - **WASM**: Uses WebAudioWrapper and Web Audio API; requires `build_async`
+/// - **WASM**: Uses a pre-set [`WebAudioWrapper`](crate::platform::web_audio::WebAudioWrapper)
+///   and Web Audio API; the wrapper must be provided via
+///   [`AudioInputBuilder::web_audio_wrapper`] before calling `build()`
 ///
 /// ## Drop vs stop()
 ///
@@ -761,7 +797,7 @@ pub struct AudioInputHandle {
     #[cfg(not(target_family = "wasm"))]
     _stream: Option<cpal::Stream>,
     #[cfg(target_family = "wasm")]
-    _web_audio: Option<std::sync::Arc<crate::platform::web_audio::WebAudioWrapper>>,
+    _web_audio: Option<WebAudioWrapper>,
     processor_handle: Option<JoinHandle<()>>,
     callback_handle: Option<JoinHandle<()>>,
     input_volume: Arc<AtomicF32>,
