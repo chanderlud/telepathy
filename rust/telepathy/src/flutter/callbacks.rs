@@ -4,11 +4,11 @@ use crate::flutter::{
 };
 #[cfg(test)]
 use async_trait::async_trait;
+use flutter_rust_bridge::{JoinHandle, spawn};
 use libp2p::PeerId;
 #[cfg(test)]
 use mockall::automock;
 use std::sync::Arc;
-use flutter_rust_bridge::{spawn, JoinHandle};
 use tokio::sync::Notify;
 
 #[cfg_attr(test, automock)]

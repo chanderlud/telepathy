@@ -30,6 +30,8 @@
 
 use crate::error::AudioError;
 use crate::internal::processing::wide_mul;
+#[cfg(target_family = "wasm")]
+use crate::internal::thread;
 use crate::internal::utils::{db_to_multiplier, resampler_factory};
 use crate::sea::codec::file::SeaFileHeader;
 use crate::sea::decoder::SeaDecoder;
@@ -50,17 +52,15 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Relaxed;
 #[cfg(not(target_family = "wasm"))]
 use std::time::Instant;
-#[cfg(target_family = "wasm")]
-use wasmtimer::std::Instant;
 use tokio::select;
-use tokio::sync::{Mutex, Notify};
 use tokio::sync::oneshot;
-#[cfg(target_family = "wasm")]
-use crate::internal::thread;
+use tokio::sync::{Mutex, Notify};
 #[cfg(target_family = "wasm")]
 use wasm_bindgen_futures::spawn_local;
 #[cfg(target_family = "wasm")]
 use wasm_sync::{Condvar, Mutex as WasmMutex};
+#[cfg(target_family = "wasm")]
+use wasmtimer::std::Instant;
 
 /// Number of frames to fade out when canceling playback.
 /// This prevents audio pops/clicks when stopping playback abruptly.
