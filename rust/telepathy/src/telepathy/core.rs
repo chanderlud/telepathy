@@ -1337,7 +1337,7 @@ where
                             ));
 
                             connections.insert(state.peer, RoomConnection {
-                                output: helper,
+                                _output: helper,
                                 handle,
                             });
                             self.callbacks.call_state(CallState::RoomJoin(state.peer.to_string())).await;

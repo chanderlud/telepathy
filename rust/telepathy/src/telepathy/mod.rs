@@ -676,7 +676,7 @@ pub(crate) enum RoomMessage {
 }
 
 struct RoomConnection {
-    output: OutputHelper,
+    _output: OutputHelper,
     handle: JoinHandle<Result<()>>,
 }
 

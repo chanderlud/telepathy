@@ -19,7 +19,7 @@ use libp2p::swarm::SwarmEvent;
 use libp2p::tcp;
 use libp2p::{Multiaddr, PeerId, Swarm, autonat, dcutr, identify, noise, ping, yamux};
 use libp2p_stream::Control;
-use log::{debug, error, info, warn};
+use log::{error, info, warn};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
