@@ -100,7 +100,7 @@ pub struct AudioInputConfig {
     /// When `true`, the encoder uses variable bit rate for potentially
     /// smaller output. When `false`, uses constant bit rate.
     pub codec_vbr: bool,
-    /// Residual bits for codec quality (typically 1.0-8.0).
+    /// Residual bits for codec quality (typically 2.0-8.0).
     ///
     /// Higher values provide better quality but larger encoded size.
     pub codec_residual_bits: f32,

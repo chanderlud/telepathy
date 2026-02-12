@@ -9,7 +9,7 @@ use nnnoiseless::FRAME_SIZE;
 pub struct EncoderSettings {
     pub scale_factor_bits: u8,
     pub scale_factor_frames: u8,
-    pub residual_bits: f32, // 1-8
+    pub residual_bits: f32, // 2-8
     pub frames_per_chunk: u16,
     pub vbr: bool,
 }

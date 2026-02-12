@@ -345,7 +345,7 @@ class _AudioSettingsState extends State<AudioSettings> {
                 widget.networkSettingsController.codecConfig.toValues();
             final bool codecEnabled = values.$1;
             final bool codecVbr = values.$2;
-            final double residualBits = values.$3.clamp(1.0, 8.0).toDouble();
+            final double residualBits = values.$3.clamp(2.0, 8.0).toDouble();
 
             return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -387,7 +387,7 @@ class _AudioSettingsState extends State<AudioSettings> {
                     style: TextStyle(fontSize: 18),
                   ),
                   Slider(
-                    min: 1.0,
+                    min: 2.0,
                     max: 8.0,
                     value: residualBits,
                     label: residualBits.toStringAsFixed(1),
