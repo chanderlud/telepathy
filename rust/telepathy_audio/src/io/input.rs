@@ -28,6 +28,7 @@ use crate::error::AudioError;
 use crate::internal::buffer_pool::{DEFAULT_POOL_CAPACITY, PooledBuffer};
 use crate::internal::processor::input_processor;
 use crate::internal::state::InputProcessorState;
+use crate::internal::thread::{self, JoinHandle};
 use crate::internal::traits::AudioInput;
 #[cfg(not(target_family = "wasm"))]
 use crate::internal::traits::{CHANNEL_SIZE, RingBufferInput};
@@ -46,9 +47,10 @@ use log::{debug, error};
 use nnnoiseless::{DenoiseState, RnnModel};
 #[cfg(not(target_family = "wasm"))]
 use rtrb::RingBuffer;
+use std::sync::Arc;
+#[cfg(not(target_family = "wasm"))]
+use std::sync::Condvar;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
-use std::sync::{Arc, Condvar};
-use std::thread::{self, JoinHandle};
 use tokio::sync::Notify;
 
 /// Configuration for audio input processing.
@@ -450,8 +452,8 @@ where
             None
         };
 
-        // spawn processor thread
-        let processor_handle = thread::spawn(move || {
+        // spawn processor thread (safe_spawn catches panics on WASM when threading is unavailable)
+        let processor_handle = thread::safe_spawn(move || {
             if let Err(e) = input_processor(
                 processor_input,
                 processor_sender,
@@ -463,18 +465,21 @@ where
                 error!("Input processor error: {}", e);
             }
             debug!("Input processor thread ended");
-        });
+        })?;
 
         // spawn callback thread if callback is set
-        let callback_handle = self.callback.and_then(|callback| {
-            let receiver = output_receiver?;
-            Some(thread::spawn(move || {
-                while let Ok(buffer) = receiver.recv() {
-                    callback(buffer)
-                }
-                debug!("Callback thread ended");
-            }))
-        });
+        let callback_handle = match self.callback {
+            Some(callback) => match output_receiver {
+                Some(receiver) => Some(thread::safe_spawn(move || {
+                    while let Ok(buffer) = receiver.recv() {
+                        callback(buffer)
+                    }
+                    debug!("Callback thread ended");
+                })?),
+                None => None,
+            },
+            None => None,
+        };
 
         Ok(InputBuildContext {
             input_volume,
@@ -715,7 +720,6 @@ where
             _web_audio: Some(web_audio),
             processor_handle: Some(context.processor_handle),
             callback_handle: context.callback_handle,
-            input_sender: None, // No sender for WASM - controlled via web_audio
             input_volume: context.input_volume,
             rms_threshold: context.rms_threshold,
             muted: context.muted,
@@ -871,6 +875,7 @@ struct RingBufferSender {
     notify: Arc<Condvar>,
 }
 
+#[cfg(not(target_family = "wasm"))]
 impl Drop for RingBufferSender {
     fn drop(&mut self) {
         self.notify.notify_one();

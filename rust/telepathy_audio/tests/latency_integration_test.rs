@@ -3,6 +3,8 @@
 //! This test verifies that audio flows through the complete processing
 //! pipeline and measures total end-to-end latency.
 
+#![cfg(not(target_family = "wasm"))]
+
 use atomic_float::AtomicF32;
 use bytes::{Bytes, BytesMut};
 use kanal;

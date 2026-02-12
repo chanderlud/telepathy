@@ -32,12 +32,24 @@
 //!
 //! ## Platform Support
 //!
-//! | Platform | Backend |
-//! |----------|---------|
-//! | Windows  | WASAPI  |
-//! | macOS    | CoreAudio |
-//! | Linux    | ALSA    |
-//! | Web      | AudioWorklet/WebAudio |
+//! | Platform | Backend | Threading |
+//! |----------|---------|-----------|
+//! | Windows  | WASAPI  | `std::thread` (OS threads) |
+//! | macOS    | CoreAudio | `std::thread` (OS threads) |
+//! | Linux    | ALSA    | `std::thread` (OS threads) |
+//! | Web      | AudioWorklet/WebAudio | `wasm_thread` (Web Workers) |
+//!
+//! ### WASM Threading
+//!
+//! On WASM targets, the library uses the [`wasm_thread`](https://crates.io/crates/wasm_thread)
+//! crate to spawn processor and callback threads as Web Workers. This requires:
+//!
+//! - **`SharedArrayBuffer` support**: The web server must send COOP/COEP headers:
+//!   - `Cross-Origin-Opener-Policy: same-origin`
+//!   - `Cross-Origin-Embedder-Policy: require-corp`
+//! - **Nightly Rust** (optional): For atomics support via `build-std`
+//!
+//! See the README for detailed WASM setup instructions and browser compatibility.
 //!
 //! ## Basic Usage
 //!

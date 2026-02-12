@@ -291,8 +291,49 @@ async fn setup_audio() -> Result<(), AudioError> {
 1. **Input**: Must use `build_async` (browser permission dialog is async)
 2. **Output**: Uses `build` (no permissions needed)
 3. **Sample Rate**: Fixed at 48kHz for Web Audio API compatibility
-4. **Threading**: Uses Web Workers for processor threads
+4. **Threading**: Uses Web Workers for processor threads (via `wasm_thread` crate)
 5. **Buffer Management**: Output uses shared `Arc<Mutex<Vec<f32>>>` instead of cpal stream
+
+### WASM Threading Requirements
+
+The library uses the `wasm_thread` crate to provide Web Worker-based threading on WASM targets. This requires the following setup:
+
+**SharedArrayBuffer Headers:**
+
+WASM builds require `SharedArrayBuffer` support, which necessitates serving the application with COOP and COEP headers:
+
+```
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Embedder-Policy: require-corp
+```
+
+**Main Thread Blocking:**
+
+Blocking operations (like `JoinHandle::join()`) should not be called on the browser's main thread. The library's `Drop` implementations call `join()` on processor threads, so `AudioInputHandle` and `AudioOutputHandle` should be dropped from a Web Worker or async context, not the main thread.
+
+**Thread Spawning Overhead:**
+
+Thread spawning in WASM (Web Workers) has higher overhead than native threads. Once spawned, Web Workers provide true parallelism. The processor and callback threads are long-lived, so spawn overhead is amortized.
+
+**Browser Compatibility:**
+
+Minimum browser versions that support Web Workers with `SharedArrayBuffer`:
+- Chrome 68+
+- Firefox 79+
+- Safari 15.2+
+- Edge 79+
+
+**Build Configuration:**
+
+For WASM builds with atomics support, you may need nightly Rust and specific build flags. See `.cargo/config.toml` for recommended settings:
+
+```toml
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "target-feature=+atomics,+bulk-memory,+mutable-globals"]
+
+[unstable]
+build-std = ["std", "panic_abort"]
+```
 
 **WebAudioWrapper Reuse:**
 

@@ -6,6 +6,10 @@
 //! verify benchmark inputs.
 //!
 //! Run with: `cargo bench --bench throughput_bench`
+//!
+//! Note: These benchmarks are native-only and do not run on WASM targets.
+
+#![cfg(not(target_family = "wasm"))]
 
 mod mock_input;
 mod mock_output;

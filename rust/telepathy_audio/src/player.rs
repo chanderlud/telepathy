@@ -53,6 +53,8 @@ use tokio::select;
 use tokio::sync::{Mutex, Notify};
 use tokio::task::spawn_blocking;
 #[cfg(target_family = "wasm")]
+use wasm_bindgen_futures::spawn_local;
+#[cfg(target_family = "wasm")]
 use wasm_sync::{Condvar, Mutex as WasmMutex};
 
 /// Number of frames to fade out when canceling playback.
@@ -294,7 +296,26 @@ impl AudioPlayer {
         // This allows us to return errors from stream creation before the task continues
         let (init_tx, init_rx) = tokio::sync::oneshot::channel::<Result<(), AudioError>>();
 
+        #[cfg(not(target_family = "wasm"))]
         let handle = tokio::spawn(async move {
+            if let Err(e) = play_sound_with_device(
+                bytes,
+                cancel_clone,
+                output_device,
+                output_config,
+                output_volume,
+                init_tx,
+            )
+            .await
+            {
+                // Log any errors that occur after initialization
+                // (initialization errors are already sent via init_tx)
+                debug!("Playback error (after init): {:?}", e);
+            }
+        });
+
+        #[cfg(target_family = "wasm")]
+        spawn_local(async move {
             if let Err(e) = play_sound_with_device(
                 bytes,
                 cancel_clone,
@@ -314,10 +335,13 @@ impl AudioPlayer {
         // Wait for initialization result from the spawned task
         // This returns as soon as the stream is built and playing, or on error
         match init_rx.await {
+            #[cfg(not(target_family = "wasm"))]
             Ok(Ok(())) => Ok(SoundHandle {
                 cancel,
                 _handle: handle,
             }),
+            #[cfg(target_family = "wasm")]
+            Ok(Ok(())) => Ok(SoundHandle { cancel }),
             Ok(Err(e)) => Err(e),
             Err(_) => {
                 // Channel was dropped, which means the task panicked or was cancelled
@@ -363,6 +387,7 @@ pub struct SoundHandle {
     /// Notification channel for cancellation.
     cancel: Arc<Notify>,
     /// Task handle (kept alive to ensure playback continues).
+    #[cfg(not(target_family = "wasm"))]
     _handle: tokio::task::JoinHandle<()>,
 }
 

@@ -59,6 +59,13 @@ pub enum AudioError {
     /// on WASM where async initialization is required.
     Platform(String),
     JoinError(String),
+    /// WASM threading errors (WASM only).
+    ///
+    /// Occurs when WASM threading operations fail, such as when
+    /// `SharedArrayBuffer` is not available (missing COOP/COEP headers)
+    /// or when blocking operations are attempted on the browser's main thread.
+    #[cfg(target_family = "wasm")]
+    WasmThreading(String),
     /// Invalid WAV file error.
     ///
     /// Occurs when a WAV file has an invalid or corrupted header,
@@ -81,6 +88,8 @@ impl fmt::Display for AudioError {
             AudioError::Config(msg) => write!(f, "Configuration error: {}", msg),
             AudioError::Platform(msg) => write!(f, "Platform error: {}", msg),
             AudioError::JoinError(msg) => write!(f, "Join error: {}", msg),
+            #[cfg(target_family = "wasm")]
+            AudioError::WasmThreading(msg) => write!(f, "WASM threading error: {}", msg),
             AudioError::InvalidWav => write!(f, "Invalid WAV file"),
             AudioError::UnknownSampleFormat => write!(f, "Unknown sample format"),
         }

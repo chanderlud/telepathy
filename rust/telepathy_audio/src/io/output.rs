@@ -30,6 +30,7 @@ use crate::error::AudioError;
 use crate::internal::NETWORK_FRAME;
 use crate::internal::processor::output_processor;
 use crate::internal::state::OutputProcessorState;
+use crate::internal::thread::{self, JoinHandle};
 use crate::internal::traits::AudioOutput;
 #[cfg(not(target_family = "wasm"))]
 use crate::internal::traits::CHANNEL_SIZE;
@@ -50,7 +51,6 @@ use log::{debug, error};
 use nnnoiseless::FRAME_SIZE;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
-use std::thread::{self, JoinHandle};
 use tokio::sync::Notify;
 
 /// Configuration for audio output processing.
@@ -273,15 +273,15 @@ impl AudioOutputBuilder {
             None
         };
 
-        // Spawn processor thread
-        let processor_handle = thread::spawn(move || {
+        // Spawn processor thread (safe_spawn catches panics on WASM when threading is unavailable)
+        let processor_handle = thread::safe_spawn(move || {
             if let Err(e) =
                 output_processor(network_receiver, processor_output, ratio, state, decoder)
             {
                 error!("Output processor error: {}", e);
             }
             debug!("Output processor thread ended");
-        });
+        })?;
 
         Ok(OutputBuildContext {
             output_volume,
@@ -622,7 +622,9 @@ where
             let num_frames = data.len() / output_channels;
             match output_consumer.read_chunk(num_frames) {
                 Ok(chunk) => {
-                    for (sample_f32, frame) in chunk.into_iter().zip(data.chunks_mut(output_channels)) {
+                    for (sample_f32, frame) in
+                        chunk.into_iter().zip(data.chunks_mut(output_channels))
+                    {
                         let sample_t = T::from_sample(sample_f32);
                         frame.fill(sample_t);
                     }

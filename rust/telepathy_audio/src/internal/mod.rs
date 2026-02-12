@@ -18,6 +18,7 @@ pub mod buffer_pool;
 pub mod processing;
 pub mod processor;
 pub mod state;
+pub(crate) mod thread;
 pub mod traits;
 pub mod utils;
 

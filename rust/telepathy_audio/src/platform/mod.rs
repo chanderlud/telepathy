@@ -11,7 +11,3 @@
 
 #[cfg(target_family = "wasm")]
 pub(crate) mod web_audio;
-
-// Re-export WASM types
-#[cfg(target_family = "wasm")]
-pub(crate) use web_audio::{WebAudioInput, WebAudioWrapper};
