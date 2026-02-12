@@ -413,7 +413,7 @@ impl AudioOutputBuilder {
 
         Ok(AudioOutputHandle {
             _stream: stream,
-            processor_handle: Some(context.processor_handle),
+            _processor_handle: Some(context.processor_handle),
             network_sender: context.network_sender,
             output_volume: context.output_volume,
             deafened: context.deafened,
@@ -457,7 +457,7 @@ impl AudioOutputBuilder {
 
         Ok(AudioOutputHandle {
             _web_buffer: Some(web_buffer),
-            processor_handle: Some(context.processor_handle),
+            _processor_handle: Some(context.processor_handle),
             network_sender: context.network_sender,
             output_volume: context.output_volume,
             deafened: context.deafened,
@@ -509,7 +509,7 @@ pub struct AudioOutputHandle {
     _stream: cpal::Stream,
     #[cfg(target_family = "wasm")]
     _web_buffer: Option<std::sync::Arc<wasm_sync::Mutex<Vec<f32>>>>,
-    processor_handle: Option<JoinHandle<()>>,
+    _processor_handle: Option<JoinHandle<()>>,
     network_sender: Sender<Bytes>,
     output_volume: Arc<AtomicF32>,
     deafened: Arc<AtomicBool>,
@@ -552,19 +552,6 @@ impl AudioOutputHandle {
         self.output_volume.load(Relaxed)
     }
 
-    /// Stops the audio output and waits for all threads to finish.
-    ///
-    /// This is called automatically when the handle is dropped, but can
-    /// be called explicitly if you need to wait for completion.
-    pub fn stop(mut self) {
-        // Close the sender to signal threads to stop (mirrors Drop implementation)
-        _ = self.network_sender.close();
-
-        if let Some(handle) = self.processor_handle.take() {
-            let _ = handle.join();
-        }
-    }
-
     /// Gets the loss receiver
     pub fn loss_receiver(&self) -> Arc<AtomicUsize> {
         self.loss_sender.clone()
@@ -573,13 +560,8 @@ impl AudioOutputHandle {
 
 impl Drop for AudioOutputHandle {
     fn drop(&mut self) {
-        // Close the sender to signal threads to stop - must happen BEFORE joining threads
-        // to ensure the receiver loops can exit and threads can join cleanly
+        // Close the sender to signal threads to stop
         _ = self.network_sender.close();
-
-        if let Some(handle) = self.processor_handle.take() {
-            let _ = handle.join();
-        }
     }
 }
 

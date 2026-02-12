@@ -48,10 +48,15 @@ use std::sync::Arc;
 #[cfg(target_family = "wasm")]
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Relaxed;
+#[cfg(not(target_family = "wasm"))]
 use std::time::Instant;
+#[cfg(target_family = "wasm")]
+use wasmtimer::std::Instant;
 use tokio::select;
 use tokio::sync::{Mutex, Notify};
-use tokio::task::spawn_blocking;
+use tokio::sync::oneshot;
+#[cfg(target_family = "wasm")]
+use crate::internal::thread;
 #[cfg(target_family = "wasm")]
 use wasm_bindgen_futures::spawn_local;
 #[cfg(target_family = "wasm")]
@@ -241,8 +246,10 @@ impl AudioPlayer {
     pub fn new(output_volume_db: f32) -> Self {
         cfg_if::cfg_if! {
             if #[cfg(target_family = "wasm")] {
-                // Attempt to use the AudioWorklet host on WASM for better performance
-                let host = cpal::host_from_id(cpal::HostId::AudioWorklet).unwrap_or(cpal::default_host());
+                // TODO Attempt to use the AudioWorklet host on WASM for better performance
+                // Currently, using the AudioWorklet output results in a crash
+                // let host = cpal::host_from_id(cpal::HostId::AudioWorklet).unwrap_or(cpal::default_host());
+                let host = cpal::default_host();
             } else {
                 let host = cpal::default_host();
             }
@@ -294,7 +301,7 @@ impl AudioPlayer {
 
         // Use a oneshot channel to receive initialization result from the spawned task
         // This allows us to return errors from stream creation before the task continues
-        let (init_tx, init_rx) = tokio::sync::oneshot::channel::<Result<(), AudioError>>();
+        let (init_tx, init_rx) = oneshot::channel::<Result<(), AudioError>>();
 
         #[cfg(not(target_family = "wasm"))]
         let handle = tokio::spawn(async move {
@@ -439,7 +446,7 @@ pub async fn wav_to_sea(bytes: Vec<u8>, residual_bits: f32) -> Result<Vec<u8>, A
 
     let sample_format = spec.sample_format;
 
-    let handle = spawn_blocking(move || {
+    spawn_cpu_task(move || {
         let settings = EncoderSettings {
             frames_per_chunk: FRAME_SIZE as u16,
             vbr: true,
@@ -492,9 +499,8 @@ pub async fn wav_to_sea(bytes: Vec<u8>, residual_bits: f32) -> Result<Vec<u8>, A
         // update the header with the real chunk size
         data[6..=7].copy_from_slice(encoder.chunk_size().to_le_bytes().as_ref());
         Ok::<Vec<u8>, AudioError>(data)
-    });
-
-    handle.await?
+    })
+    .await
 }
 
 /// Gets the output device based on the configured device ID.
@@ -524,7 +530,7 @@ async fn play_sound_with_device(
     output_device: cpal::Device,
     output_config: cpal::SupportedStreamConfig,
     output_volume: Arc<AtomicF32>,
-    init_tx: tokio::sync::oneshot::Sender<Result<(), AudioError>>,
+    init_tx: oneshot::Sender<Result<(), AudioError>>,
 ) -> Result<(), AudioError> {
     // Perform initialization and signal result to caller
     // This inner async block allows us to use ? while still signaling errors
@@ -554,19 +560,20 @@ async fn play_sound_with_device(
             spec.sample_rate = header.sample_rate;
             let mut decoder = SeaDecoder::new(header)?;
 
-            let handle = spawn_blocking(move || {
-                let mut decoded = Vec::new();
-                let mut buffer = [0_i16; FRAME_SIZE];
+            samples = Some(
+                spawn_cpu_task(move || {
+                    let mut decoded = Vec::new();
+                    let mut buffer = [0_i16; FRAME_SIZE];
 
-                for chunk in local_bytes[14..].chunks(chunk_size) {
-                    decoder.decode_frame(chunk, &mut buffer)?;
-                    decoded.push(buffer);
-                }
+                    for chunk in local_bytes[14..].chunks(chunk_size) {
+                        decoder.decode_frame(chunk, &mut buffer)?;
+                        decoded.push(buffer);
+                    }
 
-                Ok::<Vec<[i16; FRAME_SIZE]>, AudioError>(decoded)
-            });
-
-            samples = Some(handle.await??);
+                    Ok::<Vec<[i16; FRAME_SIZE]>, AudioError>(decoded)
+                })
+                .await?,
+            );
             info!("decoding sound took {:?}", now.elapsed());
         }
 
@@ -665,7 +672,7 @@ async fn play_sound_with_device(
         // The sender used by the processor
         let sender = processed_sender.clone();
 
-        let processor_future = spawn_blocking(move || {
+        let processor_future = spawn_cpu_task(move || {
             processor(
                 (samples.is_none().then_some(bytes), samples),
                 spec.sample_format,
@@ -689,8 +696,7 @@ async fn play_sound_with_device(
     .await;
 
     // Signal initialization result to the caller
-    let (output_stream, output_finished, processed_sender, mut processor_future) = match init_result
-    {
+    let (output_stream, output_finished, processed_sender, processor_future) = match init_result {
         Ok(state) => {
             let _ = init_tx.send(Ok(()));
             state
@@ -701,6 +707,8 @@ async fn play_sound_with_device(
             return Err(e);
         }
     };
+
+    tokio::pin!(processor_future);
 
     // Keep the stream alive
     let _output_stream = output_stream;
@@ -731,12 +739,8 @@ async fn play_sound_with_device(
     debug!("starting to tear down player stack");
     // Join the processor task
     match processor_join {
-        Some(result) => {
-            result.map_err(|e| AudioError::Processing(format!("Processor join error: {}", e)))??
-        }
-        None => processor_future
-            .await
-            .map_err(|e| AudioError::Processing(format!("Processor join error: {}", e)))??,
+        Some(result) => result?,
+        None => processor_future.await?,
     };
     debug!("finished tearing down player stack");
     Ok(())
@@ -1026,6 +1030,36 @@ fn unpack_wav_frame<T: SampleConversion>(
     }
 
     Ok(frame_count)
+}
+
+/// Runs a CPU-bound closure on a blocking context and returns its result.
+///
+/// On native targets uses `tokio::task::spawn_blocking` for optimal performance.
+/// On WASM uses the thread abstraction with a oneshot channel to bridge synchronous
+/// execution to an awaitable future (no multi-threaded runtime in browser).
+#[cfg(not(target_family = "wasm"))]
+async fn spawn_cpu_task<F, R>(f: F) -> Result<R, AudioError>
+where
+    F: FnOnce() -> Result<R, AudioError> + Send + 'static,
+    R: Send + 'static,
+{
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| AudioError::JoinError(format!("JoinError: {}", e)))?
+}
+
+#[cfg(target_family = "wasm")]
+async fn spawn_cpu_task<F, R>(f: F) -> Result<R, AudioError>
+where
+    F: FnOnce() -> Result<R, AudioError> + Send + 'static,
+    R: Send + 'static,
+{
+    let (tx, rx) = oneshot::channel();
+    thread::safe_spawn(move || {
+        let result = f();
+        let _ = tx.send(result);
+    })?;
+    rx.await?
 }
 
 #[cfg(test)]

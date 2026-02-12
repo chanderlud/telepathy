@@ -5,6 +5,9 @@ edition = "2024"
 description = "Audio processing library for telepathy with device management, codec support, and SIMD optimization"
 license = "MIT"
 
+[package.metadata]
+wasm-opt = ["-O", "--enable-bulk-memory", "--enable-nontrapping-float-to-int"]
+
 [lib]
 crate-type = ["lib"]
 
@@ -19,10 +22,10 @@ nnnoiseless = { version = "0.5", default-features = false }
 kanal = "0.1.1"
 rubato = { version = "0.16", default-features = false }
 libm = "0.2"
+tokio = { version = "1", features = ["time", "sync", "rt", "macros"] }
 
 [target.'cfg(target_family = "wasm")'.dependencies]
-wasm_thread = "0.3"
-tokio = { version = "1", features = ["time", "io-util", "macros", "rt", "sync"] }
+wasm_thread = { version = "0.3", default-features = false  }
 web-sys = { version = "0.3", features = [
     "AudioContext",
     "MediaDevices",
@@ -48,9 +51,9 @@ wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
 serde-wasm-bindgen = "0.6"
 wasm_sync = "0.1"
+wasmtimer = "0.4"
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
-tokio = { version = "1", features = ["time", "io-util", "macros", "process", "net", "rt-multi-thread", "fs", "sync"] }
 rtrb = "0.3"
 
 [dev-dependencies]

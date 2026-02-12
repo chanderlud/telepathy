@@ -53,8 +53,6 @@ use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
-#[cfg(target_family = "wasm")]
-use wasmtimer::tokio::interval;
 
 type Result<T> = std::result::Result<T, Error>;
 pub(crate) type SharedDeviceId = Arc<Mutex<Option<String>>>;

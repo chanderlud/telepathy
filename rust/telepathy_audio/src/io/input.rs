@@ -685,8 +685,8 @@ where
 
         Ok(AudioInputHandle {
             _stream: Some(stream),
-            processor_handle: Some(context.processor_handle),
-            callback_handle: context.callback_handle,
+            _processor_handle: Some(context.processor_handle),
+            _callback_handle: context.callback_handle,
             input_volume: context.input_volume,
             rms_threshold: context.rms_threshold,
             muted: context.muted,
@@ -753,8 +753,8 @@ where
 
         Ok(AudioInputHandle {
             _web_audio: Some(web_audio),
-            processor_handle: Some(context.processor_handle),
-            callback_handle: context.callback_handle,
+            _processor_handle: Some(context.processor_handle),
+            _callback_handle: context.callback_handle,
             input_volume: context.input_volume,
             rms_threshold: context.rms_threshold,
             muted: context.muted,
@@ -798,8 +798,8 @@ pub struct AudioInputHandle {
     _stream: Option<cpal::Stream>,
     #[cfg(target_family = "wasm")]
     _web_audio: Option<WebAudioWrapper>,
-    processor_handle: Option<JoinHandle<()>>,
-    callback_handle: Option<JoinHandle<()>>,
+    _processor_handle: Option<JoinHandle<()>>,
+    _callback_handle: Option<JoinHandle<()>>,
     input_volume: Arc<AtomicF32>,
     rms_threshold: Arc<AtomicF32>,
     muted: Arc<AtomicBool>,
@@ -841,64 +841,6 @@ impl AudioInputHandle {
     /// Gets the current RMS threshold.
     pub fn rms_threshold(&self) -> f32 {
         self.rms_threshold.load(Relaxed)
-    }
-
-    /// Stops the audio input and waits for all threads to finish.
-    ///
-    /// This is called automatically when the handle is dropped, but can
-    /// be called explicitly if you need to wait for completion.
-    #[cfg(not(target_family = "wasm"))]
-    pub fn stop(mut self) {
-        // Drop the stream so its callback stops before joining threads
-        drop(self._stream.take());
-
-        // Wait for threads to finish
-        if let Some(handle) = self.processor_handle.take() {
-            let _ = handle.join();
-        }
-        if let Some(handle) = self.callback_handle.take() {
-            let _ = handle.join();
-        }
-    }
-
-    /// Stops the audio input and waits for all threads to finish.
-    ///
-    /// This is called automatically when the handle is dropped, but can
-    /// be called explicitly if you need to wait for completion.
-    #[cfg(target_family = "wasm")]
-    pub fn stop(mut self) {
-        // Drop the WebAudioWrapper to set finished flag before joining threads
-        self._web_audio.take();
-
-        // Wait for threads to finish
-        if let Some(handle) = self.processor_handle.take() {
-            let _ = handle.join();
-        }
-        if let Some(handle) = self.callback_handle.take() {
-            let _ = handle.join();
-        }
-    }
-}
-
-impl Drop for AudioInputHandle {
-    fn drop(&mut self) {
-        // Drop the underlying source so its callback stops
-        #[cfg(not(target_family = "wasm"))]
-        {
-            self._stream.take();
-        }
-        #[cfg(target_family = "wasm")]
-        {
-            self._web_audio.take();
-        }
-
-        // Wait for threads to finish
-        if let Some(handle) = self.processor_handle.take() {
-            let _ = handle.join();
-        }
-        if let Some(handle) = self.callback_handle.take() {
-            let _ = handle.join();
-        }
     }
 }
 

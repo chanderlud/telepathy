@@ -524,16 +524,10 @@ impl OutputHelper {
     pub(crate) fn sender(&self) -> kanal::Sender<Bytes> {
         self.handle.sender()
     }
-
-    pub(crate) fn join(self) -> Result<()> {
-        debug!("stopping output handle via join");
-        self.handle.stop();
-        Ok(())
-    }
 }
 
 pub(crate) struct InputHelper {
-    handle: AudioInputHandle,
+    _handle: AudioInputHandle,
     receiver: Option<kanal::AsyncReceiver<PooledBuffer>>,
 }
 
@@ -544,18 +538,12 @@ impl InputHelper {
         receiver: kanal::AsyncReceiver<PooledBuffer>,
     ) -> Self {
         Self {
-            handle,
+            _handle: handle,
             receiver: Some(receiver),
         }
     }
 
     pub(crate) fn receiver(&mut self) -> kanal::AsyncReceiver<PooledBuffer> {
         self.receiver.take().unwrap()
-    }
-
-    pub(crate) fn join(self) -> Result<()> {
-        debug!("stopping input handle via join");
-        self.handle.stop();
-        Ok(())
     }
 }

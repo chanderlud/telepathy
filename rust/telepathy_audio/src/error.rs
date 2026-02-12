@@ -259,6 +259,21 @@ impl From<tokio::task::JoinError> for AudioError {
 }
 
 // ============================================================================
+// Tokio oneshot (WASM spawn_cpu_task)
+// ============================================================================
+
+/// Converts tokio oneshot receive errors (WASM only).
+///
+/// Occurs when the sender is dropped without sending, e.g. if the spawned
+/// thread panics before sending the result.
+#[cfg(target_family = "wasm")]
+impl From<tokio::sync::oneshot::error::RecvError> for AudioError {
+    fn from(_: tokio::sync::oneshot::error::RecvError) -> Self {
+        AudioError::Processing("blocking task channel closed".to_string())
+    }
+}
+
+// ============================================================================
 // WASM-specific conversions
 // ============================================================================
 

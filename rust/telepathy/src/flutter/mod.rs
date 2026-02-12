@@ -30,7 +30,7 @@ use tokio::net::lookup_host;
 #[cfg(not(target_family = "wasm"))]
 use tokio::process::Command;
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-use tokio::spawn;
+use flutter_rust_bridge::spawn;
 use tokio::sync::{Mutex, Notify, RwLock};
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 use tokio::time::Instant;

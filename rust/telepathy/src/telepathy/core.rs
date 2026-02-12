@@ -1141,8 +1141,7 @@ where
         }
         // join background tasks
         statistics_handle.await?;
-        input_helper.join()?;
-        output_helper.join()?;
+        // dropping input and output handles cleans up resources
         debug!("finished call teardown");
         Ok(())
     }
@@ -1374,10 +1373,9 @@ where
         stop_io.cancel();
         // join input IO task
         input_handle.await??;
-        // join output tasks
+        // join output tasks, dropping output helpers to close
         for connection in connections.into_values() {
             connection.handle.await??;
-            connection.output.join()?;
         }
         debug!("finished tearing down room processing stack");
         // cleanup room state
@@ -1386,8 +1384,6 @@ where
         end_sessions.cancel();
         // join statistics collector
         statistics_handle.await?;
-        // join input tasks
-        input_helper.join()?;
         Ok(())
     }
 }
