@@ -50,15 +50,14 @@
 
 #![cfg(target_family = "wasm")]
 
-use crate::error::AudioError;
-use crate::internal::traits::{AudioInput, CHANNEL_SIZE};
+use crate::internal::traits::{CHANNEL_SIZE, RingBufferInput};
 use log::error;
+use rtrb::RingBuffer;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering::Relaxed;
 use wasm_bindgen::{JsCast, JsValue, prelude::Closure};
 use wasm_bindgen_futures::JsFuture;
-use wasm_sync::{Condvar, Mutex};
+use wasm_sync::Condvar;
 use web_sys::BlobPropertyBag;
 
 /// Wrapper for Web Audio API input handling.
@@ -97,8 +96,8 @@ use web_sys::BlobPropertyBag;
 ///
 /// Based on the workaround from [cpal issue #813](https://github.com/RustAudio/cpal/issues/813#issuecomment-2413007276).
 pub struct WebAudioWrapper {
-    pair: Arc<(Mutex<Vec<f32>>, Condvar)>,
-    finished: Arc<AtomicBool>,
+    consumer: Option<rtrb::Consumer<f32>>,
+    notify: Arc<Condvar>,
     pub sample_rate: f32,
     audio_ctx: web_sys::AudioContext,
     _source: web_sys::MediaStreamAudioSourceNode,
@@ -185,8 +184,9 @@ impl WebAudioWrapper {
 
         source.connect_with_audio_node(&worklet_node)?;
 
-        let pair: Arc<(Mutex<Vec<f32>>, _)> = Arc::new((Mutex::default(), Condvar::new()));
-        let pair_clone = Arc::clone(&pair);
+        let (mut input_producer, input_consumer) = RingBuffer::<f32>::new(CHANNEL_SIZE);
+        let notify = Arc::new(Condvar::new());
+        let notify_clone = notify.clone();
 
         // Float32Array
         let js_closure = Closure::wrap(Box::new(move |msg: JsValue| {
@@ -194,18 +194,16 @@ impl WebAudioWrapper {
                 .dyn_into::<web_sys::MessageEvent>()
                 .map(|msg| serde_wasm_bindgen::from_value(msg.data()));
 
-            match (data_result, pair_clone.0.lock()) {
-                (Ok(Ok(data)), Ok(mut data_clone)) => {
-                    if data_clone.len() > CHANNEL_SIZE {
+            match data_result {
+                Ok(Ok(data)) => {
+                    let Ok(chunk) = input_producer.write_chunk_uninit(data.len()) else {
                         return;
-                    }
-
-                    data_clone.extend(data);
-                    pair_clone.1.notify_one();
+                    };
+                    chunk.fill_from_iter(data.into_iter());
+                    notify_clone.notify_one();
                 }
-                (Err(error), _) => error!("failed to handle worker message: {:?}", error),
-                (Ok(Err(error)), _) => error!("failed to handle worker message: {:?}", error),
-                (_, Err(error)) => error!("failed to lock pair: {}", error),
+                Err(error) => error!("failed to handle worker message: {:?}", error),
+                Ok(Err(error)) => error!("failed to handle worker message: {:?}", error),
             }
         }) as Box<dyn FnMut(JsValue)>);
 
@@ -214,8 +212,8 @@ impl WebAudioWrapper {
         worklet_node.port()?.set_onmessage(Some(js_func));
 
         Ok(WebAudioWrapper {
-            pair,
-            finished: Default::default(),
+            consumer: Some(input_consumer),
+            notify,
             sample_rate,
             audio_ctx,
             _source: source,
@@ -229,6 +227,13 @@ impl WebAudioWrapper {
     /// Resumes the audio context if it was suspended.
     pub fn resume(&self) {
         _ = self.audio_ctx.resume();
+    }
+
+    pub fn get_input(&mut self) -> RingBufferInput {
+        RingBufferInput::new(
+            self.consumer.take().expect("consumer already consumed"),
+            self.notify.clone(),
+        )
     }
 }
 
@@ -252,75 +257,10 @@ impl Drop for WebAudioWrapper {
         // close context
         let _ = self.audio_ctx.close();
         // cleans up shared state
-        self.finished.store(true, Relaxed);
-        self.pair.1.notify_all();
+        self.notify.notify_one();
     }
 }
 
 unsafe impl Send for WebAudioWrapper {}
 
 unsafe impl Sync for WebAudioWrapper {}
-
-/// Web Audio input source that implements [`AudioInput`].
-///
-/// This struct provides the [`AudioInput`] trait implementation for WASM
-/// targets. It reads audio samples from the shared buffer populated by
-/// [`WebAudioWrapper`]'s AudioWorklet message handler.
-///
-/// ## Blocking Behavior
-///
-/// The [`read_into`](AudioInput::read_into) method blocks (via condvar) when
-/// the buffer is empty, waiting for more audio data to arrive. This makes it
-/// suitable for use in a dedicated processing thread.
-///
-/// ## Buffer Management
-///
-/// - Samples are pushed by the JS message handler (WebAudioWrapper)
-/// - Samples are consumed by this struct's `read_into` method
-/// - Buffer is bounded by [`CHANNEL_SIZE`] (2,400 samples)
-/// - Backpressure is handled in WebAudioWrapper (drops when buffer full)
-pub struct WebAudioInput {
-    pair: Arc<(Mutex<Vec<f32>>, Condvar)>,
-    finished: Arc<AtomicBool>,
-}
-
-impl From<&WebAudioWrapper> for WebAudioInput {
-    fn from(value: &WebAudioWrapper) -> Self {
-        Self {
-            pair: Arc::clone(&value.pair),
-            finished: Arc::clone(&value.finished),
-        }
-    }
-}
-
-impl AudioInput for WebAudioInput {
-    fn read_into(&mut self, dst: &mut [f32]) -> Result<usize, AudioError> {
-        let mut written = 0;
-
-        while written < dst.len() {
-            let mut data = self.pair.0.lock().unwrap();
-            // if producer is done and there's no more buffered audio, we're done
-            if self.finished.load(Relaxed) && data.is_empty() {
-                return Ok(written);
-            }
-
-            if data.is_empty() {
-                let cond = |v: &mut Vec<f32>| v.is_empty() && !self.finished.load(Relaxed);
-
-                data = self.pair.1.wait_while(data, cond).unwrap();
-
-                // if we woke up finished and still empty, we're done
-                if data.is_empty() && self.finished.load(Relaxed) {
-                    return Ok(written);
-                }
-            }
-
-            let take = (dst.len() - written).min(data.len());
-            dst[written..written + take].copy_from_slice(&data[..take]);
-            data.drain(..take);
-            written += take;
-        }
-
-        Ok(written)
-    }
-}

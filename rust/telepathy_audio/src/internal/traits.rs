@@ -24,6 +24,8 @@ use crate::error::AudioError;
 use std::sync::Arc;
 #[cfg(not(target_family = "wasm"))]
 use std::sync::{Condvar, Mutex};
+#[cfg(target_family = "wasm")]
+use wasm_sync::{Condvar, Mutex};
 
 /// Buffer size for audio data (2,400 samples).
 ///
@@ -70,7 +72,6 @@ pub trait AudioOutput {
 ///
 /// When the producer is dropped, `is_abandoned()` returns `true`, signaling
 /// end-of-stream.
-#[cfg(not(target_family = "wasm"))]
 pub struct RingBufferInput {
     /// The consumer end of the ring buffer for audio samples.
     consumer: rtrb::Consumer<f32>,
@@ -90,7 +91,6 @@ pub struct RingBufferInput {
     mutex: Mutex<()>,
 }
 
-#[cfg(not(target_family = "wasm"))]
 impl RingBufferInput {
     pub fn new(consumer: rtrb::Consumer<f32>, notify: Arc<Condvar>) -> Self {
         Self {
@@ -101,7 +101,6 @@ impl RingBufferInput {
     }
 }
 
-#[cfg(not(target_family = "wasm"))]
 impl AudioInput for RingBufferInput {
     fn read_into(&mut self, dst: &mut [f32]) -> Result<usize, AudioError> {
         // block until enough slots are available
@@ -149,13 +148,11 @@ impl AudioInput for RingBufferInput {
 /// contiguous writable region, then fills it using `fill_from_iter()`. The chunk
 /// is automatically committed when dropped, requiring only 1-2 atomic operations
 /// regardless of sample count.
-#[cfg(not(target_family = "wasm"))]
 pub struct RingBufferOutput {
     /// The producer end of the ring buffer for audio samples.
     producer: rtrb::Producer<f32>,
 }
 
-#[cfg(not(target_family = "wasm"))]
 impl RingBufferOutput {
     /// Creates a new `RingBufferOutput` wrapping the given producer.
     ///
@@ -167,7 +164,6 @@ impl RingBufferOutput {
     }
 }
 
-#[cfg(not(target_family = "wasm"))]
 impl AudioOutput for RingBufferOutput {
     fn is_full(&self) -> bool {
         self.producer.slots() == 0
@@ -187,100 +183,5 @@ impl AudioOutput for RingBufferOutput {
             }
             Err(_) => Ok(samples.len()),
         }
-    }
-}
-
-/// Web-based audio output using a shared buffer.
-///
-/// This struct provides audio output for WASM targets by writing samples to a
-/// shared buffer that can be consumed by cpal
-///
-/// ## Buffer Behavior
-///
-/// - Maximum capacity: [`CHANNEL_SIZE`] (2,400 samples)
-/// - [`is_full()`](Self::is_full) returns `true` when buffer length >= CHANNEL_SIZE
-/// - [`write_samples()`](AudioOutput::write_samples) drops samples when buffer is full
-/// - The buffer should be drained by the consumer regularly
-#[cfg(target_family = "wasm")]
-#[derive(Default)]
-pub struct WebOutput {
-    /// The shared buffer for audio samples.
-    ///
-    /// Protected by a mutex for thread-safe access between the processor
-    /// thread and the JavaScript audio callback.
-    pub buf: Arc<wasm_sync::Mutex<Vec<f32>>>,
-}
-
-#[cfg(target_family = "wasm")]
-impl WebOutput {
-    /// Creates a new WebOutput with the given shared buffer.
-    ///
-    /// Pre-allocates capacity up to [`CHANNEL_SIZE`] to avoid reallocations
-    /// during audio processing.
-    ///
-    /// # Arguments
-    ///
-    /// * `buf` - Shared buffer that will be written to by the processor and
-    ///   read by the Web Audio API consumer
-    pub fn new(buf: Arc<wasm_sync::Mutex<Vec<f32>>>) -> Self {
-        // This buffer is bounded by CHANNEL_SIZE; reserve upfront to avoid growth reallocations.
-        if let Ok(mut data) = buf.lock() {
-            let current_capacity = data.capacity();
-            if current_capacity < CHANNEL_SIZE {
-                data.reserve(CHANNEL_SIZE - current_capacity);
-            }
-        }
-
-        Self { buf }
-    }
-}
-
-#[cfg(target_family = "wasm")]
-impl AudioOutput for WebOutput {
-    /// Returns `true` if the buffer has reached capacity ([`CHANNEL_SIZE`]).
-    ///
-    /// When full, callers should either wait for the consumer to drain samples
-    /// or accept that new samples will be dropped.
-    fn is_full(&self) -> bool {
-        self.buf
-            .lock()
-            .map(|data| data.len() >= CHANNEL_SIZE)
-            .unwrap_or(true)
-    }
-
-    /// Writes samples to the shared buffer, dropping excess if full.
-    ///
-    /// # Returns
-    ///
-    /// Returns the number of samples that were **dropped** (not written).
-    /// - `Ok(0)` means all samples were written successfully
-    /// - `Ok(n)` means `n` samples were dropped due to buffer being full
-    ///
-    /// # Behavior
-    ///
-    /// - If buffer is at capacity, returns `samples.len()` (all dropped)
-    /// - Otherwise, writes as many samples as space allows
-    /// - Never grows buffer beyond [`CHANNEL_SIZE`]
-    fn write_samples(&mut self, samples: &[f32]) -> Result<usize, AudioError> {
-        let mut data = self
-            .buf
-            .lock()
-            .map_err(|e| AudioError::Processing(e.to_string()))?;
-
-        if data.len() >= CHANNEL_SIZE {
-            return Ok(samples.len());
-        }
-
-        let space = CHANNEL_SIZE - data.len();
-        let take = space.min(samples.len());
-        // Ensure we never grow past CHANNEL_SIZE without reserving.
-        let needed = data.len() + take;
-        let current_capacity = data.capacity();
-        if current_capacity < needed {
-            data.reserve(needed - current_capacity);
-        }
-        data.extend_from_slice(&samples[..take]);
-
-        Ok(samples.len() - take)
     }
 }

@@ -24,7 +24,6 @@
 //! ```
 
 use crate::devices::AudioHost;
-#[cfg(not(target_family = "wasm"))]
 use crate::devices::{DeviceError, get_output_device};
 use crate::error::AudioError;
 use crate::internal::NETWORK_FRAME;
@@ -32,19 +31,15 @@ use crate::internal::processor::output_processor;
 use crate::internal::state::OutputProcessorState;
 use crate::internal::thread::{self, JoinHandle};
 use crate::internal::traits::AudioOutput;
-#[cfg(not(target_family = "wasm"))]
 use crate::internal::traits::CHANNEL_SIZE;
-#[cfg(not(target_family = "wasm"))]
 use crate::internal::traits::RingBufferOutput;
+use crate::io::SendStream;
 use crate::sea::codec::file::SeaFileHeader;
 use crate::sea::decoder::SeaDecoder;
 use atomic_float::AtomicF32;
 use bytes::Bytes;
-#[cfg(not(target_family = "wasm"))]
 use cpal::Sample;
-#[cfg(not(target_family = "wasm"))]
 use cpal::SampleFormat;
-#[cfg(not(target_family = "wasm"))]
 use cpal::traits::{DeviceTrait, StreamTrait};
 use kanal::{Sender, unbounded};
 use log::{debug, error};
@@ -303,7 +298,6 @@ impl AudioOutputBuilder {
     /// - The device cannot be found
     /// - The stream cannot be created
     /// - The device uses an unsupported sample format
-    #[cfg(not(target_family = "wasm"))]
     pub fn build(self, host: &AudioHost) -> Result<AudioOutputHandle, AudioError> {
         use rtrb::RingBuffer;
 
@@ -409,54 +403,11 @@ impl AudioOutputBuilder {
             )?,
             _ => return Err(AudioError::Config("Unsupported sample format".to_string())),
         };
-        stream.play()?;
+        // Start playback
+        stream.0.play()?;
 
         Ok(AudioOutputHandle {
             _stream: stream,
-            _processor_handle: Some(context.processor_handle),
-            network_sender: context.network_sender,
-            output_volume: context.output_volume,
-            deafened: context.deafened,
-            loss_sender: context.loss_sender,
-        })
-    }
-
-    /// Builds and starts the audio output stream (WASM version).
-    ///
-    /// On WASM, this creates a WebOutput-based audio output that writes to a
-    /// shared buffer. Unlike audio input, output uses synchronous `build` on WASM.
-    ///
-    /// # WASM-Specific Behavior
-    ///
-    /// - Creates a shared `Arc<Mutex<Vec<f32>>>` buffer for audio samples
-    /// - Processed audio is written to this buffer by the processor thread
-    /// - The caller is responsible for consuming this buffer from a Web Audio
-    ///   API AudioWorklet or ScriptProcessorNode
-    /// - Assumes 48kHz output sample rate for the web audio context
-    /// - The `AudioOutputHandle` holds an `Arc` to the buffer (`_web_buffer`)
-    ///
-    /// # Note
-    ///
-    /// The web buffer is bounded by `CHANNEL_SIZE` (2,400 samples). When full,
-    /// additional samples are dropped to prevent unbounded memory growth.
-    #[cfg(target_family = "wasm")]
-    pub fn build(self, _host: &AudioHost) -> Result<AudioOutputHandle, AudioError> {
-        use crate::internal::traits::WebOutput;
-        use std::sync::Arc;
-        use wasm_sync::Mutex;
-
-        // Create shared buffer for web output
-        let web_buffer: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
-        let processor_output = WebOutput::new(web_buffer.clone());
-
-        // Fixed 48kHz output for web audio context
-        let output_sample_rate = 48000_u32;
-
-        // Build common components (channels, threads, state)
-        let context = self.build_common(processor_output, output_sample_rate)?;
-
-        Ok(AudioOutputHandle {
-            _web_buffer: Some(web_buffer),
             _processor_handle: Some(context.processor_handle),
             network_sender: context.network_sender,
             output_volume: context.output_volume,
@@ -492,23 +443,8 @@ impl Default for AudioOutputBuilder {
 /// All control methods (`deafen`, `undeafen`, `set_volume`, etc.) are thread-safe
 /// and can be called from any thread. They use atomic operations internally.
 /// The sender returned by `sender()` can be cloned and used from multiple threads.
-///
-/// ## Platform Differences
-///
-/// - **Native**: Uses cpal stream for audio output
-/// - **WASM**: Uses a shared buffer (`Arc<Mutex<Vec<f32>>>`) that should be
-///   consumed by a Web Audio API AudioWorklet or ScriptProcessorNode
-///
-/// ## Drop vs stop()
-///
-/// Calling `drop` (implicit when handle goes out of scope) and `stop()` have
-/// the same effect. Use `stop()` when you need to explicitly wait for cleanup
-/// completion in a specific code location.
 pub struct AudioOutputHandle {
-    #[cfg(not(target_family = "wasm"))]
-    _stream: cpal::Stream,
-    #[cfg(target_family = "wasm")]
-    _web_buffer: Option<std::sync::Arc<wasm_sync::Mutex<Vec<f32>>>>,
+    _stream: SendStream,
     _processor_handle: Option<JoinHandle<()>>,
     network_sender: Sender<Bytes>,
     output_volume: Arc<AtomicF32>,
@@ -584,14 +520,13 @@ impl Drop for AudioOutputHandle {
 /// * `output_consumer` - Ring buffer consumer for f32 samples from the processor
 /// * `output_channels` - Number of output channels
 /// * `error_notify` - Optional notify handle for stream errors
-#[cfg(not(target_family = "wasm"))]
 fn build_output_stream_with_format<T>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
     mut output_consumer: rtrb::Consumer<f32>,
     output_channels: usize,
     error_notify: Option<Arc<Notify>>,
-) -> Result<cpal::Stream, AudioError>
+) -> Result<SendStream, AudioError>
 where
     T: Sample + cpal::SizedSample + cpal::FromSample<f32> + Send + 'static,
 {
@@ -627,5 +562,5 @@ where
         None,
     )?;
 
-    Ok(stream)
+    Ok(SendStream(stream))
 }

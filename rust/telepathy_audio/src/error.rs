@@ -209,7 +209,6 @@ impl From<kanal::CloseError> for AudioError {
     }
 }
 
-#[cfg(not(target_family = "wasm"))]
 impl From<rtrb::chunks::ChunkError> for AudioError {
     fn from(err: rtrb::chunks::ChunkError) -> Self {
         AudioError::Channel(format!("Chunk error: {}", err))

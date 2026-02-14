@@ -307,9 +307,9 @@ pub use internal::processing::wide_mul;
 /// and graceful cancellation with fade-out.
 pub use player::{AudioPlayer, SoundHandle, wav_to_sea};
 
-// Re-export web audio types for WASM consumers
+// Re-export web audio wrapper for WASM consumers
 #[cfg(target_family = "wasm")]
-pub use platform::web_audio::{WebAudioInput, WebAudioWrapper};
+pub use platform::web_audio::WebAudioWrapper;
 
 pub use cpal::Host;
 pub use nnnoiseless::RnnModel;

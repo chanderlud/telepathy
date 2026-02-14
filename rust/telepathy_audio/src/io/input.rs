@@ -523,7 +523,11 @@ where
                 state,
                 encoder,
             ) {
-                error!("Input processor error: {}", e);
+                if let AudioError::Channel(_) = e {
+                    debug!("Input processor ended by closed channel");
+                } else {
+                    error!("Input processor error: {}", e);
+                }
             }
             debug!("Input processor thread ended");
         })?;
@@ -728,22 +732,20 @@ where
     /// ```
     #[cfg(target_family = "wasm")]
     pub fn build(mut self, _host: &AudioHost) -> Result<AudioInputHandle, AudioError> {
-        use crate::platform::web_audio::WebAudioInput;
-
         if self.callback.is_none() && self.channel.is_none() {
             return Err(AudioError::Config(
                 "either callback or channel must be set".to_string(),
             ));
         }
 
-        let Some(web_audio) = self.web_audio_wrapper.take() else {
+        let Some(mut web_audio) = self.web_audio_wrapper.take() else {
             return Err(AudioError::Config(
                 "WebAudioWrapper must be set via web_audio_wrapper() method before calling build() on WASM targets. Initialize the wrapper using WebAudioWrapper::new().await on the main thread.".to_string(),
             ));
         };
 
         let input_sample_rate = web_audio.sample_rate as u32;
-        let processor_input = WebAudioInput::from(&web_audio);
+        let processor_input = web_audio.get_input();
 
         // Build common components (channels, threads, state)
         let context = self.build_common(processor_input, input_sample_rate)?;

@@ -40,3 +40,10 @@ pub mod output;
 // Re-export main types for convenience
 pub use input::{AudioInputBuilder, AudioInputConfig, AudioInputHandle};
 pub use output::{AudioOutputBuilder, AudioOutputConfig, AudioOutputHandle};
+
+/// cpal::Stream is not yet send and sync on WASM
+///
+/// SendStream allows the Stream to be used in spawned tasks
+struct SendStream(cpal::Stream);
+unsafe impl Send for SendStream {}
+unsafe impl Sync for SendStream {}
