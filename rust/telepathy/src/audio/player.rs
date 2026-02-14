@@ -5,12 +5,11 @@
 //! Flutter Rust Bridge attributes for Dart interop.
 
 use crate::error::DartError;
-use cpal::Host;
 use flutter_rust_bridge::frb;
 #[cfg(not(target_family = "wasm"))]
 use std::path::Path;
 use std::sync::Arc;
-use telepathy_audio::{AudioPlayer, SoundHandle, wav_to_sea};
+use telepathy_audio::{AudioPlayer, Host, SoundHandle, wav_to_sea};
 #[cfg(not(target_family = "wasm"))]
 use tokio::fs::File;
 #[cfg(not(target_family = "wasm"))]

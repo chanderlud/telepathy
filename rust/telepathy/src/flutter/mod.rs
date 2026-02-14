@@ -8,7 +8,6 @@ use crate::telepathy::screenshare::{Decoder, Encoder};
 use crate::telepathy::{ConnectionState, screenshare};
 use atomic_float::AtomicF32;
 use chrono::{DateTime, Local};
-pub use cpal::Host;
 #[cfg(not(target_family = "wasm"))]
 use fast_log::Config;
 #[cfg(not(target_family = "wasm"))]
@@ -27,6 +26,7 @@ use std::str::FromStr;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32};
 use std::sync::{Arc, Once};
+pub use telepathy_audio::Host;
 #[cfg(not(target_family = "wasm"))]
 use tokio::net::lookup_host;
 #[cfg(not(target_family = "wasm"))]

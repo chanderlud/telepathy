@@ -3,7 +3,6 @@ use std::fmt::{Display, Formatter};
 use std::net::AddrParseError;
 
 use crate::BehaviourEvent;
-use cpal::DefaultStreamConfigError;
 #[cfg(target_family = "wasm")]
 use flutter_rust_bridge::for_generated::futures::channel::oneshot::Canceled;
 use libp2p::identity::{DecodingError, ParseError};
@@ -24,7 +23,6 @@ pub(crate) struct Error {
 pub(crate) enum ErrorKind {
     Io(std::io::Error),
     MessageCodec(speedy::Error),
-    StreamConfig(DefaultStreamConfigError),
     KanalSend(kanal::SendError),
     KanalReceive(kanal::ReceiveError),
     KanalClose(kanal::CloseError),
@@ -74,14 +72,6 @@ impl From<speedy::Error> for Error {
     fn from(err: speedy::Error) -> Self {
         Self {
             kind: ErrorKind::MessageCodec(err),
-        }
-    }
-}
-
-impl From<DefaultStreamConfigError> for Error {
-    fn from(err: DefaultStreamConfigError) -> Self {
-        Self {
-            kind: ErrorKind::StreamConfig(err),
         }
     }
 }
@@ -268,7 +258,6 @@ impl Display for Error {
             match self.kind {
                 ErrorKind::Io(ref err) => format!("IO error: {}", err),
                 ErrorKind::MessageCodec(ref err) => format!("Message codec error: {}", err),
-                ErrorKind::StreamConfig(ref err) => format!("Stream config error: {}", err),
                 ErrorKind::KanalSend(ref err) => format!("Kanal send error: {}", err),
                 ErrorKind::KanalReceive(ref err) => format!("Kanal receive error: {}", err),
                 ErrorKind::KanalClose(ref err) => format!("Kanal close error: {}", err),
@@ -319,10 +308,7 @@ impl Error {
     }
 
     pub(crate) fn is_audio_error(&self) -> bool {
-        matches!(
-            self.kind,
-            ErrorKind::NoInputDevice | ErrorKind::StreamConfig(_)
-        )
+        matches!(self.kind, ErrorKind::NoInputDevice)
     }
 }
 

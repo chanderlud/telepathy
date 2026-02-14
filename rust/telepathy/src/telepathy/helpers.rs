@@ -10,8 +10,6 @@ use crate::telepathy::{
 };
 use crate::{Behaviour, BehaviourEvent};
 use bytes::Bytes;
-#[cfg(not(target_family = "wasm"))]
-use cpal::traits::DeviceTrait;
 use libp2p::futures::StreamExt;
 use libp2p::multiaddr::Protocol;
 use libp2p::swarm::SwarmEvent;
@@ -28,6 +26,7 @@ use std::time::Duration;
 use telepathy_audio::WebAudioWrapper;
 use telepathy_audio::{
     AudioInputBuilder, AudioInputHandle, AudioOutputBuilder, AudioOutputHandle, PooledBuffer,
+    get_input_device,
 };
 #[cfg(not(target_family = "wasm"))]
 use tokio::fs::File;
@@ -382,11 +381,10 @@ where
         {
             // Query sample rate from input device using library
             let device_id = self.core_state.input_device.lock().await.clone();
-            let device_handle =
-                telepathy_audio::get_input_device(&self.host, device_id.as_deref())?;
-            let device = device_handle.device();
-            let config = device.default_input_config()?;
-            input_sample_rate = config.sample_rate();
+            let device_handle = get_input_device(&self.host, device_id.as_deref())?;
+            input_sample_rate = device_handle
+                .sample_rate()
+                .ok_or(ErrorKind::NoInputDevice)?;
             info!("input_device: {:?}", device_handle.name());
         }
 

@@ -4,6 +4,7 @@
 //! audio input/output devices across platforms.
 
 use cpal::traits::{DeviceTrait, HostTrait};
+use cpal::{DeviceId, DeviceIdError};
 use std::fmt;
 use std::sync::Arc;
 
@@ -63,12 +64,17 @@ pub struct AudioDeviceList {
 pub struct DeviceHandle {
     device: cpal::Device,
     device_id: String,
+    device_type: DeviceType,
 }
 
 impl DeviceHandle {
     /// Creates a new device handle from a cpal device.
-    fn new(device: cpal::Device, device_id: String) -> Self {
-        Self { device, device_id }
+    fn new(device: cpal::Device, device_id: String, device_type: DeviceType) -> Self {
+        Self {
+            device,
+            device_id,
+            device_type,
+        }
     }
 
     /// Returns a reference to the underlying cpal device.
@@ -84,6 +90,13 @@ impl DeviceHandle {
         &self.device_id
     }
 
+    pub fn sample_rate(&self) -> Option<u32> {
+        Some(match self.device_type {
+            DeviceType::Input => self.device.default_input_config().ok()?.sample_rate(),
+            DeviceType::Output => self.device.default_output_config().ok()?.sample_rate(),
+        })
+    }
+
     /// Returns the device name.
     pub fn name(&self) -> Result<String, DeviceError> {
         self.device
@@ -97,8 +110,15 @@ impl fmt::Debug for DeviceHandle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DeviceHandle")
             .field("device_id", &self.device_id)
+            .field("description", &self.device.description())
             .finish()
     }
+}
+
+#[derive(Debug)]
+pub enum DeviceType {
+    Input,
+    Output,
 }
 
 /// Central audio host for device management.
@@ -162,6 +182,13 @@ impl AudioHost {
     /// This method is intended for internal use.
     pub(crate) fn inner(&self) -> &cpal::Host {
         &self.host
+    }
+
+    /// Returns an atomic reference to the underlying cpal host.
+    ///
+    /// This method is intended for internal use.
+    pub(crate) fn clone_inner(&self) -> Arc<cpal::Host> {
+        Arc::clone(&self.host)
     }
 }
 
@@ -299,14 +326,13 @@ pub fn get_input_device(
     device_id: Option<&str>,
 ) -> Result<DeviceHandle, DeviceError> {
     if let Some(id) = device_id {
-        // Try to find the device by ID
-        let devices = host
-            .inner()
-            .input_devices()
-            .map_err(|e| DeviceError::EnumerationFailed(e.to_string()))?;
+        let parsed: DeviceId = id
+            .parse()
+            .map_err(|e: DeviceIdError| DeviceError::InvalidDeviceId(e.to_string()))?;
 
-        if let Some(device) = find_device_by_id(devices, id) {
-            return Ok(DeviceHandle::new(device, id.to_string()));
+        // Try to find the device by ID
+        if let Some(device) = host.inner().device_by_id(&parsed) {
+            return Ok(DeviceHandle::new(device, id.to_string(), DeviceType::Input));
         }
 
         // Fall back to default device
@@ -323,7 +349,7 @@ pub fn get_input_device(
         .id()
         .map(|id| id.to_string())
         .unwrap_or_else(|_| "unknown".to_string());
-    Ok(DeviceHandle::new(device, device_id))
+    Ok(DeviceHandle::new(device, device_id, DeviceType::Input))
 }
 
 /// Gets an output device by ID, falling back to the default if not found.
@@ -355,14 +381,17 @@ pub fn get_output_device(
     device_id: Option<&str>,
 ) -> Result<DeviceHandle, DeviceError> {
     if let Some(id) = device_id {
-        // Try to find the device by ID
-        let devices = host
-            .inner()
-            .output_devices()
-            .map_err(|e| DeviceError::EnumerationFailed(e.to_string()))?;
+        let parsed: DeviceId = id
+            .parse()
+            .map_err(|e: DeviceIdError| DeviceError::InvalidDeviceId(e.to_string()))?;
 
-        if let Some(device) = find_device_by_id(devices, id) {
-            return Ok(DeviceHandle::new(device, id.to_string()));
+        // Try to find the device by ID
+        if let Some(device) = host.inner().device_by_id(&parsed) {
+            return Ok(DeviceHandle::new(
+                device,
+                id.to_string(),
+                DeviceType::Output,
+            ));
         }
 
         // Fall back to default device
@@ -379,7 +408,7 @@ pub fn get_output_device(
         .id()
         .map(|id| id.to_string())
         .unwrap_or_else(|_| "unknown".to_string());
-    Ok(DeviceHandle::new(device, device_id))
+    Ok(DeviceHandle::new(device, device_id, DeviceType::Output))
 }
 
 /// Gets the default input (recording) device.
@@ -432,21 +461,6 @@ fn device_to_info(device: &cpal::Device) -> Option<AudioDeviceInfo> {
     let name = description.name().to_string();
     let id = device.id().ok()?.to_string();
     Some(AudioDeviceInfo { name, id })
-}
-
-/// Finds a device by its ID string from an iterator of devices.
-fn find_device_by_id<I>(devices: I, device_id: &str) -> Option<cpal::Device>
-where
-    I: Iterator<Item = cpal::Device>,
-{
-    for device in devices {
-        if let Ok(id) = device.id()
-            && id.to_string() == device_id
-        {
-            return Some(device);
-        }
-    }
-    None
 }
 
 /// Unit tests for device enumeration.

@@ -310,3 +310,6 @@ pub use player::{AudioPlayer, SoundHandle, wav_to_sea};
 // Re-export web audio types for WASM consumers
 #[cfg(target_family = "wasm")]
 pub use platform::web_audio::{WebAudioInput, WebAudioWrapper};
+
+pub use cpal::Host;
+pub use nnnoiseless::RnnModel;

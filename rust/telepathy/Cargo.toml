@@ -12,10 +12,8 @@ crate-type = ["cdylib", "staticlib"]
 [dependencies]
 telepathy_audio = { path = "../telepathy_audio" }
 tokio-util = { version = "0.7", features = ["codec", "compat"] }
-cpal = { version = "0.17", features = ["wasm-bindgen", "audioworklet"] }
 log = "0.4"
 kanal = "0.1.1"
-nnnoiseless = { version = "0.5", default-features = false }
 atomic_float = "1"
 flutter_rust_bridge = { version = "=2.11.1", default-features = false, features = ["rust-async", "thread-pool", "dart-opaque", "anyhow"] }
 lazy_static = "1"

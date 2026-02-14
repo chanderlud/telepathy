@@ -28,6 +28,7 @@
 //! }
 //! ```
 
+use crate::AudioHost;
 use crate::error::AudioError;
 use crate::internal::processing::wide_mul;
 #[cfg(target_family = "wasm")]
@@ -224,7 +225,7 @@ pub struct AudioPlayer {
     /// Selected output device ID (None uses default device).
     output_device: Arc<Mutex<Option<DeviceId>>>,
     /// The cpal audio host for device access.
-    host: Arc<Host>,
+    host: AudioHost,
 }
 
 impl AudioPlayer {
@@ -244,21 +245,10 @@ impl AudioPlayer {
     /// let player = AudioPlayer::new(-6.0);
     /// ```
     pub fn new(output_volume_db: f32) -> Self {
-        cfg_if::cfg_if! {
-            if #[cfg(target_family = "wasm")] {
-                // TODO Attempt to use the AudioWorklet host on WASM for better performance
-                // Currently, using the AudioWorklet output results in a crash
-                // let host = cpal::host_from_id(cpal::HostId::AudioWorklet).unwrap_or(cpal::default_host());
-                let host = cpal::default_host();
-            } else {
-                let host = cpal::default_host();
-            }
-        }
-
         Self {
             output_volume: Arc::new(AtomicF32::new(db_to_multiplier(output_volume_db))),
             output_device: Default::default(),
-            host: Arc::new(host),
+            host: AudioHost::new(),
         }
     }
 
@@ -290,7 +280,7 @@ impl AudioPlayer {
         }
 
         // Get output device and config before spawning to catch device errors early
-        let output_device = get_output_device(&self.output_device, &self.host).await?;
+        let output_device = get_output_device(&self.output_device, self.host.inner()).await?;
         let output_config = output_device
             .default_output_config()
             .map_err(|e| AudioError::Device(format!("Failed to get output config: {}", e)))?;
@@ -382,7 +372,7 @@ impl AudioPlayer {
     ///
     /// This can be used to enumerate devices or access other host functionality.
     pub fn host(&self) -> Arc<Host> {
-        self.host.clone()
+        self.host.clone_inner()
     }
 }
 
@@ -506,7 +496,7 @@ pub async fn wav_to_sea(bytes: Vec<u8>, residual_bits: f32) -> Result<Vec<u8>, A
 /// Gets the output device based on the configured device ID.
 async fn get_output_device(
     output_device: &Arc<Mutex<Option<DeviceId>>>,
-    host: &Arc<Host>,
+    host: &Host,
 ) -> Result<cpal::Device, AudioError> {
     match *output_device.lock().await {
         Some(ref id) => Ok(host.device_by_id(id).unwrap_or(

@@ -36,16 +36,15 @@ use libp2p::swarm::{ConnectionId, SwarmEvent};
 use libp2p::{PeerId, Stream, dcutr::Event as DcutrEvent, identify::Event as IdentifyEvent};
 use libp2p_stream::Control;
 use log::{debug, error, info, trace, warn};
-use nnnoiseless::RnnModel;
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::{Duration, Instant};
-use telepathy_audio::AudioHost;
 #[cfg(target_family = "wasm")]
 use telepathy_audio::WebAudioWrapper;
+use telepathy_audio::{AudioHost, RnnModel};
 use tokio::select;
 use tokio::sync::mpsc::{Receiver as MReceiver, Sender as MSender, channel};
 use tokio::sync::{Mutex, Notify, RwLock};
