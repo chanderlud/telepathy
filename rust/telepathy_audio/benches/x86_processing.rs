@@ -1,8 +1,11 @@
-use criterion::{Criterion, criterion_group, criterion_main};
-use rand::Rng;
-use std::hint::black_box;
+#![cfg(not(target_family = "wasm"))]
 
+use crate::common::{dummy_float_frame, dummy_int_frame};
+use criterion::{Criterion, criterion_group, criterion_main};
+use std::hint::black_box;
 use telepathy_audio::internal::processing::*;
+
+mod common;
 
 /// Benchmarks for multiplication operations.
 /// Compares scalar, wide (auto-selecting), AVX2, AVX2+FMA, and AVX-512 implementations.
@@ -76,12 +79,7 @@ pub fn bench_i16_to_f32_conversion(c: &mut Criterion) {
 pub fn bench_float_scaling(c: &mut Criterion) {
     let mut group = c.benchmark_group("float_scaling");
 
-    let mut pre_buf = [0_f32; 4096];
-    // Initialize buffer with valid float data
-    let mut rng = rand::thread_rng();
-    for x in &mut pre_buf {
-        *x = rng.gen_range(-1.0..1.0);
-    }
+    let mut pre_buf = dummy_float_frame();
 
     group.bench_function("scalar_float_scaler", |b| {
         b.iter(|| scalar_float_scaler(black_box(&mut pre_buf), black_box(i16::MAX as f32)))
@@ -118,10 +116,9 @@ pub fn bench_f32_to_i16_conversion(c: &mut Criterion) {
     let mut group = c.benchmark_group("f32_to_i16_conversion");
 
     // Create f32 frame scaled to i16 range
-    let mut float_frame = [0_f32; 4096];
-    let mut rng = rand::thread_rng();
+    let mut float_frame = dummy_float_frame();
     for x in &mut float_frame {
-        *x = rng.gen_range(i16::MIN as f32..i16::MAX as f32);
+        *x = (*x * i16::MAX as f32).clamp(i16::MIN as f32, i16::MAX as f32);
     }
 
     let mut output = [0_i16; 4096];
@@ -215,26 +212,6 @@ pub fn bench_rms_calculation(c: &mut Criterion) {
     }
 
     group.finish();
-}
-
-fn dummy_float_frame() -> [f32; 4096] {
-    let mut frame = [0_f32; 4096];
-    let mut rng = rand::thread_rng();
-    rng.fill(&mut frame[..]);
-
-    for x in &mut frame {
-        *x = x.clamp(i16::MIN as f32, i16::MAX as f32);
-        *x /= i16::MAX as f32;
-    }
-
-    frame
-}
-
-fn dummy_int_frame() -> [i16; 4096] {
-    let mut frame = [0_i16; 4096];
-    let mut rng = rand::thread_rng();
-    rng.fill(&mut frame[..]);
-    frame
 }
 
 criterion_group!(

@@ -8,34 +8,15 @@
 //! export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner
 //! export RUSTUP_TOOLCHAIN=nightly
 //! export RUSTFLAGS="-Ctarget-feature=+atomics -Ctarget-feature=+simd128 -Clink-args=--shared-memory -Clink-args=--max-memory=1073741824 -Clink-args=--import-memory  -Clink-args=--export=__wasm_init_tls -Clink-args=--export=__tls_size -Clink-args=--export=__tls_align -Clink-args=--export=__tls_base"
-//! cargo bench --target wasm32-unknown-unknown --bench processing_bench_wasm -Z build-std=std,panic_abort
+//! cargo bench --target wasm32-unknown-unknown --bench wasm_processing -Z build-std=std,panic_abort
 //! ```
 
+mod common;
+
+use common::{dummy_float_frame, dummy_int_frame};
 use std::hint::black_box;
-use wasm_bindgen_test::{Criterion, wasm_bindgen_bench};
-
 use telepathy_audio::internal::processing::*;
-
-// ---------------------------------------------------------------------------
-// Helper data generators (matching processing_bench.rs)
-// ---------------------------------------------------------------------------
-
-fn dummy_float_frame() -> [f32; 4096] {
-    let mut frame = [0_f32; 4096];
-    for (i, x) in frame.iter_mut().enumerate() {
-        // Deterministic pattern – no RNG so the benchmark is reproducible on WASM
-        *x = ((i as f32 / 4096.0) * 2.0 - 1.0) * 0.9;
-    }
-    frame
-}
-
-fn dummy_int_frame() -> [i16; 4096] {
-    let mut frame = [0_i16; 4096];
-    for (i, x) in frame.iter_mut().enumerate() {
-        *x = ((i as f32 / 4096.0) * 2.0 - 1.0) as i16 * 16000;
-    }
-    frame
-}
+use wasm_bindgen_test::{Criterion, wasm_bindgen_bench};
 
 /// Benchmarks scalar vs wide (auto-selecting) multiplication.
 #[wasm_bindgen_bench]

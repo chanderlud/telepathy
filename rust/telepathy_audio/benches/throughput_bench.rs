@@ -1,24 +1,20 @@
+#![cfg(not(target_family = "wasm"))]
+
 //! Throughput benchmarks for telepathy_audio processing stacks.
 //!
 //! Measures throughput for both input and output processing stacks
-//! using simulated audio through mock implementations. Uses cosine waves
-//! instead of pink noise for simpler, more deterministic, and easier to
-//! verify benchmark inputs.
+//! using simulated audio through mock implementations.
 //!
 //! Run with: `cargo bench --bench throughput_bench`
 //!
 //! Note: These benchmarks are native-only and do not run on WASM targets.
 
-#![cfg(not(target_family = "wasm"))]
-
-mod mock_input;
-mod mock_output;
+mod common;
 
 use bytes::{Bytes, BytesMut};
+use common::*;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use kanal;
-use mock_input::MockAudioInput;
-use mock_output::NullOutput;
 use nnnoiseless::DenoiseState;
 use std::f32::consts::PI;
 use std::hint::black_box;

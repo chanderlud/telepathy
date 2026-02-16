@@ -86,7 +86,7 @@ pub fn db_to_multiplier(db: f32) -> f32 {
 /// * `Ok(Some(resampler))` - A configured sinc resampler when ratio != 1.0
 /// * `Ok(None)` - When no resampling is needed (pass through samples)
 /// * `Err(_)` - When resampler creation fails (invalid parameters)
-pub(crate) fn resampler_factory(
+pub fn resampler_factory(
     ratio: f64,
     channels: usize,
     size: usize,
