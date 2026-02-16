@@ -8,21 +8,31 @@
 //! All public functions in this module automatically select the optimal
 //! implementation based on runtime CPU feature detection:
 //!
-//! | Function | AVX-512 | AVX2/AVX | Scalar |
-//! |----------|---------|----------|--------|
-//! | [`wide_mul`] | 16 floats/iter | 8 floats/iter | 1 float/iter |
-//! | [`wide_i16_to_f32`] | N/A | 16 samples/iter | 1 sample/iter |
-//! | [`wide_float_scaler`] | 16 floats/iter | 8 floats/iter | 1 float/iter |
+//! | Function | AVX-512 | AVX2/AVX | WASM SIMD (v128) | Scalar |
+//! |----------|---------|----------|------------------|--------|
+//! | [`wide_mul`] | 16 floats/iter | 8 floats/iter | 4 floats/iter | 1 float/iter |
+//! | [`wide_i16_to_f32`] | N/A | 16 samples/iter | 8 samples/iter | 1 sample/iter |
+//! | [`wide_float_scaler`] | 16 floats/iter | 8 floats/iter | 4 floats/iter | 1 float/iter |
+//! | [`wide_f32_to_i16`] | N/A | 8 samples/iter | 4 samples/iter | 1 sample/iter |
+//! | [`calculate_rms`] | N/A | 8 floats/iter | 4 floats/iter | 4 floats/iter (unrolled) |
 //!
 //! ## Alignment Requirements
 //!
 //! SIMD paths are only used when frame length meets alignment requirements:
 //! - AVX-512: frame length must be a multiple of 16
 //! - AVX2/AVX: frame length must be a multiple of 8
+//! - WASM SIMD (v128): frame length must be a multiple of 4
 //! - Scalar fallback handles any length
 //!
 //! The standard `FRAME_SIZE` (480) is a multiple of 16, so SIMD paths are
-//! typically used for normal audio processing.
+//! typically used for normal audio processing (480 % 4 = 0 for WASM SIMD).
+//!
+//! ## WASM SIMD Support
+//!
+//! On `wasm32` targets compiled with `target-feature=+simd128`, this module
+//! uses 128-bit SIMD (v128) intrinsics from `std::arch::wasm32`. The v128
+//! register holds 4×f32 or 8×i16, providing significant speedups over scalar
+//! code in modern browsers.
 //!
 //! ## Safety
 //!
@@ -31,6 +41,9 @@
 
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
+
+#[cfg(target_arch = "wasm32")]
+use std::arch::wasm32::*;
 
 const MAX_I16_F32: f32 = i16::MAX as f32;
 const MIN_I16_F32: f32 = i16::MIN as f32;
@@ -75,6 +88,14 @@ pub fn wide_mul(frame: &mut [f32], factor: f32) {
         }
     }
 
+    #[cfg(target_arch = "wasm32")]
+    {
+        if cfg!(target_feature = "simd128") && frame.len().is_multiple_of(4) {
+            wasm_simd_mul(frame, factor);
+            return;
+        }
+    }
+
     scalar_mul(frame, factor);
 }
 
@@ -95,6 +116,14 @@ pub fn wide_i16_to_f32(ints: &[i16], out: &mut [f32], scale: f32) {
     {
         if is_x86_feature_detected!("avx2") {
             unsafe { i16_to_f32_avx2(ints, out, scale) }
+            return;
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        if cfg!(target_feature = "simd128") {
+            wasm_simd_i16_to_f32(ints, out, scale);
             return;
         }
     }
@@ -127,6 +156,14 @@ pub fn wide_float_scaler(floats: &mut [f32], scale: f32) {
         }
         if is_x86_feature_detected!("avx") {
             unsafe { avx_float_scaler(floats, scale) }
+            return;
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        if cfg!(target_feature = "simd128") {
+            wasm_simd_float_scaler(floats, scale);
             return;
         }
     }
@@ -416,9 +453,151 @@ pub fn wide_f32_to_i16(floats: &[f32], output: &mut [i16]) {
         }
     }
 
+    #[cfg(target_arch = "wasm32")]
+    {
+        if cfg!(target_feature = "simd128") && floats.len() >= 4 {
+             wasm_simd_f32_to_i16(floats, output);
+            return;
+        }
+    }
+
     // Scalar fallback
     for (out, &f) in output.iter_mut().zip(floats.iter()) {
         *out = f as i16;
+    }
+}
+
+/// WASM SIMD multiplication: 4 floats per iteration via v128.
+///
+/// Multiplies each sample by `factor` and clamps the result to [-1.0, 1.0].
+/// The caller must ensure `frame.len()` is a multiple of 4.
+#[cfg(target_arch = "wasm32")]
+#[target_feature(enable = "simd128")]
+fn wasm_simd_mul(frame: &mut [f32], factor: f32) {
+    let len = frame.len();
+    let mut i = 0;
+
+    let factor_vec = f32x4_splat(factor);
+    let min_vec = f32x4_splat(-1.0_f32);
+    let max_vec = f32x4_splat(1.0_f32);
+
+    while i + 4 <= len {
+        let mut chunk = unsafe {
+            v128_load(frame.as_ptr().add(i) as *const v128)
+        };
+        chunk = f32x4_mul(chunk, factor_vec);
+        chunk = f32x4_max(min_vec, f32x4_min(max_vec, chunk));
+        unsafe {
+            v128_store(frame.as_mut_ptr().add(i) as *mut v128, chunk);
+        }
+        i += 4;
+    }
+}
+
+/// WASM SIMD i16→f32 conversion with scaling: 8 i16 → 8 f32 per iteration.
+///
+/// Converts 16-bit integer samples to 32-bit floats, applies `scale`, and
+/// clamps to [-1.0, 1.0]. Processes 8 samples per loop iteration using two
+/// v128 stores (4 f32 each).
+#[cfg(target_arch = "wasm32")]
+#[target_feature(enable = "simd128")]
+fn wasm_simd_i16_to_f32(ints: &[i16], out: &mut [f32], scale: f32) {
+    let n = ints.len().min(out.len());
+    let mut i = 0;
+
+    let scale_vec = f32x4_splat(scale);
+    let min_vec = f32x4_splat(-1.0_f32);
+    let max_vec = f32x4_splat(1.0_f32);
+
+    // Process 8 i16 samples per iteration (one v128 load of 8×i16)
+    while i + 8 <= n {
+        // Load 8 × i16 into a v128
+        let v_i16 = unsafe {
+            v128_load(ints.as_ptr().add(i) as *const v128)
+        };
+
+        // Widen lower 4 i16 → 4 i32 → 4 f32
+        let lo_i32 = i32x4_extend_low_i16x8(v_i16);
+        let mut lo_f32 = f32x4_mul(f32x4_convert_i32x4(lo_i32), scale_vec);
+        lo_f32 = f32x4_max(min_vec, f32x4_min(max_vec, lo_f32));
+        unsafe {
+            v128_store(out.as_mut_ptr().add(i) as *mut v128, lo_f32);
+        }
+
+        // Widen upper 4 i16 → 4 i32 → 4 f32
+        let hi_i32 = i32x4_extend_high_i16x8(v_i16);
+        let mut hi_f32 = f32x4_mul(f32x4_convert_i32x4(hi_i32), scale_vec);
+        hi_f32 = f32x4_max(min_vec, f32x4_min(max_vec, hi_f32));
+        unsafe {
+            v128_store(out.as_mut_ptr().add(i + 4) as *mut v128, hi_f32);
+        }
+
+        i += 8;
+    }
+}
+
+/// WASM SIMD float scaling with truncation: 4 floats per iteration.
+///
+/// Multiplies each sample by `scale`, truncates toward zero, and clamps to
+/// the i16 range [-32768.0, 32767.0]. The caller must ensure `floats.len()`
+/// is a multiple of 4.
+#[cfg(target_arch = "wasm32")]
+#[target_feature(enable = "simd128")]
+fn wasm_simd_float_scaler(floats: &mut [f32], scale: f32) {
+    let n = floats.len();
+    let mut i = 0;
+
+    let scale_vec = f32x4_splat(scale);
+    let min_vec = f32x4_splat(MIN_I16_F32);
+    let max_vec = f32x4_splat(MAX_I16_F32);
+
+    while i + 4 <= n {
+        let mut v = unsafe {
+            v128_load(floats.as_ptr().add(i) as *const v128)
+        };
+        v = f32x4_mul(v, scale_vec);
+        // Truncate toward zero: convert f32→i32 (saturating truncation), then back
+        let vi = i32x4_trunc_sat_f32x4(v);
+        let mut vf = f32x4_convert_i32x4(vi);
+        unsafe {
+            // Clamp to i16 representable range
+            vf = f32x4_max(min_vec, f32x4_min(max_vec, vf));
+            v128_store(floats.as_mut_ptr().add(i) as *mut v128, vf);
+        }
+        i += 4;
+    }
+}
+
+/// WASM SIMD f32→i16 conversion: 4 floats → 4 i16 per iteration.
+///
+/// Truncates each f32 toward zero and writes the resulting i16 values.
+/// Uses `i32x4_trunc_sat_f32x4` which saturates out-of-range values to
+/// `i32::MIN` / `i32::MAX`, then narrows with `i16x8_narrow_i32x4`.
+#[cfg(target_arch = "wasm32")]
+#[target_feature(enable = "simd128")]
+fn wasm_simd_f32_to_i16(floats: &[f32], output: &mut [i16]) {
+    let n = floats.len().min(output.len());
+    let mut i = 0;
+
+    // Process 4 f32 → 4 i16 per iteration
+    while i + 4 <= n {
+        let v = unsafe {
+            v128_load(floats.as_ptr().add(i) as *const v128)
+        };
+        // Truncate f32 → i32 with saturation (matches `as i16` truncation semantics)
+        let vi32 = i32x4_trunc_sat_f32x4(v);
+        // Narrow i32x4 → i16x8 with signed saturation (upper half is from zeros)
+        let zero = i32x4_splat(0);
+        let packed = i16x8_narrow_i32x4(vi32, zero);
+        // Store the lower 4 i16 (8 bytes) from the v128
+        let dst = unsafe {
+            output.as_mut_ptr().add(i) as *mut u64
+        };
+        let bits = u64x2_extract_lane::<0>(packed);
+        unsafe {
+            core::ptr::write_unaligned(dst, bits);
+        }
+        i += 4;
     }
 }
 
@@ -582,5 +761,105 @@ mod tests {
         super::wide_f32_to_i16(&scaled, &mut simd_output);
 
         assert_eq!(scalar_output, simd_output);
+    }
+
+    /// Verifies WASM SIMD multiplication produces identical output to scalar.
+    #[wasm_bindgen_test::wasm_bindgen_test]
+    #[cfg(target_arch = "wasm32")]
+    fn WasmMulVariants_DummyFrame_EqualOutputs() {
+        let frame = dummy_frame();
+        let mut scalar_frame = frame;
+        let mut wasm_simd_frame = frame;
+        let mut wide_frame = frame;
+
+        super::scalar_mul(&mut scalar_frame, 2_f32);
+        super::wide_mul(&mut wide_frame, 2_f32);
+
+        if cfg!(target_feature = "simd128") {
+            unsafe { super::wasm_simd_mul(&mut wasm_simd_frame, 2_f32) };
+            assert_eq!(scalar_frame, wasm_simd_frame);
+        }
+
+        assert_eq!(scalar_frame, wide_frame);
+    }
+
+    /// Verifies WASM SIMD i16→f32 conversion produces identical output to scalar.
+    #[wasm_bindgen_test::wasm_bindgen_test]
+    #[cfg(target_arch = "wasm32")]
+    fn WasmIntConversion_DummyFrame_EqualOutputs() {
+        let frame = dummy_int_frame();
+        let mut scalar_frame = [0_f32; FRAME_SIZE];
+        let mut wasm_simd_frame = [0_f32; FRAME_SIZE];
+        let mut wide_frame = [0_f32; FRAME_SIZE];
+        let scale = (1_f32 / i16::MAX as f32) * 2.0;
+
+        super::i16_to_f32_scalar(&frame, &mut scalar_frame, scale);
+        super::wide_i16_to_f32(&frame, &mut wide_frame, scale);
+
+        if cfg!(target_feature = "simd128") {
+            unsafe { super::wasm_simd_i16_to_f32(&frame, &mut wasm_simd_frame, scale) };
+            assert_eq!(scalar_frame, wasm_simd_frame);
+        }
+
+        assert_eq!(scalar_frame, wide_frame);
+    }
+
+    /// Verifies WASM SIMD float scaling produces identical output to scalar.
+    #[wasm_bindgen_test::wasm_bindgen_test]
+    #[cfg(target_arch = "wasm32")]
+    fn WasmFloatConversion_DummyFrame_EqualOutputs() {
+        let frame = dummy_frame();
+        let mut scalar_frame = frame;
+        let mut wasm_simd_frame = frame;
+        let mut wide_frame = frame;
+
+        let scale = i16::MAX as f32 * 2.0;
+        super::scalar_float_scaler(&mut scalar_frame, scale);
+        super::wide_float_scaler(&mut wide_frame, scale);
+
+        if cfg!(target_feature = "simd128") {
+            unsafe { super::wasm_simd_float_scaler(&mut wasm_simd_frame, scale) };
+            assert_eq!(scalar_frame, wasm_simd_frame);
+        }
+
+        assert_eq!(scalar_frame, wide_frame);
+    }
+
+    /// Verifies WASM SIMD f32→i16 conversion produces identical output to scalar.
+    #[wasm_bindgen_test::wasm_bindgen_test]
+    #[cfg(target_arch = "wasm32")]
+    fn WasmF32ToI16_DummyFrame_CorrectOutput() {
+        let frame = dummy_frame();
+        let scaled: Vec<f32> = frame.iter().map(|x| x * i16::MAX as f32).collect();
+
+        let mut scalar_output = vec![0i16; FRAME_SIZE];
+        let mut simd_output = vec![0i16; FRAME_SIZE];
+
+        for (out, &f) in scalar_output.iter_mut().zip(scaled.iter()) {
+            *out = f as i16;
+        }
+
+        super::wide_f32_to_i16(&scaled, &mut simd_output);
+
+        assert_eq!(scalar_output, simd_output);
+    }
+
+    /// Verifies WASM SIMD RMS calculation matches scalar reference.
+    #[wasm_bindgen_test::wasm_bindgen_test]
+    #[cfg(target_arch = "wasm32")]
+    fn WasmRmsCalculation_DummyFrame_CorrectResult() {
+        let frame = dummy_frame();
+
+        let sum: f32 = frame.iter().map(|x| x * x).sum();
+        let expected = (sum / frame.len() as f32).sqrt();
+
+        let result = super::calculate_rms(&frame);
+
+        assert!(
+            (result - expected).abs() < 1e-6,
+            "WASM RMS mismatch: {} vs {}",
+            result,
+            expected
+        );
     }
 }

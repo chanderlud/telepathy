@@ -149,27 +149,6 @@ pub struct AudioHost {
 
 impl AudioHost {
     /// Creates a new audio host with platform-appropriate initialization.
-    ///
-    /// On wasm, this attempts to use the AudioWorklet host for better
-    /// performance, falling back to the default WebAudio host if unavailable.
-    ///
-    /// On native platforms, this uses the platform's default audio host.
-    #[cfg(target_family = "wasm")]
-    pub fn new() -> Self {
-        let host = cpal::host_from_id(cpal::HostId::AudioWorklet).unwrap_or_else(|_| {
-            log::warn!("AudioWorklet host unavailable, falling back to default host");
-            cpal::default_host()
-        });
-        Self {
-            host: Arc::new(host),
-        }
-    }
-
-    /// Creates a new audio host with platform-appropriate initialization.
-    ///
-    /// On native platforms, this uses the platform's default audio host
-    /// (WASAPI on Windows, ALSA on Linux, CoreAudio on macOS).
-    #[cfg(not(target_family = "wasm"))]
     pub fn new() -> Self {
         let host = cpal::default_host();
         Self {

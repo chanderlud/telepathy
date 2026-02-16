@@ -8,7 +8,7 @@ A standalone audio processing library for the Telepathy project, providing devic
 - **Audio Capture**: High-quality audio input with optional RNNoise noise suppression
 - **Audio Playback**: Low-latency audio output with automatic resampling
 - **Codec Support**: SEA codec encoding/decoding for efficient network transmission
-- **SIMD Optimization**: Hardware-accelerated audio processing with automatic CPU feature detection
+- **SIMD Optimization**: Hardware-accelerated audio processing with automatic CPU feature detection (x86_64 AVX2/AVX-512, WASM SIMD v128)
 - **Cross-Platform**: Native support for Windows, macOS, Linux, iOS, Android, and WebAssembly
 
 ## Usage

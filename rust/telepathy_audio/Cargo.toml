@@ -6,7 +6,7 @@ description = "Audio processing library for telepathy with device management, co
 license = "MIT"
 
 [package.metadata]
-wasm-opt = ["-O", "--enable-bulk-memory", "--enable-nontrapping-float-to-int"]
+wasm-opt = ["-O", "--enable-bulk-memory", "--enable-nontrapping-float-to-int", "--enable-simd"]
 
 [lib]
 crate-type = ["lib"]
@@ -16,7 +16,7 @@ atomic_float = "1"
 bytes = "1"
 crossbeam = "0.8"
 cfg-if = "1"
-cpal = { version = "0.17", features = ["wasm-bindgen", "audioworklet"] }
+cpal = { version = "0.17", features = ["wasm-bindgen"] }
 log = "0.4"
 nnnoiseless = { version = "0.5", default-features = false }
 kanal = "0.1.1"
@@ -54,10 +54,14 @@ serde-wasm-bindgen = "0.6"
 wasm_sync = "0.1"
 wasmtimer = "0.4"
 
-[dev-dependencies]
+[target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
 tokio-test = "0.4"
-criterion = "0.5"
+criterion = "0.8"
 rand = "0.8"
+
+[target.'cfg(target_family = "wasm")'.dev-dependencies]
+wasm-bindgen-test = "0.3"
+getrandom = { version = "0.2", features = ["js"] }
 
 [[bench]]
 name = "throughput_bench"
@@ -65,4 +69,8 @@ harness = false
 
 [[bench]]
 name = "processing_bench"
+harness = false
+
+[[bench]]
+name = "processing_bench_wasm"
 harness = false

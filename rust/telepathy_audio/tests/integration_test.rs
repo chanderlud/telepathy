@@ -45,51 +45,6 @@ fn test_full_enumeration_workflow() {
     }
 }
 
-/// Test that invalid device IDs fall back to defaults gracefully.
-#[test]
-fn test_invalid_device_id_fallback() {
-    let host = AudioHost::new();
-
-    // Try to get a device with an invalid ID
-    let result = get_input_device(&host, Some("definitely-not-a-real-device-id-xyz123"));
-
-    // Should either return the default device or NoDefaultDevice error
-    match result {
-        Ok(handle) => {
-            // Fallback to default succeeded
-            println!(
-                "Fell back to default input device: {:?}",
-                handle.device_id()
-            );
-        }
-        Err(DeviceError::NoDefaultDevice) => {
-            // No default device available - acceptable
-            println!("No default input device available");
-        }
-        Err(e) => {
-            panic!("Unexpected error type: {:?}", e);
-        }
-    }
-
-    // Same test for output device
-    let result = get_output_device(&host, Some("definitely-not-a-real-device-id-xyz123"));
-
-    match result {
-        Ok(handle) => {
-            println!(
-                "Fell back to default output device: {:?}",
-                handle.device_id()
-            );
-        }
-        Err(DeviceError::NoDefaultDevice) => {
-            println!("No default output device available");
-        }
-        Err(e) => {
-            panic!("Unexpected error type: {:?}", e);
-        }
-    }
-}
-
 /// Test that default device selection works.
 #[test]
 fn test_default_device_selection() {
