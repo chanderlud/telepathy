@@ -33,6 +33,7 @@ use crate::error::AudioError;
 use crate::internal::processing::wide_mul;
 #[cfg(target_family = "wasm")]
 use crate::internal::thread;
+use crate::internal::traits::CHANNEL_SIZE;
 use crate::internal::utils::{db_to_multiplier, resampler_factory};
 use crate::sea::codec::file::SeaFileHeader;
 use crate::sea::decoder::SeaDecoder;
@@ -41,16 +42,18 @@ use atomic_float::AtomicF32;
 use bytes::BytesMut;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{DeviceId, Host, SampleFormat};
-#[cfg(not(target_family = "wasm"))]
-use kanal::{Sender, bounded};
 use log::{debug, error, info};
 use nnnoiseless::FRAME_SIZE;
+use rtrb::RingBuffer;
 use rubato::Resampler;
 use std::mem;
 use std::sync::Arc;
-#[cfg(target_family = "wasm")]
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering::Relaxed;
+#[cfg(not(target_family = "wasm"))]
+use std::sync::Condvar;
+#[cfg(not(target_family = "wasm"))]
+use std::sync::Mutex as SyncMutex;
+use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+use std::time::Duration;
 #[cfg(not(target_family = "wasm"))]
 use std::time::Instant;
 use tokio::select;
@@ -59,13 +62,47 @@ use tokio::sync::{Mutex, Notify};
 #[cfg(target_family = "wasm")]
 use wasm_bindgen_futures::spawn_local;
 #[cfg(target_family = "wasm")]
-use wasm_sync::{Condvar, Mutex as WasmMutex};
+use wasm_sync::{Condvar, Mutex as SyncMutex};
 #[cfg(target_family = "wasm")]
 use wasmtimer::std::Instant;
 
 /// Number of frames to fade out when canceling playback.
 /// This prevents audio pops/clicks when stopping playback abruptly.
 const FADE_FRAMES: usize = 60;
+
+/// Iterator-like source of planar `f32` audio frames.
+///
+/// Implementations encapsulate format-specific decoding (e.g., WAV unpacking or
+/// de-interleaving) and expose a unified "next frame" interface to the processor.
+trait AudioFrameSource {
+    /// Fills `output` with the next chunk of planar `f32` samples.
+    ///
+    /// Returns:
+    /// - `Ok(Some(frame_count))` with samples per channel
+    /// - `Ok(None)` when no more frames are available
+    /// - `Err(_)` on processing errors
+    fn next_frame(&mut self, output: &mut [Vec<f32>]) -> Result<Option<usize>, AudioError>;
+
+    /// Total number of sample frames per channel in the source.
+    fn total_frame_count(&self) -> usize;
+
+    /// Number of audio channels.
+    fn channels(&self) -> usize;
+}
+
+impl<T: AudioFrameSource + ?Sized> AudioFrameSource for Box<T> {
+    fn next_frame(&mut self, output: &mut [Vec<f32>]) -> Result<Option<usize>, AudioError> {
+        (**self).next_frame(output)
+    }
+
+    fn total_frame_count(&self) -> usize {
+        (**self).total_frame_count()
+    }
+
+    fn channels(&self) -> usize {
+        (**self).channels()
+    }
+}
 
 /// Trait for converting audio samples from various formats to a target type.
 ///
@@ -145,6 +182,128 @@ impl SampleConversion for f32 {
     }
 }
 
+struct WavFrameSource {
+    bytes: Vec<u8>,
+    sample_format: SampleFormat,
+    channels: usize,
+    position: usize, // Current byte offset in the data section
+}
+
+impl WavFrameSource {
+    fn new(bytes: Vec<u8>, sample_format: SampleFormat, channels: usize) -> Self {
+        Self {
+            bytes,
+            sample_format,
+            channels,
+            position: 0,
+        }
+    }
+}
+
+impl AudioFrameSource for WavFrameSource {
+    fn next_frame(&mut self, output: &mut [Vec<f32>]) -> Result<Option<usize>, AudioError> {
+        if self.channels == 0 {
+            return Err(AudioError::Processing(
+                "WavFrameSource: channels is 0".to_string(),
+            ));
+        }
+
+        let data_start = 44usize.saturating_add(self.position);
+        if data_start >= self.bytes.len() {
+            return Ok(None);
+        }
+
+        let chunk_size = FRAME_SIZE * self.sample_format.sample_size();
+        let data_end = (data_start + chunk_size).min(self.bytes.len());
+        let chunk = &self.bytes[data_start..data_end];
+
+        self.position = self.position.saturating_add(chunk_size);
+
+        let frame_count =
+            unpack_wav_frame::<f32>(chunk, self.sample_format, self.channels, output)?;
+        if frame_count == 0 {
+            Ok(None)
+        } else {
+            Ok(Some(frame_count))
+        }
+    }
+
+    fn total_frame_count(&self) -> usize {
+        if self.channels == 0 {
+            return 0;
+        }
+
+        let data_len = self.bytes.len().saturating_sub(44);
+        data_len / self.sample_format.sample_size() / self.channels
+    }
+
+    fn channels(&self) -> usize {
+        self.channels
+    }
+}
+
+struct DecodedFrameSource {
+    samples: Vec<[i16; FRAME_SIZE]>,
+    channels: usize,
+    position: usize, // Current frame index
+}
+
+impl DecodedFrameSource {
+    fn new(samples: Vec<[i16; FRAME_SIZE]>, channels: usize) -> Self {
+        Self {
+            samples,
+            channels,
+            position: 0,
+        }
+    }
+}
+
+impl AudioFrameSource for DecodedFrameSource {
+    fn next_frame(&mut self, output: &mut [Vec<f32>]) -> Result<Option<usize>, AudioError> {
+        if self.channels == 0 {
+            return Err(AudioError::Processing(
+                "DecodedFrameSource: channels is 0".to_string(),
+            ));
+        }
+
+        if self.position >= self.samples.len() {
+            return Ok(None);
+        }
+
+        let samples_frame = &self.samples[self.position];
+        self.position += 1;
+
+        for channel_buf in output.iter_mut() {
+            channel_buf.clear();
+        }
+
+        let scale = 1_f32 / i16::MAX as f32;
+        for (i, sample) in samples_frame.iter().enumerate() {
+            let channel_idx = i % self.channels;
+            if channel_idx >= output.len() {
+                break;
+            }
+
+            let scaled_sample = (*sample as f32) * scale;
+            output[channel_idx].push(scaled_sample);
+        }
+
+        Ok(Some(FRAME_SIZE / self.channels))
+    }
+
+    fn total_frame_count(&self) -> usize {
+        if self.channels == 0 {
+            return 0;
+        }
+
+        self.samples.len() * FRAME_SIZE / self.channels
+    }
+
+    fn channels(&self) -> usize {
+        self.channels
+    }
+}
+
 /// Audio file header information parsed from WAV format.
 struct AudioHeader {
     /// Number of audio channels (1 for mono, 2 for stereo).
@@ -201,18 +360,6 @@ impl TryFrom<&[u8]> for AudioHeader {
             sample_format,
         })
     }
-}
-
-/// Audio buffer for WASM platform with synchronization primitives.
-#[cfg(target_family = "wasm")]
-#[derive(Default)]
-struct AudioBuffer {
-    /// The audio sample buffer.
-    buffer: WasmMutex<Vec<f32>>,
-    /// Flag indicating playback has been canceled.
-    canceled: AtomicBool,
-    /// Condition variable for buffer synchronization.
-    condvar: Condvar,
 }
 
 /// Framework-agnostic audio player for WAV and SEA codec files.
@@ -398,6 +545,66 @@ impl SoundHandle {
     }
 }
 
+/// Blocking ring buffer audio output for native and WASM platforms.
+///
+/// ## Blocking Behavior
+///
+/// `write_samples_blocking` waits on a [`Condvar`] until the ring buffer has
+/// enough free slots to accept the full write. This prevents dropping samples
+/// at the cost of applying backpressure to the processor.
+struct BlockingRingBufferOutput {
+    /// The producer end of the ring buffer for audio samples.
+    producer: rtrb::Producer<f32>,
+
+    /// Condvar for signaling when space becomes available.
+    notify: Arc<Condvar>,
+
+    /// Mutex required for condvar wait protocol.
+    ///
+    /// This is a dummy mutex (contains no data) used solely to satisfy the
+    /// condvar API requirements. The actual synchronization is handled by the
+    /// lock-free ring buffer.
+    mutex: SyncMutex<()>,
+}
+
+impl BlockingRingBufferOutput {
+    fn new(producer: rtrb::Producer<f32>, notify: Arc<Condvar>) -> Self {
+        Self {
+            producer,
+            notify,
+            mutex: SyncMutex::new(()),
+        }
+    }
+
+    /// Writes all samples to the ring buffer, blocking until enough space is available.
+    fn write_samples_blocking(&mut self, samples: &[f32]) -> Result<(), AudioError> {
+        let target = samples.len();
+        loop {
+            if self.producer.slots() >= target {
+                break;
+            }
+
+            if self.producer.is_abandoned() {
+                return Err(AudioError::Channel(
+                    "BlockingRingBufferOutput consumer abandoned".to_string(),
+                ));
+            }
+
+            let guard = self.mutex.lock().unwrap();
+            if self.producer.slots() >= target {
+                drop(guard);
+                break;
+            }
+
+            drop(self.notify.wait(guard).unwrap());
+        }
+
+        let chunk = self.producer.write_chunk_uninit(target)?;
+        chunk.fill_from_iter(samples.iter().copied());
+        Ok(())
+    }
+}
+
 /// Converts WAV bytes to SEA codec bytes.
 ///
 /// This function encodes WAV audio data into the SEA codec format,
@@ -576,15 +783,15 @@ async fn play_sound_with_device(
         // The resampling ratio used by the processor
         let ratio = output_config.sample_rate() as f64 / spec.sample_rate as f64;
 
-        // Sends samples from the processor to the output stream
-        #[cfg(not(target_family = "wasm"))]
-        let (processed_sender, processed_receiver) = bounded::<Vec<f32>>(1_000);
+        // Shared cancellation/finish state between control flow, processor, and stream callback
+        let processor_canceled = Arc::new(AtomicBool::new(false));
+        let processor_finished = Arc::new(AtomicBool::new(false));
 
-        // Handles synchronization between the processor and output stream
-        #[cfg(target_family = "wasm")]
-        let processed_sender: Arc<AudioBuffer> = Default::default();
-        #[cfg(target_family = "wasm")]
-        let audio_buffer = processed_sender.clone();
+        // Create unified ring buffer for processor -> stream communication
+        let (processor_producer, stream_consumer) = RingBuffer::<f32>::new(CHANNEL_SIZE * 4);
+        let space_available = Arc::new(Condvar::new());
+        let processor_output =
+            BlockingRingBufferOutput::new(processor_producer, space_available.clone());
 
         // Notifies this thread when playback has finished
         let output_finished = Arc::new(Notify::new());
@@ -599,34 +806,23 @@ async fn play_sound_with_device(
         // Used to provide a fade to 0 when the sound is canceled
         let f32_sample_rate = output_config.sample_rate() as f32;
 
+        let processor_canceled_for_stream = processor_canceled.clone();
+        let processor_finished_for_stream = processor_finished.clone();
+        let space_available_for_stream = space_available.clone();
+
+        let mut stream_consumer = stream_consumer;
         let output_stream = output_device.build_output_stream(
             &output_config.into(),
             move |output: &mut [f32], _| {
-                #[cfg(target_family = "wasm")]
-                let mut data = {
-                    audio_buffer.condvar.notify_one();
-                    audio_buffer.buffer.lock().unwrap()
-                };
-
+                let mut canceled = processor_canceled_for_stream.load(Relaxed);
                 for frame in output.chunks_mut(output_channels) {
-                    #[cfg(not(target_family = "wasm"))]
-                    let samples_result = processed_receiver.recv();
-                    #[cfg(not(target_family = "wasm"))]
-                    let canceled = samples_result.is_err();
-
-                    #[cfg(target_family = "wasm")]
-                    let canceled = {
-                        let mut canceled = audio_buffer.canceled.load(Relaxed);
-
-                        if !canceled && data.is_empty() {
-                            audio_buffer.canceled.store(true, Relaxed);
-                            canceled = true;
+                    if canceled {
+                        // After full fade fill frames with 0
+                        if i == FADE_FRAMES {
+                            frame.fill(0_f32);
+                            continue;
                         }
 
-                        canceled
-                    };
-
-                    if canceled {
                         // Fade each sample
                         for sample in &mut last_samples {
                             *sample *= (1_f32 - i as f32 / f32_sample_rate).max(0_f32);
@@ -641,15 +837,24 @@ async fn play_sound_with_device(
                             output_finished_clone.notify_one();
                         }
                     } else {
-                        // This unwrap is safe as the result was already checked for is_err
-                        #[cfg(not(target_family = "wasm"))]
-                        let samples = samples_result.unwrap();
-                        #[cfg(target_family = "wasm")]
-                        let samples: Vec<f32> = data.drain(..output_channels).collect();
-
-                        // Play the samples
-                        frame.copy_from_slice(&samples);
-                        last_samples = samples;
+                        match stream_consumer.read_chunk(output_channels) {
+                            Ok(chunk) => {
+                                for (sample, out) in chunk.into_iter().zip(frame.iter_mut()) {
+                                    *out = sample;
+                                }
+                                last_samples.copy_from_slice(frame);
+                                space_available_for_stream.notify_one();
+                            }
+                            Err(_) => {
+                                // If the processor has finished and the buffer is empty, begin fading out.
+                                // If the processor is still running, hold the last samples (prevents pops).
+                                if processor_finished_for_stream.load(Relaxed) {
+                                    processor_canceled_for_stream.store(true, Relaxed);
+                                    canceled = true;
+                                }
+                                frame.copy_from_slice(&last_samples);
+                            }
+                        }
                     }
                 }
             },
@@ -659,19 +864,29 @@ async fn play_sound_with_device(
             None,
         )?;
 
-        // The sender used by the processor
-        let sender = processed_sender.clone();
+        let processor_canceled_for_processor = processor_canceled.clone();
+        let processor_finished_for_processor = processor_finished.clone();
 
         let processor_future = spawn_cpu_task(move || {
-            processor(
-                (samples.is_none().then_some(bytes), samples),
-                spec.sample_format,
-                spec,
+            let source: Box<dyn AudioFrameSource> = if let Some(samples) = samples {
+                Box::new(DecodedFrameSource::new(samples, spec.channels as usize))
+            } else {
+                Box::new(WavFrameSource::new(
+                    bytes,
+                    spec.sample_format,
+                    spec.channels as usize,
+                ))
+            };
+            let result = processor(
+                source,
                 output_volume,
-                sender,
+                processor_output,
                 output_channels,
                 ratio,
-            )
+                processor_canceled_for_processor,
+            );
+            processor_finished_for_processor.store(true, Relaxed);
+            result
         });
 
         output_stream.play()?; // Play the stream
@@ -679,43 +894,36 @@ async fn play_sound_with_device(
         Ok((
             output_stream,
             output_finished,
-            processed_sender,
+            processor_canceled,
             processor_future,
+            space_available,
         ))
     }
     .await;
 
     // Signal initialization result to the caller
-    let (output_stream, output_finished, processed_sender, processor_future) = match init_result {
-        Ok(state) => {
-            let _ = init_tx.send(Ok(()));
-            state
-        }
-        Err(e) => {
-            let err_msg = e.to_string();
-            let _ = init_tx.send(Err(AudioError::Processing(err_msg)));
-            return Err(e);
-        }
-    };
+    let (output_stream, output_finished, processor_canceled, processor_future, space_available) =
+        match init_result {
+            Ok(state) => {
+                let _ = init_tx.send(Ok(()));
+                state
+            }
+            Err(e) => {
+                let err_msg = e.to_string();
+                let _ = init_tx.send(Err(AudioError::Processing(err_msg)));
+                return Err(e);
+            }
+        };
 
     tokio::pin!(processor_future);
-
-    // Keep the stream alive
-    let _output_stream = output_stream;
 
     let mut processor_join: Option<_> = None;
 
     select! {
         _ = cancel.notified() => {
             debug!("reached cancel sound branch");
-            // This causes the stream to begin fading out
-            cfg_if::cfg_if! {
-                if #[cfg(target_family = "wasm")] {
-                    processed_sender.canceled.store(true, Relaxed);
-                } else {
-                    processed_sender.close()?;
-                }
-            }
+            // This causes the stream to begin fading out and asks the processor to stop
+            processor_canceled.store(true, Relaxed);
         }
         result = &mut processor_future => {
             debug!("processor finished: {:?}", result);
@@ -726,6 +934,18 @@ async fn play_sound_with_device(
 
     // Wait for playback to complete before tearing down
     output_finished.notified().await;
+    // we wait one second before dropping the stream.
+    // this ensures the effect playback cleanly fades to zero every time
+    cfg_if::cfg_if! {
+        if #[cfg(target_family = "wasm")] {
+            wasmtimer::tokio::sleep(Duration::from_secs(1)).await;
+        } else {
+             tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    }
+    // dropping the output stream ends playback
+    drop(output_stream);
+    space_available.notify_one();
     debug!("starting to tear down player stack");
     // Join the processor task
     match processor_join {
@@ -736,27 +956,30 @@ async fn play_sound_with_device(
     Ok(())
 }
 
-/// Processes audio data (WAV or decoded SEA).
-fn processor(
-    input: (Option<Vec<u8>>, Option<Vec<[i16; FRAME_SIZE]>>),
-    sample_format: SampleFormat,
-    spec: AudioHeader,
+/// Processes audio data from either WAV bytes or pre-decoded SEA samples.
+///
+/// # Arguments
+///
+/// * `input` - Audio input, either raw WAV bytes or pre-decoded samples
+/// * `sample_format` - Sample format for WAV bytes (ignored for decoded samples)
+/// * `spec` - Audio specification (channels, sample rate)
+fn processor<S: AudioFrameSource>(
+    mut source: S,
     output_volume: Arc<AtomicF32>,
-    #[cfg(not(target_family = "wasm"))] processed_sender: Sender<Vec<f32>>,
-    #[cfg(target_family = "wasm")] audio_buffer: Arc<AudioBuffer>,
+    mut output: BlockingRingBufferOutput,
     output_channels: usize,
     ratio: f64,
+    processor_canceled: Arc<AtomicBool>,
 ) -> Result<(), AudioError> {
-    let (bytes, samples) = input;
-    let sample_size = sample_format.sample_size();
-    let channels_usize = spec.channels as usize;
+    let channels_usize = source.channels();
+    if channels_usize == 0 {
+        return Err(AudioError::Processing(
+            "AudioFrameSource: channels is 0".to_string(),
+        ));
+    }
 
-    // The number of samples in the file
-    let sample_count = bytes
-        .as_ref()
-        .map(|b| (b.len() - 44) / sample_size / channels_usize)
-        .or_else(|| Some(samples.as_ref()?.len() * FRAME_SIZE / channels_usize))
-        .unwrap_or_default();
+    // The number of sample frames in the file (per channel)
+    let sample_count = source.total_frame_count();
     // The number of audio samples which will be played
     let audio_len = (sample_count as f64 * ratio) as f32;
     let mut position = 0_f32; // The playback position
@@ -767,79 +990,25 @@ fn processor(
     let fade_in = audio_len - fade_basis;
 
     // Rubato requires 10 extra bytes in the output buffer as a safety margin
-    let post_len = (FRAME_SIZE as f64 / spec.channels as f64 * ratio + 10.0) as usize;
+    let post_len = (FRAME_SIZE as f64 / channels_usize as f64 * ratio + 10.0) as usize;
 
     // The output for the resampler
     let mut post_buf = vec![vec![0_f32; post_len]; channels_usize];
     // The input for the resampler
-    let mut pre_buf = vec![vec![0_f32; FRAME_SIZE / channels_usize]; channels_usize];
+    let mut pre_buf = vec![Vec::with_capacity(FRAME_SIZE / channels_usize); channels_usize];
     // Groups of samples ready to be sent to the output
     let mut out_buf = Vec::with_capacity(output_channels);
 
     let mut resampler = resampler_factory(ratio, channels_usize, FRAME_SIZE / channels_usize)?;
     let output_volume = output_volume.load(Relaxed);
 
-    let mut byte_chunks = bytes
-        .as_ref()
-        .map(|bytes| bytes[44..].chunks(FRAME_SIZE * sample_size));
+    loop {
+        if processor_canceled.load(Relaxed) {
+            break;
+        }
 
-    let mut sample_chunks = samples.as_ref().map(|samples| samples.iter());
-
-    'outer: loop {
-        let actual_frame_count = match (byte_chunks.as_mut(), sample_chunks.as_mut()) {
-            (None, Some(samples)) => {
-                let samples = if let Some(samples) = samples.next() {
-                    samples
-                } else {
-                    break 'outer;
-                };
-
-                let scale = 1_f32 / i16::MAX as f32;
-
-                // De-interleave samples into planar buffers
-                for (i, sample) in samples.iter().enumerate() {
-                    let channel_idx = i % channels_usize;
-                    let scaled_sample = (*sample as f32) * scale;
-                    pre_buf[channel_idx][i / channels_usize] = scaled_sample;
-                }
-
-                FRAME_SIZE / channels_usize
-            }
-            (Some(chunks), None) => {
-                let chunk = if let Some(chunk) = chunks.next() {
-                    chunk
-                } else {
-                    break 'outer;
-                };
-
-                let frame_count = match sample_format {
-                    SampleFormat::U8
-                    | SampleFormat::I16
-                    | SampleFormat::I32
-                    | SampleFormat::F32
-                    | SampleFormat::F64 => {
-                        unpack_wav_frame(chunk, sample_format, channels_usize, &mut pre_buf)?
-                    }
-                    _ => {
-                        return Err(AudioError::Processing(format!(
-                            "Unknown sample format: {:?}",
-                            sample_format
-                        )));
-                    }
-                };
-
-                // Extend pre_buf channels to expected length for resampler compatibility,
-                // padding with zeros if too short, but never truncating to preserve all decoded frames
-                let expected_len = frame_count;
-                for channel in pre_buf.iter_mut() {
-                    if channel.len() < expected_len {
-                        channel.resize(expected_len, 0.0);
-                    }
-                }
-
-                frame_count
-            }
-            _ => break 'outer,
+        let Some(actual_frame_count) = source.next_frame(&mut pre_buf)? else {
+            break;
         };
 
         for channel in pre_buf.iter_mut() {
@@ -853,9 +1022,11 @@ fn processor(
             (&mut pre_buf, actual_frame_count)
         };
 
-        // I'm not sure how to refactor this loop to pass the needless range test
-        #[allow(clippy::needless_range_loop)]
         for i in 0..len {
+            if processor_canceled.load(Relaxed) {
+                break;
+            }
+
             let multiplier = if position < audio_len {
                 let delta = audio_len - position;
 
@@ -876,52 +1047,22 @@ fn processor(
 
             for j in 0..output_channels {
                 // This handles when there are more output channels than input channels
-                let sample = if j >= channels_usize {
-                    target_buffer[0][i]
-                } else {
-                    target_buffer[j][i]
-                };
+                let src_ch = if j >= channels_usize { 0 } else { j };
+                let sample = target_buffer
+                    .get(src_ch)
+                    .and_then(|ch| ch.get(i))
+                    .copied()
+                    .unwrap_or(0_f32);
 
                 out_buf.push(sample * multiplier);
             }
 
-            // Send samples for each channel to the output
-            #[cfg(not(target_family = "wasm"))]
-            {
-                let buffer = mem::take(&mut out_buf);
-                if processed_sender.send(buffer).is_err() {
-                    break 'outer;
-                }
-            }
-
-            #[cfg(target_family = "wasm")]
-            {
-                if audio_buffer.canceled.load(Relaxed) {
-                    break 'outer;
-                }
-
-                // Enforce bounding on the buffer
-                if let Ok(data) = audio_buffer.buffer.lock() {
-                    drop(
-                        audio_buffer
-                            .condvar
-                            .wait_while(data, |d| d.len() > (10_000 * channels_usize)),
-                    );
-                }
-
-                if let Ok(mut data) = audio_buffer.buffer.lock() {
-                    let mut buffer = mem::take(&mut out_buf);
-                    data.append(&mut buffer);
-                } else {
-                    error!("failed to lock audio buffer");
-                    break 'outer;
-                }
-            }
+            // Write interleaved samples to the unified output
+            output.write_samples_blocking(&out_buf)?;
+            out_buf.clear();
         }
     }
 
-    #[cfg(not(target_family = "wasm"))]
-    let _ = processed_sender.close();
     Ok(())
 }
 
@@ -1378,5 +1519,60 @@ mod tests {
         assert_eq!(output[0][0], i16::MAX);
         assert_eq!(output[0][1], 0);
         assert_eq!(output[0][2], -i16::MAX);
+    }
+
+    #[test]
+    fn test_wav_frame_source_next_frame_and_eos() {
+        // 2 frames, stereo I16: [L1, R1, L2, R2]
+        let mut bytes = vec![0_u8; 44];
+        bytes.extend_from_slice(&1000_i16.to_le_bytes());
+        bytes.extend_from_slice(&(-1000_i16).to_le_bytes());
+        bytes.extend_from_slice(&2000_i16.to_le_bytes());
+        bytes.extend_from_slice(&(-2000_i16).to_le_bytes());
+
+        let mut src = WavFrameSource::new(bytes, SampleFormat::I16, 2);
+        let mut out: Vec<Vec<f32>> = vec![Vec::new(), Vec::new()];
+
+        assert_eq!(src.channels(), 2);
+        assert_eq!(src.total_frame_count(), 2);
+
+        let frames = src.next_frame(&mut out).unwrap().unwrap();
+        assert_eq!(frames, 2);
+        assert_eq!(out[0].len(), 2);
+        assert_eq!(out[1].len(), 2);
+        assert!(out[0][0] > 0.0);
+        assert!(out[1][0] < 0.0);
+
+        let next = src.next_frame(&mut out).unwrap();
+        assert!(next.is_none());
+    }
+
+    #[test]
+    fn test_decoded_frame_source_next_frame_and_eos() {
+        let mut frame = [0_i16; FRAME_SIZE];
+        for i in 0..FRAME_SIZE {
+            frame[i] = if i % 2 == 0 { i as i16 } else { -(i as i16) };
+        }
+
+        let mut src = DecodedFrameSource::new(vec![frame], 2);
+        let mut out: Vec<Vec<f32>> = vec![Vec::new(), Vec::new()];
+
+        assert_eq!(src.channels(), 2);
+        assert_eq!(src.total_frame_count(), FRAME_SIZE / 2);
+
+        let frames = src.next_frame(&mut out).unwrap().unwrap();
+        assert_eq!(frames, FRAME_SIZE / 2);
+        assert_eq!(out[0].len(), FRAME_SIZE / 2);
+        assert_eq!(out[1].len(), FRAME_SIZE / 2);
+
+        // De-interleaving check: channel 0 gets even indices, channel 1 gets odd indices
+        let scale = 1_f32 / i16::MAX as f32;
+        assert!((out[0][0] - (0_f32 * scale)).abs() < 1e-6);
+        assert!((out[1][0] - (-1_f32 * scale)).abs() < 1e-6);
+        assert!((out[0][1] - (2_f32 * scale)).abs() < 1e-6);
+        assert!((out[1][1] - (-3_f32 * scale)).abs() < 1e-6);
+
+        let next = src.next_frame(&mut out).unwrap();
+        assert!(next.is_none());
     }
 }

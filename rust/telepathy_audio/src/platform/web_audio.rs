@@ -54,7 +54,6 @@ use crate::internal::traits::{CHANNEL_SIZE, RingBufferInput};
 use log::error;
 use rtrb::RingBuffer;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use wasm_bindgen::{JsCast, JsValue, prelude::Closure};
 use wasm_bindgen_futures::JsFuture;
 use wasm_sync::Condvar;
