@@ -552,6 +552,12 @@ impl SoundHandle {
 /// `write_samples_blocking` waits on a [`Condvar`] until the ring buffer has
 /// enough free slots to accept the full write. This prevents dropping samples
 /// at the cost of applying backpressure to the processor.
+///
+/// ## Cancellation
+///
+/// The shared `canceled` flag is checked before and after parking on the condvar
+/// so that the producer cannot remain blocked when playback is canceled and the
+/// stream callback stops draining the consumer during fade-out.
 struct BlockingRingBufferOutput {
     /// The producer end of the ring buffer for audio samples.
     producer: rtrb::Producer<f32>,
@@ -565,21 +571,40 @@ struct BlockingRingBufferOutput {
     /// condvar API requirements. The actual synchronization is handled by the
     /// lock-free ring buffer.
     mutex: SyncMutex<()>,
+
+    /// Shared cancellation flag – when set, `write_samples_blocking` returns
+    /// early instead of waiting for space that may never arrive.
+    canceled: Arc<AtomicBool>,
 }
 
 impl BlockingRingBufferOutput {
-    fn new(producer: rtrb::Producer<f32>, notify: Arc<Condvar>) -> Self {
+    fn new(
+        producer: rtrb::Producer<f32>,
+        notify: Arc<Condvar>,
+        canceled: Arc<AtomicBool>,
+    ) -> Self {
         Self {
             producer,
             notify,
             mutex: SyncMutex::new(()),
+            canceled,
         }
     }
 
     /// Writes all samples to the ring buffer, blocking until enough space is available.
+    ///
+    /// Returns early with an error when the cancellation flag is set or the
+    /// consumer side has been dropped, ensuring the producer thread can never
+    /// remain parked on the condvar after cancellation is signaled.
     fn write_samples_blocking(&mut self, samples: &[f32]) -> Result<(), AudioError> {
         let target = samples.len();
         loop {
+            if self.canceled.load(Relaxed) {
+                return Err(AudioError::Channel(
+                    "BlockingRingBufferOutput: write canceled".to_string(),
+                ));
+            }
+
             if self.producer.slots() >= target {
                 break;
             }
@@ -591,6 +616,15 @@ impl BlockingRingBufferOutput {
             }
 
             let guard = self.mutex.lock().unwrap();
+
+            // Re-check after acquiring the lock to avoid missed makeups.
+            if self.canceled.load(Relaxed) {
+                drop(guard);
+                return Err(AudioError::Channel(
+                    "BlockingRingBufferOutput: write canceled".to_string(),
+                ));
+            }
+
             if self.producer.slots() >= target {
                 drop(guard);
                 break;
@@ -790,8 +824,11 @@ async fn play_sound_with_device(
         // Create unified ring buffer for processor -> stream communication
         let (processor_producer, stream_consumer) = RingBuffer::<f32>::new(CHANNEL_SIZE * 4);
         let space_available = Arc::new(Condvar::new());
-        let processor_output =
-            BlockingRingBufferOutput::new(processor_producer, space_available.clone());
+        let processor_output = BlockingRingBufferOutput::new(
+            processor_producer,
+            space_available.clone(),
+            processor_canceled.clone(),
+        );
 
         // Notifies this thread when playback has finished
         let output_finished = Arc::new(Notify::new());
@@ -922,8 +959,11 @@ async fn play_sound_with_device(
     select! {
         _ = cancel.notified() => {
             debug!("reached cancel sound branch");
-            // This causes the stream to begin fading out and asks the processor to stop
+            // This causes the stream to begin fading out and asks the processor to stop.
+            // The condvar notification ensures the producer wakes up from any blocking
+            // wait inside write_samples_blocking so it can observe the flag and exit.
             processor_canceled.store(true, Relaxed);
+            space_available.notify_one();
         }
         result = &mut processor_future => {
             debug!("processor finished: {:?}", result);
@@ -945,7 +985,6 @@ async fn play_sound_with_device(
     }
     // dropping the output stream ends playback
     drop(output_stream);
-    space_available.notify_one();
     debug!("starting to tear down player stack");
     // Join the processor task
     match processor_join {
