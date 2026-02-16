@@ -456,7 +456,7 @@ pub fn wide_f32_to_i16(floats: &[f32], output: &mut [i16]) {
     #[cfg(target_arch = "wasm32")]
     {
         if cfg!(target_feature = "simd128") && floats.len() >= 4 {
-             wasm_simd_f32_to_i16(floats, output);
+            wasm_simd_f32_to_i16(floats, output);
             return;
         }
     }
@@ -482,9 +482,7 @@ fn wasm_simd_mul(frame: &mut [f32], factor: f32) {
     let max_vec = f32x4_splat(1.0_f32);
 
     while i + 4 <= len {
-        let mut chunk = unsafe {
-            v128_load(frame.as_ptr().add(i) as *const v128)
-        };
+        let mut chunk = unsafe { v128_load(frame.as_ptr().add(i) as *const v128) };
         chunk = f32x4_mul(chunk, factor_vec);
         chunk = f32x4_max(min_vec, f32x4_min(max_vec, chunk));
         unsafe {
@@ -512,9 +510,7 @@ fn wasm_simd_i16_to_f32(ints: &[i16], out: &mut [f32], scale: f32) {
     // Process 8 i16 samples per iteration (one v128 load of 8×i16)
     while i + 8 <= n {
         // Load 8 × i16 into a v128
-        let v_i16 = unsafe {
-            v128_load(ints.as_ptr().add(i) as *const v128)
-        };
+        let v_i16 = unsafe { v128_load(ints.as_ptr().add(i) as *const v128) };
 
         // Widen lower 4 i16 → 4 i32 → 4 f32
         let lo_i32 = i32x4_extend_low_i16x8(v_i16);
@@ -552,9 +548,7 @@ fn wasm_simd_float_scaler(floats: &mut [f32], scale: f32) {
     let max_vec = f32x4_splat(MAX_I16_F32);
 
     while i + 4 <= n {
-        let mut v = unsafe {
-            v128_load(floats.as_ptr().add(i) as *const v128)
-        };
+        let mut v = unsafe { v128_load(floats.as_ptr().add(i) as *const v128) };
         v = f32x4_mul(v, scale_vec);
         // Truncate toward zero: convert f32→i32 (saturating truncation), then back
         let vi = i32x4_trunc_sat_f32x4(v);
@@ -581,18 +575,14 @@ fn wasm_simd_f32_to_i16(floats: &[f32], output: &mut [i16]) {
 
     // Process 4 f32 → 4 i16 per iteration
     while i + 4 <= n {
-        let v = unsafe {
-            v128_load(floats.as_ptr().add(i) as *const v128)
-        };
+        let v = unsafe { v128_load(floats.as_ptr().add(i) as *const v128) };
         // Truncate f32 → i32 with saturation (matches `as i16` truncation semantics)
         let vi32 = i32x4_trunc_sat_f32x4(v);
         // Narrow i32x4 → i16x8 with signed saturation (upper half is from zeros)
         let zero = i32x4_splat(0);
         let packed = i16x8_narrow_i32x4(vi32, zero);
         // Store the lower 4 i16 (8 bytes) from the v128
-        let dst = unsafe {
-            output.as_mut_ptr().add(i) as *mut u64
-        };
+        let dst = unsafe { output.as_mut_ptr().add(i) as *mut u64 };
         let bits = u64x2_extract_lane::<0>(packed);
         unsafe {
             core::ptr::write_unaligned(dst, bits);

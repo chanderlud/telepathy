@@ -11,8 +11,8 @@
 //! cargo bench --target wasm32-unknown-unknown --bench processing_bench_wasm -Z build-std=std,panic_abort
 //! ```
 
-use wasm_bindgen_test::{wasm_bindgen_bench, Criterion};
 use std::hint::black_box;
+use wasm_bindgen_test::{Criterion, wasm_bindgen_bench};
 
 use telepathy_audio::internal::processing::*;
 
@@ -103,39 +103,6 @@ pub fn bench_f32_to_i16_conversion(c: &mut Criterion) {
 
     c.bench_function("wide_f32_to_i16", |b| {
         b.iter(|| wide_f32_to_i16(black_box(&float_frame), black_box(&mut output)))
-    });
-}
-
-/// Benchmarks scalar vs wide RMS calculation.
-#[wasm_bindgen_bench]
-pub fn bench_rms_calculation(c: &mut Criterion) {
-    let frame = dummy_float_frame();
-
-    c.bench_function("rms_scalar_unrolled", |b| {
-        b.iter(|| {
-            let data = black_box(&frame);
-            let inv_len = 1.0 / data.len() as f32;
-
-            let mut sum1 = 0.0_f32;
-            let mut sum2 = 0.0_f32;
-            let mut sum3 = 0.0_f32;
-            let mut sum4 = 0.0_f32;
-
-            let mut i = 0;
-            while i + 3 < data.len() {
-                sum1 += data[i] * data[i];
-                sum2 += data[i + 1] * data[i + 1];
-                sum3 += data[i + 2] * data[i + 2];
-                sum4 += data[i + 3] * data[i + 3];
-                i += 4;
-            }
-
-            ((sum1 + sum2 + sum3 + sum4) * inv_len).sqrt()
-        })
-    });
-
-    c.bench_function("calculate_rms_wide", |b| {
-        b.iter(|| calculate_rms(black_box(&frame)))
     });
 }
 

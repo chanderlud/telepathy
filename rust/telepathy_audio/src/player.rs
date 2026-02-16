@@ -578,11 +578,7 @@ struct BlockingRingBufferOutput {
 }
 
 impl BlockingRingBufferOutput {
-    fn new(
-        producer: rtrb::Producer<f32>,
-        notify: Arc<Condvar>,
-        canceled: Arc<AtomicBool>,
-    ) -> Self {
+    fn new(producer: rtrb::Producer<f32>, notify: Arc<Condvar>, canceled: Arc<AtomicBool>) -> Self {
         Self {
             producer,
             notify,
