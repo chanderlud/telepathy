@@ -24,7 +24,7 @@ pub(crate) use std::thread::*;
 #[cfg(target_family = "wasm")]
 pub(crate) use wasm_thread::*;
 
-use crate::error::AudioError;
+use crate::error::Error;
 
 /// Spawns a thread, catching panics on WASM when threading is unavailable.
 ///
@@ -33,7 +33,7 @@ use crate::error::AudioError;
 /// that a missing `SharedArrayBuffer` (or any other spawn-time panic) is
 /// converted into `AudioError::WasmThreading` instead of aborting.
 #[cfg(not(target_family = "wasm"))]
-pub(crate) fn safe_spawn<F>(f: F) -> std::result::Result<JoinHandle<()>, AudioError>
+pub(crate) fn safe_spawn<F>(f: F) -> std::result::Result<JoinHandle<()>, Error>
 where
     F: FnOnce() + Send + 'static,
 {
@@ -41,7 +41,7 @@ where
 }
 
 #[cfg(target_family = "wasm")]
-pub(crate) fn safe_spawn<F>(f: F) -> std::result::Result<JoinHandle<()>, AudioError>
+pub(crate) fn safe_spawn<F>(f: F) -> std::result::Result<JoinHandle<()>, Error>
 where
     F: FnOnce() + Send + 'static,
 {
@@ -57,7 +57,7 @@ where
             } else {
                 "thread::spawn panicked (threading may be unavailable)".to_string()
             };
-            Err(AudioError::WasmThreading(msg))
+            Err(Error::WasmThreading(msg))
         }
     }
 }

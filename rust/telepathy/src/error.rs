@@ -1,7 +1,5 @@
-use std::array::TryFromSliceError;
 use std::fmt::{Display, Formatter};
 use std::net::AddrParseError;
-
 use crate::BehaviourEvent;
 #[cfg(target_family = "wasm")]
 use flutter_rust_bridge::for_generated::futures::channel::oneshot::Canceled;
@@ -9,7 +7,7 @@ use libp2p::identity::{DecodingError, ParseError};
 use libp2p::swarm::{DialError, SwarmEvent};
 use libp2p::{TransportBuilderError, TransportError};
 use libp2p_stream::{AlreadyRegistered, OpenStreamError};
-use telepathy_audio::{AudioError, devices::DeviceError};
+use telepathy_audio::devices::DeviceError;
 use tokio::task::JoinError;
 use tokio::time::error::Elapsed;
 
@@ -37,15 +35,14 @@ pub(crate) enum ErrorKind {
     IdentityParse(ParseError),
     Transport(TransportError<std::io::Error>),
     AlreadyRegistered(AlreadyRegistered),
-    AudioError(AudioError),
+    AudioError(telepathy_audio::Error),
     #[cfg(target_family = "wasm")]
     Canceled(Canceled),
     TransportBuildError(TransportBuilderError),
     #[cfg(target_family = "wasm")]
     JsError(Option<String>),
-    NoInputDevice,
+    DeviceError(DeviceError),
     InvalidContactFormat,
-    TryFromSlice(TryFromSliceError),
     TransportSend,
     TransportRecv,
     UnexpectedSwarmEvent,
@@ -120,14 +117,6 @@ impl From<Elapsed> for Error {
     fn from(err: Elapsed) -> Self {
         Self {
             kind: ErrorKind::Timeout(err),
-        }
-    }
-}
-
-impl From<TryFromSliceError> for Error {
-    fn from(err: TryFromSliceError) -> Self {
-        Self {
-            kind: ErrorKind::TryFromSlice(err),
         }
     }
 }
@@ -223,8 +212,8 @@ impl From<wasm_bindgen::JsValue> for Error {
     }
 }
 
-impl From<AudioError> for Error {
-    fn from(err: AudioError) -> Self {
+impl From<telepathy_audio::Error> for Error {
+    fn from(err: telepathy_audio::Error) -> Self {
         Self {
             kind: ErrorKind::AudioError(err),
         }
@@ -233,13 +222,8 @@ impl From<AudioError> for Error {
 
 impl From<DeviceError> for Error {
     fn from(err: DeviceError) -> Self {
-        match err {
-            DeviceError::NoDefaultDevice | DeviceError::DeviceNotFound(_) => Self {
-                kind: ErrorKind::NoInputDevice,
-            },
-            _ => Self {
-                kind: ErrorKind::AudioError(AudioError::Device(err.to_string())),
-            },
+        Self {
+            kind: ErrorKind::DeviceError(err),
         }
     }
 }
@@ -265,7 +249,6 @@ impl Display for Error {
                 ErrorKind::Timeout(_) => "The connection timed out".to_string(),
                 #[cfg(target_family = "wasm")]
                 ErrorKind::WasmTimeout(_) => "The connection timed out".to_string(),
-                ErrorKind::TryFromSlice(ref err) => format!("Try from slice error: {}", err),
                 ErrorKind::AddrParse(ref err) => err.to_string(),
                 ErrorKind::IdentityDecode(ref err) => format!("Identity decode error: {}", err),
                 ErrorKind::OpenStream(ref err) => format!("Open stream error: {}", err),
@@ -280,7 +263,7 @@ impl Display for Error {
                     format!("Transport build error: {}", err),
                 #[cfg(target_family = "wasm")]
                 ErrorKind::JsError(ref err) => format!("Javascript error: {:?}", err),
-                ErrorKind::NoInputDevice => "No input device found".to_string(),
+                ErrorKind::DeviceError(ref err) => format!("Device error: {}", err),
                 ErrorKind::InvalidContactFormat => "Invalid contact format".to_string(),
                 ErrorKind::TransportSend => "Transport failed on send".to_string(),
                 ErrorKind::TransportRecv => "Transport failed on receive".to_string(),
@@ -308,7 +291,7 @@ impl Error {
     }
 
     pub(crate) fn is_audio_error(&self) -> bool {
-        matches!(self.kind, ErrorKind::NoInputDevice)
+        matches!(self.kind, ErrorKind::DeviceError(_))
     }
 }
 

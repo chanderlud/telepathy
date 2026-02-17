@@ -29,7 +29,7 @@
 //! ```
 
 use crate::constants::{MINIMUM_SILENCE_LENGTH, TRANSITION_LENGTH};
-use crate::error::AudioError;
+use crate::error::Error;
 use crate::internal::NETWORK_FRAME;
 use crate::internal::buffer_pool::BufferPool;
 use crate::internal::processing::*;
@@ -105,7 +105,7 @@ pub fn input_processor<I: AudioInput>(
     mut denoiser: Option<Box<DenoiseState>>,
     state: InputProcessorState,
     mut encoder_option: Option<SeaEncoder>,
-) -> Result<(), AudioError> {
+) -> Result<(), Error> {
     // the maximum value for i16 as f32
     let max_i16_f32 = i16::MAX as f32;
 
@@ -132,8 +132,10 @@ pub fn input_processor<I: AudioInput>(
     let mut position = 0;
     // a counter for short silence detection
     let mut silence_length = 0_u8;
+    // switches to false when the sinc closes
+    let mut sink_open = true;
 
-    loop {
+    while sink_open {
         let read = input.read_into(&mut pre_buf[0][position..in_len])?;
         if read == 0 {
             debug!("Input processor ended (EOF)");
@@ -195,6 +197,7 @@ pub fn input_processor<I: AudioInput>(
                         &sink,
                         state.buffer_pool(),
                         &mut encoder_option,
+                        &mut sink_open,
                     )?;
                 }
                 // don't transition down again
@@ -212,6 +215,7 @@ pub fn input_processor<I: AudioInput>(
                     &sink,
                     state.buffer_pool(),
                     &mut encoder_option,
+                    &mut sink_open,
                 )?;
             }
 
@@ -221,7 +225,13 @@ pub fn input_processor<I: AudioInput>(
         // Use SIMD-accelerated f32 to i16 conversion
         wide_f32_to_i16(&out_buf, &mut int_buffer);
         // send the frame to the next stage, either codec or network
-        send_frame(int_buffer, &sink, state.buffer_pool(), &mut encoder_option)?;
+        send_frame(
+            int_buffer,
+            &sink,
+            state.buffer_pool(),
+            &mut encoder_option,
+            &mut sink_open,
+        )?;
     }
 
     debug!("Input processor ended");
@@ -266,7 +276,7 @@ pub fn output_processor<O: AudioOutput>(
     ratio: f64,
     state: OutputProcessorState,
     mut decoder_option: Option<SeaDecoder>,
-) -> Result<(), AudioError> {
+) -> Result<(), Error> {
     // base scale to convert i16 to f32
     let scale = 1_f32 / i16::MAX as f32;
     // rubato requires 10 extra spaces in the output buffer as a safety margin
@@ -361,7 +371,8 @@ fn send_frame(
     sink: &impl AudioDataSink,
     pool: &Arc<BufferPool>,
     encoder_option: &mut Option<SeaEncoder>,
-) -> Result<(), AudioError> {
+    sink_open: &mut bool,
+) -> Result<(), Error> {
     // Acquire a buffer from the pool
     let mut pooled = BufferPool::acquire(pool);
     if let Some(encoder) = encoder_option {
@@ -376,7 +387,12 @@ fn send_frame(
     // Send buffer to encoder or network
     match sink.send(pooled) {
         Ok(()) => Ok(()),
-        Err(ClosedOrFailed::Closed) => Err(AudioError::Channel("closed".to_string())),
+        Err(ClosedOrFailed::Closed) => {
+            // break the processor loop on close
+            *sink_open = false;
+            Ok(())
+        }
+        // propagate failures
         Err(ClosedOrFailed::Failed(error)) => Err(error.into()),
     }
 }

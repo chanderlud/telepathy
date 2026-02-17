@@ -2,7 +2,7 @@
 
 use std::f32::consts::PI;
 use std::time::Instant;
-use telepathy_audio::AudioError;
+use telepathy_audio::Error;
 use telepathy_audio::internal::traits::{AudioInput, AudioOutput};
 
 /// Mock audio input that generates simulated audio samples.
@@ -58,7 +58,7 @@ impl MockAudioInput {
 }
 
 impl AudioInput for MockAudioInput {
-    fn read_into(&mut self, dst: &mut [f32]) -> Result<usize, AudioError> {
+    fn read_into(&mut self, dst: &mut [f32]) -> Result<usize, Error> {
         // Check if we've reached the sample limit
         if let Some(max) = self.max_samples {
             if self.samples_generated >= max {
@@ -125,7 +125,7 @@ impl AudioOutput for NullOutput {
         false // Never full
     }
 
-    fn write_samples(&mut self, samples: &[f32]) -> Result<usize, AudioError> {
+    fn write_samples(&mut self, samples: &[f32]) -> Result<usize, Error> {
         self.frame_timestamps.push(Instant::now());
         self.samples_received += samples.len();
         Ok(0) // No samples dropped

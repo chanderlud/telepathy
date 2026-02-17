@@ -309,7 +309,7 @@ pub use io::traits::{AudioDataSink, AudioDataSource, ClosedOrFailed};
 pub use internal::buffer_pool::{PooledBuffer, PooledBytes};
 
 // Re-export error types
-pub use error::AudioError;
+pub use error::Error;
 
 // Re-export constants
 pub use constants::FRAME_SIZE;

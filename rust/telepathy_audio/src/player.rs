@@ -28,7 +28,7 @@
 //! ```
 
 use crate::AudioHost;
-use crate::error::AudioError;
+use crate::error::Error;
 use crate::internal::processing::wide_mul;
 #[cfg(target_family = "wasm")]
 use crate::internal::thread;
@@ -80,7 +80,7 @@ trait AudioFrameSource {
     /// - `Ok(Some(frame_count))` with samples per channel
     /// - `Ok(None)` when no more frames are available
     /// - `Err(_)` on processing errors
-    fn next_frame(&mut self, output: &mut [Vec<f32>]) -> Result<Option<usize>, AudioError>;
+    fn next_frame(&mut self, output: &mut [Vec<f32>]) -> Result<Option<usize>, Error>;
 
     /// Total number of sample frames per channel in the source.
     fn total_frame_count(&self) -> usize;
@@ -90,7 +90,7 @@ trait AudioFrameSource {
 }
 
 impl<T: AudioFrameSource + ?Sized> AudioFrameSource for Box<T> {
-    fn next_frame(&mut self, output: &mut [Vec<f32>]) -> Result<Option<usize>, AudioError> {
+    fn next_frame(&mut self, output: &mut [Vec<f32>]) -> Result<Option<usize>, Error> {
         (**self).next_frame(output)
     }
 
@@ -200,9 +200,9 @@ impl WavFrameSource {
 }
 
 impl AudioFrameSource for WavFrameSource {
-    fn next_frame(&mut self, output: &mut [Vec<f32>]) -> Result<Option<usize>, AudioError> {
+    fn next_frame(&mut self, output: &mut [Vec<f32>]) -> Result<Option<usize>, Error> {
         if self.channels == 0 {
-            return Err(AudioError::Processing(
+            return Err(Error::Processing(
                 "WavFrameSource: channels is 0".to_string(),
             ));
         }
@@ -258,9 +258,9 @@ impl DecodedFrameSource {
 }
 
 impl AudioFrameSource for DecodedFrameSource {
-    fn next_frame(&mut self, output: &mut [Vec<f32>]) -> Result<Option<usize>, AudioError> {
+    fn next_frame(&mut self, output: &mut [Vec<f32>]) -> Result<Option<usize>, Error> {
         if self.channels == 0 {
-            return Err(AudioError::Processing(
+            return Err(Error::Processing(
                 "DecodedFrameSource: channels is 0".to_string(),
             ));
         }
@@ -314,7 +314,7 @@ struct AudioHeader {
 }
 
 impl TryFrom<&[u8]> for AudioHeader {
-    type Error = AudioError;
+    type Error = Error;
 
     /// Parses a WAV file header from bytes.
     ///
@@ -323,12 +323,12 @@ impl TryFrom<&[u8]> for AudioHeader {
     /// Validates WAV signature (RIFF/WAVE) and ensures channels/sample_rate are non-zero.
     fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
         if value.len() < 44 {
-            return Err(AudioError::InvalidWav);
+            return Err(Error::InvalidWav);
         }
 
         // Validate WAV signature: must start with "RIFF" and contain "WAVE"
         if &value[0..4] != b"RIFF" || &value[8..12] != b"WAVE" {
-            return Err(AudioError::InvalidWav);
+            return Err(Error::InvalidWav);
         }
 
         let bits_per_sample = u16::from_le_bytes([value[34], value[35]]);
@@ -341,7 +341,7 @@ impl TryFrom<&[u8]> for AudioHeader {
             (3, 32) => SampleFormat::F32,
             (3, 64) => SampleFormat::F64,
             _ => {
-                return Err(AudioError::InvalidWav);
+                return Err(Error::InvalidWav);
             }
         };
 
@@ -350,7 +350,7 @@ impl TryFrom<&[u8]> for AudioHeader {
 
         // Validate channels and sample_rate are non-zero to prevent divide-by-zero
         if channels == 0 || sample_rate == 0 {
-            return Err(AudioError::InvalidWav);
+            return Err(Error::InvalidWav);
         }
 
         Ok(Self {
@@ -418,18 +418,18 @@ impl AudioPlayer {
     /// - No output device is available
     /// - Stream configuration cannot be obtained
     /// - Stream creation fails
-    pub async fn play(&self, bytes: Vec<u8>) -> Result<SoundHandle, AudioError> {
+    pub async fn play(&self, bytes: Vec<u8>) -> Result<SoundHandle, Error> {
         // Preflight validation: reject clearly invalid inputs
         // SEA codec files need at least 14 bytes for header
         if bytes.len() < 14 {
-            return Err(AudioError::InvalidWav);
+            return Err(Error::InvalidWav);
         }
 
         // Get output device and config before spawning to catch device errors early
         let output_device = get_output_device(&self.output_device, self.host.inner()).await?;
         let output_config = output_device
             .default_output_config()
-            .map_err(|e| AudioError::Device(format!("Failed to get output config: {}", e)))?;
+            .map_err(|e| Error::Device(format!("Failed to get output config: {}", e)))?;
 
         let cancel = Arc::new(Notify::new());
         let cancel_clone = cancel.clone();
@@ -437,7 +437,7 @@ impl AudioPlayer {
 
         // Use a oneshot channel to receive initialization result from the spawned task
         // This allows us to return errors from stream creation before the task continues
-        let (init_tx, init_rx) = oneshot::channel::<Result<(), AudioError>>();
+        let (init_tx, init_rx) = oneshot::channel::<Result<(), Error>>();
 
         #[cfg(not(target_family = "wasm"))]
         let handle = tokio::spawn(async move {
@@ -488,7 +488,7 @@ impl AudioPlayer {
             Ok(Err(e)) => Err(e),
             Err(_) => {
                 // Channel was dropped, which means the task panicked or was cancelled
-                Err(AudioError::Processing(
+                Err(Error::Processing(
                     "Playback task terminated unexpectedly".to_string(),
                 ))
             }
@@ -591,11 +591,11 @@ impl BlockingRingBufferOutput {
     /// Returns early with an error when the cancellation flag is set or the
     /// consumer side has been dropped, ensuring the producer thread can never
     /// remain parked on the condvar after cancellation is signaled.
-    fn write_samples_blocking(&mut self, samples: &[f32]) -> Result<(), AudioError> {
+    fn write_samples_blocking(&mut self, samples: &[f32]) -> Result<(), Error> {
         let target = samples.len();
         loop {
             if self.canceled.load(Relaxed) {
-                return Err(AudioError::Channel(
+                return Err(Error::Channel(
                     "BlockingRingBufferOutput: write canceled".to_string(),
                 ));
             }
@@ -605,7 +605,7 @@ impl BlockingRingBufferOutput {
             }
 
             if self.producer.is_abandoned() {
-                return Err(AudioError::Channel(
+                return Err(Error::Channel(
                     "BlockingRingBufferOutput consumer abandoned".to_string(),
                 ));
             }
@@ -615,7 +615,7 @@ impl BlockingRingBufferOutput {
             // Re-check after acquiring the lock to avoid missed makeups.
             if self.canceled.load(Relaxed) {
                 drop(guard);
-                return Err(AudioError::Channel(
+                return Err(Error::Channel(
                     "BlockingRingBufferOutput: write canceled".to_string(),
                 ));
             }
@@ -653,9 +653,9 @@ impl BlockingRingBufferOutput {
 /// # Errors
 ///
 /// Returns `AudioError` if the WAV data is invalid or encoding fails.
-pub async fn wav_to_sea(bytes: Vec<u8>, residual_bits: f32) -> Result<Vec<u8>, AudioError> {
+pub async fn wav_to_sea(bytes: Vec<u8>, residual_bits: f32) -> Result<Vec<u8>, Error> {
     if bytes.len() < 44 {
-        return Err(AudioError::Processing("WAV data too short".to_string()));
+        return Err(Error::Processing("WAV data too short".to_string()));
     }
 
     let spec = AudioHeader::try_from(&bytes[0..44])?;
@@ -724,7 +724,7 @@ pub async fn wav_to_sea(bytes: Vec<u8>, residual_bits: f32) -> Result<Vec<u8>, A
 
         // update the header with the real chunk size
         data[6..=7].copy_from_slice(encoder.chunk_size().to_le_bytes().as_ref());
-        Ok::<Vec<u8>, AudioError>(data)
+        Ok::<Vec<u8>, Error>(data)
     })
     .await
 }
@@ -733,15 +733,15 @@ pub async fn wav_to_sea(bytes: Vec<u8>, residual_bits: f32) -> Result<Vec<u8>, A
 async fn get_output_device(
     output_device: &Arc<Mutex<Option<DeviceId>>>,
     host: &Host,
-) -> Result<cpal::Device, AudioError> {
+) -> Result<cpal::Device, Error> {
     match *output_device.lock().await {
         Some(ref id) => Ok(host.device_by_id(id).unwrap_or(
             host.default_output_device()
-                .ok_or(AudioError::Device("No output device available".to_string()))?,
+                .ok_or(Error::Device("No output device available".to_string()))?,
         )),
         None => host
             .default_output_device()
-            .ok_or(AudioError::Device("No output device available".to_string())),
+            .ok_or(Error::Device("No output device available".to_string())),
     }
 }
 
@@ -756,16 +756,16 @@ async fn play_sound_with_device(
     output_device: cpal::Device,
     output_config: cpal::SupportedStreamConfig,
     output_volume: Arc<AtomicF32>,
-    init_tx: oneshot::Sender<Result<(), AudioError>>,
-) -> Result<(), AudioError> {
+    init_tx: oneshot::Sender<Result<(), Error>>,
+) -> Result<(), Error> {
     // Perform initialization and signal result to caller
     // This inner async block allows us to use ? while still signaling errors
-    let init_result: Result<_, AudioError> = async {
+    let init_result: Result<_, Error> = async {
         // Parse the input spec (only attempt WAV parsing if we have enough bytes)
         let spec_result = if bytes.len() >= 44 {
             AudioHeader::try_from(&bytes[0..44])
         } else {
-            Err(AudioError::InvalidWav)
+            Err(Error::InvalidWav)
         };
         let is_valid_wav = spec_result.is_ok();
         let mut spec = spec_result.unwrap_or(AudioHeader {
@@ -796,7 +796,7 @@ async fn play_sound_with_device(
                         decoded.push(buffer);
                     }
 
-                    Ok::<Vec<[i16; FRAME_SIZE]>, AudioError>(decoded)
+                    Ok::<Vec<[i16; FRAME_SIZE]>, Error>(decoded)
                 })
                 .await?,
             );
@@ -806,7 +806,7 @@ async fn play_sound_with_device(
         // Validate that we have valid audio parameters before proceeding
         // This prevents divide-by-zero and buffer panics from malformed input
         if spec.channels == 0 || spec.sample_rate == 0 {
-            return Err(AudioError::InvalidWav);
+            return Err(Error::InvalidWav);
         }
 
         // The resampling ratio used by the processor
@@ -942,7 +942,7 @@ async fn play_sound_with_device(
             }
             Err(e) => {
                 let err_msg = e.to_string();
-                let _ = init_tx.send(Err(AudioError::Processing(err_msg)));
+                let _ = init_tx.send(Err(Error::Processing(err_msg)));
                 return Err(e);
             }
         };
@@ -1004,10 +1004,10 @@ fn processor<S: AudioFrameSource>(
     output_channels: usize,
     ratio: f64,
     processor_canceled: Arc<AtomicBool>,
-) -> Result<(), AudioError> {
+) -> Result<(), Error> {
     let channels_usize = source.channels();
     if channels_usize == 0 {
-        return Err(AudioError::Processing(
+        return Err(Error::Processing(
             "AudioFrameSource: channels is 0".to_string(),
         ));
     }
@@ -1131,7 +1131,7 @@ fn unpack_wav_frame<T: SampleConversion>(
     sample_format: SampleFormat,
     channels: usize,
     output: &mut [Vec<T>],
-) -> Result<usize, AudioError> {
+) -> Result<usize, Error> {
     let bytes_per_sample = sample_format.sample_size();
     let bytes_per_frame = bytes_per_sample * channels;
 
@@ -1157,31 +1157,35 @@ fn unpack_wav_frame<T: SampleConversion>(
                 match sample_format {
                     SampleFormat::U8 => T::from_u8_sample(sample_bytes[0]),
                     SampleFormat::I16 => {
-                        let value = i16::from_le_bytes(sample_bytes.try_into().map_err(|_| {
-                            AudioError::Processing("Invalid I16 sample".to_string())
-                        })?);
+                        let value =
+                            i16::from_le_bytes(sample_bytes.try_into().map_err(|_| {
+                                Error::Processing("Invalid I16 sample".to_string())
+                            })?);
                         T::from_i16_sample(value)
                     }
                     SampleFormat::I32 => {
-                        let value = i32::from_le_bytes(sample_bytes.try_into().map_err(|_| {
-                            AudioError::Processing("Invalid I32 sample".to_string())
-                        })?);
+                        let value =
+                            i32::from_le_bytes(sample_bytes.try_into().map_err(|_| {
+                                Error::Processing("Invalid I32 sample".to_string())
+                            })?);
                         T::from_i32_sample(value)
                     }
                     SampleFormat::F32 => {
-                        let value = f32::from_le_bytes(sample_bytes.try_into().map_err(|_| {
-                            AudioError::Processing("Invalid F32 sample".to_string())
-                        })?);
+                        let value =
+                            f32::from_le_bytes(sample_bytes.try_into().map_err(|_| {
+                                Error::Processing("Invalid F32 sample".to_string())
+                            })?);
                         T::from_f32_sample(value)
                     }
                     SampleFormat::F64 => {
-                        let value = f64::from_le_bytes(sample_bytes.try_into().map_err(|_| {
-                            AudioError::Processing("Invalid F64 sample".to_string())
-                        })?);
+                        let value =
+                            f64::from_le_bytes(sample_bytes.try_into().map_err(|_| {
+                                Error::Processing("Invalid F64 sample".to_string())
+                            })?);
                         T::from_f64_sample(value)
                     }
                     _ => {
-                        return Err(AudioError::Processing(format!(
+                        return Err(Error::Processing(format!(
                             "Unsupported sample format: {:?}",
                             sample_format
                         )));
@@ -1203,20 +1207,18 @@ fn unpack_wav_frame<T: SampleConversion>(
 /// On WASM uses the thread abstraction with a oneshot channel to bridge synchronous
 /// execution to an awaitable future (no multi-threaded runtime in browser).
 #[cfg(not(target_family = "wasm"))]
-async fn spawn_cpu_task<F, R>(f: F) -> Result<R, AudioError>
+async fn spawn_cpu_task<F, R>(f: F) -> Result<R, Error>
 where
-    F: FnOnce() -> Result<R, AudioError> + Send + 'static,
+    F: FnOnce() -> Result<R, Error> + Send + 'static,
     R: Send + 'static,
 {
-    tokio::task::spawn_blocking(f)
-        .await
-        .map_err(|e| AudioError::JoinError(format!("JoinError: {}", e)))?
+    tokio::task::spawn_blocking(f).await.map_err(Error::from)?
 }
 
 #[cfg(target_family = "wasm")]
-async fn spawn_cpu_task<F, R>(f: F) -> Result<R, AudioError>
+async fn spawn_cpu_task<F, R>(f: F) -> Result<R, Error>
 where
-    F: FnOnce() -> Result<R, AudioError> + Send + 'static,
+    F: FnOnce() -> Result<R, Error> + Send + 'static,
     R: Send + 'static,
 {
     let (tx, rx) = oneshot::channel();

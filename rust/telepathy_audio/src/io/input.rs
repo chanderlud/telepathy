@@ -61,8 +61,8 @@
 
 use crate::devices::AudioHost;
 #[cfg(not(target_family = "wasm"))]
-use crate::devices::{DeviceError, get_input_device};
-use crate::error::AudioError;
+use crate::devices::get_input_device;
+use crate::error::Error;
 use crate::internal::buffer_pool::{DEFAULT_POOL_CAPACITY, PooledBuffer};
 use crate::internal::processor::input_processor;
 use crate::internal::state::InputProcessorState;
@@ -470,7 +470,7 @@ where
         self,
         processor_input: I,
         input_sample_rate: u32,
-    ) -> Result<InputBuildContext, AudioError> {
+    ) -> Result<InputBuildContext, Error> {
         // Create shared atomic state (use provided shared atomics or create new ones)
         let input_volume = self
             .shared_input_volume
@@ -486,7 +486,7 @@ where
             .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
         let rms_sender = self.shared_rms.clone().unwrap_or_default();
         let sink = self.sink.ok_or_else(|| {
-            AudioError::Config("a data sink must be set via callback() or sink()".to_string())
+            Error::Config("a data sink must be set via callback() or sink()".to_string())
         })?;
 
         // create denoiser if needed
@@ -532,15 +532,7 @@ where
         let processor_handle = thread::safe_spawn(move || {
             if let Err(e) = input_processor(processor_input, sink, ratio, denoiser, state, encoder)
             {
-                if let AudioError::Channel(ref m) = e {
-                    if m == "closed" {
-                        debug!("Input processor ended by closed sink");
-                    } else {
-                        error!("Input processor error: {}", e);
-                    }
-                } else {
-                    error!("Input processor error: {}", e);
-                }
+                error!("Input processor error: {}", e);
             }
             debug!("Input processor thread ended");
         })?;
@@ -566,25 +558,15 @@ where
     /// - The stream cannot be created
     /// - The device uses an unsupported sample format
     #[cfg(not(target_family = "wasm"))]
-    pub fn build(self, host: &AudioHost) -> Result<AudioInputHandle, AudioError> {
+    pub fn build(self, host: &AudioHost) -> Result<AudioInputHandle, Error> {
         if self.sink.is_none() {
-            return Err(AudioError::Config(
+            return Err(Error::Config(
                 "a data sink must be set via callback() or sink()".to_string(),
             ));
         }
 
         // Get the input device
-        let device_handle =
-            get_input_device(host, self.config.device_id.as_deref()).map_err(|e| match e {
-                DeviceError::NoDefaultDevice => AudioError::Device("No input device".to_string()),
-                DeviceError::DeviceNotFound(id) => {
-                    AudioError::Device(format!("Device not found: {}", id))
-                }
-                DeviceError::EnumerationFailed(msg) => AudioError::Device(msg),
-                DeviceError::InvalidDeviceId(id) => {
-                    AudioError::Device(format!("Invalid device ID: {}", id))
-                }
-            })?;
+        let device_handle = get_input_device(host, self.config.device_id.as_deref())?;
 
         let device = device_handle.device();
         let config = device.default_input_config()?;
@@ -680,7 +662,7 @@ where
                 input_channels,
                 error_notify,
             )?,
-            _ => return Err(AudioError::Config("Unsupported sample format".to_string())),
+            _ => return Err(Error::Config("Unsupported sample format".to_string())),
         };
 
         stream.play()?;
@@ -728,15 +710,15 @@ where
     /// # }
     /// ```
     #[cfg(target_family = "wasm")]
-    pub fn build(mut self, _host: &AudioHost) -> Result<AudioInputHandle, AudioError> {
+    pub fn build(mut self, _host: &AudioHost) -> Result<AudioInputHandle, Error> {
         if self.sink.is_none() {
-            return Err(AudioError::Config(
+            return Err(Error::Config(
                 "a data sink must be set via callback() or sink()".to_string(),
             ));
         }
 
         let Some(mut web_audio) = self.web_audio_wrapper.take() else {
-            return Err(AudioError::Config(
+            return Err(Error::Config(
                 "WebAudioWrapper must be set via web_audio_wrapper() method before calling build() on WASM targets. Initialize the wrapper using WebAudioWrapper::new().await on the main thread.".to_string(),
             ));
         };
@@ -878,7 +860,7 @@ fn build_input_stream_with_format<T>(
     mut input_sender: RingBufferSender,
     input_channels: usize,
     error_notify: Option<Arc<Notify>>,
-) -> Result<cpal::Stream, AudioError>
+) -> Result<cpal::Stream, Error>
 where
     T: Sample<Float = f32> + cpal::SizedSample + Send + 'static,
 {
@@ -923,7 +905,7 @@ fn build_input_stream_with_format_64<T>(
     mut input_sender: RingBufferSender,
     input_channels: usize,
     error_notify: Option<Arc<Notify>>,
-) -> Result<cpal::Stream, AudioError>
+) -> Result<cpal::Stream, Error>
 where
     T: Sample<Float = f64> + cpal::SizedSample + Send + 'static,
 {

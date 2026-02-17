@@ -6,12 +6,11 @@
 //!
 //! ## Error Categories
 //!
-//! - [`AudioError::Device`] - Device enumeration and selection failures
-//! - [`AudioError::Stream`] - Audio stream creation and playback failures
-//! - [`AudioError::Processing`] - Resampling, codec, and conversion failures
-//! - [`AudioError::Channel`] - Inter-thread communication failures
-//! - [`AudioError::Config`] - Invalid configuration (e.g., missing callback)
-//! - [`AudioError::Platform`] - Platform-specific issues (e.g., WASM restrictions)
+//! - [`Error::Device`] - Device enumeration and selection failures
+//! - [`Error::Stream`] - Audio stream creation and playback failures
+//! - [`Error::Processing`] - Resampling, codec, and conversion failures
+//! - [`Error::Channel`] - Inter-thread communication failures
+//! - [`Error::Config`] - Invalid configuration (e.g., missing callback)
 //!
 //! ## Error Conversions
 //!
@@ -19,14 +18,16 @@
 //! dependencies (cpal, rubato, sea_codec), allowing seamless error
 //! propagation with the `?` operator.
 
+use crate::DeviceError;
 use std::fmt;
+use tokio::task::JoinError;
 
 /// Comprehensive error type for audio operations.
 ///
 /// This enum covers all error conditions that can occur during audio
 /// device management, stream operations, and audio processing.
 #[derive(Debug)]
-pub enum AudioError {
+pub enum Error {
     /// Device-related errors (e.g., device not found, enumeration failed).
     ///
     /// Occurs during device enumeration via [`list_input_devices`](crate::list_input_devices),
@@ -53,12 +54,7 @@ pub enum AudioError {
     /// Occurs when builder configuration is invalid, such as missing
     /// required callback in [`AudioInputBuilder`](crate::AudioInputBuilder).
     Config(String),
-    /// Platform-specific errors.
-    ///
-    /// Occurs for platform restrictions, such as calling synchronous `build`
-    /// on WASM where async initialization is required.
-    Platform(String),
-    JoinError(String),
+    JoinError(JoinError),
     /// WASM threading errors (WASM only).
     ///
     /// Occurs when WASM threading operations fail, such as when
@@ -78,33 +74,38 @@ pub enum AudioError {
     UnknownSampleFormat,
 }
 
-impl fmt::Display for AudioError {
+impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            AudioError::Device(msg) => write!(f, "Device error: {}", msg),
-            AudioError::Stream(msg) => write!(f, "Stream error: {}", msg),
-            AudioError::Processing(msg) => write!(f, "Processing error: {}", msg),
-            AudioError::Channel(msg) => write!(f, "Channel error: {}", msg),
-            AudioError::Config(msg) => write!(f, "Configuration error: {}", msg),
-            AudioError::Platform(msg) => write!(f, "Platform error: {}", msg),
-            AudioError::JoinError(msg) => write!(f, "Join error: {}", msg),
+            Error::Device(msg) => write!(f, "Device error: {}", msg),
+            Error::Stream(msg) => write!(f, "Stream error: {}", msg),
+            Error::Processing(msg) => write!(f, "Processing error: {}", msg),
+            Error::Channel(msg) => write!(f, "Channel error: {}", msg),
+            Error::Config(msg) => write!(f, "Configuration error: {}", msg),
+            Error::JoinError(msg) => write!(f, "Join error: {}", msg),
             #[cfg(target_family = "wasm")]
-            AudioError::WasmThreading(msg) => write!(f, "WASM threading error: {}", msg),
-            AudioError::InvalidWav => write!(f, "Invalid WAV file"),
-            AudioError::UnknownSampleFormat => write!(f, "Unknown sample format"),
+            Error::WasmThreading(msg) => write!(f, "WASM threading error: {}", msg),
+            Error::InvalidWav => write!(f, "Invalid WAV file"),
+            Error::UnknownSampleFormat => write!(f, "Unknown sample format"),
         }
     }
 }
 
-impl std::error::Error for AudioError {}
+impl std::error::Error for Error {}
+
+impl From<DeviceError> for Error {
+    fn from(e: DeviceError) -> Self {
+        Error::Device(e.to_string())
+    }
+}
 
 /// Converts cpal device enumeration errors.
 ///
 /// Occurs when [`list_input_devices`](crate::list_input_devices) or
 /// [`list_output_devices`](crate::list_output_devices) fails to enumerate devices.
-impl From<cpal::DevicesError> for AudioError {
+impl From<cpal::DevicesError> for Error {
     fn from(err: cpal::DevicesError) -> Self {
-        AudioError::Device(err.to_string())
+        Error::Device(err.to_string())
     }
 }
 
@@ -113,9 +114,9 @@ impl From<cpal::DevicesError> for AudioError {
 /// Occurs when querying device's default stream configuration during
 /// [`AudioInputBuilder::build`](crate::AudioInputBuilder::build) or
 /// [`AudioOutputBuilder::build`](crate::AudioOutputBuilder::build).
-impl From<cpal::DefaultStreamConfigError> for AudioError {
+impl From<cpal::DefaultStreamConfigError> for Error {
     fn from(err: cpal::DefaultStreamConfigError) -> Self {
-        AudioError::Stream(err.to_string())
+        Error::Stream(err.to_string())
     }
 }
 
@@ -123,27 +124,27 @@ impl From<cpal::DefaultStreamConfigError> for AudioError {
 ///
 /// Occurs when `build_input_stream` or `build_output_stream` fails during
 /// builder `build()` methods.
-impl From<cpal::BuildStreamError> for AudioError {
+impl From<cpal::BuildStreamError> for Error {
     fn from(err: cpal::BuildStreamError) -> Self {
-        AudioError::Stream(err.to_string())
+        Error::Stream(err.to_string())
     }
 }
 
 /// Converts cpal stream play errors.
 ///
 /// Occurs when `stream.play()` fails after stream creation.
-impl From<cpal::PlayStreamError> for AudioError {
+impl From<cpal::PlayStreamError> for Error {
     fn from(err: cpal::PlayStreamError) -> Self {
-        AudioError::Stream(err.to_string())
+        Error::Stream(err.to_string())
     }
 }
 
 /// Converts cpal stream pause errors.
 ///
 /// Occurs when attempting to pause a stream (currently unused).
-impl From<cpal::PauseStreamError> for AudioError {
+impl From<cpal::PauseStreamError> for Error {
     fn from(err: cpal::PauseStreamError) -> Self {
-        AudioError::Stream(err.to_string())
+        Error::Stream(err.to_string())
     }
 }
 
@@ -151,9 +152,9 @@ impl From<cpal::PauseStreamError> for AudioError {
 ///
 /// Occurs when [`resampler_factory`](crate::resampler_factory) fails to
 /// create a resampler with invalid parameters.
-impl From<rubato::ResamplerConstructionError> for AudioError {
+impl From<rubato::ResamplerConstructionError> for Error {
     fn from(err: rubato::ResamplerConstructionError) -> Self {
-        AudioError::Processing(format!("Resampler construction error: {}", err))
+        Error::Processing(format!("Resampler construction error: {}", err))
     }
 }
 
@@ -161,15 +162,15 @@ impl From<rubato::ResamplerConstructionError> for AudioError {
 ///
 /// Occurs during audio processing when the resampler encounters an error
 /// processing audio frames.
-impl From<rubato::ResampleError> for AudioError {
+impl From<rubato::ResampleError> for Error {
     fn from(err: rubato::ResampleError) -> Self {
-        AudioError::Processing(format!("Resample error: {}", err))
+        Error::Processing(format!("Resample error: {}", err))
     }
 }
 
-impl From<rtrb::chunks::ChunkError> for AudioError {
+impl From<rtrb::chunks::ChunkError> for Error {
     fn from(err: rtrb::chunks::ChunkError) -> Self {
-        AudioError::Channel(format!("Chunk error: {}", err))
+        Error::Channel(format!("Chunk error: {}", err))
     }
 }
 
@@ -177,33 +178,33 @@ impl From<rtrb::chunks::ChunkError> for AudioError {
 ///
 /// Occurs during encoding in [`encoder`](crate::encoder) or decoding in
 /// [`decoder`](crate::decoder) when the codec encounters invalid data.
-impl From<crate::sea::codec::common::SeaError> for AudioError {
+impl From<crate::sea::codec::common::SeaError> for Error {
     fn from(err: crate::sea::codec::common::SeaError) -> Self {
-        AudioError::Processing(format!("Codec error: {:?}", err))
+        Error::Processing(format!("Codec error: {:?}", err))
     }
 }
 
 /// Converts slice conversion errors.
 ///
 /// Occurs when audio frame data cannot be converted to the expected array size.
-impl From<std::array::TryFromSliceError> for AudioError {
+impl From<std::array::TryFromSliceError> for Error {
     fn from(err: std::array::TryFromSliceError) -> Self {
-        AudioError::Processing(format!("Slice conversion error: {}", err))
+        Error::Processing(format!("Slice conversion error: {}", err))
     }
 }
 
 /// Converts IO errors.
 ///
 /// Occurs during file operations or other IO-related processing.
-impl From<std::io::Error> for AudioError {
+impl From<std::io::Error> for Error {
     fn from(err: std::io::Error) -> Self {
-        AudioError::Processing(format!("IO error: {}", err))
+        Error::Processing(format!("IO error: {}", err))
     }
 }
 
-impl From<tokio::task::JoinError> for AudioError {
-    fn from(err: tokio::task::JoinError) -> Self {
-        AudioError::JoinError(format!("JoinError: {}", err))
+impl From<JoinError> for Error {
+    fn from(err: JoinError) -> Self {
+        Error::JoinError(err)
     }
 }
 
@@ -212,9 +213,9 @@ impl From<tokio::task::JoinError> for AudioError {
 /// Occurs when the sender is dropped without sending, e.g. if the spawned
 /// thread panics before sending the result.
 #[cfg(target_family = "wasm")]
-impl From<tokio::sync::oneshot::error::RecvError> for AudioError {
+impl From<tokio::sync::oneshot::error::RecvError> for Error {
     fn from(_: tokio::sync::oneshot::error::RecvError) -> Self {
-        AudioError::Processing("blocking task channel closed".to_string())
+        Error::Processing("blocking task channel closed".to_string())
     }
 }
 
@@ -223,8 +224,8 @@ impl From<tokio::sync::oneshot::error::RecvError> for AudioError {
 /// Occurs during Web Audio API operations when JavaScript throws an error,
 /// such as permission denied for microphone access.
 #[cfg(target_family = "wasm")]
-impl From<wasm_bindgen::JsValue> for AudioError {
+impl From<wasm_bindgen::JsValue> for Error {
     fn from(err: wasm_bindgen::JsValue) -> Self {
-        AudioError::Platform(format!("JavaScript error: {:?}", err))
+        Error::Processing(format!("JavaScript error: {:?}", err))
     }
 }

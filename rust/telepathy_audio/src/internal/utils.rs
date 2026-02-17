@@ -26,7 +26,7 @@
 //! This is necessary because cpal streams are not inherently `Send`.
 
 use crate::constants::RESAMPLER_PARAMETERS;
-use crate::error::AudioError;
+use crate::error::Error;
 use nnnoiseless::FRAME_SIZE;
 use rubato::SincFixedIn;
 
@@ -90,7 +90,7 @@ pub fn resampler_factory(
     ratio: f64,
     channels: usize,
     size: usize,
-) -> Result<Option<SincFixedIn<f32>>, AudioError> {
+) -> Result<Option<SincFixedIn<f32>>, Error> {
     if ratio == 1_f64 {
         Ok(None)
     } else {

@@ -11,7 +11,7 @@ use telepathy_audio::internal::buffer_pool::PooledBuffer;
 use telepathy_audio::internal::processor::{input_processor, output_processor};
 use telepathy_audio::internal::state::{InputProcessorState, OutputProcessorState};
 use telepathy_audio::internal::traits::{AudioInput, AudioOutput};
-use telepathy_audio::{AudioDataSink, AudioDataSource, AudioError, ClosedOrFailed, FRAME_SIZE};
+use telepathy_audio::{AudioDataSink, AudioDataSource, ClosedOrFailed, Error, FRAME_SIZE};
 
 struct TestAudioInput {
     samples_remaining: usize,
@@ -26,7 +26,7 @@ impl TestAudioInput {
 }
 
 impl AudioInput for TestAudioInput {
-    fn read_into(&mut self, dst: &mut [f32]) -> Result<usize, AudioError> {
+    fn read_into(&mut self, dst: &mut [f32]) -> Result<usize, Error> {
         if self.samples_remaining == 0 {
             return Ok(0);
         }
@@ -48,7 +48,7 @@ impl AudioOutput for CountingOutput {
         false
     }
 
-    fn write_samples(&mut self, samples: &[f32]) -> Result<usize, AudioError> {
+    fn write_samples(&mut self, samples: &[f32]) -> Result<usize, Error> {
         if !samples.is_empty() {
             self.frames.fetch_add(1, Relaxed);
         }
@@ -97,7 +97,7 @@ fn sink_errors_propagate() {
     .unwrap_err();
 
     match err {
-        AudioError::Processing(msg) => assert!(msg.contains("intentional")),
+        Error::Processing(msg) => assert!(msg.contains("intentional")),
         other => panic!("expected Channel error, got {:?}", other),
     }
 }

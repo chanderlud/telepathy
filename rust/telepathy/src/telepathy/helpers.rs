@@ -20,6 +20,7 @@ use libp2p::{Multiaddr, PeerId, Swarm, autonat, dcutr, identify, noise, ping, ya
 use libp2p_stream::Control;
 use log::{error, info, warn};
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::Duration;
@@ -322,7 +323,7 @@ where
                     .lock()
                     .await
                     .take()
-                    .ok_or(ErrorKind::NoInputDevice)?;
+                    .expect("web audio wrapper was not initialized");
 
                 let handle = builder
                     .web_audio_wrapper(wrapper)
@@ -346,9 +347,8 @@ where
     ) -> Result<OutputHelper> {
         // Get device ID
         let device_id = self.core_state.output_device.lock().await.clone();
-
+        // Create the input channel
         let (sender, receiver) = kanal::unbounded();
-
         // Create the audio output using the builder
         let handle = AudioOutputBuilder::new()
             .source(KanalSource::new(receiver))
@@ -379,48 +379,36 @@ where
             return Ok(state);
         }
 
-        let input_sample_rate;
-
-        #[cfg(not(target_family = "wasm"))]
-        {
-            // Query sample rate from input device using library
-            let device_id = self.core_state.input_device.lock().await.clone();
-            let device_handle = get_input_device(&self.host, device_id.as_deref())?;
-            input_sample_rate = device_handle
-                .sample_rate()
-                .ok_or(ErrorKind::NoInputDevice)?;
-            info!("input_device: {:?}", device_handle.name());
-        }
-
-        #[cfg(target_family = "wasm")]
-        {
-            if let Some(web_input) = self.web_input.lock().await.as_ref() {
-                input_sample_rate = web_input.sample_rate as u32;
-            } else {
-                return Err(ErrorKind::NoInputDevice.into());
-            }
-        }
-
-        // load the shared codec config values
-        let config_codec_enabled = self.core_state.codec_config.enabled.load(Relaxed);
-        let config_vbr = self.core_state.codec_config.vbr.load(Relaxed);
-        let config_residual_bits = self.core_state.codec_config.residual_bits.load(Relaxed);
-
-        let mut local_configuration = AudioHeader {
-            sample_rate: input_sample_rate,
-            codec_enabled: config_codec_enabled,
-            vbr: config_vbr,
-            residual_bits: config_residual_bits as f64,
-        };
-
         // rnnoise requires a 48kHz sample rate
-        if self.core_state.denoise.load(Relaxed) {
-            local_configuration.sample_rate = 48_000;
-        }
+        let sample_rate = if self.core_state.denoise.load(Relaxed) {
+            48_000
+        } else {
+            cfg_if::cfg_if! {
+                if #[cfg(target_family = "wasm")] {
+                     self
+                        .web_input
+                        .lock()
+                        .await
+                        .as_ref()
+                        .expect("web audio wrapper was not initialized")
+                        .sample_rate as u32
+                } else {
+                    let device_id = self.core_state.input_device.lock().await;
+                    let device_handle = get_input_device(&self.host, device_id.as_deref())?;
+                    info!("input_device: {:?}", device_handle.name());
+                    device_handle.sample_rate()?
+                }
+            }
+        };
 
         Ok(EarlyCallState {
             peer,
-            local_configuration,
+            local_configuration: AudioHeader {
+                sample_rate,
+                codec_enabled: self.core_state.codec_config.enabled.load(Relaxed),
+                vbr: self.core_state.codec_config.vbr.load(Relaxed),
+                residual_bits: self.core_state.codec_config.residual_bits.load(Relaxed) as f64,
+            },
             remote_configuration: AudioHeader::default(),
         })
     }
@@ -431,20 +419,25 @@ where
             if #[cfg(target_family = "wasm")] {
                 None
             } else {
-                match File::open("ringtone.sea").await {
-                    Ok(mut file) => {
-                        let mut buffer = Vec::new();
+                let path = PathBuf::from("ringtone.sea");
+                if !path.exists() {
+                    None
+                } else {
+                    match File::open("ringtone.sea").await {
+                        Ok(mut file) => {
+                            let mut buffer = Vec::new();
 
-                        if let Err(error) = file.read_to_end(&mut buffer).await {
-                            error!("failed to read ringtone: {:?}", error);
-                            None
-                        } else {
-                            Some(buffer)
+                            if let Err(error) = file.read_to_end(&mut buffer).await {
+                                error!("failed to read ringtone: {:?}", error);
+                                None
+                            } else {
+                                Some(buffer)
+                            }
                         }
-                    }
-                    Err(error) => {
-                        error!("failed to open ringtone: {:?}", error);
-                        None
+                        Err(error) => {
+                            error!("failed to open ringtone: {:?}", error);
+                            None
+                        }
                     }
                 }
             }

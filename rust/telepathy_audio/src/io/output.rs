@@ -26,9 +26,8 @@
 //! let _ = tx;
 //! ```
 
-use crate::devices::AudioHost;
-use crate::devices::{DeviceError, get_output_device};
-use crate::error::AudioError;
+use crate::devices::{AudioHost, get_output_device};
+use crate::error::Error;
 use crate::internal::NETWORK_FRAME;
 use crate::internal::processor::output_processor;
 use crate::internal::state::OutputProcessorState;
@@ -261,7 +260,7 @@ where
         self,
         processor_output: O,
         output_sample_rate: u32,
-    ) -> Result<OutputBuildContext, AudioError> {
+    ) -> Result<OutputBuildContext, Error> {
         // Create shared atomic state (use provided shared atomics or create new ones)
         let output_volume = self
             .shared_output_volume
@@ -270,9 +269,9 @@ where
         let deafened = self.shared_deafened.clone().unwrap_or_default();
         let rms_sender = self.shared_rms.clone().unwrap_or_default();
         let loss_sender = self.shared_loss.clone().unwrap_or_default();
-        let source = self.source.ok_or_else(|| {
-            AudioError::Config("a data source must be set via source()".to_string())
-        })?;
+        let source = self
+            .source
+            .ok_or_else(|| Error::Config("a data source must be set via source()".to_string()))?;
 
         // Calculate resampling ratio
         let ratio = output_sample_rate as f64 / self.config.sample_rate as f64;
@@ -319,26 +318,16 @@ where
     /// - The device cannot be found
     /// - The stream cannot be created
     /// - The device uses an unsupported sample format
-    pub fn build(self, host: &AudioHost) -> Result<AudioOutputHandle, AudioError> {
+    pub fn build(self, host: &AudioHost) -> Result<AudioOutputHandle, Error> {
         use rtrb::RingBuffer;
         if self.source.is_none() {
-            return Err(AudioError::Config(
+            return Err(Error::Config(
                 "a data source must be set via source()".to_string(),
             ));
         }
 
         // Get the output device
-        let device_handle =
-            get_output_device(host, self.config.device_id.as_deref()).map_err(|e| match e {
-                DeviceError::NoDefaultDevice => AudioError::Device("No output device".to_string()),
-                DeviceError::DeviceNotFound(id) => {
-                    AudioError::Device(format!("Device not found: {}", id))
-                }
-                DeviceError::EnumerationFailed(msg) => AudioError::Device(msg),
-                DeviceError::InvalidDeviceId(id) => {
-                    AudioError::Device(format!("Invalid device ID: {}", id))
-                }
-            })?;
+        let device_handle = get_output_device(host, self.config.device_id.as_deref())?;
 
         let device = device_handle.device();
         let config = device.default_output_config()?;
@@ -427,7 +416,7 @@ where
                 output_channels,
                 error_notify,
             )?,
-            _ => return Err(AudioError::Config("Unsupported sample format".to_string())),
+            _ => return Err(Error::Config("Unsupported sample format".to_string())),
         };
         // Start playback
         stream.0.play()?;
@@ -526,7 +515,7 @@ fn build_output_stream_with_format<T>(
     mut output_consumer: rtrb::Consumer<f32>,
     output_channels: usize,
     error_notify: Option<Arc<Notify>>,
-) -> Result<SendStream, AudioError>
+) -> Result<SendStream, Error>
 where
     T: Sample + cpal::SizedSample + cpal::FromSample<f32> + Send + 'static,
 {

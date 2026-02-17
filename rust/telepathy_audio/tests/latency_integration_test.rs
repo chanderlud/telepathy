@@ -18,7 +18,7 @@ use telepathy_audio::internal::buffer_pool::{DEFAULT_POOL_CAPACITY, PooledBuffer
 use telepathy_audio::internal::processor::{input_processor, output_processor};
 use telepathy_audio::internal::state::{InputProcessorState, OutputProcessorState};
 use telepathy_audio::internal::traits::{AudioInput, AudioOutput};
-use telepathy_audio::{AudioError, FRAME_SIZE};
+use telepathy_audio::{Error, FRAME_SIZE};
 
 const TEST_FRAMES: usize = 100;
 
@@ -38,7 +38,7 @@ impl TestAudioInput {
 }
 
 impl AudioInput for TestAudioInput {
-    fn read_into(&mut self, dst: &mut [f32]) -> Result<usize, AudioError> {
+    fn read_into(&mut self, dst: &mut [f32]) -> Result<usize, Error> {
         if self.samples_remaining == 0 {
             return Ok(0);
         }
@@ -79,7 +79,7 @@ impl AudioOutput for TestAudioOutput {
         false
     }
 
-    fn write_samples(&mut self, samples: &[f32]) -> Result<usize, AudioError> {
+    fn write_samples(&mut self, samples: &[f32]) -> Result<usize, Error> {
         self.samples_received
             .fetch_add(samples.len(), Ordering::Relaxed);
         self.frames_received.fetch_add(1, Ordering::Relaxed);

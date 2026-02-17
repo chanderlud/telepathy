@@ -1,6 +1,6 @@
 use telepathy_audio::{AudioHost, AudioInputBuilder};
 
-fn main() -> Result<(), telepathy_audio::AudioError> {
+fn main() -> Result<(), telepathy_audio::Error> {
     let host = AudioHost::new();
 
     let _input = AudioInputBuilder::new()

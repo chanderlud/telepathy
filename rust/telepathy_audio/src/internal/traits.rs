@@ -19,8 +19,7 @@
 //! [`CHANNEL_SIZE`] (2,400 samples) defines the buffer capacity for audio buffers.
 //! At 48kHz, this represents 50ms of audio data.
 
-use crate::error::AudioError;
-
+use crate::error::Error;
 use std::sync::Arc;
 #[cfg(not(target_family = "wasm"))]
 use std::sync::{Condvar, Mutex};
@@ -43,7 +42,7 @@ pub trait AudioInput {
     /// Returns:
     /// - `Ok(n)`: number of samples written (0 means end-of-stream)
     /// - `Err(_)`: an error occurred during reading
-    fn read_into(&mut self, dst: &mut [f32]) -> Result<usize, AudioError>;
+    fn read_into(&mut self, dst: &mut [f32]) -> Result<usize, Error>;
 }
 
 /// Trait for writing audio samples to an output destination.
@@ -53,7 +52,7 @@ pub trait AudioOutput {
 
     /// Writes as many samples as it can.
     /// Returns how many samples were dropped (loss).
-    fn write_samples(&mut self, samples: &[f32]) -> Result<usize, AudioError>;
+    fn write_samples(&mut self, samples: &[f32]) -> Result<usize, Error>;
 }
 
 /// Lock-free ring buffer audio input for native platforms.
@@ -102,7 +101,7 @@ impl RingBufferInput {
 }
 
 impl AudioInput for RingBufferInput {
-    fn read_into(&mut self, dst: &mut [f32]) -> Result<usize, AudioError> {
+    fn read_into(&mut self, dst: &mut [f32]) -> Result<usize, Error> {
         // block until enough slots are available
         let target = dst.len();
         loop {
@@ -169,7 +168,7 @@ impl AudioOutput for RingBufferOutput {
         self.producer.slots() == 0
     }
 
-    fn write_samples(&mut self, samples: &[f32]) -> Result<usize, AudioError> {
+    fn write_samples(&mut self, samples: &[f32]) -> Result<usize, Error> {
         let available = self.producer.slots();
         if available == 0 {
             return Ok(samples.len());

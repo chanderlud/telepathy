@@ -4,7 +4,7 @@
 //! audio input/output devices across platforms.
 
 use cpal::traits::{DeviceTrait, HostTrait};
-use cpal::{DeviceId, DeviceIdError};
+use cpal::{DefaultStreamConfigError, DeviceId, DeviceIdError};
 use std::fmt;
 use std::sync::Arc;
 
@@ -19,6 +19,7 @@ pub enum DeviceError {
     EnumerationFailed(String),
     /// Device ID parsing failed
     InvalidDeviceId(String),
+    DefaultConfigMissing(String),
 }
 
 impl fmt::Display for DeviceError {
@@ -30,11 +31,20 @@ impl fmt::Display for DeviceError {
                 write!(f, "Failed to enumerate devices: {}", msg)
             }
             DeviceError::InvalidDeviceId(id) => write!(f, "Invalid device ID: {}", id),
+            DeviceError::DefaultConfigMissing(error) => {
+                write!(f, "Default config missing: {}", error)
+            }
         }
     }
 }
 
 impl std::error::Error for DeviceError {}
+
+impl From<DefaultStreamConfigError> for DeviceError {
+    fn from(err: DefaultStreamConfigError) -> Self {
+        Self::DefaultConfigMissing(err.to_string())
+    }
+}
 
 /// Information about an audio device.
 ///
@@ -90,10 +100,10 @@ impl DeviceHandle {
         &self.device_id
     }
 
-    pub fn sample_rate(&self) -> Option<u32> {
-        Some(match self.device_type {
-            DeviceType::Input => self.device.default_input_config().ok()?.sample_rate(),
-            DeviceType::Output => self.device.default_output_config().ok()?.sample_rate(),
+    pub fn sample_rate(&self) -> Result<u32, DeviceError> {
+        Ok(match self.device_type {
+            DeviceType::Input => self.device.default_input_config()?.sample_rate(),
+            DeviceType::Output => self.device.default_output_config()?.sample_rate(),
         })
     }
 
