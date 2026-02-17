@@ -1038,7 +1038,7 @@ where
             .await?;
 
         // Setup output (stream is managed internally)
-        let output_helper = self
+        let mut output_helper = self
             .setup_output(
                 call_state.remote_configuration.sample_rate as f64,
                 codec_config.0,
@@ -1318,7 +1318,7 @@ where
                             // this unwrap is safe because audio_input never panics
                             new_sockets.lock().unwrap().push((write, Instant::now()));
                             // setup output stack
-                            let helper = self
+                            let mut helper = self
                                 .setup_output(
                                     state.remote_configuration.sample_rate as f64,
                                     true,

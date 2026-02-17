@@ -1,3 +1,6 @@
+/// channel adapters for telepathy_audio I/O traits
+/// flutter_rust_bridge:ignore
+mod audio_adapters;
 /// implementations for core telepathy functionality
 /// flutter_rust_bridge:ignore
 pub mod core;

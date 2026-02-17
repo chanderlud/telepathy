@@ -14,7 +14,7 @@ mod common;
 use bytes::{Bytes, BytesMut};
 use common::*;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use kanal;
+use kanal::{Receiver, Sender, unbounded};
 use nnnoiseless::DenoiseState;
 use std::f32::consts::PI;
 use std::hint::black_box;
@@ -28,6 +28,31 @@ use telepathy_audio::sea::codec::common::SeaError;
 use telepathy_audio::sea::codec::file::SeaFileHeader;
 use telepathy_audio::sea::decoder::SeaDecoder;
 use telepathy_audio::sea::encoder::{EncoderSettings, SeaEncoder};
+use telepathy_audio::{AudioDataSink, AudioDataSource, ClosedOrFailed, PooledBuffer};
+
+#[derive(Clone)]
+struct KanalSink(Sender<PooledBuffer>);
+
+impl AudioDataSink for KanalSink {
+    fn send(&self, data: PooledBuffer) -> Result<(), ClosedOrFailed> {
+        self.0.send(data).map_err(|_| ClosedOrFailed::Closed)
+    }
+}
+
+struct KanalSource(Receiver<Bytes>);
+
+impl AudioDataSource for KanalSource {
+    fn recv(&self) -> Result<Bytes, ClosedOrFailed> {
+        self.0.recv().map_err(|_| ClosedOrFailed::Closed)
+    }
+
+    fn try_recv(&self) -> Result<Option<Bytes>, ClosedOrFailed> {
+        match self.0.try_recv() {
+            Ok(b) => Ok(b),
+            Err(_) => Err(ClosedOrFailed::Closed),
+        }
+    }
+}
 
 /// Number of frames to process in each benchmark iteration.
 const BENCHMARK_FRAMES: usize = 1000;
@@ -115,7 +140,7 @@ fn bench_input_throughput(c: &mut Criterion) {
                     } else {
                         (MockAudioInput::new_48khz(Some(benchmark_samples())), 48_000)
                     };
-                    let (processor_tx, processor_rx) = kanal::unbounded();
+                    let (processor_tx, processor_rx) = unbounded();
                     let denoiser = config.denoise.then_some(denoiser.clone());
                     let a = Default::default();
                     let b = Default::default();
@@ -137,7 +162,14 @@ fn bench_input_throughput(c: &mut Criterion) {
                     };
 
                     let processor_handle = thread::spawn(move || {
-                        input_processor(mock_input, processor_tx, ratio, denoiser, state, encoder)
+                        input_processor(
+                            mock_input,
+                            KanalSink(processor_tx),
+                            ratio,
+                            denoiser,
+                            state,
+                            encoder,
+                        )
                     });
 
                     let mut count = 0;
@@ -207,7 +239,7 @@ fn bench_output_throughput(c: &mut Criterion) {
                 };
 
                 b.iter(|| {
-                    let (input_tx, input_rx) = kanal::unbounded();
+                    let (input_tx, input_rx) = unbounded();
                     let mock_output = NullOutput::new();
                     let state = OutputProcessorState::default();
 
@@ -227,7 +259,7 @@ fn bench_output_throughput(c: &mut Criterion) {
                     let ratio = if config.resample { 0.9 } else { 1.0 };
 
                     let handle = thread::spawn(move || {
-                        output_processor(input_rx, mock_output, ratio, state, decoder)
+                        output_processor(KanalSource(input_rx), mock_output, ratio, state, decoder)
                     });
 
                     // Send pre-generated frames to the output processor

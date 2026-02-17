@@ -7,18 +7,18 @@
 
 use atomic_float::AtomicF32;
 use bytes::{Bytes, BytesMut};
-use kanal;
 use nnnoiseless::DenoiseState;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
-use telepathy_audio::FRAME_SIZE;
-use telepathy_audio::error::AudioError;
+use telepathy_audio::adapters::{MpscSink, MpscSource};
 use telepathy_audio::internal::buffer_pool::{DEFAULT_POOL_CAPACITY, PooledBuffer};
 use telepathy_audio::internal::processor::{input_processor, output_processor};
 use telepathy_audio::internal::state::{InputProcessorState, OutputProcessorState};
 use telepathy_audio::internal::traits::{AudioInput, AudioOutput};
+use telepathy_audio::{AudioError, FRAME_SIZE};
 
 const TEST_FRAMES: usize = 100;
 
@@ -93,7 +93,7 @@ fn test_input_processor_with_denoise() {
     let total_samples = FRAME_SIZE * TEST_FRAMES;
     let mock_input = TestAudioInput::new(total_samples);
 
-    let (output_tx, output_rx) = kanal::unbounded::<PooledBuffer>();
+    let (output_tx, output_rx) = mpsc::channel::<PooledBuffer>();
 
     // Enable denoiser
     let denoiser = Some(DenoiseState::new());
@@ -101,8 +101,16 @@ fn test_input_processor_with_denoise() {
 
     let start = Instant::now();
 
-    let handle =
-        thread::spawn(move || input_processor(mock_input, output_tx, 1.0, denoiser, state, None));
+    let handle = thread::spawn(move || {
+        input_processor(
+            mock_input,
+            MpscSink::new(output_tx),
+            1.0,
+            denoiser,
+            state,
+            None,
+        )
+    });
 
     let mut frames_received = 0;
     while frames_received < TEST_FRAMES {
@@ -119,7 +127,6 @@ fn test_input_processor_with_denoise() {
         }
     }
 
-    drop(output_rx);
     handle
         .join()
         .expect("Input processor panicked")
@@ -138,14 +145,16 @@ fn test_input_processor_with_denoise() {
 /// Tests output processor with resampling.
 #[test]
 fn test_output_processor_with_resampling() {
-    let (input_tx, input_rx) = kanal::unbounded::<Bytes>();
+    let (input_tx, input_rx) = mpsc::channel::<Bytes>();
     let (mock_output, _, frames_counter) = TestAudioOutput::new();
     let state = OutputProcessorState::default();
 
     // Resample from 48kHz to 44.1kHz
     let ratio = 44_100.0 / 48_000.0;
 
-    let handle = thread::spawn(move || output_processor(input_rx, mock_output, ratio, state, None));
+    let handle = thread::spawn(move || {
+        output_processor(MpscSource::new(input_rx), mock_output, ratio, state, None)
+    });
 
     let start = Instant::now();
 
@@ -179,7 +188,7 @@ fn test_input_processor_mute() {
     let total_samples = FRAME_SIZE * 50;
     let mock_input = TestAudioInput::new(total_samples);
 
-    let (output_tx, output_rx) = kanal::unbounded::<PooledBuffer>();
+    let (_output_tx, output_rx) = mpsc::channel::<PooledBuffer>();
 
     // Create state with muted = true
     let muted = Arc::new(AtomicBool::new(true));
@@ -195,14 +204,12 @@ fn test_input_processor_mute() {
         DEFAULT_POOL_CAPACITY,
     );
 
-    let handle =
-        thread::spawn(move || input_processor(mock_input, output_tx, 1.0, None, state, None));
+    let sink = MpscSink::new(_output_tx);
+    let handle = thread::spawn(move || input_processor(mock_input, sink, 1.0, None, state, None));
 
     // Try to receive frames - should timeout since muted
     let result = output_rx.recv_timeout(Duration::from_millis(500));
 
-    // Close channel
-    drop(output_rx);
     handle
         .join()
         .expect("Input processor panicked")
@@ -215,7 +222,7 @@ fn test_input_processor_mute() {
 /// Tests that deafening stops audio output.
 #[test]
 fn test_output_processor_deafen() {
-    let (input_tx, input_rx) = kanal::unbounded::<Bytes>();
+    let (input_tx, input_rx) = mpsc::channel::<Bytes>();
     let (mock_output, samples_counter, _) = TestAudioOutput::new();
 
     // Create state with deafened = true
@@ -226,7 +233,9 @@ fn test_output_processor_deafen() {
 
     let state = OutputProcessorState::new(&output_volume, rms_sender, &deafened, loss_sender);
 
-    let handle = thread::spawn(move || output_processor(input_rx, mock_output, 1.0, state, None));
+    let handle = thread::spawn(move || {
+        output_processor(MpscSource::new(input_rx), mock_output, 1.0, state, None)
+    });
 
     // Send frames
     for _ in 0..10 {

@@ -2,13 +2,12 @@
 //!
 //! This module provides a high-level API for capturing and processing audio input.
 //! It handles device selection, resampling, noise suppression, codec encoding,
-//! and delivers processed audio through a callback mechanism.
+//! and delivers processed audio through a user-provided [`AudioDataSink`](crate::AudioDataSink).
 //!
 //! # Example (Native)
 //!
 //! ```rust,no_run
 //! use telepathy_audio::{AudioHost, AudioInputBuilder};
-//! use std::sync::Arc;
 //!
 //! let host = AudioHost::new();
 //! let input = AudioInputBuilder::new()
@@ -17,6 +16,21 @@
 //!         // Handle processed audio data
 //!         println!("Received {} bytes", data.as_ref().len());
 //!     })
+//!     .build(&host)
+//!     .unwrap();
+//! ```
+//!
+//! # Example (Custom Sink)
+//!
+//! ```rust,no_run
+//! use telepathy_audio::{AudioHost, AudioInputBuilder, PooledBuffer};
+//! use telepathy_audio::adapters::MpscSink;
+//! use std::sync::mpsc;
+//!
+//! let host = AudioHost::new();
+//! let (tx, _rx) = mpsc::channel::<PooledBuffer>();
+//! let _input = AudioInputBuilder::new()
+//!     .sink(MpscSink::new(tx))
 //!     .build(&host)
 //!     .unwrap();
 //! ```
@@ -56,6 +70,7 @@ use crate::internal::thread::{self, JoinHandle};
 use crate::internal::traits::AudioInput;
 #[cfg(not(target_family = "wasm"))]
 use crate::internal::traits::{CHANNEL_SIZE, RingBufferInput};
+use crate::io::traits::AudioDataSink;
 #[cfg(target_family = "wasm")]
 use crate::platform::web_audio::WebAudioWrapper;
 use crate::sea::encoder::{EncoderSettings, SeaEncoder};
@@ -66,7 +81,6 @@ use cpal::Sample;
 use cpal::SampleFormat;
 #[cfg(not(target_family = "wasm"))]
 use cpal::traits::{DeviceTrait, StreamTrait};
-use kanal::{AsyncSender, unbounded};
 use log::{debug, error};
 use nnnoiseless::{DenoiseState, RnnModel};
 #[cfg(not(target_family = "wasm"))]
@@ -169,13 +183,12 @@ impl Default for AudioInputConfig {
 ///
 /// Use this builder to configure audio input processing options before
 /// starting the stream.
-pub struct AudioInputBuilder<F>
+pub struct AudioInputBuilder<S>
 where
-    F: Fn(PooledBuffer) + Send + 'static,
+    S: AudioDataSink,
 {
     config: AudioInputConfig,
-    callback: Option<F>,
-    channel: Option<AsyncSender<PooledBuffer>>,
+    sink: Option<S>,
     /// Optional shared atomic for input volume (enables real-time synchronization)
     shared_input_volume: Option<Arc<AtomicF32>>,
     /// Optional shared atomic for RMS threshold (enables real-time synchronization)
@@ -195,16 +208,14 @@ struct InputBuildContext {
     rms_threshold: Arc<AtomicF32>,
     muted: Arc<AtomicBool>,
     processor_handle: JoinHandle<()>,
-    callback_handle: Option<JoinHandle<()>>,
 }
 
-impl AudioInputBuilder<fn(PooledBuffer)> {
+impl AudioInputBuilder<Box<dyn Fn(PooledBuffer) + Send + 'static>> {
     /// Creates a new audio input builder with default configuration.
-    pub fn new() -> AudioInputBuilder<fn(PooledBuffer)> {
+    pub fn new() -> Self {
         AudioInputBuilder {
             config: AudioInputConfig::default(),
-            channel: None,
-            callback: None,
+            sink: None,
             shared_input_volume: None,
             shared_rms_threshold: None,
             shared_muted: None,
@@ -215,15 +226,15 @@ impl AudioInputBuilder<fn(PooledBuffer)> {
     }
 }
 
-impl Default for AudioInputBuilder<fn(PooledBuffer)> {
+impl Default for AudioInputBuilder<Box<dyn Fn(PooledBuffer) + Send + 'static>> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<F> AudioInputBuilder<F>
+impl<S> AudioInputBuilder<S>
 where
-    F: Fn(PooledBuffer) + Send + 'static,
+    S: AudioDataSink,
 {
     /// Sets the input device by ID.
     ///
@@ -394,14 +405,16 @@ where
     /// Sets the callback for receiving processed audio data.
     ///
     /// The callback receives processed audio frames as `PooledBuffer`.
-    pub fn callback<G>(self, callback: G) -> AudioInputBuilder<G>
+    pub fn callback<G>(
+        self,
+        callback: G,
+    ) -> AudioInputBuilder<Box<dyn Fn(PooledBuffer) + Send + 'static>>
     where
         G: Fn(PooledBuffer) + Send + 'static,
     {
         AudioInputBuilder {
             config: self.config,
-            channel: None,
-            callback: Some(callback),
+            sink: Some(Box::new(callback)),
             shared_input_volume: self.shared_input_volume,
             shared_rms_threshold: self.shared_rms_threshold,
             shared_muted: self.shared_muted,
@@ -411,19 +424,25 @@ where
         }
     }
 
-    /// Sets the channel for receiving processed audio data.
-    ///
-    /// The channel receives processed audio frames as `PooledBuffer`.
-    pub fn channel(mut self, channel: AsyncSender<PooledBuffer>) -> Self {
-        self.channel = Some(channel);
-        self
+    /// Sets a custom sink for receiving processed audio data.
+    pub fn sink<T: AudioDataSink>(self, sink: T) -> AudioInputBuilder<T> {
+        AudioInputBuilder {
+            config: self.config,
+            sink: Some(sink),
+            shared_input_volume: self.shared_input_volume,
+            shared_rms_threshold: self.shared_rms_threshold,
+            shared_muted: self.shared_muted,
+            shared_rms: self.shared_rms,
+            #[cfg(target_family = "wasm")]
+            web_audio_wrapper: self.web_audio_wrapper,
+        }
     }
 
     /// Common initialization logic shared between native and WASM builds.
     ///
     /// This method handles all shared setup steps:
     /// - Creates shared atomic state (input_volume, rms_threshold, muted, rms_sender)
-    /// - Creates unbounded channels for inter-thread communication
+    /// - Uses the configured sink for inter-thread / cross-component delivery
     /// - Calculates output sample rate and resampling ratio with the following precedence:
     ///   1. **Denoise enabled**: Always 48kHz (RNNoise requirement)
     ///   2. **Custom output_sample_rate**: Uses the specified rate
@@ -432,7 +451,7 @@ where
     /// - Creates InputProcessorState for atomic state management
     /// - Creates encoder if codec is enabled (sample rate matches processor output)
     /// - Spawns processor thread (calls `input_processor` with calculated ratio)
-    /// - Spawns callback thread if callback is set
+    /// - Calls the sink directly from the processor thread
     ///
     /// # Type Parameters
     ///
@@ -466,13 +485,9 @@ where
             .clone()
             .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
         let rms_sender = self.shared_rms.clone().unwrap_or_default();
-
-        let (processor_sender, output_receiver) = if let Some(sender) = self.channel {
-            (sender.to_sync(), None)
-        } else {
-            let (processor_sender, processor_receiver) = unbounded();
-            (processor_sender, Some(processor_receiver))
-        };
+        let sink = self.sink.ok_or_else(|| {
+            AudioError::Config("a data sink must be set via callback() or sink()".to_string())
+        })?;
 
         // create denoiser if needed
         let denoiser = if self.config.denoise_enabled {
@@ -515,16 +530,14 @@ where
 
         // spawn processor thread (safe_spawn catches panics on WASM when threading is unavailable)
         let processor_handle = thread::safe_spawn(move || {
-            if let Err(e) = input_processor(
-                processor_input,
-                processor_sender,
-                ratio,
-                denoiser,
-                state,
-                encoder,
-            ) {
-                if let AudioError::Channel(_) = e {
-                    debug!("Input processor ended by closed channel");
+            if let Err(e) = input_processor(processor_input, sink, ratio, denoiser, state, encoder)
+            {
+                if let AudioError::Channel(ref m) = e {
+                    if m == "closed" {
+                        debug!("Input processor ended by closed sink");
+                    } else {
+                        error!("Input processor error: {}", e);
+                    }
                 } else {
                     error!("Input processor error: {}", e);
                 }
@@ -532,26 +545,11 @@ where
             debug!("Input processor thread ended");
         })?;
 
-        // spawn callback thread if callback is set
-        let callback_handle = match self.callback {
-            Some(callback) => match output_receiver {
-                Some(receiver) => Some(thread::safe_spawn(move || {
-                    while let Ok(buffer) = receiver.recv() {
-                        callback(buffer)
-                    }
-                    debug!("Callback thread ended");
-                })?),
-                None => None,
-            },
-            None => None,
-        };
-
         Ok(InputBuildContext {
             input_volume,
             rms_threshold,
             muted,
             processor_handle,
-            callback_handle,
         })
     }
 
@@ -563,15 +561,15 @@ where
     /// # Errors
     ///
     /// Returns an error if:
-    /// - No callback was set
+    /// - No sink was set
     /// - The device cannot be found
     /// - The stream cannot be created
     /// - The device uses an unsupported sample format
     #[cfg(not(target_family = "wasm"))]
     pub fn build(self, host: &AudioHost) -> Result<AudioInputHandle, AudioError> {
-        if self.callback.is_none() && self.channel.is_none() {
+        if self.sink.is_none() {
             return Err(AudioError::Config(
-                "either callback or channel must be set".to_string(),
+                "a data sink must be set via callback() or sink()".to_string(),
             ));
         }
 
@@ -690,7 +688,6 @@ where
         Ok(AudioInputHandle {
             _stream: Some(stream),
             _processor_handle: Some(context.processor_handle),
-            _callback_handle: context.callback_handle,
             input_volume: context.input_volume,
             rms_threshold: context.rms_threshold,
             muted: context.muted,
@@ -707,7 +704,7 @@ where
     /// # Errors
     ///
     /// Returns an error if:
-    /// - No callback or channel was set
+    /// - No sink was set
     /// - No `WebAudioWrapper` was set via [`web_audio_wrapper`](Self::web_audio_wrapper)
     /// - Common build steps fail (codec initialization, thread spawning, etc.)
     ///
@@ -732,9 +729,9 @@ where
     /// ```
     #[cfg(target_family = "wasm")]
     pub fn build(mut self, _host: &AudioHost) -> Result<AudioInputHandle, AudioError> {
-        if self.callback.is_none() && self.channel.is_none() {
+        if self.sink.is_none() {
             return Err(AudioError::Config(
-                "either callback or channel must be set".to_string(),
+                "a data sink must be set via callback() or sink()".to_string(),
             ));
         }
 
@@ -756,7 +753,6 @@ where
         Ok(AudioInputHandle {
             _web_audio: Some(web_audio),
             _processor_handle: Some(context.processor_handle),
-            _callback_handle: context.callback_handle,
             input_volume: context.input_volume,
             rms_threshold: context.rms_threshold,
             muted: context.muted,
@@ -772,11 +768,8 @@ where
 /// ## Lifecycle
 ///
 /// - **Creation**: Created by [`AudioInputBuilder::build`] on all platforms
-/// - **Running**: Audio is captured, processed (with optional encoding), and delivered via callback
-/// - **Cleanup**: When dropped, the handle:
-///   1. Closes the input channel to signal threads to stop
-///   2. Waits for processor and callback (if enabled) threads to join
-///   3. Stops the underlying audio stream
+/// - **Running**: Audio is captured, processed (with optional encoding), and delivered via the configured sink
+/// - **Cleanup**: When dropped, the handle drops the underlying audio stream, causing the processor to observe EOF
 ///
 /// ## Thread Safety
 ///
@@ -801,7 +794,6 @@ pub struct AudioInputHandle {
     #[cfg(target_family = "wasm")]
     _web_audio: Option<WebAudioWrapper>,
     _processor_handle: Option<JoinHandle<()>>,
-    _callback_handle: Option<JoinHandle<()>>,
     input_volume: Arc<AtomicF32>,
     rms_threshold: Arc<AtomicF32>,
     muted: Arc<AtomicBool>,

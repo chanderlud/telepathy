@@ -2,7 +2,7 @@
 //!
 //! This module provides the high-level API for audio capture and playback.
 //! It handles device selection, resampling, codec encoding/decoding, and
-//! delivers processed audio through callbacks or channels.
+//! delivers/receives audio via trait-based sinks and sources.
 //!
 //! ## Modules
 //!
@@ -13,6 +13,9 @@
 //!
 //! ```rust,no_run
 //! use telepathy_audio::{AudioHost, AudioInputBuilder, AudioOutputBuilder};
+//! use telepathy_audio::adapters::MpscSource;
+//! use bytes::Bytes;
+//! use std::sync::mpsc;
 //!
 //! let host = AudioHost::new();
 //!
@@ -25,21 +28,24 @@
 //!     .build(&host)
 //!     .unwrap();
 //!
-//! // Create audio output
+//! // Create audio output using a custom source (here: std::sync::mpsc)
+//! let (tx, rx) = mpsc::channel::<Bytes>();
 //! let output = AudioOutputBuilder::new()
 //!     .sample_rate(48000)
+//!     .source(MpscSource::new(rx))
 //!     .build(&host)
 //!     .unwrap();
-//!
-//! let sender = output.sender();
+//! let _ = tx; // feed Bytes frames via tx
 //! ```
 
 pub mod input;
 pub mod output;
+pub mod traits;
 
 // Re-export main types for convenience
 pub use input::{AudioInputBuilder, AudioInputConfig, AudioInputHandle};
 pub use output::{AudioOutputBuilder, AudioOutputConfig, AudioOutputHandle};
+pub use traits::{AudioDataSink, AudioDataSource};
 
 /// cpal::Stream is not yet send and sync on WASM
 ///

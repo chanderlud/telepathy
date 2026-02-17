@@ -58,25 +58,44 @@ input.unmute();
 // Stream stops when handle is dropped
 ```
 
+### Custom Channel Implementations
+
+`telepathy_audio` does not require any specific channel library. To integrate with your preferred
+channel type, implement:
+
+- `AudioDataSink` for audio input delivery
+- `AudioDataSource` for audio output reception
+
+This makes it easy to use `crossbeam`, `flume`, `tokio::mpsc`, etc., without `telepathy_audio`
+depending on them directly.
+
+For `std::sync::mpsc`, you can use the ready-to-use adapters in `telepathy_audio::adapters`
+instead of writing a custom implementation.
+
 ### Audio Output
 
 ```rust
 use telepathy_audio::{AudioHost, AudioOutputBuilder};
+use telepathy_audio::adapters::MpscSource;
+use bytes::Bytes;
+use std::sync::mpsc;
 
 let host = AudioHost::new();
+
+// Provide a source of audio frames (Bytes)
+let (tx, rx) = mpsc::channel::<Bytes>();
 
 // Create an audio output
 let output = AudioOutputBuilder::new()
     .sample_rate(48000)
     .volume(1.0)
+    .source(MpscSource::new(rx))
     .build(&host)
     .unwrap();
 
-// Get sender for feeding audio data
-let sender = output.sender();
-
-// Send audio data through the sender
-// sender.send(audio_message).unwrap();
+// Feed audio frames via your chosen channel implementation
+// tx.send(Bytes::from_static(&[0u8; 960])).unwrap();
+let _ = tx;
 
 // Control the output
 output.set_volume(0.8);
@@ -90,29 +109,37 @@ The library supports creating multiple independent output streams:
 
 ```rust
 use telepathy_audio::{AudioHost, AudioOutputBuilder};
+use telepathy_audio::adapters::MpscSource;
+use bytes::Bytes;
+use std::sync::mpsc;
 
 let host = AudioHost::new();
 
 // Create multiple outputs for different audio sources
+let (tx1, rx1) = mpsc::channel::<Bytes>();
 let output1 = AudioOutputBuilder::new()
     .sample_rate(48000)
+    .source(MpscSource::new(rx1))
     .build(&host)
     .unwrap();
 
+let (tx2, rx2) = mpsc::channel::<Bytes>();
 let output2 = AudioOutputBuilder::new()
     .sample_rate(44100)  // Different sample rate
+    .source(MpscSource::new(rx2))
     .build(&host)
     .unwrap();
 
-// Each output has its own sender
-let sender1 = output1.sender();
-let sender2 = output2.sender();
+let _ = (tx1, tx2, output1, output2);
 ```
 
 ### With Codec Support
 
 ```rust
 use telepathy_audio::{AudioHost, AudioInputBuilder, AudioOutputBuilder};
+use telepathy_audio::adapters::MpscSource;
+use bytes::Bytes;
+use std::sync::mpsc;
 
 let host = AudioHost::new();
 
@@ -130,10 +157,13 @@ let input = AudioInputBuilder::new()
     .unwrap();
 
 // Output with codec decoding
+let (tx, rx) = mpsc::channel::<Bytes>();
 let output = AudioOutputBuilder::new()
     .codec(true)  // Enable codec decoding
+    .source(MpscSource::new(rx))
     .build(&host)
     .unwrap();
+let _ = tx;
 ```
 
 > **Note on Sample Rates**: The processor's output sample rate depends on the configuration:
@@ -178,10 +208,10 @@ When codec is enabled, audio is compressed using the SEA codec before transmissi
 ### Thread Architecture
 
 Each audio stream spawns dedicated threads:
-- **Input**: 1 processor thread (with optional encoding) + optional callback thread
+- **Input**: 1 processor thread (with optional encoding); the sink is called directly from this thread
 - **Output**: 1 processor thread (with optional decoding)
 
-Encoding/decoding happens within the processor threads for better performance and reduced context switching. All threads communicate via lock-free channels (kanal) for low-latency operation.
+Encoding/decoding happens within the processor threads for better performance and reduced context switching. Data delivery is trait-based (`AudioDataSink` / `AudioDataSource`) so consumers can choose any channel implementation or use callbacks.
 
 ## Module Organization
 
@@ -265,8 +295,12 @@ via `web_audio_wrapper()` before calling `build()`:
 ```rust
 #[cfg(target_family = "wasm")]
 fn setup_audio(wrapper: WebAudioWrapper) -> Result<(), AudioError> {
-    use telepathy_audio::{AudioHost, AudioInputBuilder};
-    use std::sync::Arc;
+    use telepathy_audio::{
+        AudioError, AudioHost, AudioInputBuilder, AudioOutputBuilder,
+    };
+    use bytes::Bytes;
+    use std::sync::mpsc;
+    use telepathy_audio::adapters::MpscSource;
     
     let host = AudioHost::new();
     
@@ -276,9 +310,12 @@ fn setup_audio(wrapper: WebAudioWrapper) -> Result<(), AudioError> {
         .callback(|data| { /* process audio */ })
         .build(&host)?;
     
+    let (_tx, rx) = mpsc::channel::<Bytes>();
+    
     // Output uses synchronous build even on WASM
     let output = AudioOutputBuilder::new()
         .sample_rate(48000)
+        .source(MpscSource::new(rx))
         .build(&host)?;
     
     Ok(())
@@ -324,11 +361,11 @@ Minimum browser versions that support Web Workers with `SharedArrayBuffer`:
 
 **Build Configuration:**
 
-For WASM builds with atomics support, you may need nightly Rust and specific build flags. See `.cargo/config.toml` for recommended settings:
+For WASM builds with atomics support, you may need nightly Rust and specific build flags.
 
 ```toml
 [target.wasm32-unknown-unknown]
-rustflags = ["-C", "target-feature=+atomics,+bulk-memory,+mutable-globals"]
+rustflags = ["-C", "target-feature=+atomics,+bulk-memory,+mutable-globals,+simd128"]
 
 [unstable]
 build-std = ["std", "panic_abort"]

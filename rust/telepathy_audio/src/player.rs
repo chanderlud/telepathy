@@ -14,8 +14,7 @@
 //! ```rust,no_run
 //! use telepathy_audio::{AudioPlayer, SoundHandle};
 //!
-//! #[tokio::main]
-//! async fn main() {
+//! async fn play_sound() {
 //!     // Create a player with -6dB volume
 //!     let player = AudioPlayer::new(-6.0);
 //!

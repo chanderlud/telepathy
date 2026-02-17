@@ -31,15 +31,14 @@
 use crate::constants::{MINIMUM_SILENCE_LENGTH, TRANSITION_LENGTH};
 use crate::error::AudioError;
 use crate::internal::NETWORK_FRAME;
-use crate::internal::buffer_pool::{BufferPool, PooledBuffer};
+use crate::internal::buffer_pool::BufferPool;
 use crate::internal::processing::*;
 use crate::internal::state::{InputProcessorState, OutputProcessorState};
 use crate::internal::traits::{AudioInput, AudioOutput};
 use crate::internal::utils::{make_transition_down, make_transition_up, resampler_factory};
+use crate::io::traits::{AudioDataSink, AudioDataSource, ClosedOrFailed};
 use crate::sea::decoder::SeaDecoder;
 use crate::sea::encoder::SeaEncoder;
-use bytes::Bytes;
-use kanal::{Receiver, Sender};
 use log::{debug, warn};
 use nnnoiseless::{DenoiseState, FRAME_SIZE};
 use rubato::Resampler;
@@ -101,7 +100,7 @@ use std::sync::Arc;
 /// if processing fails.
 pub fn input_processor<I: AudioInput>(
     mut input: I,
-    output: Sender<PooledBuffer>,
+    sink: impl AudioDataSink,
     ratio: f64,
     mut denoiser: Option<Box<DenoiseState>>,
     state: InputProcessorState,
@@ -193,7 +192,7 @@ pub fn input_processor<I: AudioInput>(
                     // insert frame to cleanly transition down to silence
                     send_frame(
                         make_transition_down(TRANSITION_LENGTH, last_sample),
-                        &output,
+                        &sink,
                         state.buffer_pool(),
                         &mut encoder_option,
                     )?;
@@ -210,7 +209,7 @@ pub fn input_processor<I: AudioInput>(
                 // insert frame to transition up from silence to the audio
                 send_frame(
                     make_transition_up(TRANSITION_LENGTH, first_sample),
-                    &output,
+                    &sink,
                     state.buffer_pool(),
                     &mut encoder_option,
                 )?;
@@ -222,12 +221,7 @@ pub fn input_processor<I: AudioInput>(
         // Use SIMD-accelerated f32 to i16 conversion
         wide_f32_to_i16(&out_buf, &mut int_buffer);
         // send the frame to the next stage, either codec or network
-        send_frame(
-            int_buffer,
-            &output,
-            state.buffer_pool(),
-            &mut encoder_option,
-        )?;
+        send_frame(int_buffer, &sink, state.buffer_pool(), &mut encoder_option)?;
     }
 
     debug!("Input processor ended");
@@ -267,7 +261,7 @@ pub fn input_processor<I: AudioInput>(
 ///
 /// Returns `Ok(())` when the input channel closes, or an error if processing fails.
 pub fn output_processor<O: AudioOutput>(
-    input: Receiver<Bytes>,
+    source: impl AudioDataSource,
     mut output: O,
     ratio: f64,
     state: OutputProcessorState,
@@ -289,8 +283,10 @@ pub fn output_processor<O: AudioOutput>(
     let mut post_buf = [post_vec];
 
     loop {
-        let Ok(buffer) = input.recv() else {
-            break;
+        let buffer = match source.recv() {
+            Ok(b) => b,
+            Err(ClosedOrFailed::Closed) => break,
+            Err(ClosedOrFailed::Failed(error)) => Err(error)?,
         };
 
         let int_samples = if state.is_deafened() {
@@ -362,7 +358,7 @@ pub fn output_processor<O: AudioOutput>(
 #[inline]
 fn send_frame(
     frame: [i16; FRAME_SIZE],
-    output: &Sender<PooledBuffer>,
+    sink: &impl AudioDataSink,
     pool: &Arc<BufferPool>,
     encoder_option: &mut Option<SeaEncoder>,
 ) -> Result<(), AudioError> {
@@ -378,6 +374,9 @@ fn send_frame(
         });
     }
     // Send buffer to encoder or network
-    output.send(pooled)?;
-    Ok(())
+    match sink.send(pooled) {
+        Ok(()) => Ok(()),
+        Err(ClosedOrFailed::Closed) => Err(AudioError::Channel("closed".to_string())),
+        Err(ClosedOrFailed::Failed(error)) => Err(error.into()),
+    }
 }

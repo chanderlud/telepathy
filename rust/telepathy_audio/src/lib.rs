@@ -15,12 +15,19 @@
 //!   - Scalar fallback when alignment requirements aren't met
 //! - **Cross-Platform**: Native support for Windows, macOS, Linux, and WebAssembly
 //!
+//! ## Channel adapters
+//!
+//! The crate is trait-based (`AudioDataSink` / `AudioDataSource`) and does not require any
+//! specific channel library. For convenience, `telepathy_audio::adapters` provides ready-to-use
+//! `std::sync::mpsc` implementations: [`MpscSink`] and [`MpscSource`].
+//!
 //! ## Module Organization
 //!
 //! The library is organized into the following modules:
 //!
 //! - **Public Modules**:
 //!   - [`devices`] - Device enumeration and selection
+//!   - [`adapters`] - Ready-to-use channel adapters (std::sync::mpsc)
 //!   - [`io`] - Audio input/output builders and handles
 //!   - [`player`] - Audio file playback (WAV and SEA codec)
 //!   - [`error`] - Error types
@@ -98,19 +105,21 @@
 //! ### Audio Output
 //!
 //! ```rust,no_run
+//! use bytes::Bytes;
+//! use std::sync::mpsc;
 //! use telepathy_audio::{AudioHost, AudioOutputBuilder};
+//! use telepathy_audio::adapters::MpscSource;
 //!
 //! let host = AudioHost::new();
+//! let (_tx, rx) = mpsc::channel::<Bytes>();
 //!
 //! // Create an audio output
 //! let output = AudioOutputBuilder::new()
 //!     .sample_rate(48000)
 //!     .volume(1.0)
+//!     .source(MpscSource::new(rx))
 //!     .build(&host)
 //!     .unwrap();
-//!
-//! // Get sender for feeding audio data
-//! let sender = output.sender();
 //!
 //! // Control the output
 //! output.set_volume(0.8);
@@ -123,30 +132,36 @@
 //! The library supports creating multiple independent output streams:
 //!
 //! ```rust,no_run
+//! use bytes::Bytes;
+//! use std::sync::mpsc;
 //! use telepathy_audio::{AudioHost, AudioOutputBuilder};
+//! use telepathy_audio::adapters::MpscSource;
 //!
 //! let host = AudioHost::new();
 //!
 //! // Create multiple outputs for different audio sources
+//! let (_tx1, rx1) = mpsc::channel::<Bytes>();
 //! let output1 = AudioOutputBuilder::new()
 //!     .sample_rate(48000)
+//!     .source(MpscSource::new(rx1))
 //!     .build(&host)
 //!     .unwrap();
 //!
+//! let (_tx2, rx2) = mpsc::channel::<Bytes>();
 //! let output2 = AudioOutputBuilder::new()
 //!     .sample_rate(44100)  // Different sample rate
+//!     .source(MpscSource::new(rx2))
 //!     .build(&host)
 //!     .unwrap();
-//!
-//! // Each output has its own sender
-//! let sender1 = output1.sender();
-//! let sender2 = output2.sender();
 //! ```
 //!
 //! ## With Codec Support
 //!
 //! ```rust,no_run
+//! use bytes::Bytes;
+//! use std::sync::mpsc;
 //! use telepathy_audio::{AudioHost, AudioInputBuilder, AudioOutputBuilder};
+//! use telepathy_audio::adapters::MpscSource;
 //!
 //! let host = AudioHost::new();
 //!
@@ -160,8 +175,10 @@
 //!     .unwrap();
 //!
 //! // Output with codec decoding
+//! let (_tx, rx) = mpsc::channel::<Bytes>();
 //! let output = AudioOutputBuilder::new()
 //!     .codec(true)  // Enable codec decoding
+//!     .source(MpscSource::new(rx))
 //!     .build(&host)
 //!     .unwrap();
 //! ```
@@ -172,10 +189,13 @@
 //! use the shared atomic builder methods:
 //!
 //! ```rust,no_run
-//! use telepathy_audio::{AudioHost, AudioInputBuilder, AudioOutputBuilder};
 //! use std::sync::Arc;
 //! use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 //! use atomic_float::AtomicF32;
+//! use bytes::Bytes;
+//! use std::sync::mpsc;
+//! use telepathy_audio::{AudioHost, AudioInputBuilder, AudioOutputBuilder};
+//! use telepathy_audio::adapters::MpscSource;
 //!
 //! // Core state that can be shared across components
 //! let input_volume = Arc::new(AtomicF32::new(1.0));
@@ -194,10 +214,12 @@
 //!     .unwrap();
 //!
 //! // Output using shared atomics
+//! let (_tx, rx) = mpsc::channel::<Bytes>();
 //! let output = AudioOutputBuilder::new()
 //!     .sample_rate(48000)
 //!     .output_volume_shared(&output_volume)
 //!     .deafened_shared(&deafened)
+//!     .source(MpscSource::new(rx))
 //!     .build(&host)
 //!     .unwrap();
 //!
@@ -211,6 +233,9 @@
 // =============================================================================
 // Public modules
 // =============================================================================
+
+/// Channel adapter implementations (e.g. `std::sync::mpsc`).
+pub mod adapters;
 
 /// Device enumeration and selection.
 ///
@@ -267,8 +292,10 @@ pub use devices::{
 };
 
 // Re-export audio input/output API (from new io module)
+pub use adapters::{MpscSink, MpscSource};
 pub use io::input::{AudioInputBuilder, AudioInputConfig, AudioInputHandle};
 pub use io::output::{AudioOutputBuilder, AudioOutputConfig, AudioOutputHandle};
+pub use io::traits::{AudioDataSink, AudioDataSource, ClosedOrFailed};
 
 /// A pooled byte buffer that returns to the pool when dropped.
 ///

@@ -16,7 +16,7 @@
 //! ## Error Conversions
 //!
 //! This module provides `From` implementations for common error types from
-//! dependencies (cpal, rubato, kanal, sea_codec), allowing seamless error
+//! dependencies (cpal, rubato, sea_codec), allowing seamless error
 //! propagation with the `?` operator.
 
 use std::fmt;
@@ -98,10 +98,6 @@ impl fmt::Display for AudioError {
 
 impl std::error::Error for AudioError {}
 
-// ============================================================================
-// Conversions from cpal errors
-// ============================================================================
-
 /// Converts cpal device enumeration errors.
 ///
 /// Occurs when [`list_input_devices`](crate::list_input_devices) or
@@ -151,10 +147,6 @@ impl From<cpal::PauseStreamError> for AudioError {
     }
 }
 
-// ============================================================================
-// Conversions from rubato errors
-// ============================================================================
-
 /// Converts rubato resampler construction errors.
 ///
 /// Occurs when [`resampler_factory`](crate::resampler_factory) fails to
@@ -175,49 +167,11 @@ impl From<rubato::ResampleError> for AudioError {
     }
 }
 
-// ============================================================================
-// Conversions from kanal errors
-// ============================================================================
-
-/// Converts kanal send errors.
-///
-/// Occurs when sending audio data between threads fails, typically because
-/// the receiving end was dropped.
-impl From<kanal::SendError> for AudioError {
-    fn from(err: kanal::SendError) -> Self {
-        AudioError::Channel(format!("Send error: {}", err))
-    }
-}
-
-/// Converts kanal receive errors.
-///
-/// Occurs when receiving audio data between threads fails, typically because
-/// the sending end was dropped.
-impl From<kanal::ReceiveError> for AudioError {
-    fn from(err: kanal::ReceiveError) -> Self {
-        AudioError::Channel(format!("Receive error: {}", err))
-    }
-}
-
-/// Converts kanal close errors.
-///
-/// Occurs when closing a channel fails, typically when attempting to
-/// close an already-closed channel.
-impl From<kanal::CloseError> for AudioError {
-    fn from(err: kanal::CloseError) -> Self {
-        AudioError::Channel(format!("Close error: {}", err))
-    }
-}
-
 impl From<rtrb::chunks::ChunkError> for AudioError {
     fn from(err: rtrb::chunks::ChunkError) -> Self {
         AudioError::Channel(format!("Chunk error: {}", err))
     }
 }
-
-// ============================================================================
-// Conversions from sea_codec errors
-// ============================================================================
 
 /// Converts SEA codec errors.
 ///
@@ -228,10 +182,6 @@ impl From<crate::sea::codec::common::SeaError> for AudioError {
         AudioError::Processing(format!("Codec error: {:?}", err))
     }
 }
-
-// ============================================================================
-// Conversions from std errors
-// ============================================================================
 
 /// Converts slice conversion errors.
 ///
@@ -257,10 +207,6 @@ impl From<tokio::task::JoinError> for AudioError {
     }
 }
 
-// ============================================================================
-// Tokio oneshot (WASM spawn_cpu_task)
-// ============================================================================
-
 /// Converts tokio oneshot receive errors (WASM only).
 ///
 /// Occurs when the sender is dropped without sending, e.g. if the spawned
@@ -271,10 +217,6 @@ impl From<tokio::sync::oneshot::error::RecvError> for AudioError {
         AudioError::Processing("blocking task channel closed".to_string())
     }
 }
-
-// ============================================================================
-// WASM-specific conversions
-// ============================================================================
 
 /// Converts JavaScript errors (WASM only).
 ///

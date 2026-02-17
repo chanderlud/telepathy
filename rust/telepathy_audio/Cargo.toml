@@ -1,6 +1,6 @@
 [package]
 name = "telepathy_audio"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Audio processing library for telepathy with device management, codec support, and SIMD optimization"
 license = "MIT"
@@ -19,7 +19,6 @@ cfg-if = "1"
 cpal = { version = "0.17", features = ["wasm-bindgen"] }
 log = "0.4"
 nnnoiseless = { version = "0.5", default-features = false }
-kanal = "0.1.1"
 rubato = { version = "0.16", default-features = false }
 libm = "0.2"
 tokio = { version = "1", features = ["time", "sync", "rt", "macros"] }
@@ -57,6 +56,7 @@ wasmtimer = "0.4"
 [target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
 tokio-test = "0.4"
 criterion = "0.8"
+kanal = "0.1"
 
 [target.'cfg(target_family = "wasm")'.dev-dependencies]
 wasm-bindgen-test = "0.3"

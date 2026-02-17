@@ -7,20 +7,23 @@
 //!
 //! ```rust,no_run
 //! use telepathy_audio::{AudioHost, AudioOutputBuilder};
+//! use telepathy_audio::adapters::MpscSource;
 //! use bytes::Bytes;
+//! use std::sync::mpsc;
 //!
 //! let host = AudioHost::new();
+//! let (tx, rx) = mpsc::channel::<Bytes>();
+//!
 //! let output = AudioOutputBuilder::new()
 //!     .sample_rate(48000)
 //!     .volume(1.0)
+//!     .source(MpscSource::new(rx))
 //!     .build(&host)
 //!     .unwrap();
 //!
-//! // Get the sender to feed audio data
-//! let sender = output.sender();
-//!
-//! // Send audio data
-//! // sender.send(audio_data).await;
+//! // Feed audio frames via your chosen channel (here: std::sync::mpsc::Sender)
+//! // tx.send(Bytes::from_static(&[0u8; 960])).unwrap();
+//! let _ = tx;
 //! ```
 
 use crate::devices::AudioHost;
@@ -34,14 +37,13 @@ use crate::internal::traits::AudioOutput;
 use crate::internal::traits::CHANNEL_SIZE;
 use crate::internal::traits::RingBufferOutput;
 use crate::io::SendStream;
+use crate::io::traits::AudioDataSource;
 use crate::sea::codec::file::SeaFileHeader;
 use crate::sea::decoder::SeaDecoder;
 use atomic_float::AtomicF32;
-use bytes::Bytes;
 use cpal::Sample;
 use cpal::SampleFormat;
 use cpal::traits::{DeviceTrait, StreamTrait};
-use kanal::{Sender, unbounded};
 use log::{debug, error};
 use nnnoiseless::FRAME_SIZE;
 use std::sync::Arc;
@@ -94,8 +96,12 @@ impl Default for AudioOutputConfig {
 ///
 /// Use this builder to configure audio output processing options before
 /// starting the stream.
-pub struct AudioOutputBuilder {
+pub struct AudioOutputBuilder<R>
+where
+    R: AudioDataSource,
+{
     config: AudioOutputConfig,
+    source: Option<R>,
     /// Optional shared atomic for output volume (enables real-time synchronization)
     shared_output_volume: Option<Arc<AtomicF32>>,
     /// Optional shared atomic for deafened state (enables real-time synchronization)
@@ -109,19 +115,36 @@ struct OutputBuildContext {
     output_volume: Arc<AtomicF32>,
     deafened: Arc<AtomicBool>,
     loss_sender: Arc<AtomicUsize>,
-    network_sender: Sender<Bytes>,
     processor_handle: JoinHandle<()>,
 }
 
-impl AudioOutputBuilder {
+impl AudioOutputBuilder<Box<dyn AudioDataSource>> {
     /// Creates a new audio output builder with default configuration.
     pub fn new() -> Self {
         Self {
             config: AudioOutputConfig::default(),
+            source: None,
             shared_output_volume: None,
             shared_deafened: None,
             shared_rms: None,
             shared_loss: None,
+        }
+    }
+}
+
+impl<R> AudioOutputBuilder<R>
+where
+    R: AudioDataSource,
+{
+    /// Sets a custom source for receiving audio data.
+    pub fn source<T: AudioDataSource>(self, source: T) -> AudioOutputBuilder<T> {
+        AudioOutputBuilder {
+            config: self.config,
+            source: Some(source),
+            shared_output_volume: self.shared_output_volume,
+            shared_deafened: self.shared_deafened,
+            shared_rms: self.shared_rms,
+            shared_loss: self.shared_loss,
         }
     }
 
@@ -247,8 +270,9 @@ impl AudioOutputBuilder {
         let deafened = self.shared_deafened.clone().unwrap_or_default();
         let rms_sender = self.shared_rms.clone().unwrap_or_default();
         let loss_sender = self.shared_loss.clone().unwrap_or_default();
-
-        let (network_sender, network_receiver) = unbounded();
+        let source = self.source.ok_or_else(|| {
+            AudioError::Config("a data source must be set via source()".to_string())
+        })?;
 
         // Calculate resampling ratio
         let ratio = output_sample_rate as f64 / self.config.sample_rate as f64;
@@ -270,9 +294,7 @@ impl AudioOutputBuilder {
 
         // Spawn processor thread (safe_spawn catches panics on WASM when threading is unavailable)
         let processor_handle = thread::safe_spawn(move || {
-            if let Err(e) =
-                output_processor(network_receiver, processor_output, ratio, state, decoder)
-            {
+            if let Err(e) = output_processor(source, processor_output, ratio, state, decoder) {
                 error!("Output processor error: {}", e);
             }
             debug!("Output processor thread ended");
@@ -282,7 +304,6 @@ impl AudioOutputBuilder {
             output_volume,
             deafened,
             loss_sender,
-            network_sender,
             processor_handle,
         })
     }
@@ -300,6 +321,11 @@ impl AudioOutputBuilder {
     /// - The device uses an unsupported sample format
     pub fn build(self, host: &AudioHost) -> Result<AudioOutputHandle, AudioError> {
         use rtrb::RingBuffer;
+        if self.source.is_none() {
+            return Err(AudioError::Config(
+                "a data source must be set via source()".to_string(),
+            ));
+        }
 
         // Get the output device
         let device_handle =
@@ -409,7 +435,6 @@ impl AudioOutputBuilder {
         Ok(AudioOutputHandle {
             _stream: stream,
             _processor_handle: Some(context.processor_handle),
-            network_sender: context.network_sender,
             output_volume: context.output_volume,
             deafened: context.deafened,
             loss_sender: context.loss_sender,
@@ -417,7 +442,7 @@ impl AudioOutputBuilder {
     }
 }
 
-impl Default for AudioOutputBuilder {
+impl Default for AudioOutputBuilder<Box<dyn AudioDataSource>> {
     fn default() -> Self {
         Self::new()
     }
@@ -426,40 +451,22 @@ impl Default for AudioOutputBuilder {
 /// Handle to a running audio output stream.
 ///
 /// This handle allows controlling the audio output (deafen/undeafen, volume)
-/// and provides a sender for feeding audio data. Resources are automatically
+/// while audio data is received from the user-provided source. Resources are automatically
 /// cleaned up when dropped.
-///
-/// ## Lifecycle
-///
-/// - **Creation**: Created by [`AudioOutputBuilder::build`]
-/// - **Running**: Audio is received via sender, processed, and played
-/// - **Cleanup**: When dropped, the handle:
-///   1. Closes the network sender to signal threads to stop
-///   2. Waits for decoder (if enabled) and processor threads to join
-///   3. Stops the underlying audio stream
 ///
 /// ## Thread Safety
 ///
 /// All control methods (`deafen`, `undeafen`, `set_volume`, etc.) are thread-safe
 /// and can be called from any thread. They use atomic operations internally.
-/// The sender returned by `sender()` can be cloned and used from multiple threads.
 pub struct AudioOutputHandle {
     _stream: SendStream,
     _processor_handle: Option<JoinHandle<()>>,
-    network_sender: Sender<Bytes>,
     output_volume: Arc<AtomicF32>,
     deafened: Arc<AtomicBool>,
     loss_sender: Arc<AtomicUsize>,
 }
 
 impl AudioOutputHandle {
-    /// Returns a sender for feeding audio data to the output.
-    ///
-    /// Use this sender to send `ProcessorMessage` frames to be played.
-    pub fn sender(&self) -> Sender<Bytes> {
-        self.network_sender.clone()
-    }
-
     /// Deafens the audio output.
     ///
     /// When deafened, incoming audio data will be discarded and no sound
@@ -491,13 +498,6 @@ impl AudioOutputHandle {
     /// Gets the loss receiver
     pub fn loss_receiver(&self) -> Arc<AtomicUsize> {
         self.loss_sender.clone()
-    }
-}
-
-impl Drop for AudioOutputHandle {
-    fn drop(&mut self) {
-        // Close the sender to signal threads to stop
-        _ = self.network_sender.close();
     }
 }
 

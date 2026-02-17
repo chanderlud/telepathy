@@ -1,6 +1,7 @@
 use crate::error::ErrorKind;
 use crate::flutter::DartNotify;
 use crate::flutter::callbacks::{FrbCallbacks, FrbStatisticsCallback};
+use crate::telepathy::audio_adapters::{KanalSink, KanalSource};
 use crate::telepathy::core::TelepathyCore;
 use crate::telepathy::messages::{AudioHeader, Message};
 #[cfg(not(target_family = "wasm"))]
@@ -312,7 +313,7 @@ where
             .rms_shared(&statistics_state.input_rms)
             .codec(codec_enabled, vbr, residual_bits)
             .on_error(end_call)
-            .channel(sender);
+            .sink(KanalSink::new(sender));
 
         cfg_if::cfg_if! {
             if #[cfg(target_family = "wasm")] {
@@ -346,8 +347,11 @@ where
         // Get device ID
         let device_id = self.core_state.output_device.lock().await.clone();
 
+        let (sender, receiver) = kanal::unbounded();
+
         // Create the audio output using the builder
         let handle = AudioOutputBuilder::new()
+            .source(KanalSource::new(receiver))
             .device(device_id)
             .sample_rate(remote_sample_rate as u32)
             .output_volume_shared(&self.core_state.output_volume)
@@ -358,7 +362,7 @@ where
             .on_error(end_call)
             .build(&self.host)?;
 
-        Ok(OutputHelper::new(handle))
+        Ok(OutputHelper::new(handle, sender))
     }
 
     /// helper method to set up EarlyCallState
@@ -510,17 +514,21 @@ where
 }
 
 pub(crate) struct OutputHelper {
-    handle: AudioOutputHandle,
+    _handle: AudioOutputHandle,
+    sender: Option<kanal::Sender<Bytes>>,
 }
 
 impl OutputHelper {
     /// Creates a new OutputHelper and stores the handle in the shared storage
-    pub(crate) fn new(handle: AudioOutputHandle) -> Self {
-        Self { handle }
+    pub(crate) fn new(handle: AudioOutputHandle, sender: kanal::Sender<Bytes>) -> Self {
+        Self {
+            _handle: handle,
+            sender: Some(sender),
+        }
     }
 
-    pub(crate) fn sender(&self) -> kanal::Sender<Bytes> {
-        self.handle.sender()
+    pub(crate) fn sender(&mut self) -> kanal::Sender<Bytes> {
+        self.sender.take().expect("sender already taken")
     }
 }
 
@@ -542,6 +550,6 @@ impl InputHelper {
     }
 
     pub(crate) fn receiver(&mut self) -> kanal::AsyncReceiver<PooledBuffer> {
-        self.receiver.take().unwrap()
+        self.receiver.take().expect("receiver already taken")
     }
 }
