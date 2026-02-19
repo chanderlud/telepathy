@@ -367,6 +367,7 @@ where
                             warn!("unknown peer was no longer connected");
                         }
                     } else if let Some(peer_state) = peer_states.get_mut(&peer_id) {
+                        // TODO it appears there is some edge case were this occurs on the dialer w/ slow CPU (in VM)
                         // if two clients dial each other at the same time, one switches to non-dialer
                         if listener && peer_state.dialer {
                             debug!("dialer got incoming listener connection");
@@ -505,11 +506,13 @@ where
                     peer_state.dialed = true;
                     // in order to find the best connection between peers (i.e. LAN or localhost)
                     // it is important to dial every non-relayed addresses they discover
-                    for address in info.listen_addrs {
+                    for mut address in info.listen_addrs {
                         // ignore relayed addresses here
                         if address.ends_with(&Protocol::P2p(peer_id).into()) {
                             continue;
                         }
+                        // add the peer ID
+                        address.push(Protocol::P2p(peer_id));
                         // dials the non-relayed addresses to attempt direct connections
                         debug!("dialing {} from identify event", address);
                         if let Err(error) = swarm.dial(address) {
