@@ -154,8 +154,9 @@ impl WebAudioWrapper {
         let processor_js_code = r#"
             class TelepathyProcessor extends AudioWorkletProcessor {
                 process(inputs, outputs, parameters) {
-                    this.port.postMessage(Float32Array.from(inputs[0][0]));
-
+                    if (inputs != undefined) {
+                        this.port.postMessage(Float32Array.from(inputs[0][0]));
+                    }
                     return true;
                 }
             }
