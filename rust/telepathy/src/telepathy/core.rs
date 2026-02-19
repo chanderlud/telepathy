@@ -198,6 +198,9 @@ where
                 .await
         });
 
+        // during session initialization, the dialer rechecks state on this interval
+        let mut dialer_control_interval = interval(Duration::from_secs(1));
+
         // alerts the UI that the manager is active
         self.callbacks.manager_active(true, true).await;
         // the manager is about to start processing events
@@ -218,6 +221,7 @@ where
 
             for (peer, selected, details) in single_connections {
                 if selected {
+                    debug!("opening session with {peer} cs={details:?}");
                     // open a session control stream and start the session controller
                     self.open_session(
                         peer,
@@ -250,6 +254,7 @@ where
                 Some(peer_id) = start.recv() => {
                     if peer_id == public_identity {
                         // prevents dialing yourself
+                        debug!("ignoring dial to self ({})", peer_id);
                         continue;
                     } else if swarm.is_connected(&peer_id) {
                         // TODO is it possible that this check can result in invalid states where two peers cannot get into a session?
@@ -289,6 +294,46 @@ where
                                 error!("failed to start screenshare: {error:?}");
                             }
                         });
+                    }
+
+                    continue;
+                }
+                _ = dialer_control_interval.tick(), if dialer_control_needed(&peer_states) => {
+                    for (peer, peer_state) in peer_states.iter_mut() {
+                        if !peer_state.dialer || peer_state.selected_connection {
+                            continue;
+                        }
+
+                        if !peer_state.has_connections() {
+                            debug!("{peer} doesn't have any connections yet")
+                        } else if peer_state.created.elapsed() > DCUTR_TIMEOUT {
+                            // give up on direct connection upgrade
+                            // fall through to connection selection
+                            debug!("giving up on DCUTR for {peer}");
+                        } else if peer_state.latencies_missing() {
+                            // only start a session if all connections have latency
+                            debug!("{peer} waiting for all latencies");
+                            continue;
+                        } else if peer_state.relayed_only() {
+                            // only start a session if there is a non-relayed connection
+                            // if dcutr times out, fallback
+                            debug!("{} is all relayed", peer);
+                            continue;
+                        }
+
+                        // select the best connection
+                        let Some((id, state)) = select_best_connection(&peer_state.connections) else {
+                            warn!("no connection available for {}", peer);
+                            continue;
+                        };
+                        info!("using connection {state:?} [id:{id}] for {}", peer);
+                        peer_state.selected_connection = true;
+                        // close the other connections
+                        for other_id in peer_state.connections.keys() {
+                            if &id != other_id {
+                                swarm.close_connection(*other_id);
+                            }
+                        }
                     }
 
                     continue;
@@ -352,29 +397,34 @@ where
                     error,
                     connection_id,
                 } => {
-                    let has_session = self.session_states.read().await.contains_key(&peer_id);
-                    let remove_state = if let Some(peer_state) = peer_states.get_mut(&peer_id) {
+                    let peer_state_option = peer_states.remove(&peer_id);
+                    if let Some(mut peer_state) = peer_state_option {
+                        // untrack the failed connection
                         peer_state.connections.remove(&connection_id);
-                        peer_state.connections.is_empty()
+                        if peer_state.connections.is_empty() {
+                            // session initialization has failed, clean up state
+                            warn!("all outgoing connections failed: {error}\npid={peer_id}");
+                            self.callbacks
+                                .session_status(SessionStatus::Inactive, peer_id)
+                                .await;
+                        } else {
+                            // session initialization is still possible
+                            info!("outgoing fail: {error}\npid={peer_id}\nstate={peer_state:?}");
+                            peer_states.insert(peer_id, peer_state);
+                        }
+                    } else if self.session_states.read().await.contains_key(&peer_id) {
+                        // this case occurs when a connection was slow to close for the non-dialer
+                        info!("outgoing fail for peer w/ session: {error}\npid={peer_id}");
                     } else {
-                        false
-                    };
-
-                    warn!(
-                        "outgoing connection failed for {peer_id} because {error} has_session={has_session} remove_state={remove_state}"
-                    );
-
-                    // session initialization failed
-                    if !has_session {
-                        self.callbacks
-                            .session_status(SessionStatus::Inactive, peer_id)
-                            .await;
+                        warn!("outgoing fail for peer with NO STATE: {error}\npid={peer_id}");
                     }
-
-                    // clean up peer states
-                    if remove_state {
-                        peer_states.remove(&peer_id);
-                    }
+                }
+                SwarmEvent::OutgoingConnectionError {
+                    peer_id: None,
+                    error,
+                    ..
+                } => {
+                    warn!("outgoing connection error (no peer id): {error}");
                 }
                 SwarmEvent::ConnectionClosed {
                     peer_id,
@@ -384,12 +434,14 @@ where
                 } => {
                     let remove_state = if !swarm.is_connected(&peer_id) {
                         // if there is no connection to the peer, the session initialization failed
+                        debug!("session initialization failed for {peer_id} cause={cause:?}");
                         self.callbacks
                             .session_status(SessionStatus::Inactive, peer_id)
                             .await;
                         true
                     } else if let Some(peer_state) = peer_states.get_mut(&peer_id) {
                         // untrack the connection
+                        debug!("untracking connection {connection_id} for {peer_id}");
                         peer_state.connections.remove(&connection_id);
                         peer_state.connections.is_empty()
                     } else {
@@ -412,13 +464,15 @@ where
 
                     // update the latency for the peer's session
                     if let Some(state) = self.session_states.read().await.get(&event.peer) {
-                        state.latency.store(latency.as_millis() as usize, Relaxed);
+                        let latency_ms = latency.as_millis() as usize;
+                        debug!("got latency={latency_ms}ms for {} w/ session", event.peer);
+                        state.latency.store(latency_ms, Relaxed);
                         continue; // the remaining logic is not needed while a session is active
                     }
 
                     // if the session is still connecting, update the latency and try to choose a connection
                     let Some(peer_state) = peer_states.get_mut(&event.peer) else {
-                        info!("Ping without state {event:?}");
+                        info!("ping without state {event:?} for {}", event.peer);
                         continue;
                     };
 
@@ -431,34 +485,6 @@ where
                     } else {
                         warn!("ping for untracked connection: {}", event.connection);
                     }
-
-                    if peer_state.created.elapsed() > DCUTR_TIMEOUT {
-                        // give up on direct connection upgrade
-                        // fall through to connection selection
-                    } else if peer_state.latencies_missing() {
-                        // only start a session if all connections have latency
-                        debug!("{} waiting for all latencies", event.peer);
-                        continue;
-                    } else if peer_state.relayed_only() {
-                        // only start a session if there is a non-relayed connection
-                        // if dcutr times out, fallback
-                        debug!("{} is all relayed", event.peer);
-                        continue;
-                    }
-
-                    // select the best connection
-                    let Some((id, state)) = select_best_connection(&peer_state.connections) else {
-                        warn!("no connection available for {}", event.peer);
-                        continue;
-                    };
-                    info!("using connection {state:?} [id:{id}] for {}", event.peer);
-                    peer_state.selected_connection = true;
-                    // close the other connections
-                    for other_id in peer_state.connections.keys() {
-                        if &id != other_id {
-                            swarm.close_connection(*other_id);
-                        }
-                    }
                 }
                 SwarmEvent::Behaviour(BehaviourEvent::Identify(IdentifyEvent::Received {
                     peer_id,
@@ -467,13 +493,15 @@ where
                 })) if peer_id != relay_identity => {
                     let Some(peer_state) = peer_states.get_mut(&peer_id) else {
                         // peers with sessions may land here
+                        debug!("identity received for {peer_id} not in peer_states");
                         continue;
                     };
                     // skip if the peer is not the dialer or has already dialed
                     if !peer_state.dialer || peer_state.dialed {
+                        debug!("skipping identify for {peer_id}");
                         continue;
                     }
-                    debug!("Identify event from {peer_id}: {info:?}");
+                    debug!("Received first identify event from {peer_id}: {info:?}");
                     peer_state.dialed = true;
                     // in order to find the best connection between peers (i.e. LAN or localhost)
                     // it is important to dial every non-relayed addresses they discover
@@ -488,6 +516,13 @@ where
                             error!("Error dialing {peer_id}: {error}");
                         }
                     }
+                }
+                SwarmEvent::Behaviour(BehaviourEvent::Identify(IdentifyEvent::Error {
+                    peer_id,
+                    error,
+                    ..
+                })) => {
+                    warn!("identify error for {peer_id}: {error}");
                 }
                 SwarmEvent::Behaviour(BehaviourEvent::Dcutr(DcutrEvent {
                     remote_peer_id,
@@ -504,6 +539,13 @@ where
                         "dcutr failed with {remote_peer_id} [ps={has_peer_state} ss={has_session_state}]: {error:?}"
                     );
                 }
+                SwarmEvent::Behaviour(BehaviourEvent::Dcutr(DcutrEvent {
+                    remote_peer_id,
+                    result: Ok(connection),
+                })) => {
+                    debug!("dcutr succeeded with {remote_peer_id}: {connection}");
+                }
+
                 event => {
                     trace!("other swarm event: {:?}", event);
                 }
@@ -566,7 +608,10 @@ where
 
                     handles.push(self.initialize_session(peer, None, stream, None).await);
                 }
-                else => break Err(ErrorKind::StreamsEnded.into())
+                else => {
+                    error!("incoming stream channel closed unexpectedly");
+                    break Err(ErrorKind::StreamsEnded.into())
+                }
             }
         };
 
@@ -646,6 +691,7 @@ where
             contact
         } else {
             // there may be no contact for members of a group
+            debug!("no contact found for {peer}, creating group contact");
             Contact {
                 id: Uuid::new_v4().to_string(),
                 nickname: String::from("GroupContact"),
@@ -710,6 +756,7 @@ where
                 // normal session continue
                 (Ok(true), false) => {
                     // the session is not in a call
+                    debug!("session for {} continuing after call", contact.nickname);
                     state.in_call.store(false, Relaxed);
                 }
                 (Err(error), room_only) => {
@@ -781,7 +828,8 @@ where
                 match result? {
                     Message::Hello { ringtone, audio_header, room_hash } => {
                         if !audio_header.is_valid() {
-                            warn!("received invalid audio header from {}", contact.nickname);
+                            warn!("received invalid audio header from {}, rejecting", contact.nickname);
+                            write_message(transport, &Message::Reject).await?;
                             return Ok(false);
                         }
 
@@ -806,10 +854,12 @@ where
                     // automatically accept calls from member of current room
                 } else if room_hash_option.is_some() {
                     // the call is part of a room, but the client is not in the room
+                    info!("rejecting room call from {} (not in room)", contact.nickname);
                     write_message(transport, &Message::Reject).await?;
                     return Ok(true);
                 } else if self.is_call_active().await {
                     // do not accept another call if already active
+                    info!("sending Busy to {} (call already active)", contact.nickname);
                     write_message(transport, &Message::Busy).await?;
                     return Ok(true);
                 } else {
@@ -860,6 +910,7 @@ where
                             }
                             Err(error) => {
                                 // if the audio input setup fails, other client will be left hanging
+                                error!("setup_call failed for {}: {error:?}", contact.nickname);
                                 write_message(transport, &Message::Goodbye {
                                     reason: Some("audio device error".to_string())
                                 }).await?;
@@ -928,11 +979,16 @@ where
                                 Message::Goodbye { reason: Some(m) } => {
                                     Some(format!("{} did not accept the call because of {m}", contact.nickname))
                                 }
-                                Message::Reject | Message::Busy if is_in_room => None,
+                                Message::Reject | Message::Busy if is_in_room => {
+                                    info!("room peer {} rejected/busy, ignoring", contact.nickname);
+                                    None
+                                },
                                 Message::Goodbye { .. } | Message::Reject => {
+                                    info!("{} did not accept the call", contact.nickname);
                                     Some(format!("{} did not accept the call", contact.nickname))
                                 },
                                 Message::Busy => {
+                                    info!("{} is busy", contact.nickname);
                                     Some(format!("{} is busy", contact.nickname))
                                 },
                                 // keep alive messages are sometimes received here
@@ -1003,6 +1059,7 @@ where
         self.overlay.hide();
         // send a goodbye message on errors
         if let Err(error) = result.as_ref() {
+            warn!("sending error goodbye to peer due to: {error:?}");
             let message = Message::error_goodbye(error);
             write_message(transport, &message).await?;
         }
@@ -1083,8 +1140,14 @@ where
             info!("call controller starting");
 
             let message_option = match controller_future.await {
-                Ok((message, notify)) if notify => Some(message.unwrap_or_default()),
-                Err(error) => Some(error.to_string()),
+                Ok((message, notify)) if notify => {
+                    info!("call controller result: notify={notify}, message={message:?}");
+                    Some(message.unwrap_or_default())
+                }
+                Err(error) => {
+                    error!("call controller error: {error}");
+                    Some(error.to_string())
+                }
                 _ => None,
             };
 
@@ -1190,6 +1253,7 @@ where
                         write_message(transport, &message).await?;
                     } else {
                         // if the channel closes, the call has ended
+                        info!("message channel closed, ending call");
                         break Ok((None, true));
                     }
                 },
@@ -1233,18 +1297,26 @@ where
             select! {
                 _ = cancel.cancelled() => {
                     // try to say goodbye
+                    info!("room cancelled for {peer_id}, sending goodbye");
                     _ = write_message(transport, &Message::Goodbye { reason: None }).await;
                     break
                 }
                 result = read_message(transport) => {
                     match result {
-                        Ok(Message::Goodbye { .. }) | Err(_) => {
+                        Ok(Message::Goodbye { .. }) => {
+                            info!("received goodbye from room peer {peer_id}");
                             break;
                         }
                         Ok(Message::Chat { .. }) => {
                             // TODO handle chat messages
                         }
-                        _ => ()
+                        Err(error) => {
+                            warn!("room transport error for {peer_id}: {error:?}");
+                            break;
+                        }
+                        Ok(other) => {
+                            warn!("unexpected message in room handshake: {other:?}");
+                        }
                     }
                 }
             }
@@ -1303,9 +1375,9 @@ where
 
         loop {
             select! {
-                Some(message) = receiver.recv() => {
-                    match message{
-                        RoomMessage::Join { audio_transport, state } => {
+                message = receiver.recv() => {
+                    match message {
+                        Some(RoomMessage::Join { audio_transport, state }) => {
                             info!("received room Join [p={}]", state.peer);
 
                             // first connection
@@ -1341,7 +1413,7 @@ where
                             });
                             self.callbacks.call_state(CallState::RoomJoin(state.peer.to_string())).await;
                         }
-                        RoomMessage::Leave(peer) => {
+                        Some(RoomMessage::Leave(peer)) => {
                             self.callbacks.call_state(CallState::RoomLeave(peer.to_string())).await;
 
                             if let Some(connection) = connections.remove(&peer) {
@@ -1351,9 +1423,14 @@ where
                                 warn!("Leave for peer without room connection [p={peer}]");
                             }
                         }
+                        None => {
+                            warn!("room controller message channel closed unexpectedly");
+                            break;
+                        }
                     }
                 }
                 _ = end_call.notified() => {
+                    info!("room call ended by end_call signal");
                     break;
                 }
             }
@@ -1526,4 +1603,14 @@ impl PeerState {
             .iter()
             .any(|(_, state)| state.latency.is_none())
     }
+
+    fn has_connections(&self) -> bool {
+        !self.connections.is_empty()
+    }
+}
+
+fn dialer_control_needed(state: &HashMap<PeerId, PeerState>) -> bool {
+    state
+        .values()
+        .any(|state| state.dialer && !state.selected_connection)
 }

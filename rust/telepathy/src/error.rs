@@ -1,5 +1,3 @@
-use std::fmt::{Display, Formatter};
-use std::net::AddrParseError;
 use crate::BehaviourEvent;
 #[cfg(target_family = "wasm")]
 use flutter_rust_bridge::for_generated::futures::channel::oneshot::Canceled;
@@ -7,6 +5,8 @@ use libp2p::identity::{DecodingError, ParseError};
 use libp2p::swarm::{DialError, SwarmEvent};
 use libp2p::{TransportBuilderError, TransportError};
 use libp2p_stream::{AlreadyRegistered, OpenStreamError};
+use std::fmt::{Display, Formatter};
+use std::net::AddrParseError;
 use telepathy_audio::devices::DeviceError;
 use tokio::task::JoinError;
 use tokio::time::error::Elapsed;
