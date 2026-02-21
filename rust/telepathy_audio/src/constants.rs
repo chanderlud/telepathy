@@ -57,7 +57,7 @@ pub(crate) const RESAMPLER_PARAMETERS: SincInterpolationParameters = SincInterpo
 ///
 /// Higher values reduce false positives but delay silence detection.
 /// Lower values are more responsive but may create choppy audio.
-pub(crate) const MINIMUM_SILENCE_LENGTH: u8 = 40;
+pub(crate) const MINIMUM_SILENCE_LENGTH: u16 = 40;
 
 /// Number of samples used for silence transitions (fade in/out).
 ///

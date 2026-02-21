@@ -304,9 +304,7 @@ where
                             continue;
                         }
 
-                        if !peer_state.has_connections() {
-                            debug!("{peer} doesn't have any connections yet")
-                        } else if peer_state.created.elapsed() > DCUTR_TIMEOUT {
+                        if peer_state.created.elapsed() > DCUTR_TIMEOUT {
                             // give up on direct connection upgrade
                             // fall through to connection selection
                             debug!("giving up on DCUTR for {peer}");
@@ -349,12 +347,20 @@ where
                     peer_id,
                     endpoint,
                     connection_id,
+                    established_in,
+                    num_established,
                     ..
                 } if peer_id != relay_identity => {
+                    debug!(
+                        "new connection with {} id={} endpoint={:?} in={:?} num={}",
+                        peer_id, connection_id, endpoint, established_in, num_established
+                    );
+
                     if self.session_states.read().await.contains_key(&peer_id) {
-                        // TODO does this case ever hit in normal operation or does it only occur when the session is invalidated by a crash or other failure?
                         // ignore connections with peers who have a session
-                        warn!("ignored connection from {} (EDGE CASE DETECTED)", peer_id);
+                        // in normal operation, extra connections may be created
+                        // when the session is initialized
+                        warn!("ignored connection from {}", peer_id);
                         continue;
                     }
 
@@ -367,9 +373,14 @@ where
                             warn!("unknown peer was no longer connected");
                         }
                     } else if let Some(peer_state) = peer_states.get_mut(&peer_id) {
-                        // TODO it appears there is some edge case were this occurs on the dialer w/ slow CPU (in VM)
                         // if two clients dial each other at the same time, one switches to non-dialer
-                        if listener && peer_state.dialer {
+                        // non p2p connections are ignored to prevent accidental switches
+                        if listener
+                            && peer_state.dialer
+                            && endpoint
+                                .get_remote_address()
+                                .ends_with(&Protocol::P2p(peer_id).into())
+                        {
                             debug!("dialer got incoming listener connection");
                             if peer_id < public_identity {
                                 info!("one client switching to non-dialer");
@@ -1605,10 +1616,6 @@ impl PeerState {
         self.connections
             .iter()
             .any(|(_, state)| state.latency.is_none())
-    }
-
-    fn has_connections(&self) -> bool {
-        !self.connections.is_empty()
     }
 }
 

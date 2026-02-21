@@ -131,7 +131,7 @@ pub fn input_processor<I: AudioInput>(
     // the position in pre_buf
     let mut position = 0;
     // a counter for short silence detection
-    let mut silence_length = 0_u8;
+    let mut silence_length = 0_u16;
     // switches to false when the sinc closes
     let mut sink_open = true;
 
@@ -145,6 +145,7 @@ pub fn input_processor<I: AudioInput>(
 
         if state.is_muted() {
             position = 0;
+            silence_length = 0;
             continue;
         } else if position < in_len {
             continue;
@@ -190,7 +191,7 @@ pub fn input_processor<I: AudioInput>(
                 silence_length += 1; // short silences are ignored
             } else if silence_length == MINIMUM_SILENCE_LENGTH {
                 let last_sample = out_buf[0] as i16;
-                if last_sample > 0 {
+                if last_sample != 0 {
                     // insert frame to cleanly transition down to silence
                     send_frame(
                         make_transition_down(TRANSITION_LENGTH, last_sample),
@@ -208,7 +209,7 @@ pub fn input_processor<I: AudioInput>(
             }
         } else {
             let first_sample = out_buf[0] as i16;
-            if silence_length > 0 && first_sample > 0 {
+            if silence_length >= MINIMUM_SILENCE_LENGTH && first_sample != 0 {
                 // insert frame to transition up from silence to the audio
                 send_frame(
                     make_transition_up(TRANSITION_LENGTH, first_sample),

@@ -146,12 +146,11 @@ pub(crate) fn make_transition_up(length: usize, sample: i16) -> [i16; FRAME_SIZE
     let mut buf = [0; FRAME_SIZE];
 
     let start = FRAME_SIZE - length;
-    let f = sample as i32 / length as i32;
 
     for i in 0..length {
         // i goes from 0 to length-1
-        // Last value (i = length-1) will be: s * length / length = s
-        let value = f * (i as i32 + 1);
+        // Last value (i = length-1) equals sample exactly because multiply precedes divide
+        let value = sample as i32 * (i as i32 + 1) / length as i32;
         buf[start + i] = value as i16;
     }
 
@@ -196,14 +195,13 @@ pub(crate) fn make_transition_down(length: usize, sample: i16) -> [i16; FRAME_SI
     let mut buf = [0; FRAME_SIZE];
 
     let l = length as i32;
-    let f = sample as i32 / l;
 
     // First length items: linear ramp from `sample` down toward 0
     // Remaining (FRAME_SIZE - length) items are left as 0.
     for (i, item) in buf.iter_mut().enumerate().take(length) {
-        // i = 0       → value ≈ sample
-        // i = length - 1   → value ≈ sample * 1/m
-        let value = f * (l - i as i32);
+        // i = 0       → value = sample (exact, multiply precedes divide)
+        // i = length-1 → value = sample * 1 / l (small residual, at most 1 LSB truncation)
+        let value = sample as i32 * (l - i as i32) / l;
         *item = value as i16;
     }
 
@@ -221,20 +219,20 @@ mod transition_tests {
         // First 470 samples should be zero
         assert!(transition[..470].iter().all(|&x| x == 0));
 
-        // Last 10 samples should ramp from ~100 to 1000
-        assert!(transition[470] > 0 && transition[470] < 200);
-        assert!(transition[479] > 900 && transition[479] <= 1000);
+        // Last 10 samples should ramp from 100 to 1000 (exact with multiply-before-divide)
+        assert_eq!(transition[470], 100);
+        assert_eq!(transition[479], 1000);
     }
 
     #[test]
     fn transition_down_creates_smooth_ramp() {
         let transition = make_transition_down(10, 1000);
 
-        // First sample should be close to 1000
-        assert!(transition[0] > 900 && transition[0] <= 1000);
+        // First sample should be 1000 (exact with multiply-before-divide)
+        assert_eq!(transition[0], 1000);
 
-        // 10th sample should be close to 0
-        assert!(transition[9] >= 0 && transition[9] < 200);
+        // 10th sample should be 100 (10% of 1000)
+        assert_eq!(transition[9], 100);
 
         // Remaining samples should be zero
         assert!(transition[10..].iter().all(|&x| x == 0));

@@ -1,6 +1,6 @@
 [package]
 name = "telepathy"
-version = "2.5.4"
+version = "2.6.0"
 edition = "2024"
 build = "build.rs"
 
@@ -26,7 +26,7 @@ cfg-if = "1"
 bytes = "1"
 
 [target.'cfg(target_os = "android")'.dependencies]
-jni = "0.21"
+jni = "0.22"
 ndk-context = "0.1"
 
 [target.'cfg(target_os = "windows")'.dependencies]

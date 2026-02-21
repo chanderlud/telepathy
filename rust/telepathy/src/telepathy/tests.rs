@@ -278,7 +278,7 @@ async fn run_test() {
     assert!(!a_is_relayed.load(Relaxed));
     assert!(!b_is_relayed.load(Relaxed));
 
-    a_session.start_call.notify_one();
+    // a_session.start_call.notify_one();
 
     tokio::time::sleep(Duration::from_secs(5)).await;
 
