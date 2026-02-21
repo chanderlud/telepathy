@@ -1,6 +1,7 @@
 import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:provider/provider.dart';
 import 'package:telepathy/controllers/index.dart';
 import 'package:telepathy/core/utils/index.dart';
 import 'package:telepathy/src/rust/audio/player.dart';
@@ -8,20 +9,15 @@ import 'package:telepathy/src/rust/telepathy.dart';
 import 'package:telepathy/src/rust/flutter.dart';
 
 class RoomDetailsWidget extends StatelessWidget {
-  final Telepathy telepathy;
-  final StateController stateController;
-  final SoundPlayer player;
-  final ProfilesController profilesController;
-
-  const RoomDetailsWidget(
-      {super.key,
-      required this.telepathy,
-      required this.stateController,
-      required this.player,
-      required this.profilesController});
+  const RoomDetailsWidget({super.key});
 
   @override
   Widget build(BuildContext context) {
+    final telepathy = context.read<Telepathy>();
+    final stateController = context.watch<StateController>();
+    final player = context.read<SoundPlayer>();
+    final profilesController = context.watch<ProfilesController>();
+
     String getNickname(String peerId) {
       Contact? contact = profilesController.contacts.values
           .firstWhereOrNull((c) => c.peerId() == peerId);

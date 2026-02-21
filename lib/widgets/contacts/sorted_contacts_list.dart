@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import 'package:telepathy/controllers/index.dart';
-import 'package:telepathy/src/rust/audio/player.dart';
 import 'package:telepathy/src/rust/flutter.dart';
-import 'package:telepathy/src/rust/telepathy.dart';
 import 'package:telepathy/widgets/contacts/contacts_list.dart';
 
 /// A contacts list wrapper that memoizes contact sorting.
@@ -13,25 +12,14 @@ import 'package:telepathy/widgets/contacts/contacts_list.dart';
 /// rebuild is wasteful because sorting is \(O(n log n)\).
 ///
 /// This widget:
-/// - Listens to `Listenable.merge([settingsController, stateController])`
+/// - Listens to `ProfilesController` and `StateController` via provider
 /// - Caches a sorted `List<Contact>`
 /// - Only re-sorts when contacts are added/removed or session status types change
 ///
 /// ## Sorting priority
 /// Connected > Connecting > Others, then alphabetical by nickname within group.
 class SortedContactsList extends StatefulWidget {
-  final Telepathy telepathy;
-  final ProfilesController profilesController;
-  final StateController stateController;
-  final SoundPlayer player;
-
-  const SortedContactsList({
-    super.key,
-    required this.telepathy,
-    required this.profilesController,
-    required this.stateController,
-    required this.player,
-  });
+  const SortedContactsList({super.key});
 
   @override
   State<SortedContactsList> createState() => _SortedContactsListState();
@@ -43,35 +31,15 @@ class _SortedContactsListState extends State<SortedContactsList> {
   int? _previousContactsHashCode;
   int? _previousSessionsHashCode;
 
-  @override
-  void initState() {
-    super.initState();
-    _refreshCacheIfNeeded(force: true);
-  }
-
-  @override
-  void didUpdateWidget(covariant SortedContactsList oldWidget) {
-    super.didUpdateWidget(oldWidget);
-
-    // If controller instances are swapped, treat it as a cache invalidation.
-    if (widget.profilesController != oldWidget.profilesController ||
-        widget.stateController != oldWidget.stateController) {
-      _cachedSortedContacts = null;
-      _previousContactsLength = null;
-      _previousContactsHashCode = null;
-      _previousSessionsHashCode = null;
-      _refreshCacheIfNeeded(force: true);
-    }
-  }
-
-  List<Contact> _sortContacts() {
+  List<Contact> _sortContacts(
+      ProfilesController profilesController, StateController stateController) {
     final List<Contact> contacts =
-        widget.profilesController.contacts.values.toList();
+        profilesController.contacts.values.toList();
 
     // sort contacts by session status then nickname
     contacts.sort((a, b) {
-      final SessionStatus aStatus = widget.stateController.sessionStatus(a);
-      final SessionStatus bStatus = widget.stateController.sessionStatus(b);
+      final SessionStatus aStatus = stateController.sessionStatus(a);
+      final SessionStatus bStatus = stateController.sessionStatus(b);
 
       if (aStatus == bStatus) {
         return a.nickname().compareTo(b.nickname());
@@ -91,22 +59,24 @@ class _SortedContactsListState extends State<SortedContactsList> {
     return contacts;
   }
 
-  int _computeSessionsHash() {
+  int _computeSessionsHash(StateController stateController) {
     return Object.hashAllUnordered(
-      widget.stateController.sessions.entries.map(
+      stateController.sessions.entries.map(
         (e) => Object.hash(e.key, e.value.runtimeType),
       ),
     );
   }
 
-  void _refreshCacheIfNeeded({required bool force}) {
-    final int contactsLength = widget.profilesController.contacts.length;
+  void _refreshCacheIfNeeded(ProfilesController profilesController,
+      StateController stateController,
+      {required bool force}) {
+    final int contactsLength = profilesController.contacts.length;
     final int contactsHash = Object.hashAll(
-      widget.profilesController.contacts.entries.map(
+      profilesController.contacts.entries.map(
         (e) => Object.hash(e.key, e.value.nickname()),
       ),
     );
-    final int sessionsHash = _computeSessionsHash();
+    final int sessionsHash = _computeSessionsHash(stateController);
 
     final bool contactsChanged = _previousContactsLength != contactsLength ||
         _previousContactsHashCode != contactsHash;
@@ -116,7 +86,8 @@ class _SortedContactsListState extends State<SortedContactsList> {
         _cachedSortedContacts == null ||
         contactsChanged ||
         sessionsChanged) {
-      _cachedSortedContacts = _sortContacts();
+      _cachedSortedContacts =
+          _sortContacts(profilesController, stateController);
       _previousContactsLength = contactsLength;
       _previousContactsHashCode = contactsHash;
       _previousSessionsHashCode = sessionsHash;
@@ -125,24 +96,15 @@ class _SortedContactsListState extends State<SortedContactsList> {
 
   @override
   Widget build(BuildContext context) {
-    return ListenableBuilder(
-      listenable: Listenable.merge([
-        widget.profilesController,
-        widget.stateController,
-      ]),
-      builder: (BuildContext context, Widget? child) {
-        // Cheap change detection; only sort when inputs to ordering change
-        _refreshCacheIfNeeded(force: false);
+    final profilesController = context.watch<ProfilesController>();
+    final stateController = context.watch<StateController>();
 
-        return ContactsList(
-          telepathy: widget.telepathy,
-          contacts: _cachedSortedContacts ?? const <Contact>[],
-          rooms: widget.profilesController.rooms.values.toList(),
-          stateController: widget.stateController,
-          profilesController: widget.profilesController,
-          player: widget.player,
-        );
-      },
+    // Cheap change detection; only sort when inputs to ordering change
+    _refreshCacheIfNeeded(profilesController, stateController, force: false);
+
+    return ContactsList(
+      contacts: _cachedSortedContacts ?? const <Contact>[],
+      rooms: profilesController.rooms.values.toList(),
     );
   }
 }

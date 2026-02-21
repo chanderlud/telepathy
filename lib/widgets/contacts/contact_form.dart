@@ -2,6 +2,7 @@ import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' hide TextInput;
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:provider/provider.dart';
 import 'package:telepathy/controllers/index.dart';
 import 'package:telepathy/core/utils/index.dart';
 import 'package:telepathy/core/utils/room_format_utils.dart';
@@ -12,11 +13,7 @@ import 'package:telepathy/src/rust/flutter.dart';
 
 /// A widget which allows the user to add a contact.
 class ContactForm extends StatefulWidget {
-  final Telepathy telepathy;
-  final ProfilesController profilesController;
-
-  const ContactForm(
-      {super.key, required this.telepathy, required this.profilesController});
+  const ContactForm({super.key});
 
   @override
   State<ContactForm> createState() => ContactFormState();
@@ -39,6 +36,9 @@ class ContactFormState extends State<ContactForm> {
 
   @override
   Widget build(BuildContext context) {
+    final telepathy = context.read<Telepathy>();
+    final profilesController = context.read<ProfilesController>();
+
     if (addContact == null) {
       return Container(
         padding: const EdgeInsets.symmetric(vertical: 15.0, horizontal: 20.0),
@@ -110,12 +110,12 @@ class ContactFormState extends State<ContactForm> {
                     showErrorDialog(context, 'Failed to add contact',
                         'Nickname and peer id cannot be empty');
                     return;
-                  } else if (widget.profilesController.contacts.values
+                  } else if (profilesController.contacts.values
                       .any((c) => c.peerId() == peerId)) {
                     showErrorDialog(context, 'Failed to add contact',
                         'Contact for peer ID already exists');
                     return;
-                  } else if (widget.profilesController.peerId == peerId) {
+                  } else if (profilesController.peerId == peerId) {
                     showErrorDialog(context, 'Failed to add contact',
                         'Cannot add self as a contact');
                     return;
@@ -123,9 +123,9 @@ class ContactFormState extends State<ContactForm> {
 
                   try {
                     Contact contact =
-                        widget.profilesController.addContact(nickname, peerId);
+                        profilesController.addContact(nickname, peerId);
 
-                    widget.telepathy.startSession(contact: contact);
+                    telepathy.startSession(contact: contact);
 
                     _nicknameInput.clear();
                     _peerIdInput.clear();
@@ -141,7 +141,7 @@ class ContactFormState extends State<ContactForm> {
         ),
       );
     } else {
-      var contacts = widget.profilesController.contacts.values
+      var contacts = profilesController.contacts.values
           .where((c) => !_peerIds.contains(c.peerId()));
 
       return Container(
@@ -323,18 +323,18 @@ class ContactFormState extends State<ContactForm> {
 
                       // the room must always contain the current profile's peer id
                       if (!_peerIds
-                          .contains(widget.profilesController.peerId)) {
-                        _peerIds.add(widget.profilesController.peerId);
+                          .contains(profilesController.peerId)) {
+                        _peerIds.add(profilesController.peerId);
                       }
 
-                      if (widget.profilesController.rooms.keys
+                      if (profilesController.rooms.keys
                           .contains(roomHash(peers: _peerIds))) {
                         showErrorDialog(context, 'Failed to add room',
                             'It appears this room already exists');
                         return;
                       }
 
-                      widget.profilesController.addRoom(nickname, _peerIds);
+                      profilesController.addRoom(nickname, _peerIds);
                       _nicknameInput.clear();
                       setState(() {
                         _peerIds.clear();

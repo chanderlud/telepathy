@@ -2,7 +2,6 @@ import 'dart:core';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart' hide Overlay;
-import 'package:telepathy/controllers/index.dart';
 import 'package:telepathy/core/utils/index.dart';
 import 'package:telepathy/screens/settings/header.dart';
 import 'package:telepathy/screens/settings/logs.dart';
@@ -12,9 +11,6 @@ import 'package:telepathy/screens/settings/sections/interface.dart';
 import 'package:telepathy/screens/settings/sections/networking.dart';
 import 'package:telepathy/screens/settings/sections/overlay.dart';
 import 'package:telepathy/screens/settings/sections/profiles.dart';
-import 'package:telepathy/src/rust/audio/player.dart';
-import 'package:telepathy/src/rust/overlay/overlay.dart';
-import 'package:telepathy/src/rust/telepathy.dart';
 
 enum SettingsSection {
   audioVideo,
@@ -26,33 +22,9 @@ enum SettingsSection {
 }
 
 class SettingsPage extends StatefulWidget {
-  final ProfilesController profilesController;
-  final AudioSettingsController audioSettingsController;
-  final NetworkSettingsController networkSettingsController;
-  final PreferencesController preferencesController;
-  final InterfaceController interfaceController;
-  final Telepathy telepathy;
-  final StateController stateController;
-  final StatisticsController statisticsController;
-  final SoundPlayer player;
-  final Overlay overlay;
-  final AudioDevices audioDevices;
   final BoxConstraints constraints;
 
-  const SettingsPage(
-      {super.key,
-      required this.profilesController,
-      required this.audioSettingsController,
-      required this.networkSettingsController,
-      required this.preferencesController,
-      required this.telepathy,
-      required this.stateController,
-      required this.player,
-      required this.statisticsController,
-      required this.overlay,
-      required this.audioDevices,
-      required this.constraints,
-      required this.interfaceController});
+  const SettingsPage({super.key, required this.constraints});
 
   @override
   SettingsPageState createState() => SettingsPageState();
@@ -151,49 +123,24 @@ class SettingsPageState extends State<SettingsPage>
                                 BoxConstraints constraints) {
                               if (_section == SettingsSection.audioVideo) {
                                 return AVSettings(
-                                  audioSettingsController:
-                                      widget.audioSettingsController,
-                                  preferencesController:
-                                      widget.preferencesController,
-                                  networkSettingsController:
-                                      widget.networkSettingsController,
-                                  telepathy: widget.telepathy,
-                                  stateController: widget.stateController,
-                                  player: widget.player,
-                                  statisticsController:
-                                      widget.statisticsController,
                                   constraints: constraints,
-                                  audioDevices: widget.audioDevices,
                                 );
                               } else if (_section == SettingsSection.profiles) {
-                                return ProfileSettings(
-                                    profilesController:
-                                        widget.profilesController,
-                                    telepathy: widget.telepathy,
-                                    stateController: widget.stateController);
+                                return const ProfileSettings();
                               } else if (_section ==
                                   SettingsSection.networking) {
                                 return NetworkSettings(
                                     key: _key,
-                                    networkSettingsController:
-                                        widget.networkSettingsController,
-                                    telepathy: widget.telepathy,
-                                    stateController: widget.stateController,
                                     constraints: constraints);
                               } else if (_section ==
                                   SettingsSection.interface) {
                                 return InterfaceSettings(
-                                    controller: widget.interfaceController,
                                     constraints: constraints);
                               } else if (_section == SettingsSection.logs) {
                                 return LogsSettings(
                                     searchController: _searchController);
                               } else if (_section == SettingsSection.overlay) {
-                                return OverlaySettings(
-                                    overlay: widget.overlay,
-                                    networkSettingsController:
-                                        widget.networkSettingsController,
-                                    stateController: widget.stateController);
+                                return const OverlaySettings();
                               } else {
                                 return const SizedBox();
                               }

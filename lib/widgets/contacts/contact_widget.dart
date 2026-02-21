@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:provider/provider.dart';
 import 'package:telepathy/controllers/index.dart';
 import 'package:telepathy/core/utils/index.dart';
 import 'package:telepathy/src/rust/audio/player.dart';
@@ -11,18 +12,8 @@ import 'package:telepathy/src/rust/flutter.dart';
 /// A widget which displays a single contact.
 class ContactWidget extends StatefulWidget {
   final Contact contact;
-  final Telepathy telepathy;
-  final StateController stateController;
-  final ProfilesController profilesController;
-  final SoundPlayer player;
 
-  const ContactWidget(
-      {super.key,
-      required this.contact,
-      required this.telepathy,
-      required this.stateController,
-      required this.player,
-      required this.profilesController});
+  const ContactWidget({super.key, required this.contact});
 
   @override
   State<StatefulWidget> createState() => ContactWidgetState();
@@ -54,8 +45,13 @@ class ContactWidgetState extends State<ContactWidget> {
 
   @override
   Widget build(BuildContext context) {
-    bool active = widget.stateController.isActiveContact(widget.contact);
-    SessionStatus status = widget.stateController.sessionStatus(widget.contact);
+    final stateController = context.read<StateController>();
+    final telepathy = context.read<Telepathy>();
+    final profilesController = context.read<ProfilesController>();
+    final player = context.read<SoundPlayer>();
+
+    bool active = stateController.isActiveContact(widget.contact);
+    SessionStatus status = stateController.sessionStatus(widget.contact);
     bool online = status.runtimeType == SessionStatus_Connected;
     bool connecting = status.runtimeType == SessionStatus_Connecting;
     bool inactive = status.runtimeType == SessionStatus_Inactive;
@@ -78,7 +74,7 @@ class ContactWidgetState extends State<ContactWidget> {
                     const Text('Edit Contact'),
                     IconButton(
                       onPressed: () async {
-                        if (!widget.stateController
+                        if (!stateController
                             .isActiveContact(widget.contact)) {
                           bool confirm = await showDialog<bool>(
                                   context: context,
@@ -121,11 +117,11 @@ class ContactWidgetState extends State<ContactWidget> {
                               false;
 
                           if (confirm) {
-                            widget.profilesController
+                            profilesController
                                 .removeContact(widget.contact);
-                            widget.telepathy
+                            telepathy
                                 .stopSession(contact: widget.contact);
-                            widget.profilesController.saveContacts();
+                            profilesController.saveContacts();
                           }
 
                           if (context.mounted) {
@@ -147,7 +143,7 @@ class ContactWidgetState extends State<ContactWidget> {
                     top: 25, left: 25, right: 25, bottom: 20),
                 children: [
                   TextInput(
-                      enabled: !widget.stateController
+                      enabled: !stateController
                           .isActiveContact(widget.contact),
                       controller: _nicknameInput,
                       labelText: 'Nickname',
@@ -158,7 +154,7 @@ class ContactWidgetState extends State<ContactWidget> {
                   Button(
                     text: 'Save',
                     onPressed: () {
-                      widget.profilesController.saveContacts();
+                      profilesController.saveContacts();
                       Navigator.pop(context);
                     },
                   ),
@@ -190,7 +186,7 @@ class ContactWidgetState extends State<ContactWidget> {
             if (inactive) ...[
               IconButton(
                   onPressed: () {
-                    widget.telepathy.startSession(contact: widget.contact);
+                    telepathy.startSession(contact: widget.contact);
                   },
                   icon: SvgPicture.asset('assets/icons/Restart.svg',
                       semanticsLabel: 'Retry the session initiation')),
@@ -232,11 +228,11 @@ class ContactWidgetState extends State<ContactWidget> {
                 onPressed: () async {
                   outgoingSoundHandle?.cancel();
 
-                  widget.telepathy.endCall();
-                  widget.stateController.endOfCall();
+                  telepathy.endCall();
+                  stateController.endOfCall();
 
                   List<int> bytes = await readSeaBytes('call_ended');
-                  otherSoundHandle = await widget.player.play(bytes: bytes);
+                  otherSoundHandle = await player.play(bytes: bytes);
                 },
               ),
             if (!active && online)
@@ -248,28 +244,28 @@ class ContactWidgetState extends State<ContactWidget> {
                   width: 32,
                 ),
                 onPressed: () async {
-                  if (widget.stateController.isCallActive) {
+                  if (stateController.isCallActive) {
                     showErrorDialog(context, 'Call failed',
                         'There is a call already active');
                     return;
-                  } else if (widget.stateController.inAudioTest) {
+                  } else if (stateController.inAudioTest) {
                     showErrorDialog(context, 'Call failed',
                         'Cannot make a call while in an audio test');
                     return;
-                  } else if (widget.stateController.callEndedRecently) {
+                  } else if (stateController.callEndedRecently) {
                     // if the call button is pressed right after a call ended, we assume the user did not want to make a call
                     return;
                   }
 
-                  widget.stateController.setStatus('Connecting');
+                  stateController.setStatus('Connecting');
                   List<int> bytes = await readSeaBytes('outgoing');
-                  outgoingSoundHandle = await widget.player.play(bytes: bytes);
+                  outgoingSoundHandle = await player.play(bytes: bytes);
 
                   try {
-                    await widget.telepathy.startCall(contact: widget.contact);
-                    widget.stateController.setActiveContact(widget.contact);
+                    await telepathy.startCall(contact: widget.contact);
+                    stateController.setActiveContact(widget.contact);
                   } on DartError catch (e) {
-                    widget.stateController.setStatus('Inactive');
+                    stateController.setStatus('Inactive');
                     outgoingSoundHandle?.cancel();
                     if (!context.mounted) return;
                     showErrorDialog(context, 'Call failed', e.message);

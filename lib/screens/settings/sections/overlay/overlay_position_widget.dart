@@ -1,20 +1,16 @@
 import 'package:flutter/material.dart' hide Overlay;
+import 'package:provider/provider.dart';
 import 'package:telepathy/controllers/index.dart';
 import 'package:telepathy/src/rust/overlay/overlay.dart';
 
 class OverlayPositionWidget extends StatefulWidget {
-  final Overlay overlay;
-  final NetworkSettingsController networkSettingsController;
-
   final double realMaxX;
   final double realMaxY;
 
   const OverlayPositionWidget(
       {super.key,
-      required this.overlay,
       required this.realMaxX,
-      required this.realMaxY,
-      required this.networkSettingsController});
+      required this.realMaxY});
 
   @override
   OverlayPositionWidgetState createState() => OverlayPositionWidgetState();
@@ -40,39 +36,46 @@ class OverlayPositionWidgetState extends State<OverlayPositionWidget> {
   }
 
   void _updatePositions() {
+    final networkSettingsController =
+        context.read<NetworkSettingsController>();
+
     _maxY = _maxX / (widget.realMaxX / widget.realMaxY);
 
-    _x = widget.networkSettingsController.overlayConfig.x /
+    _x = networkSettingsController.overlayConfig.x /
         widget.realMaxX *
         _maxX;
-    _y = widget.networkSettingsController.overlayConfig.y /
+    _y = networkSettingsController.overlayConfig.y /
         widget.realMaxY *
         _maxY;
-    _width = widget.networkSettingsController.overlayConfig.width /
+    _width = networkSettingsController.overlayConfig.width /
         widget.realMaxX *
         _maxX;
-    _height = widget.networkSettingsController.overlayConfig.height /
+    _height = networkSettingsController.overlayConfig.height /
         widget.realMaxY *
         _maxY;
   }
 
   void _updateOverlay() {
+    final overlay = context.read<Overlay>();
+    final networkSettingsController =
+        context.read<NetworkSettingsController>();
+
     double realX = _x / _maxX * widget.realMaxX;
     double realY = _y / _maxY * widget.realMaxY;
     double realWidth = _width / _maxX * widget.realMaxX;
     double realHeight = _height / _maxY * widget.realMaxY;
 
-    widget.overlay.moveOverlay(
+    overlay.moveOverlay(
       x: realX.round(),
       y: realY.round(),
       width: realWidth.round(),
       height: realHeight.round(),
     );
 
-    widget.networkSettingsController.overlayConfig.x = realX;
-    widget.networkSettingsController.overlayConfig.y = realY;
-    widget.networkSettingsController.overlayConfig.width = realWidth;
-    widget.networkSettingsController.overlayConfig.height = realHeight;
+    networkSettingsController.overlayConfig.x = realX;
+    networkSettingsController.overlayConfig.y = realY;
+    networkSettingsController.overlayConfig.width = realWidth;
+    networkSettingsController.overlayConfig.height = realHeight;
   }
 
   void _onDragUpdate(DragUpdateDetails details) {
@@ -147,6 +150,9 @@ class OverlayPositionWidgetState extends State<OverlayPositionWidget> {
 
   @override
   Widget build(BuildContext context) {
+    final networkSettingsController =
+        context.read<NetworkSettingsController>();
+
     return LayoutBuilder(
       builder: (context, constraints) {
         _maxX = constraints.maxWidth;
@@ -169,8 +175,8 @@ class OverlayPositionWidgetState extends State<OverlayPositionWidget> {
                   onPanEnd: (_) => _stopDragging(),
                   child: Container(
                       decoration: BoxDecoration(
-                        color: widget.networkSettingsController.overlayConfig
-                            .backgroundColor,
+                        color: networkSettingsController
+                            .overlayConfig.backgroundColor,
                         border: Border.all(
                             color: Theme.of(context).colorScheme.secondary,
                             width: 2),
