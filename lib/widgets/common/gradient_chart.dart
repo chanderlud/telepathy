@@ -96,7 +96,7 @@ class _GradientMiniLineChartPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _GradientMiniLineChartPainter oldDelegate) {
-    return oldDelegate.values != values ||
+    return !const ListEquality<int>().equals(oldDelegate.values, values) ||
         oldDelegate.strokeWidth != strokeWidth;
   }
 }

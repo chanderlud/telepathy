@@ -57,6 +57,7 @@ class ContactWidgetState extends State<ContactWidget> {
     bool inactive = status.runtimeType == SessionStatus_Inactive;
 
     return InkWell(
+      mouseCursor: SystemMouseCursors.click,
       onHover: (hover) {
         setState(() {
           isHovered = hover;

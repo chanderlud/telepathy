@@ -13,31 +13,27 @@ class AudioLevel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final double threshold = level * numRectangles;
-        final int maxIndex = numRectangles - 1;
+    final double threshold = level * numRectangles;
+    final int maxIndex = numRectangles - 1;
 
-        // generate the rectangles
-        final List<Widget> rectangles = List.generate(numRectangles, (index) {
-          // calculate the fraction of the index in relation to the max index
-          final double fraction = index / maxIndex;
+    // generate the rectangles
+    final List<Widget> rectangles = List.generate(numRectangles, (index) {
+      // calculate the fraction of the index in relation to the max index
+      final double fraction = index / maxIndex;
 
-          return Container(
-            width: 8,
-            height: 25,
-            margin: const EdgeInsets.only(right: 5),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(5),
-              color: index >= threshold ? grey : getColor(fraction),
-            ),
-          );
-        });
+      return Container(
+        width: 8,
+        height: 25,
+        margin: const EdgeInsets.only(right: 5),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(5),
+          color: index >= threshold ? grey : getColor(fraction),
+        ),
+      );
+    });
 
-        return Row(
-          children: rectangles,
-        );
-      },
+    return Row(
+      children: rectangles,
     );
   }
 }

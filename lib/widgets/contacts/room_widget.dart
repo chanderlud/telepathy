@@ -31,6 +31,7 @@ class RoomWidgetState extends State<RoomWidget> {
     final player = context.read<SoundPlayer>();
 
     return InkWell(
+      mouseCursor: SystemMouseCursors.click,
       onHover: (hover) {
         setState(() {
           isHovered = hover;

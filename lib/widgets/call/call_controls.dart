@@ -289,7 +289,7 @@ class _CallControlsState extends State<CallControls> {
                                   telepathy.startScreenshare(
                                       contact: stateController.activeContact!);
                                 } else {
-                                  stateController.stopScreenshare(true);
+                                  stateController.stopScreenshare(true, true);
                                 }
                               },
                               icon: SvgPicture.asset(

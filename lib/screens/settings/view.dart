@@ -33,7 +33,6 @@ class SettingsPage extends StatefulWidget {
 class SettingsPageState extends State<SettingsPage>
     with SingleTickerProviderStateMixin {
   SettingsSection _section = SettingsSection.audioVideo;
-  SettingsSection? hovered;
   bool? showMenu;
 
   final TextEditingController _searchController = TextEditingController();
@@ -165,10 +164,7 @@ class SettingsPageState extends State<SettingsPage>
                   padding: const EdgeInsets.only(top: 60),
                   child: SettingsMenu(
                     selected: _section,
-                    hovered: hovered,
                     onSectionSelected: (section) => tapHandler(section),
-                    onHoverChanged: (idx, isHovered) =>
-                        hoverHandler(idx, isHovered),
                     showOverlayItem: !kIsWeb && Platform.isWindows,
                   ),
                 ),
@@ -215,25 +211,5 @@ class SettingsPageState extends State<SettingsPage>
     setState(() {
       _section = target;
     });
-  }
-
-  void hoverHandler(SettingsSection target, bool hovered) {
-    setState(() {
-      if (hovered) {
-        this.hovered = target;
-      } else {
-        this.hovered = null;
-      }
-    });
-  }
-
-  Color getColor(SettingsSection target) {
-    if (target == hovered) {
-      return Theme.of(context).colorScheme.secondary;
-    } else if (target == _section) {
-      return Theme.of(context).colorScheme.primary;
-    } else {
-      return Theme.of(context).colorScheme.surfaceDim;
-    }
   }
 }
