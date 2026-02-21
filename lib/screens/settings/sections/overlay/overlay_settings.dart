@@ -15,29 +15,32 @@ class OverlaySettings extends StatefulWidget {
 
 class OverlaySettingsState extends State<OverlaySettings> {
   bool overlayVisible = false;
+  late final Overlay _overlay;
+  late final StateController _stateController;
+  late final NetworkSettingsController _networkSettingsController;
+
+  @override
+  void initState() {
+    super.initState();
+    _overlay = context.read<Overlay>();
+    _stateController = context.read<StateController>();
+    _networkSettingsController = context.read<NetworkSettingsController>();
+  }
 
   @override
   void dispose() {
-    final overlay = context.read<Overlay>();
-    final stateController = context.read<StateController>();
-    final networkSettingsController = context.read<NetworkSettingsController>();
-
-    if (!stateController.isCallActive) {
-      overlay.hide_();
+    if (!_stateController.isCallActive) {
+      _overlay.hide_();
     }
 
-    networkSettingsController.saveOverlayConfig();
+    _networkSettingsController.saveOverlayConfig();
 
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final overlay = context.read<Overlay>();
-    final stateController = context.read<StateController>();
-    final networkSettingsController = context.read<NetworkSettingsController>();
-
-    (int, int) size = overlay.screenResolution();
+    (int, int) size = _overlay.screenResolution();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -47,45 +50,45 @@ class OverlaySettingsState extends State<OverlaySettings> {
             Button(
               text: overlayVisible ? 'Hide overlay' : 'Show overlay',
               onPressed: () {
-                if (stateController.isCallActive ||
-                    !networkSettingsController.overlayConfig.enabled) {
+                if (_stateController.isCallActive ||
+                    !_networkSettingsController.overlayConfig.enabled) {
                   return;
                 } else if (overlayVisible) {
-                  overlay.hide_();
+                  _overlay.hide_();
                 } else {
-                  overlay.show_();
+                  _overlay.show_();
                 }
 
                 setState(() {
                   overlayVisible = !overlayVisible;
                 });
               },
-              disabled: stateController.isCallActive ||
-                  !networkSettingsController.overlayConfig.enabled,
+              disabled: _stateController.isCallActive ||
+                  !_networkSettingsController.overlayConfig.enabled,
               width: 90,
               height: 25,
             ),
             const SizedBox(width: 20),
             Button(
-              text: networkSettingsController.overlayConfig.enabled
+              text: _networkSettingsController.overlayConfig.enabled
                   ? 'Disable overlay'
                   : 'Enable overlay',
               onPressed: () async {
-                if (networkSettingsController.overlayConfig.enabled) {
-                  await overlay.disable();
-                  networkSettingsController.overlayConfig.enabled = false;
+                if (_networkSettingsController.overlayConfig.enabled) {
+                  await _overlay.disable();
+                  _networkSettingsController.overlayConfig.enabled = false;
 
                   // the overlay is never visible when it is disabled
                   setState(() {
                     overlayVisible = false;
                   });
                 } else {
-                  await overlay.enable();
-                  networkSettingsController.overlayConfig.enabled = true;
+                  await _overlay.enable();
+                  _networkSettingsController.overlayConfig.enabled = true;
 
-                  if (stateController.isCallActive) {
+                  if (_stateController.isCallActive) {
                     // if the call is active, the overlay should be shown
-                    overlay.show_();
+                    _overlay.show_();
 
                     setState(() {
                       overlayVisible = true;
@@ -99,7 +102,7 @@ class OverlaySettingsState extends State<OverlaySettings> {
                 }
 
                 // save the config
-                networkSettingsController.saveOverlayConfig();
+                _networkSettingsController.saveOverlayConfig();
               },
               width: 110,
               height: 25,
@@ -110,12 +113,12 @@ class OverlaySettingsState extends State<OverlaySettings> {
         const Text('Font Size', style: TextStyle(fontSize: 18)),
         Slider(
             value:
-                networkSettingsController.overlayConfig.fontHeight.toDouble(),
+                _networkSettingsController.overlayConfig.fontHeight.toDouble(),
             onChanged: (value) {
-              overlay.setFontHeight(height: value.round());
-              networkSettingsController.overlayConfig.fontHeight =
+              _overlay.setFontHeight(height: value.round());
+              _networkSettingsController.overlayConfig.fontHeight =
                   value.round();
-              networkSettingsController.saveOverlayConfig();
+              _networkSettingsController.saveOverlayConfig();
               setState(() {});
             },
             min: 0,
@@ -132,14 +135,14 @@ class OverlaySettingsState extends State<OverlaySettings> {
                     text: 'Change',
                     onPressed: () {
                       colorPicker(context, (Color color) {
-                        overlay.setBackgroundColor(
+                        _overlay.setBackgroundColor(
                             backgroundColor: color.toARGB32());
-                        networkSettingsController
+                        _networkSettingsController
                             .overlayConfig.backgroundColor = color;
-                        networkSettingsController.saveOverlayConfig();
+                        _networkSettingsController.saveOverlayConfig();
                         setState(() {});
                       },
-                          networkSettingsController
+                          _networkSettingsController
                               .overlayConfig.backgroundColor);
                     }),
               ],
@@ -155,12 +158,12 @@ class OverlaySettingsState extends State<OverlaySettings> {
                     text: 'Change',
                     onPressed: () {
                       colorPicker(context, (Color color) {
-                        overlay.setFontColor(fontColor: color.toARGB32());
-                        networkSettingsController.overlayConfig.fontColor =
+                        _overlay.setFontColor(fontColor: color.toARGB32());
+                        _networkSettingsController.overlayConfig.fontColor =
                             color;
-                        networkSettingsController.saveOverlayConfig();
+                        _networkSettingsController.saveOverlayConfig();
                         setState(() {});
-                      }, networkSettingsController.overlayConfig.fontColor);
+                      }, _networkSettingsController.overlayConfig.fontColor);
                     }),
               ],
             )

@@ -16,17 +16,17 @@ class InterfaceSettings extends StatefulWidget {
 class InterfaceSettingsState extends State<InterfaceSettings> {
   final TextEditingController _primaryColorInput = TextEditingController();
   String? _primaryColorError;
+  late final InterfaceController _controller;
 
   @override
   void initState() {
     super.initState();
-    final controller = context.read<InterfaceController>();
-    _primaryColorInput.text = '#${controller.primaryColor.toRadixString(16)}';
+    _controller = context.read<InterfaceController>();
+    _primaryColorInput.text = '#${_controller.primaryColor.toRadixString(16)}';
   }
 
   @override
   Widget build(BuildContext context) {
-    final controller = context.read<InterfaceController>();
     double width = widget.constraints.maxWidth < 650
         ? widget.constraints.maxWidth
         : (widget.constraints.maxWidth - 20) / 2;
@@ -52,7 +52,7 @@ class InterfaceSettingsState extends State<InterfaceSettings> {
                         _primaryColorError = 'Invalid hex color';
                       } else {
                         _primaryColorError = null;
-                        controller.setPrimaryColor(color);
+                        _controller.setPrimaryColor(color);
                       }
                     },
                     error: _primaryColorError == null
@@ -63,7 +63,7 @@ class InterfaceSettingsState extends State<InterfaceSettings> {
               Button(
                 text: 'Revert primary color to default',
                 onPressed: () {
-                  controller.setPrimaryColor(0xff5538e5);
+                  _controller.setPrimaryColor(0xff5538e5);
                   _primaryColorInput.text = '#ff5538e5';
                 },
                 width: 200,

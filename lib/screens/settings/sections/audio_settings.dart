@@ -44,6 +44,7 @@ class _AudioSettingsState extends State<AudioSettings> {
   Widget build(BuildContext context) {
     final telepathy = context.read<Telepathy>();
     final player = context.read<SoundPlayer>();
+    final audioSettingsController = context.read<AudioSettingsController>();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -68,9 +69,6 @@ class _AudioSettingsState extends State<AudioSettings> {
                 selectedOutputDevice: audioSettingsController.outputDeviceId,
               ),
               builder: (BuildContext context, _DeviceDropdownState state, _) {
-                final audioSettingsController =
-                    context.read<AudioSettingsController>();
-
                 String inputInitialSelection;
                 if (state.selectedInputDevice == null) {
                   inputInitialSelection = '';
@@ -188,8 +186,6 @@ class _AudioSettingsState extends State<AudioSettings> {
                   (controller.useDenoise, controller.denoiseModel),
               builder: (BuildContext context, state, _) {
                 final (useDenoise, denoiseModel) = state;
-                final audioSettingsController =
-                    context.read<AudioSettingsController>();
                 return DropDown(
                     items: const [
                       ('Off', 'Off'),
@@ -285,8 +281,6 @@ class _AudioSettingsState extends State<AudioSettings> {
         Selector<AudioSettingsController, double>(
           selector: (context, controller) => controller.soundVolume,
           builder: (BuildContext context, double soundVolume, _) {
-            final audioSettingsController =
-                context.read<AudioSettingsController>();
             return Slider(
                 value: soundVolume,
                 onChanged: (value) {
