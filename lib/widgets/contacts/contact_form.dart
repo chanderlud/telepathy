@@ -322,8 +322,7 @@ class ContactFormState extends State<ContactForm> {
                       }
 
                       // the room must always contain the current profile's peer id
-                      if (!_peerIds
-                          .contains(profilesController.peerId)) {
+                      if (!_peerIds.contains(profilesController.peerId)) {
                         _peerIds.add(profilesController.peerId);
                       }
 

@@ -39,54 +39,52 @@ class _CallControlsState extends State<CallControls> {
     return Column(
       children: [
         const SizedBox(height: 10),
-        Consumer<StateController>(
-            builder:
-                (BuildContext context, StateController stateController, _) {
-              Widget body;
+        Consumer<StateController>(builder:
+            (BuildContext context, StateController stateController, _) {
+          Widget body;
 
-              if (stateController.sessionManagerActive) {
-                if (stateController.isCallActive) {
-                  body = ListenableBuilder(
-                      listenable: _notifier,
-                      builder: (BuildContext context, Widget? child) {
-                        return Text(stateController.callDuration,
-                            style: const TextStyle(fontSize: 20));
-                      });
-                } else {
-                  body = Text(stateController.status,
-                      style: const TextStyle(fontSize: 20));
-                }
-              } else {
-                body = Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const SizedBox(width: 15),
-                    const Text('Session Manager Inactive',
-                        style:
-                            TextStyle(fontSize: 16, color: Color(0xFFdc2626))),
-                    stateController.sessionManagerRestartable
-                        ? const Spacer()
-                        : const SizedBox(width: 10),
-                    stateController.sessionManagerRestartable
-                        ? IconButton(
-                            onPressed: () {
-                              telepathy.restartManager();
-                            },
-                            icon: SvgPicture.asset('assets/icons/Restart.svg',
-                                colorFilter: const ColorFilter.mode(
-                                    Color(0xFFdc2626), BlendMode.srcIn),
-                                semanticsLabel: 'Restart session manager'))
-                        : Container(),
-                    const SizedBox(width: 5),
-                  ],
-                );
-              }
+          if (stateController.sessionManagerActive) {
+            if (stateController.isCallActive) {
+              body = ListenableBuilder(
+                  listenable: _notifier,
+                  builder: (BuildContext context, Widget? child) {
+                    return Text(stateController.callDuration,
+                        style: const TextStyle(fontSize: 20));
+                  });
+            } else {
+              body = Text(stateController.status,
+                  style: const TextStyle(fontSize: 20));
+            }
+          } else {
+            body = Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const SizedBox(width: 15),
+                const Text('Session Manager Inactive',
+                    style: TextStyle(fontSize: 16, color: Color(0xFFdc2626))),
+                stateController.sessionManagerRestartable
+                    ? const Spacer()
+                    : const SizedBox(width: 10),
+                stateController.sessionManagerRestartable
+                    ? IconButton(
+                        onPressed: () {
+                          telepathy.restartManager();
+                        },
+                        icon: SvgPicture.asset('assets/icons/Restart.svg',
+                            colorFilter: const ColorFilter.mode(
+                                Color(0xFFdc2626), BlendMode.srcIn),
+                            semanticsLabel: 'Restart session manager'))
+                    : Container(),
+                const SizedBox(width: 5),
+              ],
+            );
+          }
 
-              return SizedBox(
-                height: 40,
-                child: Center(child: body),
-              );
-            }),
+          return SizedBox(
+            height: 40,
+            child: Center(child: body),
+          );
+        }),
         Padding(
           padding: const EdgeInsets.only(left: 25, right: 25, top: 20),
           child: Column(

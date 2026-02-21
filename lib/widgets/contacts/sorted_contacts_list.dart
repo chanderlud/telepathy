@@ -33,8 +33,7 @@ class _SortedContactsListState extends State<SortedContactsList> {
 
   List<Contact> _sortContacts(
       ProfilesController profilesController, StateController stateController) {
-    final List<Contact> contacts =
-        profilesController.contacts.values.toList();
+    final List<Contact> contacts = profilesController.contacts.values.toList();
 
     // sort contacts by session status then nickname
     contacts.sort((a, b) {
@@ -67,8 +66,8 @@ class _SortedContactsListState extends State<SortedContactsList> {
     );
   }
 
-  void _refreshCacheIfNeeded(ProfilesController profilesController,
-      StateController stateController,
+  void _refreshCacheIfNeeded(
+      ProfilesController profilesController, StateController stateController,
       {required bool force}) {
     final int contactsLength = profilesController.contacts.length;
     final int contactsHash = Object.hashAll(

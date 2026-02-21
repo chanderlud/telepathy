@@ -130,8 +130,7 @@ class SettingsPageState extends State<SettingsPage>
                               } else if (_section ==
                                   SettingsSection.networking) {
                                 return NetworkSettings(
-                                    key: _key,
-                                    constraints: constraints);
+                                    key: _key, constraints: constraints);
                               } else if (_section ==
                                   SettingsSection.interface) {
                                 return InterfaceSettings(

@@ -8,9 +8,7 @@ class OverlayPositionWidget extends StatefulWidget {
   final double realMaxY;
 
   const OverlayPositionWidget(
-      {super.key,
-      required this.realMaxX,
-      required this.realMaxY});
+      {super.key, required this.realMaxX, required this.realMaxY});
 
   @override
   OverlayPositionWidgetState createState() => OverlayPositionWidgetState();
@@ -36,20 +34,14 @@ class OverlayPositionWidgetState extends State<OverlayPositionWidget> {
   }
 
   void _updatePositions() {
-    final networkSettingsController =
-        context.read<NetworkSettingsController>();
+    final networkSettingsController = context.read<NetworkSettingsController>();
 
     _maxY = _maxX / (widget.realMaxX / widget.realMaxY);
 
-    _x = networkSettingsController.overlayConfig.x /
-        widget.realMaxX *
-        _maxX;
-    _y = networkSettingsController.overlayConfig.y /
-        widget.realMaxY *
-        _maxY;
-    _width = networkSettingsController.overlayConfig.width /
-        widget.realMaxX *
-        _maxX;
+    _x = networkSettingsController.overlayConfig.x / widget.realMaxX * _maxX;
+    _y = networkSettingsController.overlayConfig.y / widget.realMaxY * _maxY;
+    _width =
+        networkSettingsController.overlayConfig.width / widget.realMaxX * _maxX;
     _height = networkSettingsController.overlayConfig.height /
         widget.realMaxY *
         _maxY;
@@ -57,8 +49,7 @@ class OverlayPositionWidgetState extends State<OverlayPositionWidget> {
 
   void _updateOverlay() {
     final overlay = context.read<Overlay>();
-    final networkSettingsController =
-        context.read<NetworkSettingsController>();
+    final networkSettingsController = context.read<NetworkSettingsController>();
 
     double realX = _x / _maxX * widget.realMaxX;
     double realY = _y / _maxY * widget.realMaxY;
@@ -150,8 +141,7 @@ class OverlayPositionWidgetState extends State<OverlayPositionWidget> {
 
   @override
   Widget build(BuildContext context) {
-    final networkSettingsController =
-        context.read<NetworkSettingsController>();
+    final networkSettingsController = context.read<NetworkSettingsController>();
 
     return LayoutBuilder(
       builder: (context, constraints) {

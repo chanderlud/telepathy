@@ -74,8 +74,7 @@ class ContactWidgetState extends State<ContactWidget> {
                     const Text('Edit Contact'),
                     IconButton(
                       onPressed: () async {
-                        if (!stateController
-                            .isActiveContact(widget.contact)) {
+                        if (!stateController.isActiveContact(widget.contact)) {
                           bool confirm = await showDialog<bool>(
                                   context: context,
                                   builder: (BuildContext context) {
@@ -117,10 +116,8 @@ class ContactWidgetState extends State<ContactWidget> {
                               false;
 
                           if (confirm) {
-                            profilesController
-                                .removeContact(widget.contact);
-                            telepathy
-                                .stopSession(contact: widget.contact);
+                            profilesController.removeContact(widget.contact);
+                            telepathy.stopSession(contact: widget.contact);
                             profilesController.saveContacts();
                           }
 
@@ -143,8 +140,7 @@ class ContactWidgetState extends State<ContactWidget> {
                     top: 25, left: 25, right: 25, bottom: 20),
                 children: [
                   TextInput(
-                      enabled: !stateController
-                          .isActiveContact(widget.contact),
+                      enabled: !stateController.isActiveContact(widget.contact),
                       controller: _nicknameInput,
                       labelText: 'Nickname',
                       onChanged: (value) {

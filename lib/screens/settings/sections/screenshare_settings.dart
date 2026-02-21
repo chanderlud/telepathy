@@ -32,8 +32,7 @@ class _ScreenshareSettingsState extends State<ScreenshareSettings> {
   void initState() {
     super.initState();
 
-    final networkSettingsController =
-        context.read<NetworkSettingsController>();
+    final networkSettingsController = context.read<NetworkSettingsController>();
 
     var capabilitiesFuture =
         networkSettingsController.screenshareConfig.capabilities();

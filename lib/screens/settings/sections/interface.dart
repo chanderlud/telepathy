@@ -21,8 +21,7 @@ class InterfaceSettingsState extends State<InterfaceSettings> {
   void initState() {
     super.initState();
     final controller = context.read<InterfaceController>();
-    _primaryColorInput.text =
-        '#${controller.primaryColor.toRadixString(16)}';
+    _primaryColorInput.text = '#${controller.primaryColor.toRadixString(16)}';
   }
 
   @override

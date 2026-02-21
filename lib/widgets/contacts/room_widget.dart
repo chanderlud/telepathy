@@ -109,8 +109,7 @@ class RoomWidgetState extends State<RoomWidget> {
                 outgoingSoundHandle = await player.play(bytes: bytes);
 
                 try {
-                  await telepathy
-                      .joinRoom(memberStrings: widget.room.peerIds);
+                  await telepathy.joinRoom(memberStrings: widget.room.peerIds);
                   widget.room.online.clear();
                   stateController.setActiveRoom(widget.room);
                 } on DartError catch (e) {

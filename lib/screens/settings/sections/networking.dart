@@ -9,8 +9,7 @@ import 'package:telepathy/widgets/common/index.dart';
 class NetworkSettings extends StatefulWidget {
   final BoxConstraints constraints;
 
-  const NetworkSettings(
-      {super.key, required this.constraints});
+  const NetworkSettings({super.key, required this.constraints});
 
   @override
   NetworkSettingsState createState() => NetworkSettingsState();
@@ -34,12 +33,10 @@ class NetworkSettingsState extends State<NetworkSettings> {
   }
 
   Future<void> _initialize() async {
-    final networkSettingsController =
-        context.read<NetworkSettingsController>();
+    final networkSettingsController = context.read<NetworkSettingsController>();
     _relayAddress =
         await networkSettingsController.networkConfig.getRelayAddress();
-    _relayPeerId =
-        await networkSettingsController.networkConfig.getRelayId();
+    _relayPeerId = await networkSettingsController.networkConfig.getRelayId();
 
     _relayAddressInput.text = _relayAddress;
     _relayPeerIdInput.text = _relayPeerId;
@@ -112,8 +109,7 @@ class NetworkSettingsState extends State<NetworkSettings> {
     String relayAddress = _relayAddressInput.text;
     String relayId = _relayPeerIdInput.text;
 
-    final networkSettingsController =
-        context.read<NetworkSettingsController>();
+    final networkSettingsController = context.read<NetworkSettingsController>();
     final telepathy = context.read<Telepathy>();
 
     bool changed = false;

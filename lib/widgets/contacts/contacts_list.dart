@@ -14,10 +14,7 @@ class ContactsList extends StatelessWidget {
   final List<Contact> contacts;
   final List<Room> rooms;
 
-  const ContactsList(
-      {super.key,
-      required this.contacts,
-      required this.rooms});
+  const ContactsList({super.key, required this.contacts, required this.rooms});
 
   @override
   Widget build(BuildContext context) {
@@ -55,9 +52,7 @@ class ContactsList extends StatelessWidget {
                                   backgroundColor: Theme.of(context)
                                       .colorScheme
                                       .secondaryContainer,
-                                  children: const [
-                                    ContactForm()
-                                  ],
+                                  children: const [ContactForm()],
                                 );
                               });
                         },

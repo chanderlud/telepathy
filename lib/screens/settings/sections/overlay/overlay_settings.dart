@@ -20,8 +20,7 @@ class OverlaySettingsState extends State<OverlaySettings> {
   void dispose() {
     final overlay = context.read<Overlay>();
     final stateController = context.read<StateController>();
-    final networkSettingsController =
-        context.read<NetworkSettingsController>();
+    final networkSettingsController = context.read<NetworkSettingsController>();
 
     if (!stateController.isCallActive) {
       overlay.hide_();
@@ -36,8 +35,7 @@ class OverlaySettingsState extends State<OverlaySettings> {
   Widget build(BuildContext context) {
     final overlay = context.read<Overlay>();
     final stateController = context.read<StateController>();
-    final networkSettingsController =
-        context.read<NetworkSettingsController>();
+    final networkSettingsController = context.read<NetworkSettingsController>();
 
     (int, int) size = overlay.screenResolution();
 
@@ -111,8 +109,8 @@ class OverlaySettingsState extends State<OverlaySettings> {
         const SizedBox(height: 20),
         const Text('Font Size', style: TextStyle(fontSize: 18)),
         Slider(
-            value: networkSettingsController.overlayConfig.fontHeight
-                .toDouble(),
+            value:
+                networkSettingsController.overlayConfig.fontHeight.toDouble(),
             onChanged: (value) {
               overlay.setFontHeight(height: value.round());
               networkSettingsController.overlayConfig.fontHeight =
@@ -136,8 +134,8 @@ class OverlaySettingsState extends State<OverlaySettings> {
                       colorPicker(context, (Color color) {
                         overlay.setBackgroundColor(
                             backgroundColor: color.toARGB32());
-                        networkSettingsController.overlayConfig
-                            .backgroundColor = color;
+                        networkSettingsController
+                            .overlayConfig.backgroundColor = color;
                         networkSettingsController.saveOverlayConfig();
                         setState(() {});
                       },
@@ -162,8 +160,7 @@ class OverlaySettingsState extends State<OverlaySettings> {
                             color;
                         networkSettingsController.saveOverlayConfig();
                         setState(() {});
-                      },
-                          networkSettingsController.overlayConfig.fontColor);
+                      }, networkSettingsController.overlayConfig.fontColor);
                     }),
               ],
             )

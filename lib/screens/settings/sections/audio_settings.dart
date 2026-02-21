@@ -58,13 +58,12 @@ class _AudioSettingsState extends State<AudioSettings> {
           builder: (BuildContext context, bool blockAudioChanges, _) {
             return Selector2<AudioDevices, AudioSettingsController,
                 _DeviceDropdownState>(
-              selector:
-                  (context, audioDevices, audioSettingsController) =>
-                      _DeviceDropdownState(
-                inputDevices: List<AudioDevice>.unmodifiable(
-                    audioDevices.inputDevices),
-                outputDevices: List<AudioDevice>.unmodifiable(
-                    audioDevices.outputDevices),
+              selector: (context, audioDevices, audioSettingsController) =>
+                  _DeviceDropdownState(
+                inputDevices:
+                    List<AudioDevice>.unmodifiable(audioDevices.inputDevices),
+                outputDevices:
+                    List<AudioDevice>.unmodifiable(audioDevices.outputDevices),
                 selectedInputDevice: audioSettingsController.inputDeviceId,
                 selectedOutputDevice: audioSettingsController.outputDeviceId,
               ),

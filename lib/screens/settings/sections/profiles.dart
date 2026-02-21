@@ -83,13 +83,11 @@ class ProfileSettingsState extends State<ProfileSettings> {
                             telepathy.restartManager();
                           },
                           noSplash: true,
-                          disabledColor:
-                              profilesController.activeProfile == profile.id &&
-                                      stateController.isCallActive
-                                  ? Theme.of(context)
-                                      .colorScheme
-                                      .tertiaryContainer
-                                  : null,
+                          disabledColor: profilesController.activeProfile ==
+                                      profile.id &&
+                                  stateController.isCallActive
+                              ? Theme.of(context).colorScheme.tertiaryContainer
+                              : null,
                         ),
                         const SizedBox(width: 10),
                         IconButton(

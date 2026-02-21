@@ -19,13 +19,12 @@ class CallDetailsWidget extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Consumer<StateController>(
-              builder:
-                  (BuildContext context, StateController stateController, _) {
-                return Text(
-                    '${stateController.activeRoom != null ? "Room" : "Call"} ${stateController.status.toLowerCase()}',
-                    style: const TextStyle(fontSize: 20));
-              }),
+          Consumer<StateController>(builder:
+              (BuildContext context, StateController stateController, _) {
+            return Text(
+                '${stateController.activeRoom != null ? "Room" : "Call"} ${stateController.status.toLowerCase()}',
+                style: const TextStyle(fontSize: 20));
+          }),
           const SizedBox(height: 8),
           Expanded(
             child: Column(

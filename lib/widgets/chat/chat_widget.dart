@@ -106,8 +106,8 @@ class ChatWidgetState extends State<ChatWidget> {
                 itemCount: chatStateController.messages.length,
                 itemBuilder: (BuildContext context, int index) {
                   ChatMessage message = chatStateController.messages[index];
-                  bool sender = message.isSender(
-                      identity: profilesController.peerId);
+                  bool sender =
+                      message.isSender(identity: profilesController.peerId);
 
                   return MessageItem(
                     message: message,
@@ -117,90 +117,87 @@ class ChatWidgetState extends State<ChatWidget> {
                     onShowImagePreview: showImagePreview,
                   );
                 })),
-        Consumer<StateController>(
-            builder:
-                (BuildContext context, StateController stateController, _) {
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  SelectedAttachments(
-                    attachments: chatStateController.attachments,
-                    onRemove: chatStateController.removeAttachment,
+        Consumer<StateController>(builder:
+            (BuildContext context, StateController stateController, _) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SelectedAttachments(
+                attachments: chatStateController.attachments,
+                onRemove: chatStateController.removeAttachment,
+              ),
+              const SizedBox(height: 7),
+              SizedBox(
+                height: 50,
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.tertiaryContainer,
+                    borderRadius: BorderRadius.circular(10.0),
+                    border: Border.all(
+                        color: chatStateController.active
+                            ? Colors.grey.shade400
+                            : Colors.grey.shade600),
                   ),
-                  const SizedBox(height: 7),
-                  SizedBox(
-                    height: 50,
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: Theme.of(context).colorScheme.tertiaryContainer,
-                        borderRadius: BorderRadius.circular(10.0),
-                        border: Border.all(
-                            color: chatStateController.active
-                                ? Colors.grey.shade400
-                                : Colors.grey.shade600),
-                      ),
-                      padding: EdgeInsets.symmetric(
-                          horizontal:
-                              chatStateController.active ? 4 : 12),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (chatStateController.active)
-                            IconButton(
-                              onPressed: _chatInputController.chooseFile,
-                              icon: SvgPicture.asset(
-                                'assets/icons/Attachment.svg',
-                                semanticsLabel: 'Attachment button icon',
-                                width: 26,
-                              ),
-                              hoverColor: Colors.transparent,
+                  padding: EdgeInsets.symmetric(
+                      horizontal: chatStateController.active ? 4 : 12),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (chatStateController.active)
+                        IconButton(
+                          onPressed: _chatInputController.chooseFile,
+                          icon: SvgPicture.asset(
+                            'assets/icons/Attachment.svg',
+                            semanticsLabel: 'Attachment button icon',
+                            width: 26,
+                          ),
+                          hoverColor: Colors.transparent,
+                        ),
+                      Flexible(
+                          fit: FlexFit.loose,
+                          child: TextField(
+                            focusNode: _focusNode,
+                            controller: chatStateController.messageInput,
+                            enabled: chatStateController.active,
+                            onSubmitted: (message) {
+                              sendMessage(message);
+                            },
+                            decoration: InputDecoration(
+                              labelText: chatStateController.active
+                                  ? 'Message'
+                                  : 'Chat disabled',
+                              floatingLabelBehavior:
+                                  FloatingLabelBehavior.never,
+                              disabledBorder: _noBorder,
+                              border: _noBorder,
+                              focusedBorder: _noBorder,
+                              enabledBorder: _noBorder,
+                              contentPadding:
+                                  const EdgeInsets.symmetric(horizontal: 2),
                             ),
-                          Flexible(
-                              fit: FlexFit.loose,
-                              child: TextField(
-                                focusNode: _focusNode,
-                                controller:
-                                    chatStateController.messageInput,
-                                enabled: chatStateController.active,
-                                onSubmitted: (message) {
-                                  sendMessage(message);
-                                },
-                                decoration: InputDecoration(
-                                  labelText: chatStateController.active
-                                      ? 'Message'
-                                      : 'Chat disabled',
-                                  floatingLabelBehavior:
-                                      FloatingLabelBehavior.never,
-                                  disabledBorder: _noBorder,
-                                  border: _noBorder,
-                                  focusedBorder: _noBorder,
-                                  enabledBorder: _noBorder,
-                                  contentPadding:
-                                      const EdgeInsets.symmetric(horizontal: 2),
-                                ),
-                              )),
-                          if (chatStateController.active)
-                            IconButton(
-                              onPressed: () {
-                                String message =
-                                    chatStateController.messageInput.text;
-                                sendMessage(message);
-                              },
-                              icon: SvgPicture.asset(
-                                'assets/icons/Send.svg',
-                                semanticsLabel: 'Send button icon',
-                                width: 32,
-                              ),
-                              hoverColor: Colors.transparent,
-                            )
-                        ],
-                      ),
-                    ),
+                          )),
+                      if (chatStateController.active)
+                        IconButton(
+                          onPressed: () {
+                            String message =
+                                chatStateController.messageInput.text;
+                            sendMessage(message);
+                          },
+                          icon: SvgPicture.asset(
+                            'assets/icons/Send.svg',
+                            semanticsLabel: 'Send button icon',
+                            width: 32,
+                          ),
+                          hoverColor: Colors.transparent,
+                        )
+                    ],
                   ),
-                ],
-              );
-            }),
+                ),
+              ),
+            ],
+          );
+        }),
       ],
     );
   }

@@ -7,27 +7,8 @@ import 'package:telepathy/widgets/contacts/contacts.dart';
 import 'package:telepathy/widgets/home/home_tab_view.dart';
 
 /// The main body of the app.
-class HomePage extends StatefulWidget {
+class HomePage extends StatelessWidget {
   const HomePage({super.key});
-
-  @override
-  State<HomePage> createState() => _HomePageState();
-}
-
-class _HomePageState extends State<HomePage> {
-  late final PeriodicNotifier notifier;
-
-  @override
-  void initState() {
-    super.initState();
-    notifier = PeriodicNotifier();
-  }
-
-  @override
-  void dispose() {
-    notifier.dispose();
-    super.dispose();
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -77,7 +58,7 @@ class _HomePageState extends State<HomePage> {
                                   Flexible(
                                     fit: FlexFit.loose,
                                     child: stateController.activeRoom != null
-                                        ? RoomDetailsWidget()
+                                        ? const RoomDetailsWidget()
                                         : contactsList,
                                   ),
                                 ],
