@@ -13,28 +13,49 @@ class AudioLevel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    return SizedBox(
+      width: numRectangles * 13.0, // 8 (rect width) + 5 (margin)
+      height: 25,
+      child: CustomPaint(
+        painter: _AudioLevelPainter(
+          level: level,
+          numRectangles: numRectangles,
+        ),
+      ),
+    );
+  }
+}
+
+class _AudioLevelPainter extends CustomPainter {
+  final double level;
+  final int numRectangles;
+
+  _AudioLevelPainter({required this.level, required this.numRectangles});
+
+  @override
+  void paint(Canvas canvas, Size size) {
     final double threshold = level * numRectangles;
     final int maxIndex = numRectangles - 1;
 
-    // generate the rectangles
-    final List<Widget> rectangles = List.generate(numRectangles, (index) {
-      // calculate the fraction of the index in relation to the max index
+    const double rectWidth = 8;
+    const double rectHeight = 25;
+    const double margin = 5;
+    const Radius radius = Radius.circular(5);
+
+    for (int index = 0; index < numRectangles; index++) {
       final double fraction = index / maxIndex;
+      final Color color = index >= threshold ? grey : getColor(fraction);
 
-      return Container(
-        width: 8,
-        height: 25,
-        margin: const EdgeInsets.only(right: 5),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(5),
-          color: index >= threshold ? grey : getColor(fraction),
-        ),
-      );
-    });
+      final double x = index * (rectWidth + margin);
+      final rrect = RRect.fromLTRBR(x, 0, x + rectWidth, rectHeight, radius);
 
-    return Row(
-      children: rectangles,
-    );
+      canvas.drawRRect(rrect, Paint()..color = color);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _AudioLevelPainter oldDelegate) {
+    return oldDelegate.level != level;
   }
 }
 

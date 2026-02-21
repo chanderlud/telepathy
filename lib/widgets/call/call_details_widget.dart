@@ -30,30 +30,41 @@ class CallDetailsWidget extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Selector<StatisticsController, List<int>>(
-                  selector: (context, c) => c.lossWindow,
-                  builder: (context, lossWindow, child) {
-                    return GradientMiniLineChart(
-                        values: lossWindow, strokeWidth: 2);
-                  },
+                RepaintBoundary(
+                  child: Selector<StatisticsController, int>(
+                    selector: (context, c) => c.lossWindowVersion,
+                    builder: (context, version, child) {
+                      final controller = context.read<StatisticsController>();
+                      return GradientMiniLineChart(
+                        values: controller.lossWindow,
+                        version: version,
+                        maxValue: controller.lossWindowMax,
+                        strokeWidth: 2,
+                      );
+                    },
+                  ),
                 ),
                 const SizedBox(height: 6),
                 const Text('Input level'),
                 const SizedBox(height: 7),
-                Selector<StatisticsController, double>(
-                  selector: (context, c) => c.inputLevel,
-                  builder: (context, inputLevel, child) {
-                    return AudioLevel(level: inputLevel, numRectangles: 20);
-                  },
+                RepaintBoundary(
+                  child: Selector<StatisticsController, double>(
+                    selector: (context, c) => c.inputLevel,
+                    builder: (context, inputLevel, child) {
+                      return AudioLevel(level: inputLevel, numRectangles: 20);
+                    },
+                  ),
                 ),
                 const SizedBox(height: 9),
                 const Text('Output level'),
                 const SizedBox(height: 7),
-                Selector<StatisticsController, double>(
-                  selector: (context, c) => c.outputLevel,
-                  builder: (context, outputLevel, child) {
-                    return AudioLevel(level: outputLevel, numRectangles: 20);
-                  },
+                RepaintBoundary(
+                  child: Selector<StatisticsController, double>(
+                    selector: (context, c) => c.outputLevel,
+                    builder: (context, outputLevel, child) {
+                      return AudioLevel(level: outputLevel, numRectangles: 20);
+                    },
+                  ),
                 ),
                 const SizedBox(height: 12),
                 Row(
@@ -63,18 +74,18 @@ class CallDetailsWidget extends StatelessWidget {
                       selector: (context, c) => c.latency,
                       builder: (context, latency, child) {
                         Color color = getColor(latency / 200);
-                        return SvgPicture.asset('assets/icons/Latency.svg',
-                            colorFilter:
-                                ColorFilter.mode(color, BlendMode.srcIn),
-                            semanticsLabel: 'Latency icon');
-                      },
-                    ),
-                    const SizedBox(width: 7),
-                    Selector<StatisticsController, int>(
-                      selector: (context, c) => c.latency,
-                      builder: (context, latency, child) {
-                        return Text('$latency ms',
-                            style: const TextStyle(height: 0));
+                        return Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            SvgPicture.asset('assets/icons/Latency.svg',
+                                colorFilter:
+                                    ColorFilter.mode(color, BlendMode.srcIn),
+                                semanticsLabel: 'Latency icon'),
+                            const SizedBox(width: 7),
+                            Text('$latency ms',
+                                style: const TextStyle(height: 0)),
+                          ],
+                        );
                       },
                     ),
                     const Spacer(),

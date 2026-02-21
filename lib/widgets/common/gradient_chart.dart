@@ -1,16 +1,19 @@
 import 'dart:math';
 
-import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
 import 'package:telepathy/widgets/common/audio_level.dart';
 
 class GradientMiniLineChart extends StatelessWidget {
   final List<int> values;
+  final int version;
+  final int maxValue;
   final double strokeWidth;
 
   const GradientMiniLineChart({
     super.key,
     required this.values,
+    required this.version,
+    required this.maxValue,
     this.strokeWidth = 2,
   });
 
@@ -22,6 +25,8 @@ class GradientMiniLineChart extends StatelessWidget {
       child: CustomPaint(
         painter: _GradientMiniLineChartPainter(
           values: values,
+          version: version,
+          maxValue: maxValue,
           strokeWidth: strokeWidth,
         ),
       ),
@@ -31,10 +36,28 @@ class GradientMiniLineChart extends StatelessWidget {
 
 class _GradientMiniLineChartPainter extends CustomPainter {
   final List<int> values;
+  final int version;
+  final int maxValue;
   final double strokeWidth;
+
+  static const _gradient = LinearGradient(
+    begin: Alignment.bottomCenter,
+    end: Alignment.topCenter,
+    colors: [
+      quietColor,
+      mediumColor,
+      loudColor,
+    ],
+    stops: [0.0, 0.5, 1.0],
+  );
+
+  static Size _cachedSize = Size.zero;
+  static Shader? _cachedShader;
 
   _GradientMiniLineChartPainter({
     required this.values,
+    required this.version,
+    required this.maxValue,
     required this.strokeWidth,
   });
 
@@ -42,7 +65,7 @@ class _GradientMiniLineChartPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     if (values.isEmpty) return;
 
-    double maximum = max(values.max.toDouble(), 1);
+    double maximum = max(maxValue.toDouble(), 1);
     final clamped = values
         .map((v) => (1 - (v.toDouble() / maximum)) * size.height)
         .map((v) => v.clamp(1, size.height).toDouble())
@@ -76,17 +99,13 @@ class _GradientMiniLineChartPainter extends CustomPainter {
     canvas.drawPath(path, linePaint);
 
     // 2) Draw vertical gradient, masked to the line with srcIn
+    if (_cachedShader == null || _cachedSize != size) {
+      _cachedSize = size;
+      _cachedShader = _gradient.createShader(bounds);
+    }
+
     final gradientPaint = Paint()
-      ..shader = const LinearGradient(
-        begin: Alignment.bottomCenter,
-        end: Alignment.topCenter,
-        colors: [
-          quietColor,
-          mediumColor,
-          loudColor,
-        ],
-        stops: [0.0, 0.5, 1.0],
-      ).createShader(bounds)
+      ..shader = _cachedShader
       ..blendMode = BlendMode.srcIn;
 
     canvas.drawRect(bounds, gradientPaint);
@@ -96,7 +115,7 @@ class _GradientMiniLineChartPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _GradientMiniLineChartPainter oldDelegate) {
-    return !const ListEquality<int>().equals(oldDelegate.values, values) ||
+    return oldDelegate.version != version ||
         oldDelegate.strokeWidth != strokeWidth;
   }
 }
