@@ -1,7 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
-import 'package:provider/provider.dart';
-import 'package:telepathy/controllers/index.dart';
 import 'package:telepathy/models/index.dart';
 import 'package:telepathy/src/rust/flutter.dart';
 import 'package:telepathy/widgets/contacts/contact_form.dart';
