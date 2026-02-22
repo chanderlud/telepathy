@@ -45,7 +45,7 @@ class ContactWidgetState extends State<ContactWidget> {
 
   @override
   Widget build(BuildContext context) {
-    final stateController = context.read<StateController>();
+    final stateController = context.watch<StateController>();
     final telepathy = context.read<Telepathy>();
     final profilesController = context.read<ProfilesController>();
     final player = context.read<SoundPlayer>();

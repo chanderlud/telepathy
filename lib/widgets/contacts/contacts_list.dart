@@ -87,24 +87,19 @@ class ContactsList extends StatelessWidget {
                   itemExtent: itemHeight, // every item = 1/3 of viewport
                   physics: SnapScrollPhysics(itemExtent: itemHeight),
                   itemBuilder: (BuildContext context, int index) {
-                    return Consumer<StateController>(
-                      builder: (BuildContext context,
-                          StateController stateController, _) {
-                        final item = items[index];
+                    final item = items[index];
 
-                        if (item is Contact) {
-                          return ContactWidget(
-                            contact: item,
-                          );
-                        } else if (item is Room) {
-                          return RoomWidget(
-                            room: item,
-                          );
-                        } else {
-                          return const SizedBox.shrink();
-                        }
-                      },
-                    );
+                    if (item is Contact) {
+                      return ContactWidget(
+                        contact: item,
+                      );
+                    } else if (item is Room) {
+                      return RoomWidget(
+                        room: item,
+                      );
+                    } else {
+                      return const SizedBox.shrink();
+                    }
                   },
                 );
               }),
