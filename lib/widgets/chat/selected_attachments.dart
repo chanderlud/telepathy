@@ -47,6 +47,7 @@ class _SelectedAttachmentsState extends State<SelectedAttachments> {
               Positioned(
                 right: 0,
                 child: InkWell(
+                  mouseCursor: SystemMouseCursors.click,
                   onTap: () => widget.onRemove(name),
                   child: Container(
                     decoration: BoxDecoration(

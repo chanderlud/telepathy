@@ -1,14 +1,13 @@
 import 'dart:core';
 import 'package:flutter/material.dart' hide Overlay;
+import 'package:provider/provider.dart';
 import 'package:telepathy/controllers/index.dart';
 import 'package:telepathy/widgets/common/index.dart';
 
 class InterfaceSettings extends StatefulWidget {
-  final InterfaceController controller;
   final BoxConstraints constraints;
 
-  const InterfaceSettings(
-      {super.key, required this.controller, required this.constraints});
+  const InterfaceSettings({super.key, required this.constraints});
 
   @override
   InterfaceSettingsState createState() => InterfaceSettingsState();
@@ -17,12 +16,13 @@ class InterfaceSettings extends StatefulWidget {
 class InterfaceSettingsState extends State<InterfaceSettings> {
   final TextEditingController _primaryColorInput = TextEditingController();
   String? _primaryColorError;
+  late final InterfaceController _controller;
 
   @override
   void initState() {
     super.initState();
-    _primaryColorInput.text =
-        '#${widget.controller.primaryColor.toRadixString(16)}';
+    _controller = context.read<InterfaceController>();
+    _primaryColorInput.text = '#${_controller.primaryColor.toRadixString(16)}';
   }
 
   @override
@@ -52,7 +52,7 @@ class InterfaceSettingsState extends State<InterfaceSettings> {
                         _primaryColorError = 'Invalid hex color';
                       } else {
                         _primaryColorError = null;
-                        widget.controller.setPrimaryColor(color);
+                        _controller.setPrimaryColor(color);
                       }
                     },
                     error: _primaryColorError == null
@@ -63,7 +63,7 @@ class InterfaceSettingsState extends State<InterfaceSettings> {
               Button(
                 text: 'Revert primary color to default',
                 onPressed: () {
-                  widget.controller.setPrimaryColor(0xff5538e5);
+                  _controller.setPrimaryColor(0xff5538e5);
                   _primaryColorInput.text = '#ff5538e5';
                 },
                 width: 200,

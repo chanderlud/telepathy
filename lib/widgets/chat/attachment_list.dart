@@ -33,6 +33,7 @@ class AttachmentList extends StatelessWidget {
           width: 500,
           margin: const EdgeInsets.symmetric(vertical: 5),
           child: InkWell(
+            mouseCursor: SystemMouseCursors.click,
             hoverColor: Colors.transparent,
             onTap: () => onShowImagePreview(file.$2!),
             onSecondaryTapDown: (details) =>
@@ -47,6 +48,7 @@ class AttachmentList extends StatelessWidget {
 
       // Generic file.
       return InkWell(
+        mouseCursor: SystemMouseCursors.click,
         onSecondaryTapDown: (details) =>
             onShowAttachmentMenu(details.globalPosition, file.$1),
         child: Text('Attachment: ${attachment.$1}'),
