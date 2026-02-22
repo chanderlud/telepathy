@@ -68,18 +68,18 @@ class SettingsMenuItem extends StatefulWidget {
 class _SettingsMenuItemState extends State<SettingsMenuItem> {
   bool _isHovered = false;
 
+  Color _getColor() {
+    if (_isHovered) {
+      return Theme.of(context).colorScheme.secondary;
+    } else if (widget.selected) {
+      return Theme.of(context).colorScheme.primary;
+    } else {
+      return Theme.of(context).colorScheme.surfaceDim;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    Color getColor() {
-      if (_isHovered) {
-        return Theme.of(context).colorScheme.secondary;
-      } else if (widget.selected) {
-        return Theme.of(context).colorScheme.primary;
-      } else {
-        return Theme.of(context).colorScheme.surfaceDim;
-      }
-    }
-
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20),
       child: InkWell(
@@ -94,7 +94,7 @@ class _SettingsMenuItemState extends State<SettingsMenuItem> {
           padding: const EdgeInsets.symmetric(vertical: 5, horizontal: 10),
           width: 175,
           decoration: BoxDecoration(
-            color: getColor(),
+            color: _getColor(),
             borderRadius: BorderRadius.circular(5),
           ),
           child: Text(widget.text, style: const TextStyle(fontSize: 18)),

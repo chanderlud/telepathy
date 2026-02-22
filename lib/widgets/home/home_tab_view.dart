@@ -47,47 +47,44 @@ class HomeTabViewState extends State<HomeTabView>
 
   @override
   Widget build(BuildContext context) {
-    return DefaultTabController(
-      length: 2,
-      child: Flexible(
-        fit: FlexFit.loose,
-        child: Container(
-          decoration: BoxDecoration(
-            color: _backgroundColor,
-            borderRadius: BorderRadius.circular(10.0),
-          ),
-          child: Column(
-            children: [
-              Container(
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.secondaryContainer,
-                  borderRadius:
-                      const BorderRadius.vertical(top: Radius.circular(10.0)),
-                ),
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                child: TabBar(
-                  controller: _tabController,
-                  splashFactory: NoSplash.splashFactory,
-                  overlayColor: WidgetStateProperty.all(Colors.transparent),
-                  dividerHeight: 0,
-                  padding: const EdgeInsets.all(0),
-                  tabs: [
-                    widget.iconOne,
-                    widget.iconTwo,
-                  ],
-                ),
+    return Flexible(
+      fit: FlexFit.loose,
+      child: Container(
+        decoration: BoxDecoration(
+          color: _backgroundColor,
+          borderRadius: BorderRadius.circular(10.0),
+        ),
+        child: Column(
+          children: [
+            Container(
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.secondaryContainer,
+                borderRadius:
+                    const BorderRadius.vertical(top: Radius.circular(10.0)),
               ),
-              Flexible(
-                child: TabBarView(
-                  controller: _tabController,
-                  children: [
-                    widget.widgetOne,
-                    widget.widgetTwo,
-                  ],
-                ),
-              )
-            ],
-          ),
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              child: TabBar(
+                controller: _tabController,
+                splashFactory: NoSplash.splashFactory,
+                overlayColor: WidgetStateProperty.all(Colors.transparent),
+                dividerHeight: 0,
+                padding: const EdgeInsets.all(0),
+                tabs: [
+                  widget.iconOne,
+                  widget.iconTwo,
+                ],
+              ),
+            ),
+            Flexible(
+              child: TabBarView(
+                controller: _tabController,
+                children: [
+                  widget.widgetOne,
+                  widget.widgetTwo,
+                ],
+              ),
+            )
+          ],
         ),
       ),
     );

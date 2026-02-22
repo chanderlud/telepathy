@@ -27,6 +27,26 @@ class OverlaySettingsState extends State<OverlaySettings> {
     _networkSettingsController = context.read<NetworkSettingsController>();
   }
 
+  Widget _colorPickerRow({
+    required String label,
+    required Color currentColor,
+    required void Function(Color) onColorChanged,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: const TextStyle(fontSize: 18)),
+        const SizedBox(height: 10),
+        Button(
+          text: 'Change',
+          onPressed: () {
+            colorPicker(context, onColorChanged, currentColor);
+          },
+        ),
+      ],
+    );
+  }
+
   @override
   void dispose() {
     if (!_stateController.isCallActive) {
@@ -126,47 +146,29 @@ class OverlaySettingsState extends State<OverlaySettings> {
         const SizedBox(height: 15),
         Row(
           children: [
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('Background Color', style: TextStyle(fontSize: 18)),
-                const SizedBox(height: 10),
-                Button(
-                    text: 'Change',
-                    onPressed: () {
-                      colorPicker(context, (Color color) {
-                        _overlay.setBackgroundColor(
-                            backgroundColor: color.toARGB32());
-                        _networkSettingsController
-                            .overlayConfig.backgroundColor = color;
-                        _networkSettingsController.saveOverlayConfig();
-                        setState(() {});
-                      },
-                          _networkSettingsController
-                              .overlayConfig.backgroundColor);
-                    }),
-              ],
+            _colorPickerRow(
+              label: 'Background Color',
+              currentColor:
+                  _networkSettingsController.overlayConfig.backgroundColor,
+              onColorChanged: (Color color) {
+                _overlay.setBackgroundColor(backgroundColor: color.toARGB32());
+                _networkSettingsController.overlayConfig.backgroundColor =
+                    color;
+                _networkSettingsController.saveOverlayConfig();
+                setState(() {});
+              },
             ),
             const SizedBox(width: 40),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('Primary Font Color',
-                    style: TextStyle(fontSize: 18)),
-                const SizedBox(height: 10),
-                Button(
-                    text: 'Change',
-                    onPressed: () {
-                      colorPicker(context, (Color color) {
-                        _overlay.setFontColor(fontColor: color.toARGB32());
-                        _networkSettingsController.overlayConfig.fontColor =
-                            color;
-                        _networkSettingsController.saveOverlayConfig();
-                        setState(() {});
-                      }, _networkSettingsController.overlayConfig.fontColor);
-                    }),
-              ],
-            )
+            _colorPickerRow(
+              label: 'Primary Font Color',
+              currentColor: _networkSettingsController.overlayConfig.fontColor,
+              onColorChanged: (Color color) {
+                _overlay.setFontColor(fontColor: color.toARGB32());
+                _networkSettingsController.overlayConfig.fontColor = color;
+                _networkSettingsController.saveOverlayConfig();
+                setState(() {});
+              },
+            ),
           ],
         ),
         const SizedBox(height: 35),

@@ -52,9 +52,10 @@ class ContactWidgetState extends State<ContactWidget> {
 
     bool active = stateController.isActiveContact(widget.contact);
     SessionStatus status = stateController.sessionStatus(widget.contact);
-    bool online = status.runtimeType == SessionStatus_Connected;
-    bool connecting = status.runtimeType == SessionStatus_Connecting;
-    bool inactive = status.runtimeType == SessionStatus_Inactive;
+    bool online = status is SessionStatus_Connected;
+    bool connecting = status is SessionStatus_Connecting;
+    bool inactive = status is SessionStatus_Inactive;
+    final connectedStatus = online ? status : null;
 
     return InkWell(
       mouseCursor: SystemMouseCursors.click,
@@ -207,12 +208,10 @@ class ContactWidgetState extends State<ContactWidget> {
                     semanticsLabel: 'Offline icon',
                     width: 26,
                   )),
-            if (online) ...[
-              Text((status as SessionStatus_Connected).relayed
-                  ? 'relayed'
-                  : 'direct'),
+            if (online && connectedStatus != null) ...[
+              Text(connectedStatus.relayed ? 'relayed' : 'direct'),
               const SizedBox(width: 5),
-              Text(status.remoteAddress),
+              Text(connectedStatus.remoteAddress),
             ],
             if (active)
               IconButton(

@@ -27,7 +27,6 @@ class SortedContactsList extends StatefulWidget {
 
 class _SortedContactsListState extends State<SortedContactsList> {
   List<Contact>? _cachedSortedContacts;
-  int? _previousContactsLength;
   int? _previousContactsHashCode;
   int? _previousSessionsHashCode;
 
@@ -69,7 +68,6 @@ class _SortedContactsListState extends State<SortedContactsList> {
   void _refreshCacheIfNeeded(
       ProfilesController profilesController, StateController stateController,
       {required bool force}) {
-    final int contactsLength = profilesController.contacts.length;
     final int contactsHash = Object.hashAll(
       profilesController.contacts.entries.map(
         (e) => Object.hash(e.key, e.value.nickname()),
@@ -77,8 +75,7 @@ class _SortedContactsListState extends State<SortedContactsList> {
     );
     final int sessionsHash = _computeSessionsHash(stateController);
 
-    final bool contactsChanged = _previousContactsLength != contactsLength ||
-        _previousContactsHashCode != contactsHash;
+    final bool contactsChanged = _previousContactsHashCode != contactsHash;
     final bool sessionsChanged = _previousSessionsHashCode != sessionsHash;
 
     if (force ||
@@ -87,7 +84,6 @@ class _SortedContactsListState extends State<SortedContactsList> {
         sessionsChanged) {
       _cachedSortedContacts =
           _sortContacts(profilesController, stateController);
-      _previousContactsLength = contactsLength;
       _previousContactsHashCode = contactsHash;
       _previousSessionsHashCode = sessionsHash;
     }

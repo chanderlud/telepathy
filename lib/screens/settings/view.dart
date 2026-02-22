@@ -70,6 +70,14 @@ class SettingsPageState extends State<SettingsPage>
     super.dispose();
   }
 
+  double _contentTopPadding(bool isNarrow, SettingsSection section) {
+    if (isNarrow) {
+      return section == SettingsSection.audioVideo ? 55 : 70;
+    } else {
+      return section == SettingsSection.audioVideo ? 10 : 30;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     BoxConstraints constraints = widget.constraints;
@@ -109,39 +117,27 @@ class SettingsPageState extends State<SettingsPage>
                           padding: EdgeInsets.only(
                               left: 20,
                               right: 20,
-                              top: constraints.maxWidth < 600
-                                  ? _section == SettingsSection.audioVideo
-                                      ? 55
-                                      : 70
-                                  : _section == SettingsSection.audioVideo
-                                      ? 10
-                                      : 30),
+                              top: _contentTopPadding(
+                                  constraints.maxWidth < 600, _section)),
                           child: SizedBox(
                             width: width,
                             child: LayoutBuilder(builder: (BuildContext context,
                                 BoxConstraints constraints) {
-                              if (_section == SettingsSection.audioVideo) {
-                                return AVSettings(
-                                  constraints: constraints,
-                                );
-                              } else if (_section == SettingsSection.profiles) {
-                                return const ProfileSettings();
-                              } else if (_section ==
-                                  SettingsSection.networking) {
-                                return NetworkSettings(
-                                    key: _key, constraints: constraints);
-                              } else if (_section ==
-                                  SettingsSection.interface) {
-                                return InterfaceSettings(
-                                    constraints: constraints);
-                              } else if (_section == SettingsSection.logs) {
-                                return LogsSettings(
-                                    searchController: _searchController);
-                              } else if (_section == SettingsSection.overlay) {
-                                return const OverlaySettings();
-                              } else {
-                                return const SizedBox();
-                              }
+                              return switch (_section) {
+                                SettingsSection.audioVideo => AVSettings(
+                                    constraints: constraints,
+                                  ),
+                                SettingsSection.profiles =>
+                                  const ProfileSettings(),
+                                SettingsSection.networking => NetworkSettings(
+                                    key: _key, constraints: constraints),
+                                SettingsSection.interface =>
+                                  InterfaceSettings(constraints: constraints),
+                                SettingsSection.logs => LogsSettings(
+                                    searchController: _searchController),
+                                SettingsSection.overlay =>
+                                  const OverlaySettings(),
+                              };
                             }),
                           ),
                         )

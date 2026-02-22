@@ -22,9 +22,6 @@ class OverlayPositionWidgetState extends State<OverlayPositionWidget> {
   late double _width;
   late double _height;
 
-  bool _isDragging = false;
-  bool _isResizing = false;
-
   @override
   void initState() {
     super.initState();
@@ -70,72 +67,44 @@ class OverlayPositionWidgetState extends State<OverlayPositionWidget> {
   }
 
   void _onDragUpdate(DragUpdateDetails details) {
-    if (_isDragging) {
-      setState(() {
-        _x += details.delta.dx;
-        _y += details.delta.dy;
+    setState(() {
+      _x += details.delta.dx;
+      _y += details.delta.dy;
 
-        if (_x < 0) {
-          _x = 0;
-        } else if (_x + _width > _maxX) {
-          _x = _maxX - _width;
-        }
+      if (_x < 0) {
+        _x = 0;
+      } else if (_x + _width > _maxX) {
+        _x = _maxX - _width;
+      }
 
-        if (_y < 0) {
-          _y = 0;
-        } else if (_y + _height > _maxY) {
-          _y = _maxY - _height;
-        }
+      if (_y < 0) {
+        _y = 0;
+      } else if (_y + _height > _maxY) {
+        _y = _maxY - _height;
+      }
 
-        _updateOverlay();
-      });
-    }
+      _updateOverlay();
+    });
   }
 
   void _onResizeUpdate(DragUpdateDetails details) {
-    if (_isResizing) {
-      setState(() {
-        _width += details.delta.dx;
-        _height += details.delta.dy;
-
-        if (_width + _x > _maxX) {
-          _width = _maxX - _x;
-        } else if (_width < 10) {
-          _width = 10;
-        }
-
-        if (_height + _y > _maxY) {
-          _height = _maxY - _y;
-        } else if (_height < 10) {
-          _height = 10;
-        }
-
-        _updateOverlay();
-      });
-    }
-  }
-
-  void _startDragging() {
     setState(() {
-      _isDragging = true;
-    });
-  }
+      _width += details.delta.dx;
+      _height += details.delta.dy;
 
-  void _startResizing() {
-    setState(() {
-      _isResizing = true;
-    });
-  }
+      if (_width + _x > _maxX) {
+        _width = _maxX - _x;
+      } else if (_width < 10) {
+        _width = 10;
+      }
 
-  void _stopDragging() {
-    setState(() {
-      _isDragging = false;
-    });
-  }
+      if (_height + _y > _maxY) {
+        _height = _maxY - _y;
+      } else if (_height < 10) {
+        _height = 10;
+      }
 
-  void _stopResizing() {
-    setState(() {
-      _isResizing = false;
+      _updateOverlay();
     });
   }
 
@@ -161,8 +130,8 @@ class OverlayPositionWidgetState extends State<OverlayPositionWidget> {
                 top: _y,
                 child: GestureDetector(
                   onPanUpdate: _onDragUpdate,
-                  onPanStart: (_) => _startDragging(),
-                  onPanEnd: (_) => _stopDragging(),
+                  onPanStart: (_) {},
+                  onPanEnd: (_) {},
                   child: Container(
                       decoration: BoxDecoration(
                         color: networkSettingsController
@@ -185,8 +154,8 @@ class OverlayPositionWidgetState extends State<OverlayPositionWidget> {
                 top: _y + _height - 10,
                 child: GestureDetector(
                   onPanUpdate: _onResizeUpdate,
-                  onPanStart: (_) => _startResizing(),
-                  onPanEnd: (_) => _stopResizing(),
+                  onPanStart: (_) {},
+                  onPanEnd: (_) {},
                   child: const MouseRegion(
                     cursor: SystemMouseCursors.resizeDownRight,
                     child: SizedBox(
