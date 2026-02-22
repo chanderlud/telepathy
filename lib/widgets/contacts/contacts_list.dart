@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:provider/provider.dart';
 import 'package:telepathy/controllers/index.dart';
 import 'package:telepathy/models/index.dart';
-import 'package:telepathy/src/rust/audio/player.dart';
-import 'package:telepathy/src/rust/telepathy.dart';
 import 'package:telepathy/src/rust/flutter.dart';
 import 'package:telepathy/widgets/contacts/contact_form.dart';
 import 'package:telepathy/widgets/contacts/contact_widget.dart';
@@ -12,21 +11,10 @@ import 'package:telepathy/widgets/contacts/snap_scroll_physics.dart';
 
 /// A widget which displays a list of ContactWidgets.
 class ContactsList extends StatelessWidget {
-  final Telepathy telepathy;
-  final StateController stateController;
-  final ProfilesController profilesController;
   final List<Contact> contacts;
   final List<Room> rooms;
-  final SoundPlayer player;
 
-  const ContactsList(
-      {super.key,
-      required this.telepathy,
-      required this.contacts,
-      required this.rooms,
-      required this.stateController,
-      required this.profilesController,
-      required this.player});
+  const ContactsList({super.key, required this.contacts, required this.rooms});
 
   @override
   Widget build(BuildContext context) {
@@ -64,12 +52,7 @@ class ContactsList extends StatelessWidget {
                                   backgroundColor: Theme.of(context)
                                       .colorScheme
                                       .secondaryContainer,
-                                  children: [
-                                    ContactForm(
-                                      telepathy: telepathy,
-                                      profilesController: profilesController,
-                                    )
-                                  ],
+                                  children: const [ContactForm()],
                                 );
                               });
                         },
@@ -104,31 +87,19 @@ class ContactsList extends StatelessWidget {
                   itemExtent: itemHeight, // every item = 1/3 of viewport
                   physics: SnapScrollPhysics(itemExtent: itemHeight),
                   itemBuilder: (BuildContext context, int index) {
-                    return ListenableBuilder(
-                      listenable: stateController,
-                      builder: (BuildContext context, Widget? child) {
-                        final item = items[index];
+                    final item = items[index];
 
-                        if (item is Contact) {
-                          return ContactWidget(
-                            contact: item,
-                            telepathy: telepathy,
-                            stateController: stateController,
-                            player: player,
-                            profilesController: profilesController,
-                          );
-                        } else if (item is Room) {
-                          return RoomWidget(
-                            room: item,
-                            telepathy: telepathy,
-                            stateController: stateController,
-                            player: player,
-                          );
-                        } else {
-                          return const SizedBox.shrink();
-                        }
-                      },
-                    );
+                    if (item is Contact) {
+                      return ContactWidget(
+                        contact: item,
+                      );
+                    } else if (item is Room) {
+                      return RoomWidget(
+                        room: item,
+                      );
+                    } else {
+                      return const SizedBox.shrink();
+                    }
                   },
                 );
               }),

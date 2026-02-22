@@ -3,17 +3,13 @@ import 'package:telepathy/screens/settings/view.dart';
 
 class SettingsMenu extends StatelessWidget {
   final SettingsSection selected;
-  final SettingsSection? hovered;
   final void Function(SettingsSection) onSectionSelected;
-  final void Function(SettingsSection, bool) onHoverChanged;
   final bool showOverlayItem;
 
   const SettingsMenu({
     super.key,
     required this.selected,
-    required this.hovered,
     required this.onSectionSelected,
-    required this.onHoverChanged,
     required this.showOverlayItem,
   });
 
@@ -48,38 +44,36 @@ class SettingsMenu extends StatelessWidget {
     return SettingsMenuItem(
       text: text,
       selected: selected == section,
-      hovered: hovered == section,
       onTap: () => onSectionSelected(section),
-      onEnter: () => onHoverChanged(section, true),
-      onExit: () => onHoverChanged(section, false),
     );
   }
 }
 
-class SettingsMenuItem extends StatelessWidget {
+class SettingsMenuItem extends StatefulWidget {
   final String text;
   final bool selected;
-  final bool hovered;
   final VoidCallback onTap;
-  final VoidCallback onEnter;
-  final VoidCallback onExit;
 
   const SettingsMenuItem({
     super.key,
     required this.text,
     required this.selected,
-    required this.hovered,
     required this.onTap,
-    required this.onEnter,
-    required this.onExit,
   });
+
+  @override
+  State<SettingsMenuItem> createState() => _SettingsMenuItemState();
+}
+
+class _SettingsMenuItemState extends State<SettingsMenuItem> {
+  bool _isHovered = false;
 
   @override
   Widget build(BuildContext context) {
     Color getColor() {
-      if (hovered) {
+      if (_isHovered) {
         return Theme.of(context).colorScheme.secondary;
-      } else if (selected) {
+      } else if (widget.selected) {
         return Theme.of(context).colorScheme.primary;
       } else {
         return Theme.of(context).colorScheme.surfaceDim;
@@ -89,8 +83,13 @@ class SettingsMenuItem extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20),
       child: InkWell(
-        onTap: onTap,
-        onHover: (isHovered) => isHovered ? onEnter() : onExit(),
+        mouseCursor: SystemMouseCursors.click,
+        onTap: widget.onTap,
+        onHover: (isHovered) {
+          setState(() {
+            _isHovered = isHovered;
+          });
+        },
         child: Container(
           padding: const EdgeInsets.symmetric(vertical: 5, horizontal: 10),
           width: 175,
@@ -98,7 +97,7 @@ class SettingsMenuItem extends StatelessWidget {
             color: getColor(),
             borderRadius: BorderRadius.circular(5),
           ),
-          child: Text(text, style: const TextStyle(fontSize: 18)),
+          child: Text(widget.text, style: const TextStyle(fontSize: 18)),
         ),
       ),
     );

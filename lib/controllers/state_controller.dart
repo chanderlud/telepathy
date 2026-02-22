@@ -148,7 +148,7 @@ class StateController extends ChangeNotifier {
         await record.$1.notified();
         // if the screen share is still sending, stop the screenshare
         if (isSendingScreenshare) {
-          stopScreenshare(true);
+          stopScreenshare(true, true);
         }
       });
     } else {
@@ -160,7 +160,7 @@ class StateController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void stopScreenshare(bool sending) {
+  void stopScreenshare(bool sending, bool notify) {
     DebugConsole.log('Stopping screenshare sending: $sending');
 
     if (sending) {
@@ -173,18 +173,23 @@ class StateController extends ChangeNotifier {
       isReceivingScreenshare = false;
     }
 
-    notifyListeners();
+    if (notify) {
+      notifyListeners();
+    }
   }
 
   /// a group of actions run when the call ends
   void endOfCall() {
     _activeRoom?.online.clear();
-    setActiveContact(null);
-    setActiveRoom(null);
-    setStatus('Inactive');
+    _activeContact = null;
+    _activeRoom = null;
+    status = 'Inactive';
+    _callTimer.stop();
+    _callTimer.reset();
     disableCallsTemporarily();
-    stopScreenshare(true);
-    stopScreenshare(false);
+    stopScreenshare(true, false);
+    stopScreenshare(false, false);
+    notifyListeners();
   }
 }
 

@@ -1,4 +1,5 @@
 import 'dart:collection';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:telepathy/core/utils/format_utils.dart';
@@ -12,7 +13,14 @@ class StatisticsController extends ChangeNotifier {
   final ListQueue<int> _lossWindow = ListQueue<int>(lossWindowSize)
     ..addAll(List<int>.filled(lossWindowSize, 0));
 
-  List<int> get lossWindow => List.unmodifiable(_lossWindow);
+  int _lossWindowVersion = 0;
+  int _cachedLossWindowMax = 1;
+
+  List<int> get lossWindow => _lossWindow.toList();
+
+  int get lossWindowVersion => _lossWindowVersion;
+
+  int get lossWindowMax => _cachedLossWindowMax;
 
   int get latency => _statistics?.latency.toInt() ?? 0;
 
@@ -34,6 +42,8 @@ class StatisticsController extends ChangeNotifier {
       _lossWindow.removeFirst();
     }
 
+    _cachedLossWindowMax = _lossWindow.reduce(max);
+    _lossWindowVersion++;
     notifyListeners();
   }
 }

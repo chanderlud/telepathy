@@ -1,11 +1,10 @@
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart' hide Overlay;
+import 'package:provider/provider.dart';
 import 'package:telepathy/core/theme/app_theme.dart';
 import 'package:telepathy/controllers/index.dart';
 import 'package:telepathy/screens/home/home_page.dart';
 
-import 'package:telepathy/src/rust/audio/player.dart';
-import 'package:telepathy/src/rust/overlay/overlay.dart';
 import 'package:telepathy/src/rust/telepathy.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -13,33 +12,7 @@ final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 /// The main app
 class TelepathyApp extends StatefulWidget {
-  final Telepathy telepathy;
-  final ProfilesController profilesController;
-  final AudioSettingsController audioSettingsController;
-  final NetworkSettingsController networkSettingsController;
-  final PreferencesController preferencesController;
-  final InterfaceController interfaceController;
-  final StateController callStateController;
-  final StatisticsController statisticsController;
-  final SoundPlayer player;
-  final ChatStateController chatStateController;
-  final Overlay overlay;
-  final AudioDevices audioDevices;
-
-  const TelepathyApp(
-      {super.key,
-      required this.telepathy,
-      required this.profilesController,
-      required this.audioSettingsController,
-      required this.networkSettingsController,
-      required this.preferencesController,
-      required this.callStateController,
-      required this.player,
-      required this.chatStateController,
-      required this.statisticsController,
-      required this.overlay,
-      required this.audioDevices,
-      required this.interfaceController});
+  const TelepathyApp({super.key});
 
   @override
   State<StatefulWidget> createState() => _TelepathyAppState();
@@ -72,7 +45,7 @@ class _TelepathyAppState extends State<TelepathyApp> with WindowListener {
     // second click (or more): force close, ignore whatever shutdown is doing
     if (!_isClosing) {
       _isClosing = true;
-      await widget.telepathy.shutdown();
+      await context.read<Telepathy>().shutdown();
     }
 
     await windowManager.setPreventClose(false);
@@ -81,46 +54,31 @@ class _TelepathyAppState extends State<TelepathyApp> with WindowListener {
 
   @override
   void onWindowMinimize() {
-    widget.telepathy.pauseStatistics();
+    context.read<Telepathy>().pauseStatistics();
   }
 
   @override
   void onWindowMaximize() {
-    widget.telepathy.resumeStatistics();
+    context.read<Telepathy>().resumeStatistics();
   }
 
   @override
   void onWindowRestore() {
-    widget.telepathy.resumeStatistics();
+    context.read<Telepathy>().resumeStatistics();
   }
 
   @override
   Widget build(BuildContext context) {
-    return ListenableBuilder(
-        listenable: widget.interfaceController,
-        builder: (BuildContext context, Widget? child) {
-          return MaterialApp(
-            navigatorKey: navigatorKey,
-            theme: AppTheme.dark(
-              context,
-              primaryColor: widget.interfaceController.primaryColor,
-              secondaryColor: widget.interfaceController.secondaryColor,
-            ),
-            home: HomePage(
-              telepathy: widget.telepathy,
-              profilesController: widget.profilesController,
-              audioSettingsController: widget.audioSettingsController,
-              networkSettingsController: widget.networkSettingsController,
-              preferencesController: widget.preferencesController,
-              interfaceController: widget.interfaceController,
-              stateController: widget.callStateController,
-              player: widget.player,
-              chatStateController: widget.chatStateController,
-              statisticsController: widget.statisticsController,
-              overlay: widget.overlay,
-              audioDevices: widget.audioDevices,
-            ),
-          );
-        });
+    final interfaceController = context.watch<InterfaceController>();
+
+    return MaterialApp(
+      navigatorKey: navigatorKey,
+      theme: AppTheme.dark(
+        context,
+        primaryColor: interfaceController.primaryColor,
+        secondaryColor: interfaceController.secondaryColor,
+      ),
+      home: const HomePage(),
+    );
   }
 }

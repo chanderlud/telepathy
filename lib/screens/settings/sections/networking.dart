@@ -1,22 +1,15 @@
 import 'dart:core';
 import 'package:flutter/material.dart' hide Overlay;
+import 'package:provider/provider.dart';
 import 'package:telepathy/controllers/index.dart';
 import 'package:telepathy/src/rust/telepathy.dart';
 import 'package:telepathy/src/rust/error.dart';
 import 'package:telepathy/widgets/common/index.dart';
 
 class NetworkSettings extends StatefulWidget {
-  final NetworkSettingsController networkSettingsController;
-  final Telepathy telepathy;
-  final StateController stateController;
   final BoxConstraints constraints;
 
-  const NetworkSettings(
-      {super.key,
-      required this.networkSettingsController,
-      required this.telepathy,
-      required this.stateController,
-      required this.constraints});
+  const NetworkSettings({super.key, required this.constraints});
 
   @override
   NetworkSettingsState createState() => NetworkSettingsState();
@@ -40,10 +33,10 @@ class NetworkSettingsState extends State<NetworkSettings> {
   }
 
   Future<void> _initialize() async {
+    final networkSettingsController = context.read<NetworkSettingsController>();
     _relayAddress =
-        await widget.networkSettingsController.networkConfig.getRelayAddress();
-    _relayPeerId =
-        await widget.networkSettingsController.networkConfig.getRelayId();
+        await networkSettingsController.networkConfig.getRelayAddress();
+    _relayPeerId = await networkSettingsController.networkConfig.getRelayId();
 
     _relayAddressInput.text = _relayAddress;
     _relayPeerIdInput.text = _relayPeerId;
@@ -116,11 +109,14 @@ class NetworkSettingsState extends State<NetworkSettings> {
     String relayAddress = _relayAddressInput.text;
     String relayId = _relayPeerIdInput.text;
 
+    final networkSettingsController = context.read<NetworkSettingsController>();
+    final telepathy = context.read<Telepathy>();
+
     bool changed = false;
 
     try {
       // this will raise an error if the relay ID isn't formatted right
-      await widget.networkSettingsController.networkConfig
+      await networkSettingsController.networkConfig
           .setRelayId(relayId: relayId);
       _relayPeerId = relayId;
       changed = true;
@@ -135,7 +131,7 @@ class NetworkSettingsState extends State<NetworkSettings> {
 
     try {
       // this will raise an error if the relay address isn't a valid socket address
-      await widget.networkSettingsController.networkConfig
+      await networkSettingsController.networkConfig
           .setRelayAddress(relayAddress: relayAddress);
       _relayAddress = relayAddress;
       changed = true;
@@ -151,8 +147,8 @@ class NetworkSettingsState extends State<NetworkSettings> {
     unsavedChanges = _relayAddressError != null || _relayPeerIdError != null;
 
     if (changed) {
-      widget.networkSettingsController.saveNetworkConfig();
-      widget.telepathy.restartManager();
+      networkSettingsController.saveNetworkConfig();
+      telepathy.restartManager();
     }
   }
 }

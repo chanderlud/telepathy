@@ -1,5 +1,6 @@
 import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import 'package:telepathy/core/constants/audio_constants.dart'
     as audio_constants;
 import 'package:telepathy/controllers/index.dart';
@@ -10,12 +11,10 @@ import 'package:telepathy/src/rust/flutter.dart';
 import 'package:telepathy/widgets/common/index.dart';
 
 class ScreenshareSettings extends StatefulWidget {
-  final NetworkSettingsController networkSettingsController;
   final BoxConstraints constraints;
 
   const ScreenshareSettings({
     super.key,
-    required this.networkSettingsController,
     required this.constraints,
   });
 
@@ -33,10 +32,12 @@ class _ScreenshareSettingsState extends State<ScreenshareSettings> {
   void initState() {
     super.initState();
 
+    final networkSettingsController = context.read<NetworkSettingsController>();
+
     var capabilitiesFuture =
-        widget.networkSettingsController.screenshareConfig.capabilities();
+        networkSettingsController.screenshareConfig.capabilities();
     var recordingConfigFuture =
-        widget.networkSettingsController.screenshareConfig.recordingConfig();
+        networkSettingsController.screenshareConfig.recordingConfig();
 
     Future.wait([capabilitiesFuture, recordingConfigFuture])
         .then((List<dynamic> results) {
@@ -210,8 +211,11 @@ class _ScreenshareSettingsState extends State<ScreenshareSettings> {
                 _loading = true;
               });
 
+              final networkSettingsController =
+                  context.read<NetworkSettingsController>();
+
               try {
-                await widget.networkSettingsController.screenshareConfig
+                await networkSettingsController.screenshareConfig
                     .updateRecordingConfig(
                         encoder: _temporaryConfig!.encoder,
                         device: _temporaryConfig!.device,
@@ -231,7 +235,7 @@ class _ScreenshareSettingsState extends State<ScreenshareSettings> {
                 return;
               }
 
-              widget.networkSettingsController.saveScreenshareConfig();
+              networkSettingsController.saveScreenshareConfig();
               setState(() {
                 _temporaryConfig = null;
                 _loading = false;

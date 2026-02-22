@@ -7,6 +7,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shared_preferences/util/legacy_to_async_migration_util.dart';
+import 'package:provider/provider.dart';
 import 'package:telepathy/app.dart';
 import 'package:telepathy/controllers/index.dart';
 import 'package:telepathy/core/utils/index.dart';
@@ -272,18 +273,23 @@ Future<void> main(List<String> args) async {
       InterfaceController(options: options);
   await interfaceController.init();
 
-  runApp(TelepathyApp(
-    telepathy: telepathy,
-    profilesController: profilesController,
-    audioSettingsController: audioSettingsController,
-    networkSettingsController: networkSettingsController,
-    preferencesController: preferencesController,
-    interfaceController: interfaceController,
-    callStateController: stateController,
-    player: soundPlayer,
-    chatStateController: chatStateController,
-    statisticsController: statisticsController,
-    overlay: overlay,
-    audioDevices: audioDevices,
-  ));
+  runApp(
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider.value(value: profilesController),
+        ChangeNotifierProvider.value(value: audioSettingsController),
+        ChangeNotifierProvider.value(value: networkSettingsController),
+        ChangeNotifierProvider.value(value: preferencesController),
+        ChangeNotifierProvider.value(value: interfaceController),
+        ChangeNotifierProvider.value(value: stateController),
+        ChangeNotifierProvider.value(value: statisticsController),
+        ChangeNotifierProvider.value(value: chatStateController),
+        ChangeNotifierProvider.value(value: audioDevices),
+        Provider.value(value: telepathy),
+        Provider.value(value: soundPlayer),
+        Provider.value(value: overlay),
+      ],
+      child: const TelepathyApp(),
+    ),
+  );
 }

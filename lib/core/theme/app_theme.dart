@@ -16,6 +16,7 @@ class AppTheme {
         trackShape: CustomTrackShape(),
         inactiveTrackColor: const Color(0xFF121212),
         activeTrackColor: Color(primaryColor),
+        mouseCursor: WidgetStateMouseCursor.clickable,
       ),
       colorScheme: ColorScheme.dark(
         primary: Color(primaryColor),
@@ -32,6 +33,22 @@ class AppTheme {
         overlayColor: WidgetStateProperty.all(Colors.transparent),
         thumbColor: WidgetStateProperty.all(
             Theme.of(context).tabBarTheme.indicatorColor),
+        mouseCursor: WidgetStateMouseCursor.clickable,
+      ),
+      iconButtonTheme: const IconButtonThemeData(
+        style: ButtonStyle(
+          mouseCursor: WidgetStateMouseCursor.clickable,
+        ),
+      ),
+      elevatedButtonTheme: const ElevatedButtonThemeData(
+        style: ButtonStyle(
+          mouseCursor: WidgetStateMouseCursor.clickable,
+        ),
+      ),
+      menuButtonTheme: const MenuButtonThemeData(
+        style: ButtonStyle(
+          mouseCursor: WidgetStateMouseCursor.clickable,
+        ),
       ),
       dropdownMenuTheme: DropdownMenuThemeData(
         menuStyle: MenuStyle(

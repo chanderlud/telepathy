@@ -1,106 +1,100 @@
 import 'package:flutter/material.dart' hide Overlay;
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:provider/provider.dart';
 import 'package:telepathy/controllers/index.dart';
 import 'package:telepathy/core/utils/index.dart';
 import 'package:telepathy/screens/settings/view.dart';
 import 'package:telepathy/src/rust/audio/player.dart';
 import 'package:telepathy/src/rust/flutter.dart';
-import 'package:telepathy/src/rust/overlay/overlay.dart';
 import 'package:telepathy/src/rust/telepathy.dart';
-import 'package:telepathy/widgets/common/index.dart';
 
 /// A widget with commonly used controls for a call.
-class CallControls extends StatelessWidget {
-  final Telepathy telepathy;
-  final ProfilesController profilesController;
-  final AudioSettingsController audioSettingsController;
-  final NetworkSettingsController networkSettingsController;
-  final PreferencesController preferencesController;
-  final InterfaceController interfaceController;
-  final StateController stateController;
-  final StatisticsController statisticsController;
-  final SoundPlayer player;
-  final PeriodicNotifier notifier;
-  final Overlay overlay;
-  final AudioDevices audioDevices;
+class CallControls extends StatefulWidget {
+  const CallControls({super.key});
 
-  const CallControls(
-      {super.key,
-      required this.telepathy,
-      required this.profilesController,
-      required this.audioSettingsController,
-      required this.networkSettingsController,
-      required this.preferencesController,
-      required this.stateController,
-      required this.player,
-      required this.statisticsController,
-      required this.notifier,
-      required this.overlay,
-      required this.audioDevices,
-      required this.interfaceController});
+  @override
+  State<CallControls> createState() => _CallControlsState();
+}
+
+class _CallControlsState extends State<CallControls> {
+  late final PeriodicNotifier _notifier;
+
+  @override
+  void initState() {
+    super.initState();
+    _notifier = PeriodicNotifier();
+  }
+
+  @override
+  void dispose() {
+    _notifier.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
+    final telepathy = context.read<Telepathy>();
+    final player = context.read<SoundPlayer>();
+
     return Column(
       children: [
         const SizedBox(height: 10),
-        ListenableBuilder(
-            listenable: stateController,
-            builder: (BuildContext context, Widget? child) {
-              Widget body;
+        Consumer<StateController>(builder:
+            (BuildContext context, StateController stateController, _) {
+          Widget body;
 
-              if (stateController.sessionManagerActive) {
-                if (stateController.isCallActive) {
-                  body = ListenableBuilder(
-                      listenable: notifier,
-                      builder: (BuildContext context, Widget? child) {
-                        return Text(stateController.callDuration,
-                            style: const TextStyle(fontSize: 20));
-                      });
-                } else {
-                  body = Text(stateController.status,
-                      style: const TextStyle(fontSize: 20));
-                }
-              } else {
-                body = Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const SizedBox(width: 15),
-                    const Text('Session Manager Inactive',
-                        style:
-                            TextStyle(fontSize: 16, color: Color(0xFFdc2626))),
-                    stateController.sessionManagerRestartable
-                        ? const Spacer()
-                        : const SizedBox(width: 10),
-                    stateController.sessionManagerRestartable
-                        ? IconButton(
-                            onPressed: () {
-                              telepathy.restartManager();
-                            },
-                            icon: SvgPicture.asset('assets/icons/Restart.svg',
-                                colorFilter: const ColorFilter.mode(
-                                    Color(0xFFdc2626), BlendMode.srcIn),
-                                semanticsLabel: 'Restart session manager'))
-                        : Container(),
-                    const SizedBox(width: 5),
-                  ],
-                );
-              }
+          if (stateController.sessionManagerActive) {
+            if (stateController.isCallActive) {
+              body = ListenableBuilder(
+                  listenable: _notifier,
+                  builder: (BuildContext context, Widget? child) {
+                    return Text(stateController.callDuration,
+                        style: const TextStyle(fontSize: 20));
+                  });
+            } else {
+              body = Text(stateController.status,
+                  style: const TextStyle(fontSize: 20));
+            }
+          } else {
+            body = Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const SizedBox(width: 15),
+                const Text('Session Manager Inactive',
+                    style: TextStyle(fontSize: 16, color: Color(0xFFdc2626))),
+                stateController.sessionManagerRestartable
+                    ? const Spacer()
+                    : const SizedBox(width: 10),
+                stateController.sessionManagerRestartable
+                    ? IconButton(
+                        onPressed: () {
+                          telepathy.restartManager();
+                        },
+                        icon: SvgPicture.asset('assets/icons/Restart.svg',
+                            colorFilter: const ColorFilter.mode(
+                                Color(0xFFdc2626), BlendMode.srcIn),
+                            semanticsLabel: 'Restart session manager'))
+                    : Container(),
+                const SizedBox(width: 5),
+              ],
+            );
+          }
 
-              return SizedBox(
-                height: 40,
-                child: Center(child: body),
-              );
-            }),
+          return SizedBox(
+            height: 40,
+            child: Center(child: body),
+          );
+        }),
         Padding(
           padding: const EdgeInsets.only(left: 25, right: 25, top: 20),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Selector<AudioSettingsController, double>(
-                listenable: audioSettingsController,
-                selector: (c) => c.outputVolume,
-                builder: (context, outputVolume) {
+                selector: (context, c) => c.outputVolume,
+                builder: (context, outputVolume, child) {
+                  final audioSettingsController =
+                      context.read<AudioSettingsController>();
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -122,9 +116,10 @@ class CallControls extends StatelessWidget {
                 },
               ),
               Selector<AudioSettingsController, double>(
-                listenable: audioSettingsController,
-                selector: (c) => c.inputVolume,
-                builder: (context, inputVolume) {
+                selector: (context, c) => c.inputVolume,
+                builder: (context, inputVolume, child) {
+                  final audioSettingsController =
+                      context.read<AudioSettingsController>();
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -146,9 +141,10 @@ class CallControls extends StatelessWidget {
                 },
               ),
               Selector<AudioSettingsController, double>(
-                listenable: audioSettingsController,
-                selector: (c) => c.inputSensitivity,
-                builder: (context, inputSensitivity) {
+                selector: (context, c) => c.inputSensitivity,
+                builder: (context, inputSensitivity, child) {
+                  final audioSettingsController =
+                      context.read<AudioSettingsController>();
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -185,61 +181,59 @@ class CallControls extends StatelessWidget {
                   child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  ListenableBuilder(
-                      listenable: stateController,
-                      builder: (BuildContext context, Widget? child) {
-                        return IconButton(
-                            onPressed: () async {
-                              if (stateController.isDeafened) {
-                                return;
-                              }
+                  Consumer<StateController>(
+                      builder: (BuildContext context,
+                              StateController stateController, _) =>
+                          IconButton(
+                              onPressed: () async {
+                                if (stateController.isDeafened) {
+                                  return;
+                                }
 
-                              List<int> bytes = stateController.isMuted
-                                  ? await readSeaBytes('unmute')
-                                  : await readSeaBytes('mute');
-                              otherSoundHandle =
-                                  await player.play(bytes: bytes);
+                                List<int> bytes = stateController.isMuted
+                                    ? await readSeaBytes('unmute')
+                                    : await readSeaBytes('mute');
+                                otherSoundHandle =
+                                    await player.play(bytes: bytes);
 
-                              stateController.mute();
-                              telepathy.setMuted(
-                                  muted: stateController.isMuted);
-                            },
-                            icon: SvgPicture.asset(
-                                stateController.isDeafened |
-                                        stateController.isMuted
-                                    ? 'assets/icons/MicrophoneOff.svg'
-                                    : 'assets/icons/Microphone.svg',
-                                width: 24));
-                      }),
-                  ListenableBuilder(
-                      listenable: stateController,
-                      builder: (BuildContext context, Widget? child) {
-                        return IconButton(
-                            onPressed: () async {
-                              List<int> bytes = stateController.isDeafened
-                                  ? await readSeaBytes('deafen')
-                                  : await readSeaBytes('undeafen');
-                              otherSoundHandle =
-                                  await player.play(bytes: bytes);
+                                stateController.mute();
+                                telepathy.setMuted(
+                                    muted: stateController.isMuted);
+                              },
+                              icon: SvgPicture.asset(
+                                  stateController.isDeafened |
+                                          stateController.isMuted
+                                      ? 'assets/icons/MicrophoneOff.svg'
+                                      : 'assets/icons/Microphone.svg',
+                                  width: 24))),
+                  Consumer<StateController>(
+                      builder: (BuildContext context,
+                              StateController stateController, _) =>
+                          IconButton(
+                              onPressed: () async {
+                                List<int> bytes = stateController.isDeafened
+                                    ? await readSeaBytes('deafen')
+                                    : await readSeaBytes('undeafen');
+                                otherSoundHandle =
+                                    await player.play(bytes: bytes);
 
-                              stateController.deafen();
-                              telepathy.setDeafened(
-                                  deafened: stateController.isDeafened);
+                                stateController.deafen();
+                                telepathy.setDeafened(
+                                    deafened: stateController.isDeafened);
 
-                              if (stateController.isDeafened &&
-                                  stateController.isMuted) {
-                                telepathy.setMuted(muted: true);
-                              } else {
-                                telepathy.setMuted(muted: false);
-                              }
-                            },
-                            visualDensity: VisualDensity.comfortable,
-                            icon: SvgPicture.asset(
-                                stateController.isDeafened
-                                    ? 'assets/icons/SpeakerOff.svg'
-                                    : 'assets/icons/Speaker.svg',
-                                width: 28));
-                      }),
+                                if (stateController.isDeafened &&
+                                    stateController.isMuted) {
+                                  telepathy.setMuted(muted: true);
+                                } else {
+                                  telepathy.setMuted(muted: false);
+                                }
+                              },
+                              visualDensity: VisualDensity.comfortable,
+                              icon: SvgPicture.asset(
+                                  stateController.isDeafened
+                                      ? 'assets/icons/SpeakerOff.svg'
+                                      : 'assets/icons/Speaker.svg',
+                                  width: 28))),
                   IconButton(
                       onPressed: () {
                         Navigator.push(
@@ -249,19 +243,6 @@ class CallControls extends StatelessWidget {
                                   LayoutBuilder(builder: (BuildContext context,
                                       BoxConstraints constraints) {
                                 return SettingsPage(
-                                  profilesController: profilesController,
-                                  audioSettingsController:
-                                      audioSettingsController,
-                                  networkSettingsController:
-                                      networkSettingsController,
-                                  preferencesController: preferencesController,
-                                  interfaceController: interfaceController,
-                                  telepathy: telepathy,
-                                  stateController: stateController,
-                                  statisticsController: statisticsController,
-                                  player: player,
-                                  overlay: overlay,
-                                  audioDevices: audioDevices,
                                   constraints: constraints,
                                 );
                               })),
@@ -269,14 +250,17 @@ class CallControls extends StatelessWidget {
                       },
                       icon: SvgPicture.asset('assets/icons/Settings.svg')),
                   const SizedBox(width: 1),
-                  ListenableBuilder(
-                      listenable: stateController,
-                      builder: (BuildContext context, Widget? child) =>
+                  Consumer<StateController>(
+                      builder: (BuildContext context,
+                              StateController stateController, _) =>
                           IconButton(
                               onPressed: () async {
                                 if (stateController.activeContact == null) {
                                   return;
                                 }
+
+                                final networkSettingsController =
+                                    context.read<NetworkSettingsController>();
 
                                 if (!(await screenshareAvailable())) {
                                   if (context.mounted) {
@@ -305,7 +289,7 @@ class CallControls extends StatelessWidget {
                                   telepathy.startScreenshare(
                                       contact: stateController.activeContact!);
                                 } else {
-                                  stateController.stopScreenshare(true);
+                                  stateController.stopScreenshare(true, true);
                                 }
                               },
                               icon: SvgPicture.asset(

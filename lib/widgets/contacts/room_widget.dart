@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:provider/provider.dart';
 import 'package:telepathy/controllers/index.dart';
 import 'package:telepathy/core/utils/index.dart';
 import 'package:telepathy/models/index.dart';
@@ -10,16 +11,10 @@ import 'package:telepathy/src/rust/telepathy.dart';
 
 class RoomWidget extends StatefulWidget {
   final Room room;
-  final Telepathy telepathy;
-  final StateController stateController;
-  final SoundPlayer player;
 
   const RoomWidget({
     super.key,
     required this.room,
-    required this.stateController,
-    required this.telepathy,
-    required this.player,
   });
 
   @override
@@ -31,7 +26,12 @@ class RoomWidgetState extends State<RoomWidget> {
 
   @override
   Widget build(BuildContext context) {
+    final stateController = context.read<StateController>();
+    final telepathy = context.read<Telepathy>();
+    final player = context.read<SoundPlayer>();
+
     return InkWell(
+      mouseCursor: SystemMouseCursors.click,
       onHover: (hover) {
         setState(() {
           isHovered = hover;
@@ -92,30 +92,29 @@ class RoomWidgetState extends State<RoomWidget> {
                 width: 32,
               ),
               onPressed: () async {
-                if (widget.stateController.isCallActive) {
+                if (stateController.isCallActive) {
                   showErrorDialog(
                       context, 'Call failed', 'There is a call already active');
                   return;
-                } else if (widget.stateController.inAudioTest) {
+                } else if (stateController.inAudioTest) {
                   showErrorDialog(context, 'Call failed',
                       'Cannot make a call while in an audio test');
                   return;
-                } else if (widget.stateController.callEndedRecently) {
+                } else if (stateController.callEndedRecently) {
                   // if the call button is pressed right after a call ended, we assume the user did not want to make a call
                   return;
                 }
 
-                widget.stateController.setStatus('Connecting');
+                stateController.setStatus('Connecting');
                 List<int> bytes = await readSeaBytes('outgoing');
-                outgoingSoundHandle = await widget.player.play(bytes: bytes);
+                outgoingSoundHandle = await player.play(bytes: bytes);
 
                 try {
-                  await widget.telepathy
-                      .joinRoom(memberStrings: widget.room.peerIds);
+                  await telepathy.joinRoom(memberStrings: widget.room.peerIds);
                   widget.room.online.clear();
-                  widget.stateController.setActiveRoom(widget.room);
+                  stateController.setActiveRoom(widget.room);
                 } on DartError catch (e) {
-                  widget.stateController.setStatus('Inactive');
+                  stateController.setStatus('Inactive');
                   outgoingSoundHandle?.cancel();
                   if (!context.mounted) return;
                   showErrorDialog(context, 'Call failed', e.message);
