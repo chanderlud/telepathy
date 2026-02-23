@@ -26,6 +26,7 @@
 //! let _ = tx;
 //! ```
 
+use crate::constants::TRANSITION_LENGTH;
 use crate::devices::{AudioHost, get_output_device};
 use crate::error::Error;
 use crate::internal::NETWORK_FRAME;
@@ -35,6 +36,7 @@ use crate::internal::thread::{self, JoinHandle};
 use crate::internal::traits::AudioOutput;
 use crate::internal::traits::CHANNEL_SIZE;
 use crate::internal::traits::RingBufferOutput;
+use crate::internal::utils::{hann_fade_in, hann_fade_out};
 use crate::io::SendStream;
 use crate::io::traits::AudioDataSource;
 use crate::sea::codec::file::SeaFileHeader;
@@ -45,12 +47,10 @@ use cpal::SampleFormat;
 use cpal::traits::{DeviceTrait, StreamTrait};
 use log::{debug, error};
 use nnnoiseless::FRAME_SIZE;
+use rtrb::chunks::ChunkError;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
-use rtrb::chunks::ChunkError;
 use tokio::sync::Notify;
-use crate::constants::TRANSITION_LENGTH;
-use crate::internal::utils::{hann_fade_in, hann_fade_out};
 
 /// Configuration for audio output processing.
 ///
@@ -560,8 +560,12 @@ where
                         };
 
                         for i in 0..ramp_in_len {
-                            let Some(frame) = frames.next() else { break; };
-                            let Some(sample_f32) = samples.next() else { break; };
+                            let Some(frame) = frames.next() else {
+                                break;
+                            };
+                            let Some(sample_f32) = samples.next() else {
+                                break;
+                            };
 
                             let g = hann_fade_in(i, ramp_in_len);
                             let out = sample_f32 * g;
@@ -578,7 +582,8 @@ where
                         }
 
                         // Remaining real samples (no gain)
-                        while let (Some(frame), Some(sample_f32)) = (frames.next(), samples.next()) {
+                        while let (Some(frame), Some(sample_f32)) = (frames.next(), samples.next())
+                        {
                             last_sample = sample_f32;
                             frame.fill(T::from_sample(sample_f32));
                             pulled += 1;
@@ -601,7 +606,9 @@ where
 
                 // Smooth fade from last real sample -> 0
                 for i in 0..fade_len {
-                    let Some(frame) = frames.next() else { break; };
+                    let Some(frame) = frames.next() else {
+                        break;
+                    };
                     let g = hann_fade_out(i, fade_len);
                     frame.fill(T::from_sample(last_sample * g));
                 }

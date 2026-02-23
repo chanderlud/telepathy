@@ -42,7 +42,6 @@ use crate::sea::encoder::SeaEncoder;
 use log::{debug, warn};
 use nnnoiseless::{DenoiseState, FRAME_SIZE};
 use rubato::Resampler;
-use std::sync::Arc;
 
 /// Processes audio input and sends it to the output channel.
 ///
@@ -132,10 +131,8 @@ pub fn input_processor<I: AudioInput>(
     let mut position = 0;
     // a counter for short silence detection
     let mut silence_length = 0_u16;
-    // switches to false when the sinc closes
-    let mut sink_open = true;
 
-    while sink_open {
+    loop {
         let read = input.read_into(&mut pre_buf[0][position..in_len])?;
         if read == 0 {
             debug!("Input processor ended (EOF)");
@@ -196,16 +193,28 @@ pub fn input_processor<I: AudioInput>(
             silence_length = 0;
         }
 
-        // Use SIMD-accelerated f32 to i16 conversion
+        // use SIMD-accelerated f32 to i16 conversion
         wide_f32_to_i16(&out_buf, &mut int_buffer);
-        // send the frame to the next stage, either codec or network
-        send_frame(
-            int_buffer,
-            &sink,
-            state.buffer_pool(),
-            &mut encoder_option,
-            &mut sink_open,
-        )?;
+
+        // acquire a buffer from the pool
+        let mut pooled = BufferPool::acquire(state.buffer_pool());
+        if let Some(encoder) = &mut encoder_option {
+            // encode frame into the pooled buffer
+            encoder.encode_frame(int_buffer, pooled.inner_mut())?;
+        } else {
+            // copy frame data into the pooled buffer
+            pooled.inner_mut().copy_from_slice(unsafe {
+                std::slice::from_raw_parts(int_buffer.as_ptr() as *const u8, NETWORK_FRAME)
+            });
+        }
+
+        // send buffer to network
+        match sink.send(pooled) {
+            Ok(()) => (),
+            Err(ClosedOrFailed::Closed) => break,
+            // propagate failures
+            Err(ClosedOrFailed::Failed(error)) => Err(error)?,
+        }
     }
 
     debug!("Input processor ended");
@@ -311,62 +320,4 @@ pub fn output_processor<O: AudioOutput>(
 
     debug!("Output processor ended");
     Ok(())
-}
-
-/// Sends an audio frame to the output channel using a pooled buffer.
-///
-/// This helper function acquires a buffer from the pool, writes the i16 sample
-/// array into it, and sends it through the output channel.
-/// Using pooled buffers significantly reduces allocation pressure compared
-/// to creating new `Bytes` buffers for each frame (~100 frames/second at 48kHz).
-///
-/// When the receiver drops the `PooledBuffer`, it will attempt to return the
-/// underlying buffer to the pool (if not shared/cloned).
-///
-/// # Arguments
-///
-/// * `frame` - The audio frame to send (480 i16 samples)
-/// * `output` - Sender for the output channel
-/// * `pool` - Buffer pool for acquiring reusable buffers
-///
-/// # Returns
-///
-/// Returns `Ok(())` if the frame was sent successfully, or an error if the
-/// channel send operation fails.
-///
-/// # Safety
-///
-/// Uses `unsafe` to reinterpret the i16 array as a byte slice. This is safe
-/// because i16 has a well-defined memory layout and the slice lifetime is
-/// constrained to the function scope.
-#[inline]
-fn send_frame(
-    frame: [i16; FRAME_SIZE],
-    sink: &impl AudioDataSink,
-    pool: &Arc<BufferPool>,
-    encoder_option: &mut Option<SeaEncoder>,
-    sink_open: &mut bool,
-) -> Result<(), Error> {
-    // Acquire a buffer from the pool
-    let mut pooled = BufferPool::acquire(pool);
-    if let Some(encoder) = encoder_option {
-        // Encode frame into the pooled buffer
-        encoder.encode_frame(frame, pooled.inner_mut())?;
-    } else {
-        // Copy frame data into the pooled buffer
-        pooled.inner_mut().copy_from_slice(unsafe {
-            std::slice::from_raw_parts(frame.as_ptr() as *const u8, NETWORK_FRAME)
-        });
-    }
-    // Send buffer to encoder or network
-    match sink.send(pooled) {
-        Ok(()) => Ok(()),
-        Err(ClosedOrFailed::Closed) => {
-            // break the processor loop on close
-            *sink_open = false;
-            Ok(())
-        }
-        // propagate failures
-        Err(ClosedOrFailed::Failed(error)) => Err(error.into()),
-    }
 }

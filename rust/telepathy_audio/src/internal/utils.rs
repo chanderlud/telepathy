@@ -27,7 +27,6 @@
 
 use crate::constants::RESAMPLER_PARAMETERS;
 use crate::error::Error;
-use nnnoiseless::FRAME_SIZE;
 use rubato::SincFixedIn;
 
 /// Converts a decibel value to a linear multiplier.
