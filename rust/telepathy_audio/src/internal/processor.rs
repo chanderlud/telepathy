@@ -28,14 +28,14 @@
 //! // handle.join().unwrap();
 //! ```
 
-use crate::constants::{MINIMUM_SILENCE_LENGTH, TRANSITION_LENGTH};
+use crate::constants::MINIMUM_SILENCE_LENGTH;
 use crate::error::Error;
 use crate::internal::NETWORK_FRAME;
 use crate::internal::buffer_pool::BufferPool;
 use crate::internal::processing::*;
 use crate::internal::state::{InputProcessorState, OutputProcessorState};
 use crate::internal::traits::{AudioInput, AudioOutput};
-use crate::internal::utils::{make_transition_down, make_transition_up, resampler_factory};
+use crate::internal::utils::resampler_factory;
 use crate::io::traits::{AudioDataSink, AudioDataSource, ClosedOrFailed};
 use crate::sea::decoder::SeaDecoder;
 use crate::sea::encoder::SeaEncoder;
@@ -189,37 +189,10 @@ pub fn input_processor<I: AudioInput>(
         if rms < state.rms_threshold() {
             if silence_length < MINIMUM_SILENCE_LENGTH {
                 silence_length += 1; // short silences are ignored
-            } else if silence_length == MINIMUM_SILENCE_LENGTH {
-                let last_sample = out_buf[0] as i16;
-                if last_sample != 0 {
-                    // insert frame to cleanly transition down to silence
-                    send_frame(
-                        make_transition_down(TRANSITION_LENGTH, last_sample),
-                        &sink,
-                        state.buffer_pool(),
-                        &mut encoder_option,
-                        &mut sink_open,
-                    )?;
-                }
-                // don't transition down again
-                silence_length += 1;
-                continue;
             } else {
-                continue;
+                continue; // long ones are dropped
             }
         } else {
-            let first_sample = out_buf[0] as i16;
-            if silence_length >= MINIMUM_SILENCE_LENGTH && first_sample != 0 {
-                // insert frame to transition up from silence to the audio
-                send_frame(
-                    make_transition_up(TRANSITION_LENGTH, first_sample),
-                    &sink,
-                    state.buffer_pool(),
-                    &mut encoder_option,
-                    &mut sink_open,
-                )?;
-            }
-
             silence_length = 0;
         }
 

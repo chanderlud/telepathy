@@ -47,7 +47,10 @@ use log::{debug, error};
 use nnnoiseless::FRAME_SIZE;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
+use rtrb::chunks::ChunkError;
 use tokio::sync::Notify;
+use crate::constants::TRANSITION_LENGTH;
+use crate::internal::utils::{hann_fade_in, hann_fade_out};
 
 /// Configuration for audio output processing.
 ///
@@ -521,25 +524,94 @@ where
 {
     use cpal::traits::DeviceTrait;
 
+    let mut last_sample = 0_f32;
+    let mut was_underrun = true;
+    let mut was_missing = false;
+
     let stream = device.build_output_stream(
         config,
         move |data: &mut [T], _: &_| {
-            // Number of mono samples needed (one per frame/channel-group)
-            let num_frames = data.len() / output_channels;
-            match output_consumer.read_chunk(num_frames) {
-                Ok(chunk) => {
-                    for (sample_f32, frame) in
-                        chunk.into_iter().zip(data.chunks_mut(output_channels))
-                    {
-                        let sample_t = T::from_sample(sample_f32);
-                        frame.fill(sample_t);
+            debug_assert!(output_channels > 0);
+
+            let total_frames = data.len() / output_channels;
+            // How many real frames we can pull right now
+            let available_frames = total_frames.min(output_consumer.slots());
+
+            if was_missing && available_frames == 0 {
+                // shortcut for when the fade already occurred & we are playing silence
+                data.fill(T::from_sample(0_f32));
+                return;
+            }
+
+            let mut frames = data.chunks_mut(output_channels);
+
+            // Read as many as possible (maybe 0)
+            let mut pulled = 0;
+            if available_frames > 0 {
+                match output_consumer.read_chunk(available_frames) {
+                    Ok(chunk) => {
+                        let mut samples = chunk.into_iter();
+
+                        // Fade-in on recovery: apply ramp to the incoming samples
+                        let ramp_in_len = if was_underrun {
+                            TRANSITION_LENGTH.min(available_frames)
+                        } else {
+                            0
+                        };
+
+                        for i in 0..ramp_in_len {
+                            let Some(frame) = frames.next() else { break; };
+                            let Some(sample_f32) = samples.next() else { break; };
+
+                            let g = hann_fade_in(i, ramp_in_len);
+                            let out = sample_f32 * g;
+
+                            last_sample = sample_f32;
+                            frame.fill(T::from_sample(out));
+                            pulled += 1;
+                        }
+
+                        if ramp_in_len > 0 {
+                            // Reset state after playing real samples
+                            was_underrun = false;
+                            was_missing = false;
+                        }
+
+                        // Remaining real samples (no gain)
+                        while let (Some(frame), Some(sample_f32)) = (frames.next(), samples.next()) {
+                            last_sample = sample_f32;
+                            frame.fill(T::from_sample(sample_f32));
+                            pulled += 1;
+                        }
+                    }
+                    Err(ChunkError::TooFewSlots(_)) => {
+                        // Shouldn't happen since we min() with slots(), but if it does:
+                        pulled = 0;
                     }
                 }
-                Err(_) => {
-                    // Not enough samples available; fill with silence
-                    let silence = T::from_sample(0.0f32);
-                    data.fill(silence);
+            }
+
+            // If we couldn't fill the buffer, fade out then silence
+            let missing = total_frames.saturating_sub(pulled);
+            if missing > 0 {
+                was_underrun = true;
+                was_missing = true;
+
+                let fade_len = TRANSITION_LENGTH.min(missing);
+
+                // Smooth fade from last real sample -> 0
+                for i in 0..fade_len {
+                    let Some(frame) = frames.next() else { break; };
+                    let g = hann_fade_out(i, fade_len);
+                    frame.fill(T::from_sample(last_sample * g));
                 }
+
+                // Remaining frames: hard silence
+                for frame in frames {
+                    frame.fill(T::from_sample(0.0));
+                }
+
+                last_sample = 0.0;
             }
         },
         move |err| {
