@@ -291,25 +291,34 @@ impl Telepathy {
             return Err("Cannot start test while call is active".to_string().into());
         }
 
-        #[cfg(target_family = "wasm")]
-        self.inner
-            .init_web_audio()
-            .await
-            .map_err::<Error, _>(Error::into)?;
-
-        let mut audio_config = self.inner.setup_call(PeerId::random()).await?;
-        audio_config.remote_configuration = audio_config.local_configuration.clone();
-        let stop_io = CancellationToken::new();
+        // update state right away to handle the test being ended quickly
         let end_call = Arc::new(Notify::new());
-
         self.inner.core_state.in_call.store(true, Relaxed);
         *self.inner.core_state.end_audio_test.lock().await = Some(end_call.clone());
-        let result = self
-            .inner
-            .call(&stop_io, audio_config, &end_call, None)
-            .await
-            .map_err(Into::into);
-        stop_io.cancel();
+
+        #[cfg(target_family = "wasm")]
+        if let Err(error) = self.inner.init_web_audio().await {
+            // clean up state before propagating error
+            self.inner.core_state.end_audio_test.lock().await.take();
+            self.inner.core_state.in_call.store(false, Relaxed);
+            return Err(Error::into(error));
+        }
+
+        let result = match self.inner.setup_call(PeerId::random()).await {
+            Ok(mut audio_config) => {
+                audio_config.remote_configuration = audio_config.local_configuration.clone();
+                let stop_io = CancellationToken::new();
+                let result = self
+                    .inner
+                    .call(&stop_io, audio_config, &end_call, None)
+                    .await
+                    .map_err(Into::into);
+                stop_io.cancel();
+                result
+            }
+            Err(error) => Err(Error::into(error))
+        };
+
         self.inner.core_state.end_audio_test.lock().await.take();
         self.inner.core_state.in_call.store(false, Relaxed);
         result

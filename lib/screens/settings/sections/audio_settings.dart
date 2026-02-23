@@ -20,6 +20,7 @@ class AudioSettings extends StatefulWidget {
 
 class _AudioSettingsState extends State<AudioSettings> {
   late final AudioDevices _audioDevices;
+  bool testCooldown = false;
 
   @override
   void initState() {
@@ -153,6 +154,21 @@ class _AudioSettingsState extends State<AudioSettings> {
                 height: 25,
                 disabled: isCallActive,
                 onPressed: () async {
+                  // 100ms debounce for safety
+                  if (testCooldown) {
+                    return;
+                  } else {
+                    setState(() {
+                      testCooldown = true;
+                    });
+                    Future.delayed(const Duration(milliseconds: 100), () {
+                      if (!mounted) return;
+                      setState(() {
+                        testCooldown = false;
+                      });
+                    });
+                  }
+
                   if (inAudioTest) {
                     stateController.setInAudioTest();
                     telepathy.endCall();
