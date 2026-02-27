@@ -41,7 +41,9 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Relaxed;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(not(target_family = "wasm"))]
+use std::time::Instant;
 #[cfg(target_family = "wasm")]
 use telepathy_audio::WebAudioWrapper;
 use telepathy_audio::{AudioHost, RnnModel};
@@ -56,6 +58,8 @@ use tokio_util::codec::LengthDelimitedCodec;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
+#[cfg(target_family = "wasm")]
+use wasmtimer::std::Instant;
 #[cfg(target_family = "wasm")]
 use wasmtimer::tokio::{Interval, interval, timeout};
 
