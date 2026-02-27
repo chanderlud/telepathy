@@ -50,6 +50,7 @@
 
 #![cfg(target_family = "wasm")]
 
+use crate::Error;
 use crate::internal::traits::{CHANNEL_SIZE, RingBufferInput};
 use log::error;
 use rtrb::RingBuffer;
@@ -131,7 +132,7 @@ impl WebAudioWrapper {
     /// - Will show browser permission prompt for microphone access
     /// - AudioContext starts in suspended state in some browsers
     /// - Call [`resume`](Self::resume) after user interaction if needed
-    pub async fn new() -> Result<Self, JsValue> {
+    pub async fn new() -> Result<Self, Error> {
         let audio_ctx = web_sys::AudioContext::new()?;
         let sample_rate = audio_ctx.sample_rate();
 

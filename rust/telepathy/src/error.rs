@@ -39,8 +39,6 @@ pub(crate) enum ErrorKind {
     #[cfg(target_family = "wasm")]
     Canceled(Canceled),
     TransportBuildError(TransportBuilderError),
-    #[cfg(target_family = "wasm")]
-    JsError(Option<String>),
     DeviceError(DeviceError),
     InvalidContactFormat,
     TransportSend,
@@ -203,15 +201,6 @@ impl From<wasmtimer::tokio::error::Elapsed> for Error {
     }
 }
 
-#[cfg(target_family = "wasm")]
-impl From<wasm_bindgen::JsValue> for Error {
-    fn from(err: wasm_bindgen::JsValue) -> Self {
-        Self {
-            kind: ErrorKind::JsError(err.as_string()),
-        }
-    }
-}
-
 impl From<telepathy_audio::Error> for Error {
     fn from(err: telepathy_audio::Error) -> Self {
         Self {
@@ -261,8 +250,6 @@ impl Display for Error {
                 ErrorKind::Canceled(ref err) => format!("Canceled: {}", err),
                 ErrorKind::TransportBuildError(ref err) =>
                     format!("Transport build error: {}", err),
-                #[cfg(target_family = "wasm")]
-                ErrorKind::JsError(ref err) => format!("Javascript error: {:?}", err),
                 ErrorKind::DeviceError(ref err) => format!("Device error: {}", err),
                 ErrorKind::InvalidContactFormat => "Invalid contact format".to_string(),
                 ErrorKind::TransportSend => "Transport failed on send".to_string(),
