@@ -13,6 +13,7 @@ class ChatInputController {
   final FocusNode focusNode;
 
   bool _keyboardHandlerAttached = false;
+  bool _pasteListenerAttached = false;
 
   ChatInputController({
     required this.chatStateController,
@@ -20,13 +21,16 @@ class ChatInputController {
   });
 
   void init() {
-    ClipboardEvents.instance?.registerPasteEventListener(_onPasteEvent);
     focusNode.addListener(_onFocusChanged);
   }
 
   void dispose() {
-    ClipboardEvents.instance?.unregisterPasteEventListener(_onPasteEvent);
     focusNode.removeListener(_onFocusChanged);
+
+    if (_pasteListenerAttached) {
+      ClipboardEvents.instance?.unregisterPasteEventListener(_onPasteEvent);
+      _pasteListenerAttached = false;
+    }
 
     if (_keyboardHandlerAttached) {
       HardwareKeyboard.instance.removeHandler(_onKeyEvent);
@@ -127,12 +131,24 @@ class ChatInputController {
   }
 
   void _onFocusChanged() {
-    if (focusNode.hasFocus && !_keyboardHandlerAttached) {
-      HardwareKeyboard.instance.addHandler(_onKeyEvent);
-      _keyboardHandlerAttached = true;
-    } else if (!focusNode.hasFocus && _keyboardHandlerAttached) {
-      HardwareKeyboard.instance.removeHandler(_onKeyEvent);
-      _keyboardHandlerAttached = false;
+    if (focusNode.hasFocus) {
+      if (!_keyboardHandlerAttached) {
+        HardwareKeyboard.instance.addHandler(_onKeyEvent);
+        _keyboardHandlerAttached = true;
+      }
+      if (!_pasteListenerAttached) {
+        ClipboardEvents.instance?.registerPasteEventListener(_onPasteEvent);
+        _pasteListenerAttached = true;
+      }
+    } else {
+      if (_keyboardHandlerAttached) {
+        HardwareKeyboard.instance.removeHandler(_onKeyEvent);
+        _keyboardHandlerAttached = false;
+      }
+      if (_pasteListenerAttached) {
+        ClipboardEvents.instance?.unregisterPasteEventListener(_onPasteEvent);
+        _pasteListenerAttached = false;
+      }
     }
   }
 
