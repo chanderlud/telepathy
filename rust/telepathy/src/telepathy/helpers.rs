@@ -110,16 +110,17 @@ where
                 swarm.listen_on(listen_addr_tcp)?;
             }
 
-            #[cfg(target_family = "wasm")]
-            {
-                let listen_addr = Multiaddr::empty()
-                    .with(Protocol::from(*bind_address))
-                    .with(Protocol::Udp(listen_port))
-                    .with(Protocol::QuicV1)
-                    .with(Protocol::WebTransport);
-
-                swarm.listen_on(listen_addr)?;
-            }
+            // TODO listening fails currently
+            // #[cfg(target_family = "wasm")]
+            // {
+            //     let listen_addr = Multiaddr::empty()
+            //         .with(Protocol::from(*bind_address))
+            //         .with(Protocol::Udp(listen_port))
+            //         .with(Protocol::QuicV1)
+            //         .with(Protocol::WebTransport);
+            //
+            //     swarm.listen_on(listen_addr)?;
+            // }
         }
 
         let socket_address = *self.core_state.network_config.relay_address.read().await;
@@ -150,13 +151,17 @@ where
 
         #[cfg(target_family = "wasm")]
         let relay_address = {
-            // TODO the relay currently does not support WebTransport
-            let address = Multiaddr::from(socket_address.ip())
-                .with(Protocol::Udp(socket_address.port()))
-                .with(Protocol::QuicV1)
-                .with(Protocol::WebTransport)
-                .with_p2p(relay_identity)
-                .map_err(|_| ErrorKind::SwarmBuild)?;
+            // TODO determine how to avoid hard coding the relay address for web transport
+            // let address = Multiaddr::from(socket_address.ip())
+            //     .with(Protocol::Udp(socket_address.port()))
+            //     .with(Protocol::QuicV1)
+            //     .with(Protocol::WebTransport)
+            //     .with_p2p(relay_identity)
+            //     .map_err(|_| ErrorKind::SwarmBuild)?;
+
+            let address: Multiaddr =
+                "/ip4/5.78.76.47/udp/40142/quic-v1/webtransport/certhash/uEiA-OX2kwudOzGCqYLCu6ZpPT72kpiAKn47HP0HjRjxlCQ/certhash/uEiBGyHTasm5xDFTw4bw87gJ_Ci4m1yHd7u8fZRXvnc_BOg/p2p/12D3KooWGksGbeHb8naJPijFhPGywUWXq9yqj3tCFih6Hi2aFsXU"
+                    .parse().map_err(|_| ErrorKind::SwarmBuild)?;
 
             swarm.dial(address.clone())?;
             info!("connected to relay with webtransport");
