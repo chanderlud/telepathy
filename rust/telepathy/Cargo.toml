@@ -1,6 +1,6 @@
 [package]
 name = "telepathy"
-version = "2.4.8"
+version = "2.6.0"
 edition = "2024"
 build = "build.rs"
 
@@ -10,28 +10,23 @@ build = "build.rs"
 crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
-messages = { path = "../messages" }
-sea-codec = { path = "../sea_codec" }
+telepathy_audio = { path = "../telepathy_audio" }
 tokio-util = { version = "0.7", features = ["codec", "compat"] }
-cpal = { version = "0.16", features = ["wasm-bindgen"] }
 log = "0.4"
 kanal = "0.1.1"
-rubato = "0.16"
-nnnoiseless = { version = "0.5", default-features = false }
 atomic_float = "1"
-flutter_rust_bridge = "=2.11.1"
-parking_lot = "0.12"
+flutter_rust_bridge = { version = "=2.11.1", default-features = false, features = ["rust-async", "thread-pool", "dart-opaque", "anyhow"] }
 lazy_static = "1"
 libp2p-stream = { version = "0.4.0-alpha" }
 chrono = "*"
-regex = "1"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+regex = "1" # TODO consider removing regex dep
 log-panics = "2"
-bincode = "2"
+speedy = "=0.8.7"
+cfg-if = "1"
+bytes = "1"
 
 [target.'cfg(target_os = "android")'.dependencies]
-jni = "0.21"
+jni = "0.22"
 ndk-context = "0.1"
 
 [target.'cfg(target_os = "windows")'.dependencies]
@@ -46,45 +41,20 @@ objc2-foundation = "*"
 uuid = { version = "1", features = ["v4", "js"] }
 getrandom = { version = "0.3", features = ["wasm_js"] }
 tokio = { version = "1", features = ["time", "io-util", "macros", "rt"] }
-libp2p = { version = "0.56", features = ["quic", "ping", "dcutr", "identify", "macros", "noise", "yamux", "autonat", "relay", "wasm-bindgen"] }
+libp2p = { version = "0.56", features = ["quic", "ping", "dcutr", "identify", "macros", "noise", "yamux", "relay", "wasm-bindgen", "autonat"] }
 libp2p-webtransport-websys = "0.5"
-wasm-logger = "0.2.0"
+wasm-logger = "0.2"
 wasmtimer = "0.4"
-wasm-bindgen = "0.2"
-serde-wasm-bindgen = "0.6"
-wasm-bindgen-futures = "0.4"
-web-sys = { version = "0.3", features = [
-    "AudioContext",
-    "MediaDevices",
-    "MediaStreamConstraints",
-    "MediaStream",
-    "MediaStreamAudioSourceNode",
-    "AudioWorklet",
-    "AudioWorkletNode",
-    "BaseAudioContext",
-    "MessagePort",
-    "MediaStreamAudioDestinationNode",
-    "MessageEvent",
-    "console",
-    "Url",
-    "BlobPropertyBag",
-    "Blob",
-    "Navigator",
-    "Window"
-] }
-js-sys = "0.3"
-wasm_sync = "0.1"
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 uuid = { version = "1", features = ["v4"] }
 tokio = { version = "1", features = ["time", "io-util", "macros", "process", "net", "rt-multi-thread", "fs"] }
-libp2p = { version = "0.56", features = ["tokio", "quic", "tcp", "ping", "dcutr", "identify", "macros", "noise", "yamux", "autonat", "relay"] }
-fast_log = "1.7"
+libp2p = { version = "0.56", features = ["tokio", "quic", "tcp", "ping", "dcutr", "identify", "macros", "noise", "yamux", "relay", "autonat"] }
+fast_log = "1"
 
 [dev-dependencies]
-rand = "0.8"
-criterion = "0.7"
+mockall = "0.14"
+async-trait = "0.1"
 
-[[bench]]
-name = "bench"
-harness = false
+[target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
+relay_server = { path = "../relay_server" }

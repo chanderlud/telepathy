@@ -1,0 +1,129 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_svg/flutter_svg.dart';
+import 'package:provider/provider.dart';
+import 'package:telepathy/controllers/index.dart';
+import 'package:telepathy/core/utils/index.dart';
+import 'package:telepathy/models/index.dart';
+import 'package:telepathy/src/rust/audio/player.dart';
+import 'package:telepathy/src/rust/error.dart';
+import 'package:telepathy/src/rust/telepathy.dart';
+
+class RoomWidget extends StatefulWidget {
+  final Room room;
+
+  const RoomWidget({
+    super.key,
+    required this.room,
+  });
+
+  @override
+  State<StatefulWidget> createState() => RoomWidgetState();
+}
+
+class RoomWidgetState extends State<RoomWidget> {
+  bool isHovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final stateController = context.read<StateController>();
+    final telepathy = context.read<Telepathy>();
+    final player = context.read<SoundPlayer>();
+
+    return InkWell(
+      mouseCursor: SystemMouseCursors.click,
+      onHover: (hover) {
+        setState(() {
+          isHovered = hover;
+        });
+      },
+      onTap: () {},
+      hoverColor: Colors.transparent,
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.secondaryContainer,
+          borderRadius: BorderRadius.circular(10.0),
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6.5),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CircleAvatar(
+              maxRadius: 17,
+              child: SvgPicture.asset(isHovered
+                  ? 'assets/icons/Edit.svg'
+                  : 'assets/icons/Group.svg'),
+            ),
+            const SizedBox(width: 10),
+            Text(widget.room.nickname, style: const TextStyle(fontSize: 16)),
+            const Spacer(),
+            IconButton(
+              visualDensity: VisualDensity.comfortable,
+              icon: SvgPicture.asset(
+                'assets/icons/Copy.svg',
+                semanticsLabel: 'Copy room details icon',
+                width: 28,
+              ),
+              onPressed: () async {
+                try {
+                  final roomDetailsString = widget.room.toShareableFormat();
+                  await Clipboard.setData(
+                      ClipboardData(text: roomDetailsString));
+                  if (!context.mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Room details copied'),
+                      duration: Duration(seconds: 1),
+                    ),
+                  );
+                } catch (_) {
+                  if (!context.mounted) return;
+                  showErrorDialog(context, 'Copy failed',
+                      'Failed to copy room details to clipboard');
+                }
+              },
+            ),
+            IconButton(
+              visualDensity: VisualDensity.comfortable,
+              icon: SvgPicture.asset(
+                'assets/icons/Phone.svg',
+                semanticsLabel: 'Call icon',
+                width: 32,
+              ),
+              onPressed: () async {
+                if (stateController.isCallActive) {
+                  showErrorDialog(
+                      context, 'Call failed', 'There is a call already active');
+                  return;
+                } else if (stateController.inAudioTest) {
+                  showErrorDialog(context, 'Call failed',
+                      'Cannot make a call while in an audio test');
+                  return;
+                } else if (stateController.callEndedRecently) {
+                  // if the call button is pressed right after a call ended, we assume the user did not want to make a call
+                  return;
+                }
+
+                stateController.setStatus('Connecting');
+                List<int> bytes = await readSeaBytes('outgoing');
+                outgoingSoundHandle = await player.play(bytes: bytes);
+
+                try {
+                  await telepathy.joinRoom(memberStrings: widget.room.peerIds);
+                  widget.room.online.clear();
+                  stateController.setActiveRoom(widget.room);
+                } on DartError catch (e) {
+                  stateController.setStatus('Inactive');
+                  outgoingSoundHandle?.cancel();
+                  if (!context.mounted) return;
+                  showErrorDialog(context, 'Call failed', e.message);
+                }
+              },
+            )
+          ],
+        ),
+      ),
+    );
+  }
+}

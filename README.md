@@ -12,29 +12,40 @@
 
 - Screensharing for Windows, macOS, and Linux
 - Game overlay for Windows
-- Web support (waiting on https://github.com/libp2p/rust-libp2p/pull/5564)
+- Web support
+- Telepathy rooms (group calls)
 
 ## Planned
 
 - Lossless audio codec support
-- Telepathy rooms (group calls)
+- QUIC datagrams for live audio streams
+- p2p updates for desktop clients
 
 ## History
 
-- Began as Audio Chat, a Python Tkinter app with simple UDP networking and AES cryptography
-- Moved to the current Rust audio processing stack with improved stability
-- Upgraded from custom networking and cryptography stack to libp2p for improved security, p2p networking without port forwarding, and p2p networking in web browsers
+- Began in 2023 as Audio Chat, a Python Tkinter app with simple UDP networking and AES cryptography
+- Moved to the current Rust audio processing stack & Flutter UI for improved stability in 2024
+- Soon after, the custom networking and cryptography stack was replaced with libp2p for improved security, p2p networking without port forwarding, and p2p networking in web browsers
+- In 2025, performance improvements were made, SEA codec support was added, and many bugs were fixed
+
+## Architecture
+
+### High Level Design
+- Flutter to Rust (and back) is enabled by [Flutter Rust Bridge](https://pub.dev/packages/flutter_rust_bridge)
+- This design enables the same codebase to target desktop, mobile, and web
+
+![a diagram explaining the high level structure of the telepathy app](assets/diagrams/telepathy-design.svg)
+
+### Audio Processing Stack
+- Denoising runs on the sending side; each participant in a call decides if they want to use their compute resources to denoise their audio input
+- When denoising is disabled, a custom output sample rate can be specified for network compatibility without the CPU overhead of noise suppression
+- Every participant in a call must agree on the same audio codec options for sending & receiving
+- If a frame's RMS is below the input sensitivity threshold, no audio is sent (keep-alive packets are used during silence)
+- In a classic two-way call, each client runs a sending stack and a receiving stack
+- In a Telepathy room, certain parts of each stack are duplicated to support more participants
+
+![a diagram describing the telepathy audio processing stack](assets/diagrams/audio-processing-stack.svg)
 
 ## UI Screenshots
 ![screenshot of telepathy main user interface](https://chanchan.dev/static/images/telepathy.png)
 ![screenshot of telepathy settings user interface](https://chanchan.dev/static/images/telepathy-settings.png)
-
-## Architecture
-
-### Audio Processing Stack
-- Denoising runs on the sending side, each participant in a call decides if they want to use their compute resources to denoise their audio input
-- Every participant in a call must agree on the same audio codec options for sending & receiving
-- If a frame's RMS is below the input sensitivity threshold, it becomes a single byte silent frame to save resources
-- In a classic two-way call, each client runs a sending stack and a receiving stack
-- In a Telepathy room, certain parts of each stack are duplicated to support more participants
-![a diagram describing the telepathy audio processing stack](assets/diagrams/audio-processing-stack.svg)

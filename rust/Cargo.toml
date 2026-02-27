@@ -1,8 +1,7 @@
 [workspace]
 members = [
     "telepathy",
-    "messages",
-    "sea_codec"
+    "telepathy_audio"
 ]
 resolver = "2"
 
