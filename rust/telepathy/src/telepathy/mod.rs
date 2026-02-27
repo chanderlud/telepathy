@@ -51,7 +51,10 @@ use tokio::sync::mpsc::{Receiver as MReceiver, Sender as MSender, channel};
 use tokio::sync::{Mutex, Notify};
 #[cfg(not(target_family = "wasm"))]
 use tokio::task::JoinHandle;
+#[cfg(not(target_family = "wasm"))]
 use tokio::time::timeout;
+#[cfg(target_family = "wasm")]
+use wasmtimer::tokio::timeout;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -102,7 +105,6 @@ impl Telepathy {
     }
 
     pub async fn start_manager(&mut self) {
-        #[cfg(not(target_family = "wasm"))]
         if let Some(handle) = self.inner.start_manager().await {
             self.handles.lock().await.push(handle);
         }
