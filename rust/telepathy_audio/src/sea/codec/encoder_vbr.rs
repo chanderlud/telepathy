@@ -3,18 +3,20 @@ use crate::sea::{
     encoder::EncoderSettings,
 };
 
-use super::{
-    common::{EncodedSamples, SeaEncoderTrait},
-    encoder_base::EncoderBase,
-    file::SeaFileHeader,
-    lms::SeaLMS,
-};
+use super::{common::SeaEncoderTrait, encoder_base::EncoderBase, file::SeaFileHeader, lms::SeaLMS};
 
 pub struct VbrEncoder {
     channels: usize,
     scale_factor_frames: u8,
     vbr_target_bitrate: f32,
     base_encoder: EncoderBase,
+    scratch_ranks: Vec<u64>,
+    scratch_residual_sizes: Vec<SeaResidualSize>,
+    scratch_errors: Vec<u64>,
+    scratch_indices: Vec<u16>,
+    scratch_lms_backup: Vec<SeaLMS>,
+    scratch_analyze_scale_factors: Vec<u8>,
+    scratch_analyze_residuals: Vec<u8>,
 }
 
 // const TARGET_RESIDUAL_DISTRIBUTION: [f32; 6] = [0.00, 0.09, 0.82, 0.07, 0.02, 0.00]; // ([0, target-1, target, target+1, target+2, 0])
@@ -30,6 +32,13 @@ impl VbrEncoder {
                 encoder_settings.scale_factor_bits as usize,
             ),
             vbr_target_bitrate: Self::get_normalized_vbr_bitrate(encoder_settings),
+            scratch_ranks: Vec::new(),
+            scratch_residual_sizes: Vec::new(),
+            scratch_errors: Vec::new(),
+            scratch_indices: Vec::new(),
+            scratch_lms_backup: Vec::new(),
+            scratch_analyze_scale_factors: Vec::new(),
+            scratch_analyze_residuals: Vec::new(),
         }
     }
 
@@ -95,121 +104,134 @@ impl VbrEncoder {
         res
     }
 
-    fn choose_residual_len_from_errors(&self, input_len: usize, errors: &[u64]) -> Vec<u8> {
+    fn choose_residual_len_from_errors(
+        input_len: usize,
+        scale_factor_frames: u8,
+        vbr_target_bitrate: f32,
+        errors: &[u64],
+        scratch_indices: &mut Vec<u16>,
+        residual_sizes: &mut Vec<u8>,
+    ) {
         // we need to ensure that last partial frames are not touched (it would debalance the frame size)
-        let sortable_items = input_len / self.scale_factor_frames as usize;
+        let sortable_items = input_len / scale_factor_frames as usize;
 
-        let mut indices: Vec<u16> = (0..sortable_items as u16).collect();
-        indices.sort_unstable_by(|&a, &b| errors[a as usize].cmp(&errors[b as usize]));
+        scratch_indices.clear();
+        scratch_indices.extend(0..sortable_items as u16);
+        scratch_indices.sort_unstable_by(|&a, &b| errors[a as usize].cmp(&errors[b as usize]));
 
         let [minus_one_items, _, plus_one_items, plus_two_items] =
-            Self::interpolate_distribution(sortable_items, self.vbr_target_bitrate);
+            Self::interpolate_distribution(sortable_items, vbr_target_bitrate);
 
-        let base_residual_bits = self.vbr_target_bitrate as u8;
+        let base_residual_bits = vbr_target_bitrate as u8;
 
-        let mut residual_sizes = vec![base_residual_bits; errors.len()];
+        residual_sizes.resize(errors.len(), base_residual_bits);
+        for item in residual_sizes.iter_mut() {
+            *item = base_residual_bits;
+        }
 
-        for index in indices.iter().take(minus_one_items) {
+        for index in scratch_indices.iter().take(minus_one_items) {
             residual_sizes[*index as usize] = base_residual_bits - 1;
         }
 
-        for index in indices[(sortable_items - plus_two_items - plus_one_items)..]
+        for index in scratch_indices[(sortable_items - plus_two_items - plus_one_items)..]
             .iter()
             .take(plus_one_items)
         {
             residual_sizes[*index as usize] = base_residual_bits + 1;
         }
 
-        for index in indices[sortable_items - plus_two_items..]
+        for index in scratch_indices[sortable_items - plus_two_items..]
             .iter()
             .take(plus_two_items)
         {
             residual_sizes[*index as usize] = base_residual_bits + 2;
         }
-
-        // count how many times each residual size appears
-        let mut residual_size_counts = [0; 9];
-        for i in 0..errors.len() {
-            residual_size_counts[residual_sizes[i] as usize] += 1;
-        }
-
-        residual_sizes
     }
 
-    fn analyze(&mut self, input_slice: &[i16]) -> Vec<u8> {
+    fn analyze(&mut self, input_slice: &[i16], residual_bits: &mut Vec<u8>) {
         let analyze_residual_size = SeaResidualSize::from(self.vbr_target_bitrate as u8 + 1);
 
         let slice_size = self.scale_factor_frames as usize * self.channels;
 
-        let original_lms = self.base_encoder.lms.clone();
+        // Backup LMS
+        self.scratch_lms_backup.clone_from(&self.base_encoder.lms);
 
-        let residual_sizes = vec![analyze_residual_size; self.channels];
+        self.scratch_residual_sizes
+            .resize(self.channels, analyze_residual_size);
+        for item in self.scratch_residual_sizes.iter_mut() {
+            *item = analyze_residual_size;
+        }
 
-        let mut scale_factors = vec![0u8; slice_size];
-        let mut residuals: Vec<u8> = vec![0u8; slice_size];
+        self.scratch_analyze_scale_factors.resize(slice_size, 0);
+        self.scratch_analyze_residuals.resize(slice_size, 0);
 
-        let mut errors = vec![
-            0u64;
-            (input_slice.len() / self.channels)
-                .div_ceil(self.scale_factor_frames as usize)
-                * self.channels
-        ];
+        let errors_len = (input_slice.len() / self.channels)
+            .div_ceil(self.scale_factor_frames as usize)
+            * self.channels;
+        self.scratch_errors.resize(errors_len, 0);
 
-        for (slice_index, input_slice) in input_slice.chunks(slice_size).enumerate() {
+        for (slice_index, input_slice_chunk) in input_slice.chunks(slice_size).enumerate() {
             self.base_encoder.get_residuals_for_chunk(
-                input_slice,
-                &residual_sizes,
-                &mut scale_factors,
-                &mut residuals,
-                &mut errors[slice_index * self.channels..],
+                input_slice_chunk,
+                &self.scratch_residual_sizes,
+                &mut self.scratch_analyze_scale_factors,
+                &mut self.scratch_analyze_residuals,
+                &mut self.scratch_errors[slice_index * self.channels..],
             );
         }
 
-        self.base_encoder.lms = original_lms;
+        // Restore LMS
+        self.base_encoder.lms.clone_from(&self.scratch_lms_backup);
 
-        self.choose_residual_len_from_errors(input_slice.len(), &errors)
+        // Call choose_residual_len_from_errors with scratch_errors directly
+        // Restructured to avoid clone by passing needed fields as parameters
+        Self::choose_residual_len_from_errors(
+            input_slice.len(),
+            self.scale_factor_frames,
+            self.vbr_target_bitrate,
+            &self.scratch_errors,
+            &mut self.scratch_indices,
+            residual_bits,
+        );
     }
 }
 
 impl SeaEncoderTrait for VbrEncoder {
-    fn encode(&mut self, samples: &[i16]) -> EncodedSamples {
-        let mut scale_factors = vec![
-            0u8;
-            (samples.len() / self.channels)
-                .div_ceil(self.scale_factor_frames as usize)
-                * self.channels
-        ];
+    fn encode_into(
+        &mut self,
+        samples: &[i16],
+        scale_factors: &mut Vec<u8>,
+        residuals: &mut Vec<u8>,
+        residual_bits: &mut Vec<u8>,
+    ) {
+        let scale_factors_len = (samples.len() / self.channels)
+            .div_ceil(self.scale_factor_frames as usize)
+            * self.channels;
+        scale_factors.resize(scale_factors_len, 0);
+        residuals.resize(samples.len(), 0);
 
-        let mut residuals: Vec<u8> = vec![0u8; samples.len()];
-
-        let residual_bits: Vec<u8> = self.analyze(samples);
+        self.analyze(samples, residual_bits);
 
         let slice_size = self.scale_factor_frames as usize * self.channels;
 
-        let mut residual_sizes = vec![SeaResidualSize::from(2); self.channels];
-
-        let mut ranks = vec![0u64; self.channels];
+        self.scratch_residual_sizes
+            .resize(self.channels, SeaResidualSize::from(2));
+        self.scratch_ranks.resize(self.channels, 0);
 
         for (slice_index, input_slice) in samples.chunks(slice_size).enumerate() {
             for channel_offset in 0..self.channels {
-                residual_sizes[channel_offset] = SeaResidualSize::from(
+                self.scratch_residual_sizes[channel_offset] = SeaResidualSize::from(
                     residual_bits[slice_index * self.channels + channel_offset],
                 );
             }
 
             self.base_encoder.get_residuals_for_chunk(
                 input_slice,
-                &residual_sizes,
+                &self.scratch_residual_sizes,
                 &mut scale_factors[slice_index * self.channels..],
                 &mut residuals[slice_index * slice_size..],
-                &mut ranks,
+                &mut self.scratch_ranks,
             );
-        }
-
-        EncodedSamples {
-            scale_factors,
-            residuals,
-            residual_bits,
         }
     }
 }

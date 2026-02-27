@@ -12,12 +12,7 @@ pub struct SeaDecoder {
 impl SeaDecoder {
     pub fn new(header: SeaFileHeader) -> Result<Self, SeaError> {
         Ok(Self {
-            file: SeaFile {
-                header,
-                decoder: None,
-                encoder: None,
-                encoder_settings: None,
-            },
+            file: SeaFile::new_for_decoding(header),
             frames_read: 0,
         })
     }

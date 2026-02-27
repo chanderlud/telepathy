@@ -75,13 +75,12 @@ pub enum SeaError {
     MetadataTooLarge,
 }
 
-#[derive(Debug)]
-pub struct EncodedSamples {
-    pub scale_factors: Vec<u8>,
-    pub residuals: Vec<u8>,
-    pub residual_bits: Vec<u8>,
-}
-
 pub trait SeaEncoderTrait {
-    fn encode(&mut self, input_slice: &[i16]) -> EncodedSamples;
+    fn encode_into(
+        &mut self,
+        input_slice: &[i16],
+        scale_factors: &mut Vec<u8>,
+        residuals: &mut Vec<u8>,
+        residual_bits: &mut Vec<u8>,
+    );
 }

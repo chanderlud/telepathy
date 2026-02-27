@@ -1,5 +1,3 @@
-use std::mem;
-
 pub struct BitUnpacker {
     bits_stored: u32,
     carry: u32,
@@ -19,14 +17,22 @@ impl BitUnpacker {
         }
     }
 
-    pub fn new_var_bits(bitlengths: &[u8]) -> Self {
-        Self {
-            bits_stored: 0,
-            carry: 0,
-            bitlengths: bitlengths.to_vec(),
-            bitlengths_index: 0,
-            output: Vec::new(),
-        }
+    pub fn reset_const(&mut self, bitlength: u8) {
+        self.bits_stored = 0;
+        self.carry = 0;
+        self.bitlengths.clear();
+        self.bitlengths.push(bitlength);
+        self.bitlengths_index = 0;
+        self.output.clear();
+    }
+
+    pub fn reset_var(&mut self, bitlengths: &[u8]) {
+        self.bits_stored = 0;
+        self.carry = 0;
+        self.bitlengths.clear();
+        self.bitlengths.extend_from_slice(bitlengths);
+        self.bitlengths_index = 0;
+        self.output.clear();
     }
 
     const MASKS: [u32; 9] = [0, 1, 3, 7, 15, 31, 63, 127, 255];
@@ -77,12 +83,11 @@ impl BitUnpacker {
         self.process_bytes_variable(input);
     }
 
-    pub fn finish(&mut self) -> Vec<u8> {
-        self.bitlengths.clear();
+    pub fn finish(&mut self) -> &[u8] {
         self.bitlengths_index = 0;
         self.carry = 0;
         self.bits_stored = 0;
-        mem::take(&mut self.output)
+        &self.output
     }
 }
 
@@ -99,6 +104,12 @@ impl BitPacker {
             bits_stored: 0,
             output: Vec::new(),
         }
+    }
+
+    pub fn reset(&mut self) {
+        self.accum = 0;
+        self.bits_stored = 0;
+        self.output.clear();
     }
 
     pub fn push(&mut self, input: u32, bits: u8) {
@@ -122,7 +133,7 @@ impl BitPacker {
         }
     }
 
-    pub fn finish(&mut self) -> Vec<u8> {
+    pub fn finish(&mut self) -> &[u8] {
         if self.bits_stored > 0 {
             let byte = (self.accum << (8 - self.bits_stored)) as u8;
             self.output.push(byte);
@@ -130,6 +141,6 @@ impl BitPacker {
         self.accum = 0;
         self.bits_stored = 0;
 
-        mem::take(&mut self.output)
+        &self.output
     }
 }

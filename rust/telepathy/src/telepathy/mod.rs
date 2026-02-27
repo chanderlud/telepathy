@@ -316,7 +316,7 @@ impl Telepathy {
                 stop_io.cancel();
                 result
             }
-            Err(error) => Err(Error::into(error))
+            Err(error) => Err(Error::into(error)),
         };
 
         self.inner.core_state.end_audio_test.lock().await.take();

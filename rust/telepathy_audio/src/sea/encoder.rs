@@ -29,6 +29,7 @@ impl Default for EncoderSettings {
 pub struct SeaEncoder {
     file: SeaFile,
     written_frames: u32,
+    chunk_data: Vec<u8>,
 }
 
 impl SeaEncoder {
@@ -48,6 +49,7 @@ impl SeaEncoder {
         Ok(SeaEncoder {
             file: SeaFile::new(header, &settings)?,
             written_frames: 0,
+            chunk_data: Vec::new(),
         })
     }
 
@@ -58,13 +60,15 @@ impl SeaEncoder {
     ) -> Result<(), SeaError> {
         let frames = self.file.header.frames_per_chunk as usize;
 
-        let encoded_chunk = self.file.make_chunk(&frame)?;
-        assert_eq!(encoded_chunk.len(), self.file.header.chunk_size as usize);
+        // Reuse scratch buffer to avoid per-frame allocation
+        self.chunk_data.clear();
+        self.file.make_chunk(&frame, &mut self.chunk_data)?;
+        assert_eq!(self.chunk_data.len(), self.file.header.chunk_size as usize);
 
         // encoded chunk is smaller than the original buffer, truncate it
-        buffer.resize(encoded_chunk.len(), 0);
+        buffer.resize(self.chunk_data.len(), 0);
         // copy encoded data into truncated buffer
-        buffer.copy_from_slice(&encoded_chunk);
+        buffer.copy_from_slice(&self.chunk_data);
         self.written_frames += frames as u32;
 
         Ok(())
