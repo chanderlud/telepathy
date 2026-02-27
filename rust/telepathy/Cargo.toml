@@ -56,5 +56,5 @@ fast_log = "1"
 mockall = "0.14"
 async-trait = "0.1"
 
-[target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
-relay_server = { path = "../relay_server" }
+#[target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
+#relay_server = { path = "../relay_server" }
