@@ -3,25 +3,21 @@ use crate::flutter::Statistics;
 use crate::flutter::callbacks::FrbStatisticsCallback;
 use crate::overlay::{CONNECTED, LATENCY, LOSS};
 use crate::telepathy::messages::Message;
-use crate::telepathy::sockets::{Transport, TransportStream};
-use crate::telepathy::{
-    ConnectionState, SharedDeviceId, StatisticsCollectorState, TRANSFER_BUFFER_SIZE,
-};
-use cpal::traits::HostTrait;
-use cpal::{Device, Host, Stream};
+use crate::telepathy::sockets::{TIMESTAMP_BUFFER_CAPACITY, Transport, TransportStream};
+use crate::telepathy::{ConnectionState, StatisticsCollectorState};
 use flutter_rust_bridge::for_generated::futures::{Sink, SinkExt};
-use kanal::{AsyncReceiver, AsyncSender};
+use kanal::AsyncReceiver;
 use libp2p::bytes::Bytes;
 use libp2p::futures::StreamExt;
 use libp2p::swarm::ConnectionId;
 use log::debug;
-use sea_codec::ProcessorMessage;
 use speedy::{Readable, Writable};
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::time::Duration;
+use telepathy_audio::PooledBuffer;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::select;
 use tokio::sync::Notify;
@@ -35,41 +31,12 @@ use wasmtimer::tokio::interval;
 
 type Result<T> = std::result::Result<T, Error>;
 
-/// wraps a cpal stream to unsafely make it send
-pub(crate) struct SendStream {
-    pub(crate) stream: Stream,
-}
-
-/// Safety: SendStream must not be used across awaits
-unsafe impl Send for SendStream {}
-
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Debug)]
 enum Locality {
     Loopback = 0,
     Lan = 1,
     Public = 2,
     Unknown = 3,
-}
-
-/// converts a decibel value to a multiplier
-pub(crate) fn db_to_multiplier(db: f32) -> f32 {
-    10_f32.powf(db / 20_f32)
-}
-
-/// Gets the output device
-pub(crate) async fn get_output_device(
-    output_device: &SharedDeviceId,
-    host: &Arc<Host>,
-) -> Result<Device> {
-    match *output_device.lock().await {
-        Some(ref id) => Ok(host.device_by_id(id).unwrap_or(
-            host.default_output_device()
-                .ok_or(ErrorKind::NoOutputDevice)?,
-        )),
-        None => host
-            .default_output_device()
-            .ok_or(ErrorKind::NoOutputDevice.into()),
-    }
 }
 
 /// Returns the percentage of the max input volume in the window compared to the max volume
@@ -165,8 +132,8 @@ pub(crate) async fn statistics_collector<C: FrbStatisticsCallback>(
 
 /// Used for audio tests, plays the input into the output
 pub(crate) async fn loopback(
-    input_receiver: AsyncReceiver<ProcessorMessage>,
-    output_sender: AsyncSender<ProcessorMessage>,
+    input_receiver: AsyncReceiver<PooledBuffer>,
+    output_sender: kanal::Sender<Bytes>,
     cancel: &CancellationToken,
     end_call: &Arc<Notify>,
 ) {
@@ -180,7 +147,7 @@ pub(crate) async fn loopback(
             },
             message = input_receiver.recv() => {
                 if let Ok(message) = message {
-                    if output_sender.try_send(message).is_err() {
+                    if output_sender.try_send(message.clone_inner().freeze()).is_err() {
                         break;
                     }
                 } else {
@@ -193,7 +160,7 @@ pub(crate) async fn loopback(
 
 pub(crate) fn stream_to_audio_transport(stream: libp2p::Stream) -> Transport<TransportStream> {
     LengthDelimitedCodec::builder()
-        .max_frame_length(TRANSFER_BUFFER_SIZE)
+        .max_frame_length(TIMESTAMP_BUFFER_CAPACITY)
         .length_field_type::<u16>()
         .new_framed(stream.compat())
 }

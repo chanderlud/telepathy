@@ -95,8 +95,9 @@ class NetworkSettingsController with ChangeNotifier {
   }
 
   Future<void> updateCodecResidualBits(double residualBits) async {
-    final num clamped = residualBits.clamp(1.0, 8.0);
-    codecConfig.setResidualBits(residualBits: clamped.toDouble());
+    final num clamped = residualBits.clamp(2.0, 8.0);
+    final double rounded = (clamped.toDouble() * 10).round() / 10;
+    codecConfig.setResidualBits(residualBits: rounded);
     await saveCodecConfig();
     notifyListeners();
   }

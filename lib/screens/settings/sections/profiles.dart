@@ -33,21 +33,21 @@ class ProfileSettingsState extends State<ProfileSettings> {
         crossAxisAlignment: CrossAxisAlignment.end,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Builder(builder: (BuildContext context) {
+          Builder(builder: (BuildContext builderContext) {
             bool even = profilesController.profiles.length % 2 == 0;
 
             Color colorPicker(int index) {
               if (even ? index % 2 == 0 : index % 2 != 0) {
                 return Colors.transparent;
               } else {
-                return Theme.of(context).colorScheme.secondaryContainer;
+                return Theme.of(builderContext).colorScheme.secondaryContainer;
               }
             }
 
             return ListView.builder(
                 shrinkWrap: true,
                 itemCount: profilesController.profiles.length,
-                itemBuilder: (BuildContext context, int index) {
+                itemBuilder: (BuildContext listContext, int index) {
                   Profile profile =
                       profilesController.profiles.values.elementAt(index);
 
@@ -83,11 +83,13 @@ class ProfileSettingsState extends State<ProfileSettings> {
                             telepathy.restartManager();
                           },
                           noSplash: true,
-                          disabledColor: profilesController.activeProfile ==
-                                      profile.id &&
-                                  stateController.isCallActive
-                              ? Theme.of(context).colorScheme.tertiaryContainer
-                              : null,
+                          disabledColor:
+                              profilesController.activeProfile == profile.id &&
+                                      stateController.isCallActive
+                                  ? Theme.of(listContext)
+                                      .colorScheme
+                                      .tertiaryContainer
+                                  : null,
                         ),
                         const SizedBox(width: 10),
                         IconButton(
@@ -105,8 +107,8 @@ class ProfileSettingsState extends State<ProfileSettings> {
                           tooltip: 'Delete Profile',
                           onPressed: () {
                             showDialog(
-                                context: context,
-                                builder: (BuildContext context) {
+                                context: listContext,
+                                builder: (BuildContext dialogContext) {
                                   return AlertDialog(
                                     title: const Text('Delete Profile'),
                                     content: const Text(
@@ -115,7 +117,7 @@ class ProfileSettingsState extends State<ProfileSettings> {
                                       Button(
                                         text: 'Cancel',
                                         onPressed: () {
-                                          Navigator.of(context).pop();
+                                          Navigator.of(dialogContext).pop();
                                         },
                                       ),
                                       Button(
@@ -123,7 +125,7 @@ class ProfileSettingsState extends State<ProfileSettings> {
                                         onPressed: () {
                                           profilesController
                                               .removeProfile(profile.id);
-                                          Navigator.of(context).pop();
+                                          Navigator.of(dialogContext).pop();
                                         },
                                       )
                                     ],

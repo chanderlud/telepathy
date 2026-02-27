@@ -51,7 +51,7 @@ pub(crate) struct AudioHeader {
 
 impl AudioHeader {
     pub(crate) fn is_valid(&self) -> bool {
-        self.sample_rate < 128_000 && self.residual_bits <= 8_f64 && self.residual_bits >= 1_f64
+        self.sample_rate < 128_000 && self.residual_bits <= 8_f64 && self.residual_bits >= 2_f64
     }
 }
 

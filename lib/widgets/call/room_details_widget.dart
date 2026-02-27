@@ -47,11 +47,7 @@ class RoomDetailsWidget extends StatelessWidget {
         children: [
           const Padding(
             padding: EdgeInsets.symmetric(horizontal: 8, vertical: 7),
-            child: Row(
-              children: [
-                Text('Room Details', style: TextStyle(fontSize: 20)),
-              ],
-            ),
+            child: Text('Room Details', style: TextStyle(fontSize: 20)),
           ),
           const SizedBox(height: 10.0),
           IconButton(

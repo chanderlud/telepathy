@@ -1,6 +1,6 @@
 [package]
 name = "telepathy"
-version = "2.5.4"
+version = "2.6.0"
 edition = "2024"
 build = "build.rs"
 
@@ -10,13 +10,10 @@ build = "build.rs"
 crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
-sea-codec = { path = "../sea_codec" }
+telepathy_audio = { path = "../telepathy_audio" }
 tokio-util = { version = "0.7", features = ["codec", "compat"] }
-cpal = { version = "0.17", features = ["wasm-bindgen", "audioworklet"] }
 log = "0.4"
 kanal = "0.1.1"
-rubato = { version = "0.16", default-features = false }
-nnnoiseless = { version = "0.5", default-features = false }
 atomic_float = "1"
 flutter_rust_bridge = { version = "=2.11.1", default-features = false, features = ["rust-async", "thread-pool", "dart-opaque", "anyhow"] }
 lazy_static = "1"
@@ -26,9 +23,10 @@ regex = "1" # TODO consider removing regex dep
 log-panics = "2"
 speedy = "=0.8.7"
 cfg-if = "1"
+bytes = "1"
 
 [target.'cfg(target_os = "android")'.dependencies]
-jni = "0.21"
+jni = "0.22"
 ndk-context = "0.1"
 
 [target.'cfg(target_os = "windows")'.dependencies]
@@ -81,11 +79,8 @@ fast_log = "1"
 
 [dev-dependencies]
 rand = "0.8"
-criterion = "0.7"
 mockall = "0.14"
 async-trait = "0.1"
-relay_server = { path = "../relay_server" }
 
-[[bench]]
-name = "bench"
-harness = false
+[target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
+relay_server = { path = "../relay_server" }

@@ -20,12 +20,27 @@ class AudioSettings extends StatefulWidget {
 
 class _AudioSettingsState extends State<AudioSettings> {
   late final AudioDevices _audioDevices;
+  bool testCooldown = false;
 
   @override
   void initState() {
     super.initState();
     _audioDevices = context.read<AudioDevices>();
     _audioDevices.startUpdates();
+  }
+
+  Widget _settingsSwitchRow({
+    required String label,
+    required Widget trailing,
+  }) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      mainAxisSize: MainAxisSize.max,
+      children: [
+        Text(label, style: const TextStyle(fontSize: 18)),
+        trailing,
+      ],
+    );
   }
 
   @override
@@ -69,27 +84,19 @@ class _AudioSettingsState extends State<AudioSettings> {
                 selectedOutputDevice: audioSettingsController.outputDeviceId,
               ),
               builder: (BuildContext context, _DeviceDropdownState state, _) {
-                String inputInitialSelection;
-                if (state.selectedInputDevice == null) {
-                  inputInitialSelection = '';
-                } else if (state.inputDevices.firstWhereOrNull(
-                        (d) => d.id == state.selectedInputDevice) !=
-                    null) {
-                  inputInitialSelection = state.selectedInputDevice!;
-                } else {
-                  inputInitialSelection = '';
-                }
+                final inputInitialSelection =
+                    state.selectedInputDevice != null &&
+                            state.inputDevices
+                                .any((d) => d.id == state.selectedInputDevice)
+                        ? state.selectedInputDevice!
+                        : '';
 
-                String outputInitialSelection;
-                if (state.selectedOutputDevice == null) {
-                  outputInitialSelection = '';
-                } else if (state.outputDevices.firstWhereOrNull(
-                        (d) => d.id == state.selectedOutputDevice) !=
-                    null) {
-                  outputInitialSelection = state.selectedOutputDevice!;
-                } else {
-                  outputInitialSelection = '';
-                }
+                final outputInitialSelection =
+                    state.selectedOutputDevice != null &&
+                            state.outputDevices
+                                .any((d) => d.id == state.selectedOutputDevice)
+                        ? state.selectedOutputDevice!
+                        : '';
 
                 final double width = widget.constraints.maxWidth < 650
                     ? widget.constraints.maxWidth
@@ -147,6 +154,21 @@ class _AudioSettingsState extends State<AudioSettings> {
                 height: 25,
                 disabled: isCallActive,
                 onPressed: () async {
+                  // 100ms debounce for safety
+                  if (testCooldown) {
+                    return;
+                  } else {
+                    setState(() {
+                      testCooldown = true;
+                    });
+                    Future.delayed(const Duration(milliseconds: 100), () {
+                      if (!mounted) return;
+                      setState(() {
+                        testCooldown = false;
+                      });
+                    });
+                  }
+
                   if (inAudioTest) {
                     stateController.setInAudioTest();
                     telepathy.endCall();
@@ -220,25 +242,21 @@ class _AudioSettingsState extends State<AudioSettings> {
           ],
         ),
         const SizedBox(height: 5),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          mainAxisSize: MainAxisSize.max,
-          children: [
-            const Text('Play Custom Ringtones', style: TextStyle(fontSize: 18)),
-            Selector<PreferencesController, bool>(
-              selector: (context, controller) => controller.playCustomRingtones,
-              builder: (BuildContext context, bool playCustomRingtones, _) {
-                return CustomSwitch(
-                    value: playCustomRingtones,
-                    onChanged: (play) {
-                      context
-                          .read<PreferencesController>()
-                          .updatePlayCustomRingtones(play);
-                      telepathy.setPlayCustomRingtones(play: play);
-                    });
-              },
-            ),
-          ],
+        _settingsSwitchRow(
+          label: 'Play Custom Ringtones',
+          trailing: Selector<PreferencesController, bool>(
+            selector: (context, controller) => controller.playCustomRingtones,
+            builder: (BuildContext context, bool playCustomRingtones, _) {
+              return CustomSwitch(
+                  value: playCustomRingtones,
+                  onChanged: (play) {
+                    context
+                        .read<PreferencesController>()
+                        .updatePlayCustomRingtones(play);
+                    telepathy.setPlayCustomRingtones(play: play);
+                  });
+            },
+          ),
         ),
         const SizedBox(height: 15),
         Row(
@@ -293,26 +311,21 @@ class _AudioSettingsState extends State<AudioSettings> {
           },
         ),
         const SizedBox(height: 5),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          mainAxisSize: MainAxisSize.max,
-          children: [
-            const Text('Enable Efficiency Mode',
-                style: TextStyle(fontSize: 18)),
-            Selector<PreferencesController, bool>(
-              selector: (context, controller) => controller.efficiencyMode,
-              builder: (BuildContext context, bool efficiencyMode, _) {
-                return CustomSwitch(
-                    value: efficiencyMode,
-                    onChanged: (enabled) {
-                      context
-                          .read<PreferencesController>()
-                          .updateEfficiencyMode(enabled);
-                      telepathy.setEfficiencyMode(enabled: enabled);
-                    });
-              },
-            ),
-          ],
+        _settingsSwitchRow(
+          label: 'Enable Efficiency Mode',
+          trailing: Selector<PreferencesController, bool>(
+            selector: (context, controller) => controller.efficiencyMode,
+            builder: (BuildContext context, bool efficiencyMode, _) {
+              return CustomSwitch(
+                  value: efficiencyMode,
+                  onChanged: (enabled) {
+                    context
+                        .read<PreferencesController>()
+                        .updateEfficiencyMode(enabled);
+                    telepathy.setEfficiencyMode(enabled: enabled);
+                  });
+            },
+          ),
         ),
         Consumer<NetworkSettingsController>(
           builder: (BuildContext context,
@@ -320,40 +333,31 @@ class _AudioSettingsState extends State<AudioSettings> {
             final values = networkSettingsController.codecConfig.toValues();
             final bool codecEnabled = values.$1;
             final bool codecVbr = values.$2;
-            final double residualBits = values.$3.clamp(1.0, 8.0).toDouble();
+            final double residualBits = values.$3.clamp(2.0, 8.0).toDouble();
 
             return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const SizedBox(height: 12),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text('Enable Codec', style: TextStyle(fontSize: 18)),
-                    CustomSwitch(
-                      value: codecEnabled,
-                      onChanged: (enabled) {
-                        networkSettingsController.updateCodecEnabled(enabled);
-                      },
-                    ),
-                  ],
+                _settingsSwitchRow(
+                  label: 'Enable Codec',
+                  trailing: CustomSwitch(
+                    value: codecEnabled,
+                    onChanged: (enabled) {
+                      networkSettingsController.updateCodecEnabled(enabled);
+                    },
+                  ),
                 ),
                 if (codecEnabled) ...[
                   const SizedBox(height: 12),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text(
-                        'Variable Bitrate (VBR)',
-                        style: TextStyle(fontSize: 18),
-                      ),
-                      CustomSwitch(
-                        value: codecVbr,
-                        onChanged: (vbr) {
-                          networkSettingsController.updateCodecVbr(vbr);
-                        },
-                      ),
-                    ],
+                  _settingsSwitchRow(
+                    label: 'Variable Bitrate (VBR)',
+                    trailing: CustomSwitch(
+                      value: codecVbr,
+                      onChanged: (vbr) {
+                        networkSettingsController.updateCodecVbr(vbr);
+                      },
+                    ),
                   ),
                   const SizedBox(height: 12),
                   const Text(
@@ -361,7 +365,7 @@ class _AudioSettingsState extends State<AudioSettings> {
                     style: TextStyle(fontSize: 18),
                   ),
                   Slider(
-                    min: 1.0,
+                    min: 2.0,
                     max: 8.0,
                     value: residualBits,
                     label: residualBits.toStringAsFixed(1),

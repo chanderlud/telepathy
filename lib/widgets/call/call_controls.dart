@@ -74,7 +74,7 @@ class _CallControlsState extends State<CallControls> {
                             colorFilter: const ColorFilter.mode(
                                 Color(0xFFdc2626), BlendMode.srcIn),
                             semanticsLabel: 'Restart session manager'))
-                    : Container(),
+                    : const SizedBox.shrink(),
                 const SizedBox(width: 5),
               ],
             );
@@ -178,127 +178,126 @@ class _CallControlsState extends State<CallControls> {
             child: Padding(
               padding: const EdgeInsets.all(5.0),
               child: Center(
-                  child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Consumer<StateController>(
+                  child: Consumer<StateController>(
                       builder: (BuildContext context,
                               StateController stateController, _) =>
-                          IconButton(
-                              onPressed: () async {
-                                if (stateController.isDeafened) {
-                                  return;
-                                }
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              IconButton(
+                                  onPressed: () async {
+                                    if (stateController.isDeafened) {
+                                      return;
+                                    }
 
-                                List<int> bytes = stateController.isMuted
-                                    ? await readSeaBytes('unmute')
-                                    : await readSeaBytes('mute');
-                                otherSoundHandle =
-                                    await player.play(bytes: bytes);
+                                    List<int> bytes = stateController.isMuted
+                                        ? await readSeaBytes('unmute')
+                                        : await readSeaBytes('mute');
+                                    otherSoundHandle =
+                                        await player.play(bytes: bytes);
 
-                                stateController.mute();
-                                telepathy.setMuted(
-                                    muted: stateController.isMuted);
-                              },
-                              icon: SvgPicture.asset(
-                                  stateController.isDeafened |
-                                          stateController.isMuted
-                                      ? 'assets/icons/MicrophoneOff.svg'
-                                      : 'assets/icons/Microphone.svg',
-                                  width: 24))),
-                  Consumer<StateController>(
-                      builder: (BuildContext context,
-                              StateController stateController, _) =>
-                          IconButton(
-                              onPressed: () async {
-                                List<int> bytes = stateController.isDeafened
-                                    ? await readSeaBytes('deafen')
-                                    : await readSeaBytes('undeafen');
-                                otherSoundHandle =
-                                    await player.play(bytes: bytes);
+                                    stateController.mute();
+                                    telepathy.setMuted(
+                                        muted: stateController.isMuted);
+                                  },
+                                  icon: SvgPicture.asset(
+                                      stateController.isDeafened |
+                                              stateController.isMuted
+                                          ? 'assets/icons/MicrophoneOff.svg'
+                                          : 'assets/icons/Microphone.svg',
+                                      width: 24)),
+                              IconButton(
+                                  onPressed: () async {
+                                    List<int> bytes = stateController.isDeafened
+                                        ? await readSeaBytes('deafen')
+                                        : await readSeaBytes('undeafen');
+                                    otherSoundHandle =
+                                        await player.play(bytes: bytes);
 
-                                stateController.deafen();
-                                telepathy.setDeafened(
-                                    deafened: stateController.isDeafened);
+                                    stateController.deafen();
+                                    telepathy.setDeafened(
+                                        deafened: stateController.isDeafened);
 
-                                if (stateController.isDeafened &&
-                                    stateController.isMuted) {
-                                  telepathy.setMuted(muted: true);
-                                } else {
-                                  telepathy.setMuted(muted: false);
-                                }
-                              },
-                              visualDensity: VisualDensity.comfortable,
-                              icon: SvgPicture.asset(
-                                  stateController.isDeafened
-                                      ? 'assets/icons/SpeakerOff.svg'
-                                      : 'assets/icons/Speaker.svg',
-                                  width: 28))),
-                  IconButton(
-                      onPressed: () {
-                        Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => Scaffold(body:
-                                  LayoutBuilder(builder: (BuildContext context,
-                                      BoxConstraints constraints) {
-                                return SettingsPage(
-                                  constraints: constraints,
-                                );
-                              })),
-                            ));
-                      },
-                      icon: SvgPicture.asset('assets/icons/Settings.svg')),
-                  const SizedBox(width: 1),
-                  Consumer<StateController>(
-                      builder: (BuildContext context,
-                              StateController stateController, _) =>
-                          IconButton(
-                              onPressed: () async {
-                                if (stateController.activeContact == null) {
-                                  return;
-                                }
-
-                                final networkSettingsController =
-                                    context.read<NetworkSettingsController>();
-
-                                if (!(await screenshareAvailable())) {
-                                  if (context.mounted) {
-                                    showErrorDialog(
+                                    if (stateController.isDeafened &&
+                                        stateController.isMuted) {
+                                      telepathy.setMuted(muted: true);
+                                    } else {
+                                      telepathy.setMuted(muted: false);
+                                    }
+                                  },
+                                  visualDensity: VisualDensity.comfortable,
+                                  icon: SvgPicture.asset(
+                                      stateController.isDeafened
+                                          ? 'assets/icons/SpeakerOff.svg'
+                                          : 'assets/icons/Speaker.svg',
+                                      width: 28)),
+                              IconButton(
+                                  onPressed: () {
+                                    Navigator.push(
                                         context,
-                                        'Screenshare Unavailable',
-                                        'ffmpeg must be installed to use the screenshare feature');
-                                  }
+                                        MaterialPageRoute(
+                                          builder: (context) => Scaffold(body:
+                                              LayoutBuilder(builder:
+                                                  (BuildContext context,
+                                                      BoxConstraints
+                                                          constraints) {
+                                            return SettingsPage(
+                                              constraints: constraints,
+                                            );
+                                          })),
+                                        ));
+                                  },
+                                  icon: SvgPicture.asset(
+                                      'assets/icons/Settings.svg')),
+                              const SizedBox(width: 1),
+                              IconButton(
+                                  onPressed: () async {
+                                    if (stateController.activeContact == null) {
+                                      return;
+                                    }
 
-                                  return;
-                                } else if ((await networkSettingsController
-                                        .screenshareConfig
-                                        .recordingConfig()) ==
-                                    null) {
-                                  if (context.mounted) {
-                                    showErrorDialog(
-                                        context,
-                                        'Invalid Configuration',
-                                        'An invalid screenshare configuration is active, visit settings to select new options.');
-                                  }
+                                    final networkSettingsController = context
+                                        .read<NetworkSettingsController>();
 
-                                  return;
-                                }
+                                    if (!(await screenshareAvailable())) {
+                                      if (context.mounted) {
+                                        showErrorDialog(
+                                            context,
+                                            'Screenshare Unavailable',
+                                            'ffmpeg must be installed to use the screenshare feature');
+                                      }
 
-                                if (!stateController.isSendingScreenshare) {
-                                  telepathy.startScreenshare(
-                                      contact: stateController.activeContact!);
-                                } else {
-                                  stateController.stopScreenshare(true, true);
-                                }
-                              },
-                              icon: SvgPicture.asset(
-                                  stateController.isSendingScreenshare
-                                      ? 'assets/icons/PhoneOff.svg'
-                                      : 'assets/icons/Screenshare.svg',
-                                  semanticsLabel: 'Screenshare icon'))),
-                ],
-              )),
+                                      return;
+                                    } else if ((await networkSettingsController
+                                            .screenshareConfig
+                                            .recordingConfig()) ==
+                                        null) {
+                                      if (context.mounted) {
+                                        showErrorDialog(
+                                            context,
+                                            'Invalid Configuration',
+                                            'An invalid screenshare configuration is active, visit settings to select new options.');
+                                      }
+
+                                      return;
+                                    }
+
+                                    if (!stateController.isSendingScreenshare) {
+                                      telepathy.startScreenshare(
+                                          contact:
+                                              stateController.activeContact!);
+                                    } else {
+                                      stateController.stopScreenshare(
+                                          true, true);
+                                    }
+                                  },
+                                  icon: SvgPicture.asset(
+                                      stateController.isSendingScreenshare
+                                          ? 'assets/icons/PhoneOff.svg'
+                                          : 'assets/icons/Screenshare.svg',
+                                      semanticsLabel: 'Screenshare icon')),
+                            ],
+                          ))),
             ))
       ],
     );

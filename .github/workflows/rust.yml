@@ -190,7 +190,7 @@ jobs:
 
       - name: Build Web
         if: matrix.info.target == 'web'
-        run: flutter_rust_bridge_codegen build-web --rust-root rust/telepathy ${{ startsWith(github.ref, 'refs/tags/') && '--release' || '' }}
+        run: ./web/build_web.sh
 
       - name: Build Flutter
         if: matrix.info.target != 'linux' || !startsWith(github.ref, 'refs/tags/')

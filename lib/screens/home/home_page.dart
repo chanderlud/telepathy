@@ -101,8 +101,7 @@ class HomePage extends StatelessWidget {
                 } else {
                   return Column(children: [
                     Container(
-                      constraints: BoxConstraints(
-                          maxHeight: 250, maxWidth: constraints.maxWidth),
+                      constraints: const BoxConstraints(maxHeight: 250),
                       child: contactsList,
                     ),
                     const SizedBox(height: 20),

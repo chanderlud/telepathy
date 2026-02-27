@@ -128,7 +128,7 @@ Future<void> main(List<String> args) async {
       bytes = ringtone;
     }
 
-    SoundHandle handle = await soundPlayer.play(bytes: bytes);
+    FlutterSoundHandle handle = await soundPlayer.play(bytes: bytes);
 
     if (navigatorKey.currentState == null ||
         !navigatorKey.currentState!.mounted) {

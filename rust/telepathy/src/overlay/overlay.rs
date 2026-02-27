@@ -120,7 +120,7 @@ impl Overlay {
         };
 
         let other_this = this.clone();
-        tokio::spawn(async move {
+        flutter_rust_bridge::spawn(async move {
             other_this.controller().await;
         });
 

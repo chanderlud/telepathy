@@ -1,17 +1,13 @@
-use std::array::TryFromSliceError;
-use std::fmt::{Display, Formatter};
-use std::net::AddrParseError;
-
 use crate::BehaviourEvent;
-use cpal::{BuildStreamError, DefaultStreamConfigError, DevicesError, PlayStreamError};
 #[cfg(target_family = "wasm")]
 use flutter_rust_bridge::for_generated::futures::channel::oneshot::Canceled;
 use libp2p::identity::{DecodingError, ParseError};
 use libp2p::swarm::{DialError, SwarmEvent};
 use libp2p::{TransportBuilderError, TransportError};
 use libp2p_stream::{AlreadyRegistered, OpenStreamError};
-use rubato::{ResampleError, ResamplerConstructionError};
-use sea_codec::codec::common::SeaError;
+use std::fmt::{Display, Formatter};
+use std::net::AddrParseError;
+use telepathy_audio::devices::DeviceError;
 use tokio::task::JoinError;
 use tokio::time::error::Elapsed;
 
@@ -25,12 +21,6 @@ pub(crate) struct Error {
 pub(crate) enum ErrorKind {
     Io(std::io::Error),
     MessageCodec(speedy::Error),
-    StreamConfig(DefaultStreamConfigError),
-    BuildStream(BuildStreamError),
-    PlayStream(PlayStreamError),
-    Devices(DevicesError),
-    ResamplerConstruction(ResamplerConstructionError),
-    Resample(ResampleError),
     KanalSend(kanal::SendError),
     KanalReceive(kanal::ReceiveError),
     KanalClose(kanal::CloseError),
@@ -45,18 +35,14 @@ pub(crate) enum ErrorKind {
     IdentityParse(ParseError),
     Transport(TransportError<std::io::Error>),
     AlreadyRegistered(AlreadyRegistered),
-    SeaError(SeaError),
+    AudioError(telepathy_audio::Error),
     #[cfg(target_family = "wasm")]
     Canceled(Canceled),
     TransportBuildError(TransportBuilderError),
     #[cfg(target_family = "wasm")]
     JsError(Option<String>),
-    NoOutputDevice,
-    NoInputDevice,
+    DeviceError(DeviceError),
     InvalidContactFormat,
-    UnknownSampleFormat,
-    InvalidWav,
-    TryFromSlice(TryFromSliceError),
     TransportSend,
     TransportRecv,
     UnexpectedSwarmEvent,
@@ -69,7 +55,6 @@ pub(crate) enum ErrorKind {
     NoEncoderAvailable,
     NoIdentityAvailable,
     NoStream,
-    UnsupportedSampleFormat,
 }
 
 impl From<std::io::Error> for Error {
@@ -84,46 +69,6 @@ impl From<speedy::Error> for Error {
     fn from(err: speedy::Error) -> Self {
         Self {
             kind: ErrorKind::MessageCodec(err),
-        }
-    }
-}
-
-impl From<DefaultStreamConfigError> for Error {
-    fn from(err: DefaultStreamConfigError) -> Self {
-        Self {
-            kind: ErrorKind::StreamConfig(err),
-        }
-    }
-}
-
-impl From<BuildStreamError> for Error {
-    fn from(err: BuildStreamError) -> Self {
-        Self {
-            kind: ErrorKind::BuildStream(err),
-        }
-    }
-}
-
-impl From<PlayStreamError> for Error {
-    fn from(err: PlayStreamError) -> Self {
-        Self {
-            kind: ErrorKind::PlayStream(err),
-        }
-    }
-}
-
-impl From<ResamplerConstructionError> for Error {
-    fn from(err: ResamplerConstructionError) -> Self {
-        Self {
-            kind: ErrorKind::ResamplerConstruction(err),
-        }
-    }
-}
-
-impl From<ResampleError> for Error {
-    fn from(err: ResampleError) -> Self {
-        Self {
-            kind: ErrorKind::Resample(err),
         }
     }
 }
@@ -160,14 +105,6 @@ impl From<JoinError> for Error {
     }
 }
 
-impl From<DevicesError> for Error {
-    fn from(err: DevicesError) -> Self {
-        Self {
-            kind: ErrorKind::Devices(err),
-        }
-    }
-}
-
 impl From<AddrParseError> for Error {
     fn from(err: AddrParseError) -> Self {
         Self {
@@ -180,14 +117,6 @@ impl From<Elapsed> for Error {
     fn from(err: Elapsed) -> Self {
         Self {
             kind: ErrorKind::Timeout(err),
-        }
-    }
-}
-
-impl From<TryFromSliceError> for Error {
-    fn from(err: TryFromSliceError) -> Self {
-        Self {
-            kind: ErrorKind::TryFromSlice(err),
         }
     }
 }
@@ -283,10 +212,18 @@ impl From<wasm_bindgen::JsValue> for Error {
     }
 }
 
-impl From<SeaError> for Error {
-    fn from(err: SeaError) -> Self {
+impl From<telepathy_audio::Error> for Error {
+    fn from(err: telepathy_audio::Error) -> Self {
         Self {
-            kind: ErrorKind::SeaError(err),
+            kind: ErrorKind::AudioError(err),
+        }
+    }
+}
+
+impl From<DeviceError> for Error {
+    fn from(err: DeviceError) -> Self {
+        Self {
+            kind: ErrorKind::DeviceError(err),
         }
     }
 }
@@ -305,13 +242,6 @@ impl Display for Error {
             match self.kind {
                 ErrorKind::Io(ref err) => format!("IO error: {}", err),
                 ErrorKind::MessageCodec(ref err) => format!("Message codec error: {}", err),
-                ErrorKind::StreamConfig(ref err) => format!("Stream config error: {}", err),
-                ErrorKind::BuildStream(ref err) => format!("Build stream error: {}", err),
-                ErrorKind::PlayStream(ref err) => format!("Play stream error: {}", err),
-                ErrorKind::Devices(ref err) => format!("Devices error: {}", err),
-                ErrorKind::ResamplerConstruction(ref err) =>
-                    format!("Resampler construction error: {}", err),
-                ErrorKind::Resample(ref err) => format!("Resample error: {}", err),
                 ErrorKind::KanalSend(ref err) => format!("Kanal send error: {}", err),
                 ErrorKind::KanalReceive(ref err) => format!("Kanal receive error: {}", err),
                 ErrorKind::KanalClose(ref err) => format!("Kanal close error: {}", err),
@@ -319,7 +249,6 @@ impl Display for Error {
                 ErrorKind::Timeout(_) => "The connection timed out".to_string(),
                 #[cfg(target_family = "wasm")]
                 ErrorKind::WasmTimeout(_) => "The connection timed out".to_string(),
-                ErrorKind::TryFromSlice(ref err) => format!("Try from slice error: {}", err),
                 ErrorKind::AddrParse(ref err) => err.to_string(),
                 ErrorKind::IdentityDecode(ref err) => format!("Identity decode error: {}", err),
                 ErrorKind::OpenStream(ref err) => format!("Open stream error: {}", err),
@@ -327,18 +256,15 @@ impl Display for Error {
                 ErrorKind::IdentityParse(ref err) => format!("Identity parse error: {}", err),
                 ErrorKind::Transport(ref err) => format!("Transport error: {}", err),
                 ErrorKind::AlreadyRegistered(ref err) => format!("Already registered: {}", err),
-                ErrorKind::SeaError(ref err) => format!("Sea error: {err:?}"),
+                ErrorKind::AudioError(ref err) => format!("Audio error: {err}"),
                 #[cfg(target_family = "wasm")]
                 ErrorKind::Canceled(ref err) => format!("Canceled: {}", err),
                 ErrorKind::TransportBuildError(ref err) =>
                     format!("Transport build error: {}", err),
                 #[cfg(target_family = "wasm")]
                 ErrorKind::JsError(ref err) => format!("Javascript error: {:?}", err),
-                ErrorKind::NoOutputDevice => "No output device found".to_string(),
-                ErrorKind::NoInputDevice => "No input device found".to_string(),
+                ErrorKind::DeviceError(ref err) => format!("Device error: {}", err),
                 ErrorKind::InvalidContactFormat => "Invalid contact format".to_string(),
-                ErrorKind::UnknownSampleFormat => "Unknown sample format".to_string(),
-                ErrorKind::InvalidWav => "Invalid WAV file".to_string(),
                 ErrorKind::TransportSend => "Transport failed on send".to_string(),
                 ErrorKind::TransportRecv => "Transport failed on receive".to_string(),
                 ErrorKind::UnexpectedSwarmEvent => "Unexpected swarm event".to_string(),
@@ -351,8 +277,6 @@ impl Display for Error {
                 ErrorKind::NoEncoderAvailable => "No encoder available".to_string(),
                 ErrorKind::NoIdentityAvailable => "No identity available".to_string(),
                 ErrorKind::NoStream => "Did not get a stream".to_string(),
-                ErrorKind::UnsupportedSampleFormat =>
-                    "Only 32 bit float samples are supported".to_string(),
             }
         )
     }
@@ -367,13 +291,7 @@ impl Error {
     }
 
     pub(crate) fn is_audio_error(&self) -> bool {
-        matches!(
-            self.kind,
-            ErrorKind::NoInputDevice
-                | ErrorKind::NoOutputDevice
-                | ErrorKind::BuildStream(_)
-                | ErrorKind::StreamConfig(_)
-        )
+        matches!(self.kind, ErrorKind::DeviceError(_))
     }
 }
 

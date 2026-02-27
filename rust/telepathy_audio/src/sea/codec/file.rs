@@ -1,0 +1,175 @@
+use super::{
+    chunk::SeaChunkType,
+    common::{SEAC_MAGIC, SeaEncoderTrait, SeaError},
+    decoder::Decoder,
+    encoder_cbr::CbrEncoder,
+    encoder_vbr::VbrEncoder,
+};
+use crate::sea::{codec::chunk::SeaChunk, encoder::EncoderSettings};
+
+#[derive(Debug, Clone)]
+pub struct SeaFileHeader {
+    pub version: u8,
+    pub channels: u8,
+    pub chunk_size: u16,
+    pub frames_per_chunk: u16,
+    pub sample_rate: u32,
+}
+
+impl SeaFileHeader {
+    fn validate(&self) -> Result<(), SeaError> {
+        if self.version != 1 {
+            return Err(SeaError::UnsupportedVersion);
+        }
+        if self.channels == 0
+            || self.chunk_size < 16
+            || self.frames_per_chunk == 0
+            || self.sample_rate == 0
+        {
+            return Err(SeaError::InvalidFile);
+        }
+        Ok(())
+    }
+
+    pub fn from_frame(frame: &[u8]) -> Result<Self, SeaError> {
+        if frame.len() < 14 {
+            return Err(SeaError::InvalidFile);
+        }
+
+        let magic = u32::from_be_bytes([frame[0], frame[1], frame[2], frame[3]]);
+        if magic != SEAC_MAGIC {
+            return Err(SeaError::InvalidFile);
+        }
+        let version = frame[4];
+        let channels = frame[5];
+        let chunk_size = u16::from_le_bytes([frame[6], frame[7]]);
+        let frames_per_chunk = u16::from_le_bytes([frame[8], frame[9]]);
+        let sample_rate = u32::from_le_bytes([frame[10], frame[11], frame[12], frame[13]]);
+
+        let res = Self {
+            version,
+            channels,
+            chunk_size,
+            frames_per_chunk,
+            sample_rate,
+        };
+
+        res.validate()?;
+        Ok(res)
+    }
+
+    pub fn serialize(&self) -> Vec<u8> {
+        let mut output = Vec::new();
+
+        output.extend_from_slice(&SEAC_MAGIC.to_be_bytes());
+        output.extend_from_slice(&self.version.to_le_bytes());
+        output.extend_from_slice(&self.channels.to_le_bytes());
+        output.extend_from_slice(&self.chunk_size.to_le_bytes());
+        output.extend_from_slice(&self.frames_per_chunk.to_le_bytes());
+        output.extend_from_slice(&self.sample_rate.to_le_bytes());
+
+        output
+    }
+}
+
+pub(crate) enum ActiveEncoder {
+    Cbr(CbrEncoder),
+    Vbr(VbrEncoder),
+}
+
+pub struct SeaFile {
+    pub header: SeaFileHeader,
+
+    pub(crate) decoder: Option<Decoder>,
+
+    pub(crate) encoder: Option<ActiveEncoder>,
+    pub(crate) encoder_settings: Option<EncoderSettings>,
+}
+
+impl SeaFile {
+    pub fn new(
+        header: SeaFileHeader,
+        encoder_settings: &EncoderSettings,
+    ) -> Result<Self, SeaError> {
+        let encoder = if encoder_settings.vbr {
+            let vbr_encoder = VbrEncoder::new(&header, &encoder_settings.clone());
+            Some(ActiveEncoder::Vbr(vbr_encoder))
+        } else {
+            let cbr_encoder = CbrEncoder::new(&header, &encoder_settings.clone());
+            Some(ActiveEncoder::Cbr(cbr_encoder))
+        };
+
+        Ok(SeaFile {
+            header,
+            decoder: None,
+            encoder,
+            encoder_settings: Some(encoder_settings.clone()),
+        })
+    }
+
+    pub fn make_chunk(&mut self, samples: &[i16]) -> Result<Vec<u8>, SeaError> {
+        let encoder_settings = self.encoder_settings.as_ref().unwrap();
+        let encoder = self.encoder.as_mut().unwrap();
+
+        let initial_lms = match encoder {
+            ActiveEncoder::Cbr(encoder) => encoder.get_lms().clone(),
+            ActiveEncoder::Vbr(encoder) => encoder.get_lms().clone(),
+        };
+
+        let encoded = match encoder {
+            ActiveEncoder::Cbr(encoder) => encoder.encode(samples),
+            ActiveEncoder::Vbr(encoder) => encoder.encode(samples),
+        };
+
+        let chunk = SeaChunk::new(
+            &self.header,
+            &initial_lms,
+            encoder_settings,
+            encoded.scale_factors,
+            encoded.residual_bits,
+            encoded.residuals,
+        );
+        let output = chunk.serialize();
+
+        if self.header.chunk_size == 0 {
+            self.header.chunk_size = output.len() as u16;
+        }
+
+        let full_samples_len =
+            self.header.frames_per_chunk as usize * self.header.channels as usize;
+
+        if samples.len() == full_samples_len {
+            assert_eq!(self.header.chunk_size, output.len() as u16);
+        }
+
+        Ok(output)
+    }
+
+    pub fn samples_from_frame(
+        &mut self,
+        frame: &[u8],
+        output: &mut [i16; 480],
+    ) -> Result<(), SeaError> {
+        let chunk = SeaChunk::from_slice(frame, &self.header)?;
+
+        if self.decoder.is_none() {
+            self.decoder = Some(Decoder::init(
+                self.header.channels as usize,
+                chunk.scale_factor_bits as usize,
+            ));
+        }
+        let decoder = self.decoder.as_mut().unwrap();
+        let decoded = match chunk.chunk_type {
+            SeaChunkType::Cbr => decoder.decode_cbr(&chunk),
+            SeaChunkType::Vbr => decoder.decode_vbr(&chunk),
+        };
+
+        let expected_len = self.header.frames_per_chunk as usize * self.header.channels as usize;
+        if decoded.len() != expected_len {
+            Err(SeaError::InvalidFrame)
+        } else {
+            output.copy_from_slice(decoded.as_slice());
+            Ok(())
+        }
+    }
+}

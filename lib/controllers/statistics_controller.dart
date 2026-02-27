@@ -35,15 +35,22 @@ class StatisticsController extends ChangeNotifier {
 
   /// called when the backend has updated statistics
   void setStatistics(Statistics statistics) {
-    _statistics = statistics;
+    int loss = statistics.loss.toInt();
+    int? removed;
 
-    _lossWindow.add(statistics.loss.toInt());
     if (_lossWindow.length > lossWindowSize) {
-      _lossWindow.removeFirst();
+      removed = _lossWindow.removeFirst();
     }
 
-    _cachedLossWindowMax = _lossWindow.reduce(max);
+    if (_cachedLossWindowMax < loss) {
+      _cachedLossWindowMax = loss;
+    } else if (removed == _cachedLossWindowMax && removed != null) {
+      _cachedLossWindowMax = _lossWindow.reduce(max);
+    }
+
+    _lossWindow.add(loss);
     _lossWindowVersion++;
+    _statistics = statistics;
     notifyListeners();
   }
 }

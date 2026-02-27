@@ -7,33 +7,82 @@ import '../error.dart';
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `play_sound`, `processor`, `wav_to_sea`
-// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `AudioHeader`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `try_from`
-
-/// loads a ringtone into a sea file for future use in the backend
+/// Loads a ringtone from a WAV file and converts it to SEA format.
+///
+/// This function reads a WAV file, encodes it to the SEA codec format,
+/// and saves it as "ringtone.sea" for efficient playback.
+///
+/// # Arguments
+///
+/// * `path` - Path to the WAV file to convert.
+///
+/// # Platform Support
+///
+/// - **Native**: Performs the file I/O and encoding.
+/// - **WASM**: No-op (returns Ok immediately).
 Future<void> loadRingtone({required String path}) =>
     RustLib.instance.api.crateAudioPlayerLoadRingtone(path: path);
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Arc < Host >>>
 abstract class ArcHost implements RustOpaqueInterface {}
 
-// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<SoundHandle>>
-abstract class SoundHandle implements RustOpaqueInterface {
+// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<FlutterSoundHandle>>
+abstract class FlutterSoundHandle implements RustOpaqueInterface {
+  /// Cancels the sound playback.
+  ///
+  /// This triggers a graceful fade-out to prevent audio pops/clicks.
   void cancel();
 }
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<SoundPlayer>>
 abstract class SoundPlayer implements RustOpaqueInterface {
+  /// Returns a reference to the audio host.
+  ///
+  /// This can be used to enumerate devices or access other host functionality.
   ArcHost host();
 
+  /// Creates a new sound player with the specified output volume.
+  ///
+  /// # Arguments
+  ///
+  /// * `output_volume` - Output volume in decibels. 0 dB is unity gain,
+  ///   negative values attenuate, positive values amplify.
   factory SoundPlayer({required double outputVolume}) => RustLib.instance.api
       .crateAudioPlayerSoundPlayerNew(outputVolume: outputVolume);
 
-  /// Public play function
-  Future<SoundHandle> play({required List<int> bytes});
+  /// Plays audio from the provided bytes.
+  ///
+  /// Supports both WAV files (with standard 44-byte header) and SEA codec files.
+  /// The format is auto-detected based on header validation.
+  ///
+  /// # Arguments
+  ///
+  /// * `bytes` - The audio file bytes (WAV or SEA format).
+  ///
+  /// # Returns
+  ///
+  /// A `FlutterSoundHandle` that can be used to cancel playback.
+  ///
+  /// # Errors
+  ///
+  /// Returns `DartError` if:
+  /// - The file is too short (< 14 bytes)
+  /// - No output device is available
+  /// - Stream configuration cannot be obtained
+  /// - Stream creation fails
+  Future<FlutterSoundHandle> play({required List<int> bytes});
 
+  /// Sets the output device.
+  ///
+  /// # Arguments
+  ///
+  /// * `device_id` - The device ID string to use, or `None` for the default device.
   Future<void> updateOutputDevice({String? deviceId});
 
+  /// Updates the output volume.
+  ///
+  /// # Arguments
+  ///
+  /// * `volume` - New volume in decibels.
   void updateOutputVolume({required double volume});
 }

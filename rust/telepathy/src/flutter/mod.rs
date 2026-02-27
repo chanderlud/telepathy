@@ -8,11 +8,12 @@ use crate::telepathy::screenshare::{Decoder, Encoder};
 use crate::telepathy::{ConnectionState, screenshare};
 use atomic_float::AtomicF32;
 use chrono::{DateTime, Local};
-pub use cpal::Host;
 #[cfg(not(target_family = "wasm"))]
 use fast_log::Config;
 #[cfg(not(target_family = "wasm"))]
 use fast_log::appender::{FastLogRecord, LogAppender};
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+use flutter_rust_bridge::spawn;
 use flutter_rust_bridge::{DartFnFuture, frb};
 use lazy_static::lazy_static;
 use libp2p::PeerId;
@@ -25,12 +26,11 @@ use std::str::FromStr;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32};
 use std::sync::{Arc, Once};
+pub use telepathy_audio::Host;
 #[cfg(not(target_family = "wasm"))]
 use tokio::net::lookup_host;
 #[cfg(not(target_family = "wasm"))]
 use tokio::process::Command;
-#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-use tokio::spawn;
 use tokio::sync::{Mutex, Notify, RwLock};
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 use tokio::time::Instant;

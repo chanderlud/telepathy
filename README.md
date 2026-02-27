@@ -38,6 +38,7 @@
 
 ### Audio Processing Stack
 - Denoising runs on the sending side; each participant in a call decides if they want to use their compute resources to denoise their audio input
+- When denoising is disabled, a custom output sample rate can be specified for network compatibility without the CPU overhead of noise suppression
 - Every participant in a call must agree on the same audio codec options for sending & receiving
 - If a frame's RMS is below the input sensitivity threshold, no audio is sent (keep-alive packets are used during silence)
 - In a classic two-way call, each client runs a sending stack and a receiving stack

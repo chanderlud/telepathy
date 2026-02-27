@@ -1,3 +1,6 @@
+/// channel adapters for telepathy_audio I/O traits
+/// flutter_rust_bridge:ignore
+mod audio_adapters;
 /// implementations for core telepathy functionality
 /// flutter_rust_bridge:ignore
 pub mod core;
@@ -23,11 +26,6 @@ use crate::telepathy::core::TelepathyCore;
 use crate::telepathy::helpers::OutputHelper;
 use atomic_float::AtomicF32;
 use chrono::Local;
-use cpal::Device;
-#[cfg(not(target_family = "wasm"))]
-use cpal::SupportedStreamConfig;
-use cpal::traits::{DeviceTrait, HostTrait};
-use cpal::{DeviceId, Host};
 #[cfg(target_family = "wasm")]
 use flutter_rust_bridge::JoinHandle;
 use flutter_rust_bridge::{frb, spawn};
@@ -40,7 +38,6 @@ use libp2p::{PeerId, Stream, StreamProtocol};
 use libp2p_stream::Control;
 use log::{debug, error, info, warn};
 use messages::{Attachment, AudioHeader, Message};
-use nnnoiseless::{FRAME_SIZE, RnnModel};
 use sockets::{Transport, TransportStream};
 use std::mem;
 use std::net::IpAddr;
@@ -48,6 +45,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::time::Duration;
+use telepathy_audio::{AudioDeviceInfo, Host, RnnModel, db_to_multiplier, list_all_devices};
 use tokio::select;
 use tokio::sync::mpsc::{Receiver as MReceiver, Sender as MSender, channel};
 use tokio::sync::{Mutex, Notify};
@@ -55,22 +53,15 @@ use tokio::sync::{Mutex, Notify};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
-use utils::*;
 use uuid::Uuid;
-#[cfg(target_family = "wasm")]
-use wasmtimer::tokio::interval;
 
 type Result<T> = std::result::Result<T, Error>;
-pub(crate) type SharedDeviceId = Arc<Mutex<Option<DeviceId>>>;
+pub(crate) type SharedDeviceId = Arc<Mutex<Option<String>>>;
 
-/// The number of bytes in a single network audio frame
-const TRANSFER_BUFFER_SIZE: usize = FRAME_SIZE * size_of::<i16>();
 /// A timeout used when initializing the call
 const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 /// How often to keep-alive libp2p streams
 pub(crate) const KEEP_ALIVE: Duration = Duration::from_secs(10);
-/// the number of samples to hold in a channel
-pub(crate) const CHANNEL_SIZE: usize = 2_400;
 /// the protocol identifier for Telepathy
 const CHAT_PROTOCOL: StreamProtocol = StreamProtocol::new("/telepathy/0.0.1");
 /// Maximum allowed size for a single length-delimited control/message frame on the session stream.
@@ -99,7 +90,7 @@ impl Telepathy {
     ) -> Telepathy {
         Self {
             inner: TelepathyCore::new(
-                host,
+                host.into(),
                 network_config,
                 screenshare_config,
                 overlay,
@@ -231,7 +222,7 @@ impl Telepathy {
         self.handles.lock().await.push(spawn(async move {
             let stop_io = Default::default();
             if let Err(error) = self_clone
-                .room_controller(receiver, cancel, call_state, &stop_io, end_call)
+                .room_controller(receiver, cancel, &stop_io, end_call)
                 .await
             {
                 error!("error in room controller: {:?}", error);
@@ -300,25 +291,34 @@ impl Telepathy {
             return Err("Cannot start test while call is active".to_string().into());
         }
 
-        #[cfg(target_family = "wasm")]
-        self.inner
-            .init_web_audio()
-            .await
-            .map_err::<Error, _>(Error::into)?;
-
-        let mut audio_config = self.inner.setup_call(PeerId::random()).await?;
-        audio_config.remote_configuration = audio_config.local_configuration.clone();
-        let stop_io = CancellationToken::new();
+        // update state right away to handle the test being ended quickly
         let end_call = Arc::new(Notify::new());
-
         self.inner.core_state.in_call.store(true, Relaxed);
         *self.inner.core_state.end_audio_test.lock().await = Some(end_call.clone());
-        let result = self
-            .inner
-            .call(&stop_io, audio_config, &end_call, None)
-            .await
-            .map_err(Into::into);
-        stop_io.cancel();
+
+        #[cfg(target_family = "wasm")]
+        if let Err(error) = self.inner.init_web_audio().await {
+            // clean up state before propagating error
+            self.inner.core_state.end_audio_test.lock().await.take();
+            self.inner.core_state.in_call.store(false, Relaxed);
+            return Err(Error::into(error));
+        }
+
+        let result = match self.inner.setup_call(PeerId::random()).await {
+            Ok(mut audio_config) => {
+                audio_config.remote_configuration = audio_config.local_configuration.clone();
+                let stop_io = CancellationToken::new();
+                let result = self
+                    .inner
+                    .call(&stop_io, audio_config, &end_call, None)
+                    .await
+                    .map_err(Into::into);
+                stop_io.cancel();
+                result
+            }
+            Err(error) => Err(Error::into(error))
+        };
+
         self.inner.core_state.end_audio_test.lock().await.take();
         self.inner.core_state.in_call.store(false, Relaxed);
         result
@@ -479,29 +479,30 @@ impl Telepathy {
     }
 
     pub async fn set_input_device(&self, device_id: Option<String>) {
-        *self.inner.core_state.input_device.lock().await = device_id.and_then(|id| id.parse().ok());
+        *self.inner.core_state.input_device.lock().await = device_id;
     }
 
     pub async fn set_output_device(&self, device_id: Option<String>) {
-        *self.inner.core_state.output_device.lock().await =
-            device_id.and_then(|id| id.parse().ok());
+        *self.inner.core_state.output_device.lock().await = device_id;
     }
 
     /// Lists the input and output devices
     pub fn list_devices(
         &self,
     ) -> std::result::Result<(Vec<AudioDevice>, Vec<AudioDevice>), DartError> {
-        let host_input_devices = self.inner.host.input_devices().map_err(Error::from)?;
-        let input_devices = host_input_devices
-            .filter_map(|device| device.try_into().ok())
-            .collect();
-
-        let host_output_devices = self.inner.host.output_devices().map_err(Error::from)?;
-        let output_devices = host_output_devices
-            .filter_map(|device| device.try_into().ok())
-            .collect();
-
-        Ok((input_devices, output_devices))
+        let device_list = list_all_devices(&self.inner.host).map_err(Error::from)?;
+        Ok((
+            device_list
+                .input_devices
+                .into_iter()
+                .map(AudioDevice::from)
+                .collect(),
+            device_list
+                .output_devices
+                .into_iter()
+                .map(AudioDevice::from)
+                .collect(),
+        ))
     }
 
     pub async fn set_model(&self, model: Option<Vec<u8>>) -> std::result::Result<(), DartError> {
@@ -521,14 +522,12 @@ pub struct AudioDevice {
     pub id: String,
 }
 
-impl TryFrom<Device> for AudioDevice {
-    type Error = ();
-
-    fn try_from(value: Device) -> std::result::Result<Self, Self::Error> {
-        Ok(Self {
-            name: value.description().map_err(|_| ())?.name().to_string(),
-            id: value.id().map_err(|_| ())?.to_string(),
-        })
+impl From<AudioDeviceInfo> for AudioDevice {
+    fn from(value: AudioDeviceInfo) -> Self {
+        Self {
+            name: value.name,
+            id: value.id,
+        }
     }
 }
 
@@ -538,11 +537,6 @@ pub(crate) struct EarlyCallState {
     peer: PeerId,
     local_configuration: AudioHeader,
     remote_configuration: AudioHeader,
-    #[cfg(not(target_family = "wasm"))]
-    input_config: SupportedStreamConfig,
-    #[cfg(not(target_family = "wasm"))]
-    input_device: Device,
-    input_channels: usize,
 }
 
 impl EarlyCallState {
@@ -692,7 +686,7 @@ pub(crate) enum RoomMessage {
 }
 
 struct RoomConnection {
-    output: OutputHelper,
+    _output: OutputHelper,
     handle: JoinHandle<Result<()>>,
 }
 

@@ -1,32 +1,16 @@
-#[cfg(target_family = "wasm")]
-use crate::audio::WebOutput;
-use crate::audio::codec::{decoder, encoder};
-#[cfg(target_family = "wasm")]
-use crate::audio::web_audio::{WebAudioInput, WebAudioWrapper};
-#[cfg(not(target_family = "wasm"))]
-use crate::audio::{ChannelInput, ChannelOutput};
-use crate::audio::{InputProcessorState, OutputProcessorState, input_processor, output_processor};
 use crate::error::ErrorKind;
 use crate::flutter::DartNotify;
 use crate::flutter::callbacks::{FrbCallbacks, FrbStatisticsCallback};
-use crate::frb_generated::FLUTTER_RUST_BRIDGE_HANDLER;
+use crate::telepathy::audio_adapters::{KanalSink, KanalSource};
 use crate::telepathy::core::TelepathyCore;
 use crate::telepathy::messages::{AudioHeader, Message};
 #[cfg(not(target_family = "wasm"))]
 use crate::telepathy::screenshare;
-use crate::telepathy::utils::{SendStream, get_output_device};
 use crate::telepathy::{
-    CHANNEL_SIZE, CHAT_PROTOCOL, EarlyCallState, Result, StartScreenshare, StatisticsCollectorState,
+    CHAT_PROTOCOL, EarlyCallState, Result, StartScreenshare, StatisticsCollectorState,
 };
 use crate::{Behaviour, BehaviourEvent};
-#[cfg(not(target_family = "wasm"))]
-use cpal::Device;
-use cpal::SampleFormat;
-#[cfg(not(target_family = "wasm"))]
-use cpal::traits::HostTrait;
-use cpal::traits::{DeviceTrait, StreamTrait};
-use flutter_rust_bridge::{JoinHandle, spawn_blocking_with};
-use kanal::{AsyncReceiver, AsyncSender, Sender, bounded, unbounded_async};
+use bytes::Bytes;
 use libp2p::futures::StreamExt;
 use libp2p::multiaddr::Protocol;
 use libp2p::swarm::SwarmEvent;
@@ -34,14 +18,18 @@ use libp2p::swarm::SwarmEvent;
 use libp2p::tcp;
 use libp2p::{Multiaddr, PeerId, Swarm, autonat, dcutr, identify, noise, ping, yamux};
 use libp2p_stream::Control;
-use log::{debug, error, info, warn};
-use nnnoiseless::DenoiseState;
-use sea_codec::ProcessorMessage;
-use sea_codec::codec::file::SeaFileHeader;
+use log::{error, info, warn};
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::Duration;
+#[cfg(target_family = "wasm")]
+use telepathy_audio::WebAudioWrapper;
+use telepathy_audio::{
+    AudioInputBuilder, AudioInputHandle, AudioOutputBuilder, AudioOutputHandle, PooledBuffer,
+    get_input_device,
+};
 #[cfg(not(target_family = "wasm"))]
 use tokio::fs::File;
 #[cfg(not(target_family = "wasm"))]
@@ -294,262 +282,87 @@ where
         Ok(())
     }
 
-    /// helper method to set up audio input stack between the network and device layers
+    /// helper method to set up audio input stack using the telepathy_audio library
     pub(crate) async fn setup_input(
         &self,
-        sample_rate: f64,
         codec_options: (bool, bool, f32),
         statistics_state: &StatisticsCollectorState,
-        is_room: bool,
+        end_call: &Arc<Notify>,
     ) -> Result<InputHelper> {
-        // input stream -> input processor
-        let (input_sender, input_receiver) = bounded::<f32>(CHANNEL_SIZE);
-
-        #[cfg(not(target_family = "wasm"))]
-        let processor_input = ChannelInput::from(input_receiver);
-        #[cfg(target_family = "wasm")]
-        let processor_input = {
-            // normal channel is unused on the web
-            drop(input_receiver);
-
-            if let Some(web_input) = self.web_input.lock().await.as_ref() {
-                WebAudioInput::from(web_input)
-            } else {
-                return Err(ErrorKind::NoInputDevice.into());
-            }
-        };
-
-        // input processor -> encoder or sending socket
-        let (processed_input_sender, processed_input_receiver) =
-            unbounded_async::<ProcessorMessage>();
-
-        // encoder -> sending socket
-        let (encoded_input_sender, encoded_input_receiver) = unbounded_async::<ProcessorMessage>();
-
         let (codec_enabled, vbr, residual_bits) = codec_options;
         let denoise = self.core_state.denoise.load(Relaxed);
-        // the rnnoise denoiser
-        let denoiser = denoise.then_some(DenoiseState::from_model(
-            self.core_state.denoise_model.read().await.clone(),
-        ));
-        let state = InputProcessorState::new(
-            &self.core_state.input_volume,
-            &self.core_state.rms_threshold,
-            &self.core_state.muted,
-            statistics_state.input_rms.clone(),
-        );
 
-        // spawn the input processor thread
-        let processor_handle = spawn_blocking_with(
-            move || {
-                input_processor(
-                    processor_input,
-                    processed_input_sender.to_sync(),
-                    sample_rate,
-                    denoiser,
-                    codec_enabled,
-                    state,
-                )
-            },
-            FLUTTER_RUST_BRIDGE_HANDLER.thread_pool(),
-        );
-
-        if codec_enabled {
-            // if using codec, spawn extra encoder thread
-            let encoder_handle = spawn_blocking_with(
-                move || {
-                    encoder(
-                        processed_input_receiver.to_sync(),
-                        encoded_input_sender.to_sync(),
-                        if denoise { 48_000 } else { sample_rate as u32 },
-                        vbr,
-                        residual_bits,
-                        is_room,
-                    )
-                },
-                FLUTTER_RUST_BRIDGE_HANDLER.thread_pool(),
-            );
-
-            Ok(InputHelper {
-                receiver: Some(encoded_input_receiver),
-                sender: Some(input_sender),
-                processor_handle,
-                encoder_handle: Some(encoder_handle),
-            })
+        // Get denoise model bytes if using custom model
+        let denoise_model = if denoise {
+            Some(self.core_state.denoise_model.read().await.clone())
         } else {
-            Ok(InputHelper {
-                receiver: Some(processed_input_receiver),
-                sender: Some(input_sender),
-                processor_handle,
-                encoder_handle: None,
-            })
+            None
+        };
+
+        // Get device ID
+        let device_id = self.core_state.input_device.lock().await.clone();
+
+        // Create a channel for receiving processed audio data
+        let (sender, receiver) = kanal::unbounded_async();
+
+        let builder = AudioInputBuilder::new()
+            .device(device_id)
+            .denoise(denoise, denoise_model)
+            .input_volume_shared(&self.core_state.input_volume)
+            .rms_threshold_shared(&self.core_state.rms_threshold)
+            .muted_shared(&self.core_state.muted)
+            .rms_shared(&statistics_state.input_rms)
+            .codec(codec_enabled, vbr, residual_bits)
+            .on_error(end_call)
+            .sink(KanalSink::new(sender));
+
+        cfg_if::cfg_if! {
+            if #[cfg(target_family = "wasm")] {
+                let wrapper = self
+                    .web_input
+                    .lock()
+                    .await
+                    .take()
+                    .expect("web audio wrapper was not initialized");
+
+                let handle = builder
+                    .web_audio_wrapper(wrapper)
+                    .build(&self.host)?;
+            } else {
+                 let handle = builder
+                    .build(&self.host)?;
+            }
         }
+
+        Ok(InputHelper::new(handle, receiver))
     }
 
-    /// helper method to set up audio output stack above network layer
+    /// helper method to set up audio output stack using the telepathy_audio library
     pub(crate) async fn setup_output(
         &self,
         remote_sample_rate: f64,
         codec_enabled: bool,
         statistics_state: &StatisticsCollectorState,
-        is_room: bool,
         end_call: Arc<Notify>,
     ) -> Result<OutputHelper> {
-        // receiving socket -> output processor or decoder
-        let (network_output_sender, network_output_receiver) =
-            unbounded_async::<ProcessorMessage>();
+        // Get device ID
+        let device_id = self.core_state.output_device.lock().await.clone();
+        // Create the input channel
+        let (sender, receiver) = kanal::unbounded();
+        // Create the audio output using the builder
+        let handle = AudioOutputBuilder::new()
+            .source(KanalSource::new(receiver))
+            .device(device_id)
+            .sample_rate(remote_sample_rate as u32)
+            .output_volume_shared(&self.core_state.output_volume)
+            .deafened_shared(&self.core_state.deafened)
+            .rms_shared(&statistics_state.output_rms)
+            .loss_shared(&statistics_state.loss)
+            .codec(codec_enabled)
+            .on_error(end_call)
+            .build(&self.host)?;
 
-        // decoder -> output processor
-        let (decoded_output_sender, decoded_output_receiver) =
-            unbounded_async::<ProcessorMessage>();
-
-        // output processor -> output stream
-        #[cfg(not(target_family = "wasm"))]
-        let (output_sender, output_receiver) = bounded::<f32>(CHANNEL_SIZE * 4);
-        #[cfg(not(target_family = "wasm"))]
-        let processor_input = ChannelOutput::from(output_sender);
-
-        // output processor -> output stream
-        #[cfg(target_family = "wasm")]
-        let processor_input = WebOutput::default();
-        #[cfg(target_family = "wasm")]
-        let web_output = processor_input.buf.clone();
-
-        // get the output device and its default configuration
-        let output_device = get_output_device(&self.core_state.output_device, &self.host).await?;
-        let output_config = output_device.default_output_config()?;
-        if output_config.sample_format() != SampleFormat::F32 {
-            return Err(ErrorKind::UnsupportedSampleFormat.into());
-        }
-        info!("output device: {:?}", output_device.description());
-
-        // in rooms, the SEA header is hard coded
-        let header = is_room.then_some(SeaFileHeader {
-            version: 1,
-            channels: 1,
-            chunk_size: 960,
-            frames_per_chunk: 480,
-            sample_rate: remote_sample_rate as u32,
-        });
-        // the ratio of the output sample rate to the remote input sample rate
-        let ratio = output_config.sample_rate() as f64 / remote_sample_rate;
-        let state = OutputProcessorState::new(
-            &self.core_state.output_volume,
-            statistics_state.output_rms.clone(),
-            &self.core_state.deafened,
-            statistics_state.loss.clone(),
-        );
-
-        let mut decoder_handle = None;
-        let output_processor_receiver = if codec_enabled {
-            // if codec enabled, spawn extra decoder thread
-            decoder_handle = Some(spawn_blocking_with(
-                move || {
-                    decoder(
-                        network_output_receiver.to_sync(),
-                        decoded_output_sender.to_sync(),
-                        header,
-                    )
-                },
-                FLUTTER_RUST_BRIDGE_HANDLER.thread_pool(),
-            ));
-
-            decoded_output_receiver.to_sync()
-        } else {
-            network_output_receiver.to_sync()
-        };
-
-        // spawn the output processor thread
-        let processor_handle = spawn_blocking_with(
-            move || output_processor(output_processor_receiver, processor_input, ratio, state),
-            FLUTTER_RUST_BRIDGE_HANDLER.thread_pool(),
-        );
-
-        // get the output channels for chunking the output
-        let output_channels = output_config.channels() as usize;
-
-        let stream = SendStream {
-            stream: output_device.build_output_stream(
-                &output_config.into(),
-                move |output: &mut [f32], _: &_| {
-                    // unwrap is safe because this mutex should never be poisoned
-                    #[cfg(target_family = "wasm")]
-                    let mut data = web_output.lock().unwrap();
-                    // get the len before moving data
-                    #[cfg(target_family = "wasm")]
-                    let data_len = data.len();
-                    // get enough samples to fill the output if possible
-                    #[cfg(target_family = "wasm")]
-                    let mut samples = data.drain(..(output.len() / output_channels).min(data_len));
-
-                    for frame in output.chunks_mut(output_channels) {
-                        #[cfg(not(target_family = "wasm"))]
-                        let sample = output_receiver.recv().unwrap_or(0_f32);
-                        #[cfg(target_family = "wasm")]
-                        let sample = samples.next().unwrap_or(0_f32);
-
-                        // write the sample to all the channels
-                        frame.fill(sample);
-                    }
-                },
-                move |err| {
-                    error!("Error in output stream: {}", err);
-                    end_call.notify_one();
-                },
-                None,
-            )?,
-        };
-        stream.stream.play()?;
-
-        Ok(OutputHelper {
-            sender: Some(network_output_sender),
-            stream,
-            processor_handle,
-            decoder_handle,
-        })
-    }
-
-    /// helper method to set up non-web audio input stream
-    #[cfg(not(target_family = "wasm"))]
-    pub(crate) fn setup_input_stream(
-        &self,
-        call_state: &EarlyCallState,
-        input_sender: Sender<f32>,
-        end_call: Arc<Notify>,
-    ) -> Result<SendStream> {
-        let input_channels = call_state.input_channels;
-        Ok(SendStream {
-            stream: call_state.input_device.build_input_stream(
-                &call_state.input_config.clone().into(),
-                move |input, _| {
-                    for frame in input.chunks(input_channels) {
-                        _ = input_sender.try_send(frame[0]);
-                    }
-                },
-                move |err| {
-                    error!("Error in input stream: {}", err);
-                    end_call.notify_one();
-                },
-                None,
-            )?,
-        })
-    }
-
-    /// helper method to start the web input
-    /// mirrors the non-web API for code reusability
-    #[cfg(target_family = "wasm")]
-    pub(crate) fn setup_input_stream(
-        &self,
-        _call_state: &EarlyCallState,
-        _input_sender: Sender<f32>,
-        _end_call: Arc<Notify>,
-    ) -> Result<()> {
-        if let Some(web_input) = self.web_input.blocking_lock().as_ref() {
-            web_input.resume();
-            Ok(())
-        } else {
-            Err(ErrorKind::NoInputDevice.into())
-        }
+        Ok(OutputHelper::new(handle, sender))
     }
 
     /// helper method to set up EarlyCallState
@@ -566,81 +379,38 @@ where
             return Ok(state);
         }
 
-        #[cfg(not(target_family = "wasm"))]
-        let input_device;
-        #[cfg(not(target_family = "wasm"))]
-        let input_config;
-
-        let input_sample_rate;
-        let input_channels;
-
-        #[cfg(not(target_family = "wasm"))]
-        {
-            // get the input device and its default configuration
-            input_device = self.get_input_device().await?;
-            input_config = input_device.default_input_config()?;
-            if input_config.sample_format() != SampleFormat::F32 {
-                return Err(ErrorKind::UnsupportedSampleFormat.into());
-            }
-            info!("input_device: {:?}", input_device.description());
-            input_sample_rate = input_config.sample_rate();
-            input_channels = input_config.channels() as usize;
-        }
-
-        #[cfg(target_family = "wasm")]
-        {
-            if let Some(web_input) = self.web_input.lock().await.as_ref() {
-                input_sample_rate = web_input.sample_rate as u32;
-            } else {
-                return Err(ErrorKind::NoInputDevice.into());
-            }
-
-            input_channels = 1; // only ever 1 channel on web
-        }
-
-        // load the shared codec config values
-        let config_codec_enabled = self.core_state.codec_config.enabled.load(Relaxed);
-        let config_vbr = self.core_state.codec_config.vbr.load(Relaxed);
-        let config_residual_bits = self.core_state.codec_config.residual_bits.load(Relaxed);
-
-        let mut local_configuration = AudioHeader {
-            sample_rate: input_sample_rate,
-            codec_enabled: config_codec_enabled,
-            vbr: config_vbr,
-            residual_bits: config_residual_bits as f64,
-        };
-
         // rnnoise requires a 48kHz sample rate
-        if self.core_state.denoise.load(Relaxed) {
-            local_configuration.sample_rate = 48_000;
-        }
+        let sample_rate = if self.core_state.denoise.load(Relaxed) {
+            48_000
+        } else {
+            cfg_if::cfg_if! {
+                if #[cfg(target_family = "wasm")] {
+                     self
+                        .web_input
+                        .lock()
+                        .await
+                        .as_ref()
+                        .expect("web audio wrapper was not initialized")
+                        .sample_rate as u32
+                } else {
+                    let device_id = self.core_state.input_device.lock().await;
+                    let device_handle = get_input_device(&self.host, device_id.as_deref())?;
+                    info!("input_device: {:?}", device_handle.name());
+                    device_handle.sample_rate()?
+                }
+            }
+        };
 
         Ok(EarlyCallState {
             peer,
-            local_configuration,
+            local_configuration: AudioHeader {
+                sample_rate,
+                codec_enabled: self.core_state.codec_config.enabled.load(Relaxed),
+                vbr: self.core_state.codec_config.vbr.load(Relaxed),
+                residual_bits: self.core_state.codec_config.residual_bits.load(Relaxed) as f64,
+            },
             remote_configuration: AudioHeader::default(),
-            #[cfg(not(target_family = "wasm"))]
-            input_config,
-            #[cfg(not(target_family = "wasm"))]
-            input_device,
-            input_channels,
         })
-    }
-
-    /// helper method to get the user specified device or default as fallback
-    #[cfg(not(target_family = "wasm"))]
-    pub(crate) async fn get_input_device(&self) -> Result<Device> {
-        match *self.core_state.input_device.lock().await {
-            Some(ref id) => Ok(self.host.device_by_id(id).unwrap_or(
-                self.host
-                    .default_input_device()
-                    .ok_or(ErrorKind::NoInputDevice)?,
-            )),
-            None => self
-                .host
-                .default_input_device()
-                .ok_or(ErrorKind::NoInputDevice.into()),
-        }
     }
 
     /// helper method to load pre-encoded ringtone bytes
@@ -649,20 +419,25 @@ where
             if #[cfg(target_family = "wasm")] {
                 None
             } else {
-                match File::open("ringtone.sea").await {
-                    Ok(mut file) => {
-                        let mut buffer = Vec::new();
+                let path = PathBuf::from("ringtone.sea");
+                if !path.exists() {
+                    None
+                } else {
+                    match File::open("ringtone.sea").await {
+                        Ok(mut file) => {
+                            let mut buffer = Vec::new();
 
-                        if let Err(error) = file.read_to_end(&mut buffer).await {
-                            error!("failed to read ringtone: {:?}", error);
-                            None
-                        } else {
-                            Some(buffer)
+                            if let Err(error) = file.read_to_end(&mut buffer).await {
+                                error!("failed to read ringtone: {:?}", error);
+                                None
+                            } else {
+                                Some(buffer)
+                            }
                         }
-                    }
-                    Err(error) => {
-                        error!("failed to open ringtone: {:?}", error);
-                        None
+                        Err(error) => {
+                            error!("failed to open ringtone: {:?}", error);
+                            None
+                        }
                     }
                 }
             }
@@ -732,61 +507,42 @@ where
 }
 
 pub(crate) struct OutputHelper {
-    sender: Option<AsyncSender<ProcessorMessage>>,
-    stream: SendStream,
-    processor_handle: JoinHandle<Result<()>>,
-    decoder_handle: Option<JoinHandle<Result<()>>>,
+    _handle: AudioOutputHandle,
+    sender: Option<kanal::Sender<Bytes>>,
 }
 
 impl OutputHelper {
-    pub(crate) fn sender(&mut self) -> AsyncSender<ProcessorMessage> {
-        self.sender.take().unwrap()
+    /// Creates a new OutputHelper and stores the handle in the shared storage
+    pub(crate) fn new(handle: AudioOutputHandle, sender: kanal::Sender<Bytes>) -> Self {
+        Self {
+            _handle: handle,
+            sender: Some(sender),
+        }
     }
 
-    pub(crate) async fn join(self) -> Result<()> {
-        drop(self.stream);
-        debug!("joining output processor");
-        self.processor_handle.await??;
-        if let Some(handle) = self.decoder_handle {
-            debug!("joining decoder");
-            handle.await??;
-        }
-        Ok(())
+    pub(crate) fn sender(&mut self) -> kanal::Sender<Bytes> {
+        self.sender.take().expect("sender already taken")
     }
 }
 
 pub(crate) struct InputHelper {
-    receiver: Option<AsyncReceiver<ProcessorMessage>>,
-    sender: Option<Sender<f32>>,
-    processor_handle: JoinHandle<Result<()>>,
-    encoder_handle: Option<JoinHandle<Result<()>>>,
+    _handle: AudioInputHandle,
+    receiver: Option<kanal::AsyncReceiver<PooledBuffer>>,
 }
 
 impl InputHelper {
-    pub(crate) fn receiver(&mut self) -> AsyncReceiver<ProcessorMessage> {
-        self.receiver.take().unwrap()
+    /// Creates a new InputHelper and stores the handle in the shared storage
+    pub(crate) fn new(
+        handle: AudioInputHandle,
+        receiver: kanal::AsyncReceiver<PooledBuffer>,
+    ) -> Self {
+        Self {
+            _handle: handle,
+            receiver: Some(receiver),
+        }
     }
 
-    pub(crate) fn sender(&mut self) -> Sender<f32> {
-        self.sender.take().unwrap()
-    }
-
-    pub(crate) async fn join(self) -> Result<()> {
-        debug!("joining input processor");
-        match self.processor_handle.await? {
-            Ok(()) => (),
-            Err(error) => match error.kind {
-                // input processor may end when channels close
-                ErrorKind::KanalSend(_) => (),
-                // propagate other errors
-                _ => return Err(error),
-            },
-        }
-
-        if let Some(handle) = self.encoder_handle {
-            debug!("joining encoder");
-            handle.await??;
-        }
-        Ok(())
+    pub(crate) fn receiver(&mut self) -> kanal::AsyncReceiver<PooledBuffer> {
+        self.receiver.take().expect("receiver already taken")
     }
 }
