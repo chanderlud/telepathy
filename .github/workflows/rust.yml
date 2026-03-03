@@ -231,7 +231,7 @@ jobs:
 
       - name: Build Flutter
         if: matrix.info.target != 'linux' || !startsWith(github.ref, 'refs/tags/')
-        run: flutter build ${{ matrix.info.target }} ${{ startsWith(github.ref, 'refs/tags/') && '--release' || '--debug' }} ${{ matrix.info.target == 'web' && startsWith(github.ref, 'refs/tags/') && '--base-href /telepathy/' || '' }}
+        run: flutter build ${{ matrix.info.target }} ${{ startsWith(github.ref, 'refs/tags/') && '--release' || '--debug' }} ${{ matrix.info.target == 'web' && startsWith(github.ref, 'refs/tags/') && '--base-href /' || '' }}
 
       - name: Package deb & rpm
         if: matrix.info.target == 'linux' && startsWith(github.ref, 'refs/tags/')
@@ -520,16 +520,12 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   deploy_web:
-    name: Deploy web to GitHub Pages
+    name: Deploy web to Cloudflare Pages
     needs: build_flutter
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-24.04
     permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      contents: read
 
     steps:
       - uses: actions/checkout@v4
@@ -540,14 +536,10 @@ jobs:
           name: telepathy_ubuntu-24.04_web
           path: web-artifact
 
-      - name: Setup Pages
-        uses: actions/configure-pages@v4
-
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
         with:
-          path: web-artifact/telepathy
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy web-artifact/telepathy --project-name=telepathy
 
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
