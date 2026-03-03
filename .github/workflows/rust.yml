@@ -194,7 +194,7 @@ jobs:
 
       - name: Build Flutter
         if: matrix.info.target != 'linux' || !startsWith(github.ref, 'refs/tags/')
-        run: flutter build ${{ matrix.info.target }} ${{ startsWith(github.ref, 'refs/tags/') && '--release' || '--debug' }}
+        run: flutter build ${{ matrix.info.target }} ${{ startsWith(github.ref, 'refs/tags/') && '--release' || '--debug' }} ${{ matrix.info.target == 'web' && startsWith(github.ref, 'refs/tags/') && '--base-href /telepathy/' || '' }}
 
       - name: Package deb & rpm
         if: matrix.info.target == 'linux' && startsWith(github.ref, 'refs/tags/')
@@ -470,3 +470,36 @@ jobs:
           files: dist/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  deploy_web:
+    name: Deploy web to GitHub Pages
+    needs: build_flutter
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download web artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: telepathy_ubuntu-24.04_web
+          path: web-artifact
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: web-artifact/telepathy
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
