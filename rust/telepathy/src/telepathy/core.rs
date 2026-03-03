@@ -164,7 +164,11 @@ where
                     retries += 1;
                     let next_launch = last_launch + Duration::from_millis((retries ^ 2) * 500);
                     if next_launch > Instant::now() {
-                        sleep_until(next_launch).await;
+                        // wait for the next launch or restart
+                        select! {
+                            _ = manager_clone.restart_manager.notified() => (),
+                            _ = sleep_until(next_launch) => (),
+                        };
                     }
                 } else {
                     info!("Session manager exited with success");
