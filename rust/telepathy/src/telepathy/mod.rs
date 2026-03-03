@@ -70,7 +70,7 @@ const CHAT_PROTOCOL: StreamProtocol = StreamProtocol::new("/telepathy/0.0.1");
 /// Maximum allowed size for a single length-delimited control/message frame on the session stream.
 const SESSION_MAX_FRAME_LENGTH: usize = 1024 * 1024 * 1024;
 /// How long to attempt direct connection upgrade before falling back to a relayed option
-const DCUTR_TIMEOUT: Duration = Duration::from_secs(3);
+const DCUTR_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// the public API for flutter
 #[frb(opaque)]
