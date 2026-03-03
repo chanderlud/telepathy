@@ -541,5 +541,5 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy web-artifact/telepathy --project-name=telepathy
+          command: pages deploy web-artifact/telepathy --project-name=telepathy --branch=main
 
