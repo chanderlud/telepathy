@@ -72,6 +72,7 @@ class _TelepathyAppState extends State<TelepathyApp> with WindowListener {
     final interfaceController = context.watch<InterfaceController>();
 
     return MaterialApp(
+      title: 'Telepathy',
       navigatorKey: navigatorKey,
       theme: AppTheme.dark(
         context,
