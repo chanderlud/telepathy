@@ -1,11 +1,11 @@
 {
-    "name": "telepathy",
-    "short_name": "telepathy",
+    "name": "Telepathy",
+    "short_name": "Telepathy",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "background_color": "#222425",
+    "theme_color": "#5538e5",
+    "description": "A cross platform p2p chat application.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [
