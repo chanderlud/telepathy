@@ -35,10 +35,11 @@ class _CallControlsState extends State<CallControls> {
   Widget build(BuildContext context) {
     final telepathy = context.read<Telepathy>();
     final player = context.read<SoundPlayer>();
+    final bool isCompact = MediaQuery.of(context).size.height < 700;
 
     return Column(
       children: [
-        const SizedBox(height: 10),
+        SizedBox(height: isCompact ? 4 : 10),
         Consumer<StateController>(builder:
             (BuildContext context, StateController stateController, _) {
           Widget body;
@@ -81,12 +82,12 @@ class _CallControlsState extends State<CallControls> {
           }
 
           return SizedBox(
-            height: 40,
+            height: isCompact ? 30 : 40,
             child: Center(child: body),
           );
         }),
         Padding(
-          padding: const EdgeInsets.only(left: 25, right: 25, top: 20),
+          padding: EdgeInsets.only(left: 25, right: 25, top: isCompact ? 4 : 20),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -110,7 +111,7 @@ class _CallControlsState extends State<CallControls> {
                           min: -15,
                           max: 15,
                           label: '${outputVolume.toStringAsFixed(2)} db'),
-                      const SizedBox(height: 2),
+                      SizedBox(height: isCompact ? 0 : 2),
                     ],
                   );
                 },
@@ -135,7 +136,7 @@ class _CallControlsState extends State<CallControls> {
                           min: -15,
                           max: 15,
                           label: '${inputVolume.toStringAsFixed(2)} db'),
-                      const SizedBox(height: 2),
+                      SizedBox(height: isCompact ? 0 : 2),
                     ],
                   );
                 },
