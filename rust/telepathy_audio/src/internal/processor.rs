@@ -29,20 +29,21 @@
 //! ```
 
 use std::sync::atomic::Ordering::Relaxed;
-use crate::constants::MINIMUM_SILENCE_LENGTH;
+use crate::constants::{MINIMUM_SILENCE_LENGTH, VAD_CLOSE_RATE};
 use crate::error::Error;
 use crate::internal::NETWORK_FRAME;
 use crate::internal::buffer_pool::BufferPool;
 use crate::internal::processing::*;
 use crate::internal::state::{
-    InputProcessorState, InputState, OutputProcessorState, VadProcessorState,
+    InputProcessorState, InputState, OutputProcessorState, SpeechParams, SpeechState,
+    VadProcessorState,
 };
 use crate::internal::traits::{AudioInput, AudioOutput};
 use crate::internal::utils::resampler_factory;
 use crate::io::traits::{AudioDataSink, AudioDataSource, ClosedOrFailed};
 use crate::sea::decoder::SeaDecoder;
 use crate::sea::encoder::SeaEncoder;
-use log::{debug, info, warn};
+use log::{debug, warn};
 use nnnoiseless::{DenoiseState, FRAME_SIZE};
 use rubato::Resampler;
 use ten_vad_rs::{TARGET_SAMPLE_RATE, TenVad};
@@ -293,6 +294,9 @@ pub fn vad_processor<I: AudioInput>(
     let mut vad = TenVad::new_from_bytes(MODEL_BYTES, TARGET_SAMPLE_RATE)?;
     // input for vad
     let mut vad_input = [0; VAD_FRAME];
+    let speech_params = SpeechParams::new(TARGET_SAMPLE_RATE as usize, VAD_FRAME);
+    let mut speech_state = SpeechState::default();
+    let mut current_threshold = 0_f32;
 
     // set up vad processing logic
     let callback = |target_buffer: &mut Vec<f32>, len: usize, state: &mut VadProcessorState| {
@@ -305,13 +309,14 @@ pub fn vad_processor<I: AudioInput>(
         wide_f32_to_i16(&target_buffer[..len], &mut vad_input);
 
         let score = vad.process_frame(&vad_input)?;
-        info!("vad frame score: {}", score);
+        let gate_open = speech_state.update(&speech_params, score);
 
-        if score > 0.5 {
-            state.rms_threshold.store(0_f32, Relaxed);
+        if gate_open {
+            current_threshold = 0_f32;
         } else {
-            state.rms_threshold.store(f32::MAX, Relaxed);
+            current_threshold += (state.silence_ceiling() - current_threshold) * VAD_CLOSE_RATE;
         }
+        state.rms_threshold.store(current_threshold, Relaxed);
 
         Ok(true)
     };

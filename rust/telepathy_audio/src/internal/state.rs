@@ -18,6 +18,10 @@
 
 use crate::internal::NETWORK_FRAME;
 use crate::internal::buffer_pool::BufferPool;
+use crate::constants::{
+    VAD_MAX_SPEECH_S, VAD_MIN_SILENCE_MS, VAD_MIN_SPEECH_MS, VAD_SILENCE_CEILING,
+    VAD_SPEECH_PAD_MS, VAD_THRESHOLD,
+};
 use atomic_float::AtomicF32;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -179,10 +183,87 @@ impl Default for OutputProcessorState {
     }
 }
 
+pub struct SpeechParams {
+    pub(crate) frame_size_samples: usize,
+    pub(crate) threshold: f32,
+    pub(crate) min_speech_samples: usize,
+    pub(crate) max_speech_samples: f32,
+    pub(crate) min_silence_samples: usize,
+    pub(crate) min_silence_samples_at_max_speech: usize,
+    pub(crate) speech_pad_samples: usize,
+}
+
+impl SpeechParams {
+    pub fn new(sample_rate: usize, frame_size_samples: usize) -> Self {
+        let sr_per_ms = sample_rate / 1000;
+
+        Self {
+            frame_size_samples,
+            threshold: VAD_THRESHOLD,
+            min_speech_samples: VAD_MIN_SPEECH_MS * sr_per_ms,
+            max_speech_samples: VAD_MAX_SPEECH_S * sample_rate as f32,
+            min_silence_samples: VAD_MIN_SILENCE_MS * sr_per_ms,
+            min_silence_samples_at_max_speech: 98 * sr_per_ms,
+            speech_pad_samples: VAD_SPEECH_PAD_MS * sr_per_ms,
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct SpeechState {
+    pub(crate) current_sample: usize,
+    pub(crate) triggered: bool,
+    pub(crate) temp_end: usize,
+    pub(crate) prev_end: usize,
+    pub(crate) next_start: usize,
+}
+
+impl SpeechState {
+    pub fn update(&mut self, params: &SpeechParams, speech_prob: f32) -> bool {
+        self.current_sample += params.frame_size_samples;
+
+        if speech_prob >= params.threshold {
+            if self.next_start == 0 {
+                self.next_start = self
+                    .current_sample
+                    .saturating_sub(params.frame_size_samples + params.speech_pad_samples);
+            }
+            self.temp_end = 0;
+            if !self.triggered
+                && self.current_sample.saturating_sub(self.next_start) >= params.min_speech_samples
+            {
+                self.triggered = true;
+                self.prev_end = 0;
+            }
+        } else if self.triggered {
+            if self.temp_end == 0 {
+                self.temp_end = self.current_sample;
+            }
+
+            let segment_len = self.current_sample.saturating_sub(self.next_start) as f32;
+            let min_silence = if segment_len >= params.max_speech_samples {
+                params.min_silence_samples_at_max_speech
+            } else {
+                params.min_silence_samples
+            };
+
+            if self.current_sample.saturating_sub(self.temp_end) >= min_silence {
+                self.triggered = false;
+                self.prev_end = self.temp_end + params.speech_pad_samples;
+                self.next_start = 0;
+                self.temp_end = 0;
+            }
+        }
+
+        self.triggered || self.temp_end != 0
+    }
+}
+
 pub struct VadProcessorState {
     pub(crate) rms_threshold: Arc<AtomicF32>,
     pub(crate) muted: Arc<AtomicBool>,
     pub(crate) silence_length: u16,
+    pub(crate) silence_ceiling: f32,
 }
 
 impl VadProcessorState {
@@ -199,7 +280,17 @@ impl VadProcessorState {
             rms_threshold: rms_threshold.clone(),
             muted: muted.clone(),
             silence_length: 0,
+            silence_ceiling: VAD_SILENCE_CEILING,
         }
+    }
+
+    pub fn with_silence_ceiling(mut self, silence_ceiling: f32) -> Self {
+        self.silence_ceiling = silence_ceiling;
+        self
+    }
+
+    pub fn silence_ceiling(&self) -> f32 {
+        self.silence_ceiling
     }
 }
 

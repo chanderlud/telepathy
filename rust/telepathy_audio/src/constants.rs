@@ -77,3 +77,18 @@ pub(crate) const MINIMUM_SILENCE_LENGTH: u16 = 40;
 /// create high-frequency artifacts perceived as clicks. The linear ramp
 /// spreads the energy change across multiple samples.
 pub(crate) const TRANSITION_LENGTH: usize = 48;
+
+/// TenVAD speech probability threshold.
+pub(crate) const VAD_THRESHOLD: f32 = 0.5_f32;
+/// Minimum speech duration before opening gate (milliseconds).
+pub(crate) const VAD_MIN_SPEECH_MS: usize = 50;
+/// Minimum silence duration before closing gate (milliseconds).
+pub(crate) const VAD_MIN_SILENCE_MS: usize = 300;
+/// Extra padding around speech boundaries (milliseconds).
+pub(crate) const VAD_SPEECH_PAD_MS: usize = 30;
+/// Maximum continuous speech duration before forced split (seconds).
+pub(crate) const VAD_MAX_SPEECH_S: f32 = 30.0_f32;
+/// RMS threshold ceiling while VAD gate is closed.
+pub(crate) const VAD_SILENCE_CEILING: f32 = 750_f32;
+/// Exponential close rate for smoothing threshold transitions.
+pub(crate) const VAD_CLOSE_RATE: f32 = 0.1_f32;

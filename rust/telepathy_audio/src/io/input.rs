@@ -63,6 +63,7 @@ use crate::devices::AudioHost;
 #[cfg(not(target_family = "wasm"))]
 use crate::devices::get_input_device;
 use crate::error::Error;
+use crate::constants::VAD_SILENCE_CEILING;
 use crate::internal::buffer_pool::{DEFAULT_POOL_CAPACITY, PooledBuffer};
 use crate::internal::processor::{input_processor, vad_processor};
 use crate::internal::state::{InputProcessorState, VadProcessorState};
@@ -131,6 +132,11 @@ pub struct AudioInputConfig {
     /// Audio frames with RMS below this threshold are treated as silence.
     /// A value of 0.0 disables silence detection.
     pub rms_threshold: f32,
+    /// RMS threshold ceiling applied while VAD gate is closed.
+    ///
+    /// Lower values allow more low-level background audio to pass through,
+    /// while higher values make VAD gating stricter.
+    pub vad_silence_ceiling: f32,
     /// Whether codec encoding is enabled.
     ///
     /// When enabled, audio is encoded using the SEA codec before being
@@ -171,6 +177,7 @@ impl Default for AudioInputConfig {
             denoise_model: None,
             volume: 1.0,
             rms_threshold: 0.0,
+            vad_silence_ceiling: VAD_SILENCE_CEILING,
             codec_enabled: false,
             codec_vbr: false,
             codec_residual_bits: 5.0,
@@ -274,6 +281,15 @@ where
     /// A value of 0.0 disables silence detection.
     pub fn rms_threshold(mut self, threshold: f32) -> Self {
         self.config.rms_threshold = threshold;
+        self
+    }
+
+    /// Sets VAD silence ceiling used by auto sensitivity gating.
+    ///
+    /// Lower values leak more background audio while closed; higher values
+    /// make the closed gate stricter.
+    pub fn vad_sensitivity(mut self, ceiling: f32) -> Self {
+        self.config.vad_silence_ceiling = ceiling;
         self
     }
 
@@ -579,6 +595,7 @@ where
         let (input_sender, processor_input) = ringbuffer_helper();
 
         let (vad_sender, vad_input) = ringbuffer_helper();
+        let vad_silence_ceiling = self.config.vad_silence_ceiling;
 
         let error_notify = self.config.error_notify.clone();
         // Build common components (channels, threads, state)
@@ -672,7 +689,8 @@ where
         stream.play()?;
 
         let ratio = TARGET_SAMPLE_RATE as f64 / device_sample_rate as f64;
-        let vad_state = VadProcessorState::new(&context.rms_threshold, &context.muted);
+        let vad_state = VadProcessorState::new(&context.rms_threshold, &context.muted)
+            .with_silence_ceiling(vad_silence_ceiling);
 
         // spawn vad processor
         let vad_handle = thread::safe_spawn(move || {
