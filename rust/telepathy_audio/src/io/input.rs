@@ -64,8 +64,8 @@ use crate::devices::AudioHost;
 use crate::devices::get_input_device;
 use crate::error::Error;
 use crate::internal::buffer_pool::{DEFAULT_POOL_CAPACITY, PooledBuffer};
-use crate::internal::processor::input_processor;
-use crate::internal::state::InputProcessorState;
+use crate::internal::processor::{input_processor, vad_processor};
+use crate::internal::state::{InputProcessorState, VadProcessorState};
 use crate::internal::thread::{self, JoinHandle};
 use crate::internal::traits::AudioInput;
 #[cfg(not(target_family = "wasm"))]
@@ -89,6 +89,7 @@ use std::sync::Arc;
 #[cfg(not(target_family = "wasm"))]
 use std::sync::Condvar;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+use ten_vad_rs::TARGET_SAMPLE_RATE;
 use tokio::sync::Notify;
 
 /// Configuration for audio input processing.
@@ -528,7 +529,7 @@ where
             None
         };
 
-        // spawn processor thread (safe_spawn catches panics on WASM when threading is unavailable)
+        // spawn processor thread
         let processor_handle = thread::safe_spawn(move || {
             if let Err(e) = input_processor(processor_input, sink, ratio, denoiser, state, encoder)
             {
@@ -575,17 +576,10 @@ where
         let device_sample_rate = config.sample_rate();
         let sample_format = config.sample_format();
 
-        // Create ring buffer for cpal stream to processor
-        let (input_producer, input_consumer) = RingBuffer::<f32>::new(CHANNEL_SIZE);
-        // Create condvar to wake input processor when the ring buffer changes
-        let input_notify = Arc::new(Condvar::new());
-        // Create sender for input stream to input processor
-        let input_sender = RingBufferSender {
-            producer: input_producer,
-            notify: input_notify.clone(),
-        };
-        // Create processor input and extract error_notify before consuming self
-        let processor_input = RingBufferInput::new(input_consumer, input_notify);
+        let (input_sender, processor_input) = ringbuffer_helper();
+
+        let (vad_sender, vad_input) = ringbuffer_helper();
+
         let error_notify = self.config.error_notify.clone();
         // Build common components (channels, threads, state)
         let context = self.build_common(processor_input, device_sample_rate)?;
@@ -596,6 +590,7 @@ where
                 device,
                 &config.into(),
                 input_sender,
+                Some(vad_sender),
                 input_channels,
                 error_notify,
             )?,
@@ -603,6 +598,7 @@ where
                 device,
                 &config.into(),
                 input_sender,
+                Some(vad_sender),
                 input_channels,
                 error_notify,
             )?,
@@ -610,6 +606,7 @@ where
                 device,
                 &config.into(),
                 input_sender,
+                Some(vad_sender),
                 input_channels,
                 error_notify,
             )?,
@@ -617,6 +614,7 @@ where
                 device,
                 &config.into(),
                 input_sender,
+                Some(vad_sender),
                 input_channels,
                 error_notify,
             )?,
@@ -624,6 +622,7 @@ where
                 device,
                 &config.into(),
                 input_sender,
+                Some(vad_sender),
                 input_channels,
                 error_notify,
             )?,
@@ -631,6 +630,7 @@ where
                 device,
                 &config.into(),
                 input_sender,
+                Some(vad_sender),
                 input_channels,
                 error_notify,
             )?,
@@ -638,6 +638,7 @@ where
                 device,
                 &config.into(),
                 input_sender,
+                Some(vad_sender),
                 input_channels,
                 error_notify,
             )?,
@@ -645,6 +646,7 @@ where
                 device,
                 &config.into(),
                 input_sender,
+                Some(vad_sender),
                 input_channels,
                 error_notify,
             )?,
@@ -652,6 +654,7 @@ where
                 device,
                 &config.into(),
                 input_sender,
+                Some(vad_sender),
                 input_channels,
                 error_notify,
             )?,
@@ -659,6 +662,7 @@ where
                 device,
                 &config.into(),
                 input_sender,
+                Some(vad_sender),
                 input_channels,
                 error_notify,
             )?,
@@ -667,9 +671,21 @@ where
 
         stream.play()?;
 
+        let ratio = TARGET_SAMPLE_RATE as f64 / device_sample_rate as f64;
+        let vad_state = VadProcessorState::new(&context.rms_threshold, &context.muted);
+
+        // spawn vad processor
+        let vad_handle = thread::safe_spawn(move || {
+            if let Err(e) = vad_processor(vad_input, ratio, vad_state) {
+                error!("Input processor error: {}", e);
+            }
+            debug!("Input processor thread ended");
+        })?;
+
         Ok(AudioInputHandle {
             _stream: Some(stream),
             _processor_handle: Some(context.processor_handle),
+            _vad_handle: Some(vad_handle),
             input_volume: context.input_volume,
             rms_threshold: context.rms_threshold,
             muted: context.muted,
@@ -735,6 +751,7 @@ where
         Ok(AudioInputHandle {
             _web_audio: Some(web_audio),
             _processor_handle: Some(context.processor_handle),
+            _vad_handle: None,
             input_volume: context.input_volume,
             rms_threshold: context.rms_threshold,
             muted: context.muted,
@@ -776,6 +793,7 @@ pub struct AudioInputHandle {
     #[cfg(target_family = "wasm")]
     _web_audio: Option<WebAudioWrapper>,
     _processor_handle: Option<JoinHandle<()>>,
+    _vad_handle: Option<JoinHandle<()>>,
     input_volume: Arc<AtomicF32>,
     rms_threshold: Arc<AtomicF32>,
     muted: Arc<AtomicBool>,
@@ -858,6 +876,7 @@ fn build_input_stream_with_format<T>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
     mut input_sender: RingBufferSender,
+    mut vad_sender: Option<RingBufferSender>,
     input_channels: usize,
     error_notify: Option<Arc<Notify>>,
 ) -> Result<cpal::Stream, Error>
@@ -869,18 +888,27 @@ where
     let stream = device.build_input_stream(
         config,
         move |data: &[T], _: &_| {
-            let Ok(chunk) = input_sender
-                .producer
-                .write_chunk_uninit(data.len() / input_channels)
-            else {
-                return;
-            };
+            input_stream_helper(
+                &mut input_sender,
+                input_channels,
+                data.len(),
+                data.chunks(input_channels).map(|frame| {
+                    // Convert device format T to f32
+                    frame[0].to_float_sample()
+                }),
+            );
 
-            chunk.fill_from_iter(data.chunks(input_channels).map(|frame| {
-                // Convert device format T to f32
-                frame[0].to_float_sample()
-            }));
-            input_sender.notify.notify_one();
+            if let Some(sender) = vad_sender.as_mut() {
+                input_stream_helper(
+                    sender,
+                    input_channels,
+                    data.len(),
+                    data.chunks(input_channels).map(|frame| {
+                        // Convert device format T to f32
+                        frame[0].to_float_sample()
+                    }),
+                );
+            }
         },
         move |err| {
             log::error!("Input stream error: {}", err);
@@ -903,6 +931,7 @@ fn build_input_stream_with_format_64<T>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
     mut input_sender: RingBufferSender,
+    mut vad_sender: Option<RingBufferSender>,
     input_channels: usize,
     error_notify: Option<Arc<Notify>>,
 ) -> Result<cpal::Stream, Error>
@@ -914,19 +943,29 @@ where
     let stream = device.build_input_stream(
         config,
         move |data: &[T], _: &_| {
-            let Ok(chunk) = input_sender
-                .producer
-                .write_chunk_uninit(data.len() / input_channels)
-            else {
-                return;
-            };
+            input_stream_helper(
+                &mut input_sender,
+                input_channels,
+                data.len(),
+                data.chunks(input_channels).map(|frame| {
+                    // Convert device format T to f64, then to f32
+                    let sample_f64 = frame[0].to_float_sample();
+                    sample_f64 as f32
+                }),
+            );
 
-            chunk.fill_from_iter(data.chunks(input_channels).map(|frame| {
-                // Convert device format T to f64, then to f32
-                let sample_f64 = frame[0].to_float_sample();
-                sample_f64 as f32
-            }));
-            input_sender.notify.notify_one();
+            if let Some(sender) = vad_sender.as_mut() {
+                input_stream_helper(
+                    sender,
+                    input_channels,
+                    data.len(),
+                    data.chunks(input_channels).map(|frame| {
+                        // Convert device format T to f64, then to f32
+                        let sample_f64 = frame[0].to_float_sample();
+                        sample_f64 as f32
+                    }),
+                );
+            }
         },
         move |err| {
             log::error!("Input stream error: {}", err);
@@ -938,4 +977,36 @@ where
     )?;
 
     Ok(stream)
+}
+
+fn input_stream_helper(
+    input_sender: &mut RingBufferSender,
+    input_channels: usize,
+    data_len: usize,
+    sample_iter: impl Iterator<Item = f32>,
+) {
+    let Ok(chunk) = input_sender
+        .producer
+        .write_chunk_uninit(data_len / input_channels)
+    else {
+        return;
+    };
+
+    chunk.fill_from_iter(sample_iter);
+    input_sender.notify.notify_one();
+}
+
+fn ringbuffer_helper() -> (RingBufferSender, RingBufferInput) {
+    // Create ring buffer for cpal stream to processor
+    let (input_producer, input_consumer) = RingBuffer::<f32>::new(CHANNEL_SIZE);
+    // Create condvar to wake input processor when the ring buffer changes
+    let input_notify = Arc::new(Condvar::new());
+    // Create sender for input stream to processor
+    let sender = RingBufferSender {
+        producer: input_producer,
+        notify: input_notify.clone(),
+    };
+    // Create processor input
+    let receiver = RingBufferInput::new(input_consumer, input_notify);
+    (sender, receiver)
 }

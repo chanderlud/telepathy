@@ -229,3 +229,9 @@ impl From<wasm_bindgen::JsValue> for Error {
         Error::Processing(format!("JavaScript error: {:?}", err))
     }
 }
+
+impl From<ten_vad_rs::TenVadError> for Error {
+    fn from(err: ten_vad_rs::TenVadError) -> Self {
+        Error::Processing(format!("ten_vad_rs::TenVad error: {:?}", err))
+    }
+}

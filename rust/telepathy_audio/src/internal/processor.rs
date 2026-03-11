@@ -28,20 +28,27 @@
 //! // handle.join().unwrap();
 //! ```
 
+use std::sync::atomic::Ordering::Relaxed;
 use crate::constants::MINIMUM_SILENCE_LENGTH;
 use crate::error::Error;
 use crate::internal::NETWORK_FRAME;
 use crate::internal::buffer_pool::BufferPool;
 use crate::internal::processing::*;
-use crate::internal::state::{InputProcessorState, OutputProcessorState};
+use crate::internal::state::{
+    InputProcessorState, InputState, OutputProcessorState, VadProcessorState,
+};
 use crate::internal::traits::{AudioInput, AudioOutput};
 use crate::internal::utils::resampler_factory;
 use crate::io::traits::{AudioDataSink, AudioDataSource, ClosedOrFailed};
 use crate::sea::decoder::SeaDecoder;
 use crate::sea::encoder::SeaEncoder;
-use log::{debug, warn};
+use log::{debug, info, warn};
 use nnnoiseless::{DenoiseState, FRAME_SIZE};
 use rubato::Resampler;
+use ten_vad_rs::{TARGET_SAMPLE_RATE, TenVad};
+
+const VAD_FRAME: usize = 256;
+const MODEL_BYTES: &[u8] = include_bytes!("../../../../assets/models/ten-vad.onnx");
 
 /// Processes audio input and sends it to the output channel.
 ///
@@ -98,7 +105,7 @@ use rubato::Resampler;
 /// Returns `Ok(())` when the input stream ends or channel closes, or an error
 /// if processing fails.
 pub fn input_processor<I: AudioInput>(
-    mut input: I,
+    input: I,
     sink: impl AudioDataSink,
     ratio: f64,
     mut denoiser: Option<Box<DenoiseState>>,
@@ -108,62 +115,13 @@ pub fn input_processor<I: AudioInput>(
     // the maximum value for i16 as f32
     let max_i16_f32 = i16::MAX as f32;
 
-    // rubato requires 10 extra spaces in the output buffer as a safety margin
-    let post_len = (FRAME_SIZE as f64 + 10_f64) as usize;
-    let in_len = (FRAME_SIZE as f64 / ratio).ceil() as usize;
-
-    // resampler is Some if resampling is needed
-    let mut resampler = resampler_factory(ratio, 1, in_len)?;
-    // the input for the resampler
-    let mut pre_vec = Vec::with_capacity(in_len);
-    pre_vec.resize(in_len, 0_f32);
-    let mut pre_buf = [pre_vec];
-    // the output for the resampler
-    let mut post_vec = Vec::with_capacity(post_len);
-    post_vec.resize(post_len, 0_f32);
-    let mut post_buf = [post_vec];
     // the output for rnnoise
     let mut out_buf = [0_f32; FRAME_SIZE];
     // output for 16 bit samples
     let mut int_buffer = [0; FRAME_SIZE];
 
-    // the position in pre_buf
-    let mut position = 0;
-    // a counter for short silence detection
-    let mut silence_length = 0_u16;
-
-    loop {
-        let read = input.read_into(&mut pre_buf[0][position..in_len])?;
-        if read == 0 {
-            debug!("Input processor ended (EOF)");
-            break;
-        }
-        position += read;
-
-        if state.is_muted() {
-            position = 0;
-            silence_length = 0;
-            continue;
-        } else if position < in_len {
-            continue;
-        } else {
-            position = 0;
-        }
-
-        let (target_buffer, len) = if let Some(resampler) = &mut resampler {
-            // resample the data
-            let processed = resampler.process_into_buffer(&pre_buf, &mut post_buf, None)?;
-            (&mut post_buf[0], processed.1)
-        } else {
-            (&mut pre_buf[0], FRAME_SIZE)
-        };
-
-        // the first frame may be smaller than FRAME_SIZE
-        if len != FRAME_SIZE {
-            warn!("input_processor: len != FRAME_SIZE: {}", len);
-            continue;
-        }
-
+    // main processor logic
+    let callback = |target_buffer: &mut Vec<f32>, len: usize, state: &mut InputProcessorState| {
         // apply the input volume & scale the samples to -32768.0 to 32767.0
         wide_float_scaler(
             &mut target_buffer[..len],
@@ -184,13 +142,13 @@ pub fn input_processor<I: AudioInput>(
 
         // check if the frame is below the rms threshold
         if rms < state.rms_threshold() {
-            if silence_length < MINIMUM_SILENCE_LENGTH {
-                silence_length += 1; // short silences are ignored
+            if state.silence_length < MINIMUM_SILENCE_LENGTH {
+                state.silence_length += 1; // short silences are ignored
             } else {
-                continue; // long ones are dropped
+                return Ok(true); // long ones are dropped
             }
         } else {
-            silence_length = 0;
+            state.silence_length = 0;
         }
 
         // use SIMD-accelerated f32 to i16 conversion
@@ -210,13 +168,15 @@ pub fn input_processor<I: AudioInput>(
 
         // send buffer to network
         match sink.send(pooled) {
-            Ok(()) => (),
-            Err(ClosedOrFailed::Closed) => break,
+            Ok(()) => Ok(true),
+            Err(ClosedOrFailed::Closed) => Ok(false),
             // propagate failures
             Err(ClosedOrFailed::Failed(error)) => Err(error)?,
         }
-    }
+    };
 
+    // run resample and process loop to completion
+    base_resampler(input, ratio, state, FRAME_SIZE, callback)?;
     debug!("Input processor ended");
     Ok(())
 }
@@ -319,5 +279,109 @@ pub fn output_processor<O: AudioOutput>(
     }
 
     debug!("Output processor ended");
+    Ok(())
+}
+
+pub fn vad_processor<I: AudioInput>(
+    input: I,
+    ratio: f64,
+    state: VadProcessorState,
+) -> Result<(), Error> {
+    // the maximum value for i16 as f32
+    let max_i16_f32 = i16::MAX as f32;
+
+    let mut vad = TenVad::new_from_bytes(MODEL_BYTES, TARGET_SAMPLE_RATE)?;
+    // input for vad
+    let mut vad_input = [0; VAD_FRAME];
+
+    // set up vad processing logic
+    let callback = |target_buffer: &mut Vec<f32>, len: usize, state: &mut VadProcessorState| {
+        // scale the samples to -32768.0 to 32767.0
+        wide_float_scaler(
+            &mut target_buffer[..len],
+            max_i16_f32,
+        );
+        // use SIMD-accelerated f32 to i16 conversion
+        wide_f32_to_i16(&target_buffer[..len], &mut vad_input);
+
+        let score = vad.process_frame(&vad_input)?;
+        info!("vad frame score: {}", score);
+
+        if score > 0.5 {
+            state.rms_threshold.store(0_f32, Relaxed);
+        } else {
+            state.rms_threshold.store(f32::MAX, Relaxed);
+        }
+
+        Ok(true)
+    };
+
+    // run resample and process loop to completion
+    base_resampler(input, ratio, state, VAD_FRAME, callback)?;
+    debug!("VAD processor ended");
+    Ok(())
+}
+
+fn base_resampler<I: AudioInput, S: InputState>(
+    mut input: I,
+    ratio: f64,
+    mut state: S,
+    frame_size: usize,
+    mut callback: impl FnMut(&mut Vec<f32>, usize, &mut S) -> Result<bool, Error>,
+) -> Result<(), Error> {
+    // rubato requires 10 extra spaces in the output buffer as a safety margin
+    let post_len = (frame_size as f64 + 10_f64) as usize;
+    let in_len = (frame_size as f64 / ratio).ceil() as usize;
+
+    // resampler is Some if resampling is needed
+    let mut resampler = resampler_factory(ratio, 1, in_len)?;
+    // the input for the resampler
+    let mut pre_buf = [vec![0_f32; in_len]];
+    // the output for the resampler
+    let mut post_buf = [vec![0_f32; post_len]];
+
+    // the position in pre_buf
+    let mut position = 0;
+
+    loop {
+        let read = input.read_into(&mut pre_buf[0][position..in_len])?;
+        if read == 0 {
+            debug!("Resampler loop ended (EOF)");
+            break;
+        }
+        position += read;
+
+        if state.is_muted() {
+            position = 0;
+            state.reset_silence();
+            continue;
+        } else if position < in_len {
+            continue;
+        } else {
+            position = 0;
+        }
+
+        let (target_buffer, len) = if let Some(resampler) = &mut resampler {
+            // resample the data
+            let processed = resampler.process_into_buffer(&pre_buf, &mut post_buf, None)?;
+            (&mut post_buf[0], processed.1)
+        } else {
+            (&mut pre_buf[0], frame_size)
+        };
+
+        // the first frame may be smaller than frame_size
+        if len != frame_size {
+            warn!("base_resampler: len != frame_size: {}", len);
+            continue;
+        }
+
+        // callback returns false to break the loop
+        if callback(target_buffer, len, &mut state)? {
+            continue;
+        } else {
+            break;
+        }
+    }
+
     Ok(())
 }

@@ -53,6 +53,9 @@ serde-wasm-bindgen = "0.6"
 wasm_sync = "0.1"
 wasmtimer = "0.4"
 
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+ten-vad-rs = "0.1"
+
 [target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
 tokio-test = "0.4"
 criterion = "0.8"

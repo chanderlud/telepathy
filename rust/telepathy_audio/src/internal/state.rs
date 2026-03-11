@@ -24,6 +24,12 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
 
+pub trait InputState {
+    fn is_muted(&self) -> bool;
+
+    fn reset_silence(&mut self);
+}
+
 /// State for the input audio processor.
 ///
 /// This structure holds atomic references to shared state that can be
@@ -34,6 +40,7 @@ pub struct InputProcessorState {
     pub(crate) muted: Arc<AtomicBool>,
     pub(crate) rms_sender: Arc<AtomicF32>,
     pub(crate) buffer_pool: Arc<BufferPool>,
+    pub(crate) silence_length: u16,
 }
 
 impl InputProcessorState {
@@ -58,6 +65,7 @@ impl InputProcessorState {
             muted: muted.clone(),
             rms_sender,
             buffer_pool: Arc::new(BufferPool::new(pool_size, NETWORK_FRAME)),
+            silence_length: 0,
         }
     }
 
@@ -69,11 +77,6 @@ impl InputProcessorState {
     /// Gets the current RMS threshold for silence detection.
     pub(crate) fn rms_threshold(&self) -> f32 {
         self.rms_threshold.load(Relaxed)
-    }
-
-    /// Checks if the input is currently muted.
-    pub(crate) fn is_muted(&self) -> bool {
-        self.muted.load(Relaxed)
     }
 
     /// Sends the RMS value to statistics (uses max to keep highest value).
@@ -95,7 +98,18 @@ impl Default for InputProcessorState {
             muted: Default::default(),
             rms_sender: Default::default(),
             buffer_pool: Default::default(),
+            silence_length: 0,
         }
+    }
+}
+
+impl InputState for InputProcessorState {
+    fn is_muted(&self) -> bool {
+        self.muted.load(Relaxed)
+    }
+
+    fn reset_silence(&mut self) {
+        self.silence_length = 0;
     }
 }
 
@@ -162,5 +176,39 @@ impl Default for OutputProcessorState {
             deafened: Arc::new(Default::default()),
             loss_sender: Arc::new(Default::default()),
         }
+    }
+}
+
+pub struct VadProcessorState {
+    pub(crate) rms_threshold: Arc<AtomicF32>,
+    pub(crate) muted: Arc<AtomicBool>,
+    pub(crate) silence_length: u16,
+}
+
+impl VadProcessorState {
+    /// Creates a new input processor state.
+    ///
+    /// # Arguments
+    ///
+    /// * `input_volume` - Atomic reference to the input volume multiplier
+    /// * `rms_threshold` - Atomic reference to the RMS threshold for silence detection
+    /// * `muted` - Atomic reference to the mute state
+    /// * `rms_sender` - Atomic reference for sending RMS values to statistics
+    pub fn new(rms_threshold: &Arc<AtomicF32>, muted: &Arc<AtomicBool>) -> Self {
+        Self {
+            rms_threshold: rms_threshold.clone(),
+            muted: muted.clone(),
+            silence_length: 0,
+        }
+    }
+}
+
+impl InputState for VadProcessorState {
+    fn is_muted(&self) -> bool {
+        self.muted.load(Relaxed)
+    }
+
+    fn reset_silence(&mut self) {
+        self.silence_length = 0;
     }
 }
