@@ -235,3 +235,9 @@ impl From<ten_vad_rs::TenVadError> for Error {
         Error::Processing(format!("ten_vad_rs::TenVad error: {:?}", err))
     }
 }
+
+impl From<audioadapter_buffers::SizeError> for Error {
+    fn from(err: audioadapter_buffers::SizeError) -> Self {
+        Error::Processing(format!("audioadapter_buffers::SizeError: {:?}", err))
+    }
+}

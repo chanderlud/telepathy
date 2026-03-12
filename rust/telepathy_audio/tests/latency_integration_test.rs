@@ -21,6 +21,7 @@ use telepathy_audio::internal::traits::{AudioInput, AudioOutput};
 use telepathy_audio::{Error, FRAME_SIZE};
 
 const TEST_FRAMES: usize = 100;
+const TEST_SAMPLE_RATE: usize = 48_000;
 
 /// Mock audio input for testing.
 struct TestAudioInput {
@@ -46,7 +47,7 @@ impl AudioInput for TestAudioInput {
         let to_read = dst.len().min(self.samples_remaining);
         for sample in dst.iter_mut().take(to_read) {
             *sample = (self.phase.sin() as f32) * 0.5;
-            self.phase += 2.0 * std::f64::consts::PI * 440.0 / 48_000.0;
+            self.phase += 2.0 * std::f64::consts::PI * 440.0 / TEST_SAMPLE_RATE as f64;
         }
         self.samples_remaining -= to_read;
         Ok(to_read)
@@ -105,7 +106,8 @@ fn test_input_processor_with_denoise() {
         input_processor(
             mock_input,
             MpscSink::new(output_tx),
-            1.0,
+            TEST_SAMPLE_RATE,
+            TEST_SAMPLE_RATE,
             denoiser,
             state,
             None,
@@ -149,11 +151,18 @@ fn test_output_processor_with_resampling() {
     let (mock_output, _, frames_counter) = TestAudioOutput::new();
     let state = OutputProcessorState::default();
 
-    // Resample from 48kHz to 44.1kHz
-    let ratio = 44_100.0 / 48_000.0;
+    let input_rate = TEST_SAMPLE_RATE;
+    let output_rate = 44_100;
 
     let handle = thread::spawn(move || {
-        output_processor(MpscSource::new(input_rx), mock_output, ratio, state, None)
+        output_processor(
+            MpscSource::new(input_rx),
+            mock_output,
+            input_rate,
+            output_rate,
+            state,
+            None,
+        )
     });
 
     let start = Instant::now();
@@ -205,7 +214,17 @@ fn test_input_processor_mute() {
     );
 
     let sink = MpscSink::new(_output_tx);
-    let handle = thread::spawn(move || input_processor(mock_input, sink, 1.0, None, state, None));
+    let handle = thread::spawn(move || {
+        input_processor(
+            mock_input,
+            sink,
+            TEST_SAMPLE_RATE,
+            TEST_SAMPLE_RATE,
+            None,
+            state,
+            None,
+        )
+    });
 
     // Try to receive frames - should timeout since muted
     let result = output_rx.recv_timeout(Duration::from_millis(500));
@@ -234,7 +253,14 @@ fn test_output_processor_deafen() {
     let state = OutputProcessorState::new(&output_volume, rms_sender, &deafened, loss_sender);
 
     let handle = thread::spawn(move || {
-        output_processor(MpscSource::new(input_rx), mock_output, 1.0, state, None)
+        output_processor(
+            MpscSource::new(input_rx),
+            mock_output,
+            TEST_SAMPLE_RATE,
+            TEST_SAMPLE_RATE,
+            state,
+            None,
+        )
     });
 
     // Send frames

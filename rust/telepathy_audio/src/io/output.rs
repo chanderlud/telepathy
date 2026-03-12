@@ -262,7 +262,7 @@ where
     fn build_common<O: AudioOutput + Send + 'static>(
         self,
         processor_output: O,
-        output_sample_rate: u32,
+        output_rate: u32,
     ) -> Result<OutputBuildContext, Error> {
         // Create shared atomic state (use provided shared atomics or create new ones)
         let output_volume = self
@@ -275,9 +275,6 @@ where
         let source = self
             .source
             .ok_or_else(|| Error::Config("a data source must be set via source()".to_string()))?;
-
-        // Calculate resampling ratio
-        let ratio = output_sample_rate as f64 / self.config.sample_rate as f64;
 
         let state =
             OutputProcessorState::new(&output_volume, rms_sender, &deafened, loss_sender.clone());
@@ -296,7 +293,14 @@ where
 
         // Spawn processor thread (safe_spawn catches panics on WASM when threading is unavailable)
         let processor_handle = thread::safe_spawn(move || {
-            if let Err(e) = output_processor(source, processor_output, ratio, state, decoder) {
+            if let Err(e) = output_processor(
+                source,
+                processor_output,
+                self.config.sample_rate as usize,
+                output_rate as usize,
+                state,
+                decoder,
+            ) {
                 error!("Output processor error: {}", e);
             }
             debug!("Output processor thread ended");

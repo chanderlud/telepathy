@@ -28,8 +28,9 @@
 //! // handle.join().unwrap();
 //! ```
 
-use std::sync::atomic::Ordering::Relaxed;
-use crate::constants::{MINIMUM_SILENCE_LENGTH, VAD_CLOSE_RATE};
+use crate::constants::{
+    MINIMUM_SILENCE_LENGTH, VAD_CLOSE_RATE, VAD_HOP, VAD_OPEN_RATE, VAD_PRE_SPEECH_THRESHOLD,
+};
 use crate::error::Error;
 use crate::internal::NETWORK_FRAME;
 use crate::internal::buffer_pool::BufferPool;
@@ -43,12 +44,13 @@ use crate::internal::utils::resampler_factory;
 use crate::io::traits::{AudioDataSink, AudioDataSource, ClosedOrFailed};
 use crate::sea::decoder::SeaDecoder;
 use crate::sea::encoder::SeaEncoder;
+use audioadapter_buffers::direct::InterleavedSlice;
 use log::{debug, warn};
 use nnnoiseless::{DenoiseState, FRAME_SIZE};
-use rubato::Resampler;
+use rubato::{FixedSync, Resampler};
+use std::sync::atomic::Ordering::Relaxed;
 use ten_vad_rs::{TARGET_SAMPLE_RATE, TenVad};
 
-const VAD_FRAME: usize = 256;
 const MODEL_BYTES: &[u8] = include_bytes!("../../../../assets/models/ten-vad.onnx");
 
 /// Processes audio input and sends it to the output channel.
@@ -108,7 +110,8 @@ const MODEL_BYTES: &[u8] = include_bytes!("../../../../assets/models/ten-vad.onn
 pub fn input_processor<I: AudioInput>(
     input: I,
     sink: impl AudioDataSink,
-    ratio: f64,
+    input_rate: usize,
+    output_rate: usize,
     mut denoiser: Option<Box<DenoiseState>>,
     state: InputProcessorState,
     mut encoder_option: Option<SeaEncoder>,
@@ -177,7 +180,7 @@ pub fn input_processor<I: AudioInput>(
     };
 
     // run resample and process loop to completion
-    base_resampler(input, ratio, state, FRAME_SIZE, callback)?;
+    base_resampler(input, input_rate, output_rate, state, FRAME_SIZE, callback)?;
     debug!("Input processor ended");
     Ok(())
 }
@@ -217,24 +220,29 @@ pub fn input_processor<I: AudioInput>(
 pub fn output_processor<O: AudioOutput>(
     source: impl AudioDataSource,
     mut output: O,
-    ratio: f64,
+    input_rate: usize,
+    output_rate: usize,
     state: OutputProcessorState,
     mut decoder_option: Option<SeaDecoder>,
 ) -> Result<(), Error> {
     // base scale to convert i16 to f32
     let scale = 1_f32 / i16::MAX as f32;
-    // rubato requires 10 extra spaces in the output buffer as a safety margin
-    let post_len = (FRAME_SIZE as f64 * ratio + 10_f64) as usize;
 
-    let mut decoded_buf = [0_i16; FRAME_SIZE];
     // resampler is Some if resampling is needed
-    let mut resampler_option = resampler_factory(ratio, 1, FRAME_SIZE)?;
-    // the input for the resampler
-    let pre_buf = [&mut [0_f32; FRAME_SIZE]];
-    // the output for the resampler
-    let mut post_vec = Vec::with_capacity(post_len);
-    post_vec.resize(post_len, 0_f32);
-    let mut post_buf = [post_vec];
+    let mut resampler_option =
+        resampler_factory(input_rate, output_rate, 1, FRAME_SIZE, FixedSync::Input)?;
+    // the maximum number of samples per output
+    let output_buffer_size = resampler_option
+        .as_ref()
+        .map(|r| r.output_frames_max())
+        .unwrap_or(FRAME_SIZE);
+
+    // The output of the decoder
+    let mut decoded_buf = [0_i16; FRAME_SIZE];
+    // The input for the resampler
+    let mut pre_buf = [0_f32; FRAME_SIZE];
+    // The output for the resampler
+    let mut post_buf = vec![0_f32; output_buffer_size];
 
     loop {
         let buffer = match source.recv() {
@@ -259,18 +267,22 @@ pub fn output_processor<O: AudioOutput>(
         };
 
         // convert the i16 samples to f32 & apply the output volume
-        wide_i16_to_f32(int_samples, pre_buf[0], scale * state.output_volume());
+        wide_i16_to_f32(int_samples, &mut pre_buf, scale * state.output_volume());
         // send the rms to the statistics collector
-        state.send_rms(calculate_rms(pre_buf[0]));
+        state.send_rms(calculate_rms(&pre_buf));
         // get finalized samples
         let float_samples = if let Some(resampler) = &mut resampler_option {
             // resample the data
-            let processed = resampler.process_into_buffer(&pre_buf, &mut post_buf, None)?;
+            let input_adapter = InterleavedSlice::new(&pre_buf, 1, FRAME_SIZE)?;
+            let mut output_adapter =
+                InterleavedSlice::new_mut(&mut post_buf, 1, output_buffer_size)?;
+            let processed =
+                resampler.process_into_buffer(&input_adapter, &mut output_adapter, None)?;
             // send the resampled data to the output stream
-            &post_buf[0][..processed.1]
+            &post_buf[..processed.1]
         } else {
             // if no resampling is needed, send the data to the output stream
-            &*pre_buf[0]
+            &pre_buf
         };
 
         let lost = output.write_samples(float_samples)?;
@@ -285,71 +297,81 @@ pub fn output_processor<O: AudioOutput>(
 
 pub fn vad_processor<I: AudioInput>(
     input: I,
-    ratio: f64,
+    input_rate: usize,
     state: VadProcessorState,
 ) -> Result<(), Error> {
     // the maximum value for i16 as f32
     let max_i16_f32 = i16::MAX as f32;
+    let vad_sample_rate = TARGET_SAMPLE_RATE as usize;
 
     let mut vad = TenVad::new_from_bytes(MODEL_BYTES, TARGET_SAMPLE_RATE)?;
     // input for vad
-    let mut vad_input = [0; VAD_FRAME];
-    let speech_params = SpeechParams::new(TARGET_SAMPLE_RATE as usize, VAD_FRAME);
+    let mut vad_input = [0; VAD_HOP];
+    let speech_params = SpeechParams::new(vad_sample_rate, VAD_HOP);
     let mut speech_state = SpeechState::default();
     let mut current_threshold = 0_f32;
 
     // set up vad processing logic
     let callback = |target_buffer: &mut Vec<f32>, len: usize, state: &mut VadProcessorState| {
         // scale the samples to -32768.0 to 32767.0
-        wide_float_scaler(
-            &mut target_buffer[..len],
-            max_i16_f32,
-        );
+        wide_float_scaler(&mut target_buffer[..len], max_i16_f32);
         // use SIMD-accelerated f32 to i16 conversion
         wide_f32_to_i16(&target_buffer[..len], &mut vad_input);
 
         let score = vad.process_frame(&vad_input)?;
+        warn!("{}", score);
         let gate_open = speech_state.update(&speech_params, score);
 
         if gate_open {
             current_threshold = 0_f32;
+        } else if score > VAD_PRE_SPEECH_THRESHOLD {
+            current_threshold *= 1.0_f32 - VAD_OPEN_RATE;
         } else {
             current_threshold += (state.silence_ceiling() - current_threshold) * VAD_CLOSE_RATE;
         }
+        warn!("{}", current_threshold);
         state.rms_threshold.store(current_threshold, Relaxed);
 
         Ok(true)
     };
 
     // run resample and process loop to completion
-    base_resampler(input, ratio, state, VAD_FRAME, callback)?;
+    base_resampler(input, input_rate, vad_sample_rate, state, VAD_HOP, callback)?;
     debug!("VAD processor ended");
     Ok(())
 }
 
 fn base_resampler<I: AudioInput, S: InputState>(
     mut input: I,
-    ratio: f64,
+    input_rate: usize,
+    output_rate: usize,
     mut state: S,
     frame_size: usize,
     mut callback: impl FnMut(&mut Vec<f32>, usize, &mut S) -> Result<bool, Error>,
 ) -> Result<(), Error> {
-    // rubato requires 10 extra spaces in the output buffer as a safety margin
-    let post_len = (frame_size as f64 + 10_f64) as usize;
-    let in_len = (frame_size as f64 / ratio).ceil() as usize;
-
     // resampler is Some if resampling is needed
-    let mut resampler = resampler_factory(ratio, 1, in_len)?;
+    let mut resampler =
+        resampler_factory(input_rate, output_rate, 1, frame_size, FixedSync::Output)?;
+    // the maximum number of samples per input
+    let input_buffer_size = resampler
+        .as_ref()
+        .map(|r| r.input_frames_max())
+        .unwrap_or(frame_size);
+
     // the input for the resampler
-    let mut pre_buf = [vec![0_f32; in_len]];
+    let mut pre_buf = vec![0_f32; input_buffer_size];
     // the output for the resampler
-    let mut post_buf = [vec![0_f32; post_len]];
+    let mut post_buf = vec![0_f32; frame_size];
 
     // the position in pre_buf
     let mut position = 0;
 
     loop {
-        let read = input.read_into(&mut pre_buf[0][position..in_len])?;
+        let in_len = resampler
+            .as_ref()
+            .map(|r| r.input_frames_next())
+            .unwrap_or(frame_size);
+        let read = input.read_into(&mut pre_buf[position..in_len])?;
         if read == 0 {
             debug!("Resampler loop ended (EOF)");
             break;
@@ -368,10 +390,13 @@ fn base_resampler<I: AudioInput, S: InputState>(
 
         let (target_buffer, len) = if let Some(resampler) = &mut resampler {
             // resample the data
-            let processed = resampler.process_into_buffer(&pre_buf, &mut post_buf, None)?;
-            (&mut post_buf[0], processed.1)
+            let input_adapter = InterleavedSlice::new(&pre_buf, 1, in_len)?;
+            let mut output_adapter = InterleavedSlice::new_mut(&mut post_buf, 1, frame_size)?;
+            let processed =
+                resampler.process_into_buffer(&input_adapter, &mut output_adapter, None)?;
+            (&mut post_buf, processed.1)
         } else {
-            (&mut pre_buf[0], frame_size)
+            (&mut pre_buf, frame_size)
         };
 
         // the first frame may be smaller than frame_size

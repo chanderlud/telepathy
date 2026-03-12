@@ -59,11 +59,11 @@
 //!     .unwrap();
 //! ```
 
+use crate::constants::VAD_SILENCE_CEILING;
 use crate::devices::AudioHost;
 #[cfg(not(target_family = "wasm"))]
 use crate::devices::get_input_device;
 use crate::error::Error;
-use crate::constants::VAD_SILENCE_CEILING;
 use crate::internal::buffer_pool::{DEFAULT_POOL_CAPACITY, PooledBuffer};
 use crate::internal::processor::{input_processor, vad_processor};
 use crate::internal::state::{InputProcessorState, VadProcessorState};
@@ -90,7 +90,6 @@ use std::sync::Arc;
 #[cfg(not(target_family = "wasm"))]
 use std::sync::Condvar;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
-use ten_vad_rs::TARGET_SAMPLE_RATE;
 use tokio::sync::Notify;
 
 /// Configuration for audio input processing.
@@ -477,7 +476,7 @@ where
     /// # Arguments
     ///
     /// * `processor_input` - The audio input source for the processor
-    /// * `input_sample_rate` - Device's native sample rate in Hz
+    /// * `input_rate` - Device's native sample rate in Hz
     ///
     /// # Returns
     ///
@@ -486,7 +485,7 @@ where
     fn build_common<I: AudioInput + Send + 'static>(
         self,
         processor_input: I,
-        input_sample_rate: u32,
+        input_rate: u32,
     ) -> Result<InputBuildContext, Error> {
         // Create shared atomic state (use provided shared atomics or create new ones)
         let input_volume = self
@@ -523,18 +522,16 @@ where
             DEFAULT_POOL_CAPACITY,
         );
         // determine the output sample rate
-        let sample_rate = if self.config.denoise_enabled {
+        let output_rate = if self.config.denoise_enabled {
             48_000
         } else {
-            self.config.output_sample_rate.unwrap_or(input_sample_rate)
+            self.config.output_sample_rate.unwrap_or(input_rate)
         };
-        // calculate the required ratio
-        let ratio = sample_rate as f64 / input_sample_rate as f64;
         // create the encoder if needed
         let encoder = if self.config.codec_enabled {
             Some(SeaEncoder::new(
                 1,
-                sample_rate,
+                output_rate,
                 EncoderSettings {
                     residual_bits: self.config.codec_residual_bits,
                     vbr: self.config.codec_vbr,
@@ -547,8 +544,15 @@ where
 
         // spawn processor thread
         let processor_handle = thread::safe_spawn(move || {
-            if let Err(e) = input_processor(processor_input, sink, ratio, denoiser, state, encoder)
-            {
+            if let Err(e) = input_processor(
+                processor_input,
+                sink,
+                input_rate as usize,
+                output_rate as usize,
+                denoiser,
+                state,
+                encoder,
+            ) {
                 error!("Input processor error: {}", e);
             }
             debug!("Input processor thread ended");
@@ -688,13 +692,12 @@ where
 
         stream.play()?;
 
-        let ratio = TARGET_SAMPLE_RATE as f64 / device_sample_rate as f64;
         let vad_state = VadProcessorState::new(&context.rms_threshold, &context.muted)
             .with_silence_ceiling(vad_silence_ceiling);
 
         // spawn vad processor
         let vad_handle = thread::safe_spawn(move || {
-            if let Err(e) = vad_processor(vad_input, ratio, vad_state) {
+            if let Err(e) = vad_processor(vad_input, device_sample_rate as usize, vad_state) {
                 error!("Input processor error: {}", e);
             }
             debug!("Input processor thread ended");

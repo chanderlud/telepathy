@@ -128,35 +128,36 @@ fn bench_input_throughput(c: &mut Criterion) {
             BenchmarkId::new("input_throughput", config.name),
             &config,
             |b, config| {
-                let denoiser = DenoiseState::new();
                 let config = config.clone();
 
                 b.iter(|| {
                     let (mock_input, input_rate) = if config.resample {
                         (
                             MockAudioInput::new_44100hz(Some(benchmark_samples())),
-                            44_100,
+                            44_100_usize,
                         )
                     } else {
-                        (MockAudioInput::new_48khz(Some(benchmark_samples())), 48_000)
+                        (
+                            MockAudioInput::new_48khz(Some(benchmark_samples())),
+                            48_000_usize,
+                        )
                     };
                     let (processor_tx, processor_rx) = unbounded();
-                    let denoiser = config.denoise.then_some(denoiser.clone());
                     let a = Default::default();
                     let b = Default::default();
                     let c = Default::default();
                     let d = Default::default();
                     let state = InputProcessorState::new(&a, &b, &c, d, 1024);
 
-                    let sample_rate = if config.denoise || config.resample {
+                    let output_rate = if config.denoise || config.resample {
                         48_000
                     } else {
                         input_rate
                     };
-                    let ratio = sample_rate as f64 / input_rate as f64;
+                    let denoiser = config.denoise.then(DenoiseState::new);
 
                     let encoder = if config.codec {
-                        SeaEncoder::new(1, sample_rate, EncoderSettings::default()).ok()
+                        SeaEncoder::new(1, output_rate as u32, EncoderSettings::default()).ok()
                     } else {
                         None
                     };
@@ -165,7 +166,8 @@ fn bench_input_throughput(c: &mut Criterion) {
                         input_processor(
                             mock_input,
                             KanalSink(processor_tx),
-                            ratio,
+                            input_rate,
+                            output_rate,
                             denoiser,
                             state,
                             encoder,
@@ -242,6 +244,8 @@ fn bench_output_throughput(c: &mut Criterion) {
                     let (input_tx, input_rx) = unbounded();
                     let mock_output = NullOutput::new();
                     let state = OutputProcessorState::default();
+                    let input_rate = 48_000_usize;
+                    let output_rate = if config.resample { 44_100 } else { input_rate };
 
                     let decoder = if config.codec {
                         SeaDecoder::new(SeaFileHeader {
@@ -249,17 +253,22 @@ fn bench_output_throughput(c: &mut Criterion) {
                             channels: 1,
                             chunk_size: 960,
                             frames_per_chunk: 480,
-                            sample_rate: 48_000,
+                            sample_rate: input_rate as u32,
                         })
                         .ok()
                     } else {
                         None
                     };
 
-                    let ratio = if config.resample { 0.9 } else { 1.0 };
-
                     let handle = thread::spawn(move || {
-                        output_processor(KanalSource(input_rx), mock_output, ratio, state, decoder)
+                        output_processor(
+                            KanalSource(input_rx),
+                            mock_output,
+                            input_rate,
+                            output_rate,
+                            state,
+                            decoder,
+                        )
                     });
 
                     // Send pre-generated frames to the output processor

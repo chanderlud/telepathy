@@ -16,12 +16,12 @@
 //! value encountered, which can be read by the application for visualization
 //! or voice activity detection.
 
-use crate::internal::NETWORK_FRAME;
-use crate::internal::buffer_pool::BufferPool;
 use crate::constants::{
     VAD_MAX_SPEECH_S, VAD_MIN_SILENCE_MS, VAD_MIN_SPEECH_MS, VAD_SILENCE_CEILING,
     VAD_SPEECH_PAD_MS, VAD_THRESHOLD,
 };
+use crate::internal::NETWORK_FRAME;
+use crate::internal::buffer_pool::BufferPool;
 use atomic_float::AtomicF32;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;

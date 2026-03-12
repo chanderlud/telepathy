@@ -5,40 +5,6 @@
 //! requirements.
 
 pub use nnnoiseless::FRAME_SIZE;
-use rubato::{SincInterpolationParameters, SincInterpolationType, WindowFunction};
-
-/// Parameters used for resampling throughout the application.
-///
-/// These parameters provide high-quality resampling suitable for real-time
-/// audio processing. See [rubato documentation](https://docs.rs/rubato) for
-/// detailed parameter descriptions.
-///
-/// ## Parameter Rationale
-///
-/// - **`sinc_len: 256`** - Sinc filter length. Higher values provide better
-///   frequency response but increase latency and CPU usage. 256 offers an
-///   excellent quality/performance balance for voice audio.
-///
-/// - **`f_cutoff: 0.95`** - Anti-aliasing filter cutoff as fraction of Nyquist.
-///   0.95 preserves frequencies up to 95% of Nyquist while attenuating aliases.
-///   Suitable for voice which doesn't require the full spectrum.
-///
-/// - **`interpolation: Linear`** - Interpolation type between sinc table entries.
-///   Linear interpolation is fast and sufficient for the oversampling factor used.
-///
-/// - **`oversampling_factor: 256`** - Resolution of the sinc table. Higher values
-///   improve accuracy at the cost of memory. 256 provides excellent precision.
-///
-/// - **`window: BlackmanHarris2`** - Window function applied to sinc filter.
-///   Blackman-Harris provides excellent stopband attenuation (~92dB) which
-///   effectively eliminates aliasing artifacts.
-pub(crate) const RESAMPLER_PARAMETERS: SincInterpolationParameters = SincInterpolationParameters {
-    sinc_len: 256,
-    f_cutoff: 0.95,
-    interpolation: SincInterpolationType::Linear,
-    oversampling_factor: 256,
-    window: WindowFunction::BlackmanHarris2,
-};
 
 /// Minimum number of consecutive silent frames before silence is detected.
 ///
@@ -78,17 +44,23 @@ pub(crate) const MINIMUM_SILENCE_LENGTH: u16 = 40;
 /// spreads the energy change across multiple samples.
 pub(crate) const TRANSITION_LENGTH: usize = 48;
 
+/// The number of samples per VAD frame
+pub(crate) const VAD_HOP: usize = 256;
 /// TenVAD speech probability threshold.
-pub(crate) const VAD_THRESHOLD: f32 = 0.5_f32;
+pub(crate) const VAD_THRESHOLD: f32 = 0.65_f32;
 /// Minimum speech duration before opening gate (milliseconds).
-pub(crate) const VAD_MIN_SPEECH_MS: usize = 50;
+pub(crate) const VAD_MIN_SPEECH_MS: usize = 5;
 /// Minimum silence duration before closing gate (milliseconds).
 pub(crate) const VAD_MIN_SILENCE_MS: usize = 300;
 /// Extra padding around speech boundaries (milliseconds).
-pub(crate) const VAD_SPEECH_PAD_MS: usize = 30;
+pub(crate) const VAD_SPEECH_PAD_MS: usize = 10;
 /// Maximum continuous speech duration before forced split (seconds).
 pub(crate) const VAD_MAX_SPEECH_S: f32 = 30.0_f32;
 /// RMS threshold ceiling while VAD gate is closed.
-pub(crate) const VAD_SILENCE_CEILING: f32 = 750_f32;
+pub(crate) const VAD_SILENCE_CEILING: f32 = 1000_f32;
 /// Exponential close rate for smoothing threshold transitions.
-pub(crate) const VAD_CLOSE_RATE: f32 = 0.1_f32;
+pub(crate) const VAD_CLOSE_RATE: f32 = 0.01_f32;
+/// Pre-speech probability that triggers early threshold decay.
+pub(crate) const VAD_PRE_SPEECH_THRESHOLD: f32 = 0.5_f32;
+/// Multiplicative decay rate while pre-speech is detected.
+pub(crate) const VAD_OPEN_RATE: f32 = 0.5_f32;
