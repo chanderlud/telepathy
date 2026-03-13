@@ -51,9 +51,12 @@ use tokio::sync::mpsc::{Receiver as MReceiver, Sender as MSender, channel};
 use tokio::sync::{Mutex, Notify};
 #[cfg(not(target_family = "wasm"))]
 use tokio::task::JoinHandle;
+#[cfg(not(target_family = "wasm"))]
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
+#[cfg(target_family = "wasm")]
+use wasmtimer::tokio::timeout;
 
 type Result<T> = std::result::Result<T, Error>;
 pub(crate) type SharedDeviceId = Arc<Mutex<Option<String>>>;
@@ -67,7 +70,7 @@ const CHAT_PROTOCOL: StreamProtocol = StreamProtocol::new("/telepathy/0.0.1");
 /// Maximum allowed size for a single length-delimited control/message frame on the session stream.
 const SESSION_MAX_FRAME_LENGTH: usize = 1024 * 1024 * 1024;
 /// How long to attempt direct connection upgrade before falling back to a relayed option
-const DCUTR_TIMEOUT: Duration = Duration::from_secs(3);
+const DCUTR_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// the public API for flutter
 #[frb(opaque)]
@@ -102,7 +105,6 @@ impl Telepathy {
     }
 
     pub async fn start_manager(&mut self) {
-        #[cfg(not(target_family = "wasm"))]
         if let Some(handle) = self.inner.start_manager().await {
             self.handles.lock().await.push(handle);
         }

@@ -64,10 +64,10 @@ pub(crate) const MINIMUM_SILENCE_LENGTH: u16 = 40;
 /// ## Rationale
 ///
 /// This controls the length of the linear ramp when transitioning to or
-/// from silence. At 48kHz, 96 samples represents 2ms.
+/// from silence. At 48kHz, 48 samples represents 1ms.
 ///
 /// This duration is chosen because:
-/// - 2ms is imperceptible as a distinct fade effect
+/// - 1ms is imperceptible as a distinct fade effect
 /// - Long enough to eliminate audible clicks/pops
 /// - Short enough to preserve speech transients (plosives, etc.)
 ///
@@ -76,4 +76,4 @@ pub(crate) const MINIMUM_SILENCE_LENGTH: u16 = 40;
 /// The transition prevents discontinuities in the audio waveform that would
 /// create high-frequency artifacts perceived as clicks. The linear ramp
 /// spreads the energy change across multiple samples.
-pub(crate) const TRANSITION_LENGTH: usize = 96;
+pub(crate) const TRANSITION_LENGTH: usize = 48;

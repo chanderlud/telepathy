@@ -8,11 +8,40 @@ on:
   pull_request:
     branches: [ master ]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    name: Lint
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux Prerequisites
+        run: sudo apt-get update && sudo apt-get install clang cmake git ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev libasound2-dev
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: 'stable'
+          components: rustfmt, clippy
+          cache: true
+          cache-workspaces: rust
+
+      - name: Check formatting
+        run: cd rust && cargo fmt -- --check
+
+      - name: Lint with Clippy
+        run: cd rust && cargo clippy -- -D warnings
+
   test_rust:
+    needs: lint
     runs-on: ${{ matrix.info.image }}
     name: Test [${{ matrix.info.image }} ${{ matrix.info.target }}]
 
@@ -61,33 +90,23 @@ jobs:
       - name: Configure Rust for Android
         if: matrix.info.target == 'aarch64-linux-android'
         run: |
-          export TARGET=aarch64-linux-android
-          export NDK_PATH="${{ steps.setup-ndk.outputs.ndk-path }}"
-          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang++"
-          export RUSTFLAGS="-L $NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/$TARGET_API/$TARGET/"
-      
-          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER" >> $GITHUB_ENV
-          echo "RUSTFLAGS=$RUSTFLAGS" >> $GITHUB_ENV
+          NDK_PATH="${{ steps.setup-ndk.outputs.ndk-path }}"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang++" >> $GITHUB_ENV
+          echo "RUSTFLAGS=-L $NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/26/" >> $GITHUB_ENV
 
       - name: Setup Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: 'stable'
-          components: rustfmt, clippy
           target: ${{ matrix.info.target }}
-          cache: false
-
-      - name: Check formatting
-        run: cd rust && cargo fmt -- --check
-
-      - name: Lint with Clippy
-        if: matrix.info.target != 'aarch64-linux-android'
-        run: cd rust && cargo clippy -- -D warnings
+          cache: true
+          cache-workspaces: rust
 
       - name: Build
         run: cd rust && cargo build --verbose --target ${{ matrix.info.target }}
 
   build_flutter:
+    needs: lint
     runs-on: ${{ matrix.info.image }}
     name: Build [${{ matrix.info.image }} ${{ matrix.info.target }} ${{ startsWith(github.ref, 'refs/tags/') && 'release' || 'debug' }}]
 
@@ -114,6 +133,36 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            rust/target
+          key: cargo-${{ matrix.info.image }}-${{ matrix.info.target }}-${{ hashFiles('rust/**/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ matrix.info.image }}-${{ matrix.info.target }}-
+            cargo-${{ matrix.info.image }}-
+
+      - name: Cache Flutter pub
+        uses: actions/cache@v4
+        with:
+          path: ~/.pub-cache
+          key: pub-${{ runner.os }}-${{ hashFiles('pubspec.lock') }}
+          restore-keys: pub-${{ runner.os }}-
+
+      - name: Cache cargo install binaries
+        if: matrix.info.target == 'web'
+        id: cache-cargo-tools
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/flutter_rust_bridge_codegen
+            ~/.cargo/bin/wasm-pack
+          key: cargo-tools-${{ runner.os }}-${{ hashFiles('pubspec.lock') }}
+
       - name: Setup Flutter SDK
         uses: flutter-actions/setup-flutter@v4
         with:
@@ -122,7 +171,7 @@ jobs:
 
       - name: Set up Java 17
         if: matrix.info.target == 'apk'
-        uses: actions/setup-java@v3
+        uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
@@ -132,15 +181,6 @@ jobs:
 
       - name: Lint Flutter
         run: flutter analyze --fatal-infos --fatal-warnings
-
-      - name: Reinstall rustup
-        if: matrix.info.target == 'ios'
-        run: |
-          rm -rf ~/.rustup
-          brew uninstall rustup
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-          rustup target add aarch64-apple-ios
-          rustup component add rust-std
 
       - name: Linux Prerequisites
         if: runner.os == 'Linux'
@@ -158,35 +198,32 @@ jobs:
           BUILD_PROVISION_PROFILE_BASE64: ${{ matrix.info.target == 'ios' && secrets.BUILD_PROVISION_PROFILE_BASE64_MOBILE || secrets.BUILD_PROVISION_PROFILE_BASE64_DESKTOP }}
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         run: |
-          # create variables
           CERTIFICATE_PATH=$RUNNER_TEMP/build_certificate.p12
           PP_EXTENSION=$([[ "${{ matrix.info.target }}" == "ios" ]] && echo "mobileprovision" || echo "provisionprofile")
           PP_PATH=$RUNNER_TEMP/build_pp.$PP_EXTENSION
           KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
       
-          # import certificate and provisioning profile from secrets
           echo -n "$BUILD_CERTIFICATE_BASE64" | base64 --decode -o $CERTIFICATE_PATH
           echo -n "$BUILD_PROVISION_PROFILE_BASE64" | base64 --decode -o $PP_PATH
       
-          # create temporary keychain
           security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
           security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
       
-          # import certificate to keychain
           security import $CERTIFICATE_PATH -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
           security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
           security list-keychain -d user -s $KEYCHAIN_PATH
       
-          # apply provisioning profile
           mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
           cp $PP_PATH ~/Library/MobileDevice/Provisioning\ Profiles
 
       - name: Install Web Tools
-        if : matrix.info.target == 'web'
-        run: |
-          cargo install flutter_rust_bridge_codegen wasm-pack
-          rustup component add rust-src --toolchain nightly-x86_64-unknown-linux-gnu
+        if: matrix.info.target == 'web' && steps.cache-cargo-tools.outputs.cache-hit != 'true'
+        run: cargo install flutter_rust_bridge_codegen@2.11.1 wasm-pack@0.14.0
+
+      - name: Setup Rust nightly for Web
+        if: matrix.info.target == 'web'
+        run: rustup component add rust-src --toolchain nightly-x86_64-unknown-linux-gnu
 
       - name: Build Web
         if: matrix.info.target == 'web'
@@ -194,7 +231,7 @@ jobs:
 
       - name: Build Flutter
         if: matrix.info.target != 'linux' || !startsWith(github.ref, 'refs/tags/')
-        run: flutter build ${{ matrix.info.target }} ${{ startsWith(github.ref, 'refs/tags/') && '--release' || '--debug' }}
+        run: flutter build ${{ matrix.info.target }} ${{ startsWith(github.ref, 'refs/tags/') && '--release' || '--debug' }} ${{ matrix.info.target == 'web' && startsWith(github.ref, 'refs/tags/') && '--base-href /' || '' }}
 
       - name: Package deb & rpm
         if: matrix.info.target == 'linux' && startsWith(github.ref, 'refs/tags/')
@@ -270,6 +307,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Cache Cargo registry for cross build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo-cache/registry/index
+            ~/.cargo-cache/registry/cache
+            ~/.cargo-cache/git/db
+          key: cargo-cross-${{ matrix.distro }}-${{ matrix.arch }}-${{ hashFiles('rust/**/Cargo.lock') }}
+          restore-keys: cargo-cross-${{ matrix.distro }}-${{ matrix.arch }}-
+
       - name: Build artifact
         uses: uraimo/run-on-arch-action@v3
         id: build
@@ -281,9 +328,13 @@ jobs:
 
           setup: |
             mkdir -p "${PWD}/artifacts"
+            mkdir -p "$HOME/.cargo-cache/registry"
+            mkdir -p "$HOME/.cargo-cache/git"
 
           dockerRunArgs: |
             --volume "${PWD}/artifacts:/artifacts"
+            --volume "$HOME/.cargo-cache/registry:/root/.cargo/registry"
+            --volume "$HOME/.cargo-cache/git:/root/.cargo/git"
 
           install: |
             case "${{ matrix.distro }}" in
@@ -314,7 +365,7 @@ jobs:
                     ;;
                 esac
                 
-                /flutter/bin/flutter --version # triggers flutter initialization
+                /flutter/bin/flutter --version
                 /flutter/bin/cache/dart-sdk/bin/dart pub global activate flutter_distributor
                 ;;
             esac
@@ -352,12 +403,10 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
-          # each artifact ends up in artifacts/<artifact-name>/
 
       - name: Compute version from tag
         id: version
         run: |
-          # Tag is something like "v2.4.8"
           ref="${GITHUB_REF##*/}"
           ver="${ref#v}"
           echo "version=$ver" >> "$GITHUB_OUTPUT"
@@ -384,7 +433,6 @@ jobs:
           mv "artifacts/telepathy_windows-2022_windows/telepathy-windows-x64.exe" \
              "dist/telepathy-${VER}-windows-installer-x86_64.exe"
 
-          # zip the Windows bundle directory
           cd artifacts/telepathy_windows-2022_windows
           zip -r "../../dist/telepathy-${VER}-windows-standalone-x86_64.zip" telepathy
           cd ../../
@@ -470,3 +518,28 @@ jobs:
           files: dist/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  deploy_web:
+    name: Deploy web to Cloudflare Pages
+    needs: build_flutter
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download web artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: telepathy_ubuntu-24.04_web
+          path: web-artifact
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy web-artifact/telepathy --project-name=telepathy --branch=main
+

@@ -41,7 +41,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Relaxed;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 #[cfg(target_family = "wasm")]
 use telepathy_audio::WebAudioWrapper;
 use telepathy_audio::{AudioHost, RnnModel};
@@ -51,13 +51,15 @@ use tokio::sync::{Mutex, Notify, RwLock};
 #[cfg(not(target_family = "wasm"))]
 use tokio::task::JoinHandle;
 #[cfg(not(target_family = "wasm"))]
-use tokio::time::{Interval, interval, timeout};
+use tokio::time::{Instant, Interval, interval, sleep_until, timeout};
 use tokio_util::codec::LengthDelimitedCodec;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 #[cfg(target_family = "wasm")]
-use wasmtimer::tokio::{Interval, interval, timeout};
+use wasmtimer::std::Instant;
+#[cfg(target_family = "wasm")]
+use wasmtimer::tokio::{Interval, interval, sleep_until, timeout};
 
 pub(crate) struct TelepathyCore<C, S>
 where
@@ -148,15 +150,29 @@ where
         // start the session manager
         let manager_clone = self.clone();
         Some(spawn(async move {
+            let mut retries = 0;
             // break when stop_manager==true
             while !manager_clone.core_state.stop_manager.load(Relaxed) {
+                let last_launch = Instant::now();
                 // run the session manager to completion
                 let result = manager_clone
                     .session_manager(&mut receive_session, &mut receive_screenshare)
                     .await;
 
                 if let Err(error) = result {
-                    error!("Session manager failed: {}", error);
+                    error!("Session manager failed: {error} [retries={retries}]");
+                    retries += 1;
+                    let next_launch = last_launch + Duration::from_millis((retries ^ 2) * 500);
+                    if next_launch > Instant::now() {
+                        // wait for the next launch or restart
+                        select! {
+                            _ = manager_clone.restart_manager.notified() => (),
+                            _ = sleep_until(next_launch) => (),
+                        };
+                    }
+                } else {
+                    info!("Session manager exited with success");
+                    retries = 0;
                 }
             }
         }))

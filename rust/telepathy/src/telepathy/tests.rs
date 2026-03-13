@@ -3,12 +3,10 @@ use crate::flutter::callbacks::{
     FrbStatisticsCallback, MockFrbCallbacks, MockFrbStatisticsCallback,
 };
 use fast_log::Config;
-use kanal::{bounded, unbounded};
 use log::{LevelFilter, info};
 use relay_server::{RelayInfo, spawn_relay};
 use std::net::{IpAddr, Ipv4Addr};
 use std::process::Command;
-use std::thread::{sleep, spawn};
 use telepathy_audio::AudioHost;
 use tokio::sync::OnceCell;
 use tokio::time::interval;

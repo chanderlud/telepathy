@@ -9,19 +9,18 @@ use log::{debug, error, info, warn};
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 use telepathy_audio::internal::NETWORK_FRAME;
 use telepathy_audio::internal::buffer_pool::BufferPool;
 use telepathy_audio::{FRAME_SIZE, PooledBuffer, PooledBytes};
 use tokio::select;
 #[cfg(not(target_family = "wasm"))]
-use tokio::time::timeout;
+use tokio::time::{Instant, timeout};
 use tokio_util::bytes::{Buf, BufMut};
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 use tokio_util::compat::Compat;
 use tokio_util::sync::CancellationToken;
 #[cfg(target_family = "wasm")]
-use wasmtimer::tokio::timeout;
+use wasmtimer::{std::Instant, tokio::timeout};
 
 pub(crate) type SharedSockets = Arc<Mutex<Vec<(AudioSocket, Instant)>>>;
 pub(crate) type TransportStream = Compat<Stream>;
