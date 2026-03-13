@@ -18,7 +18,7 @@
 //! dependencies (cpal, rubato, sea_codec), allowing seamless error
 //! propagation with the `?` operator.
 
-use crate::DeviceError;
+use crate::devices::DeviceError;
 use std::fmt;
 use tokio::task::JoinError;
 

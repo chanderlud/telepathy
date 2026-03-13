@@ -1,7 +1,9 @@
 use bytes::Bytes;
 use std::sync::mpsc;
 use telepathy_audio::adapters::{MpscSink, MpscSource};
-use telepathy_audio::{AudioHost, AudioInputBuilder, AudioOutputBuilder, PooledBuffer};
+use telepathy_audio::devices::AudioHost;
+use telepathy_audio::internal::buffer_pool::PooledBuffer;
+use telepathy_audio::io::{AudioInputBuilder, AudioOutputBuilder};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let host = AudioHost::new();

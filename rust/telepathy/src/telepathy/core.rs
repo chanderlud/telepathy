@@ -42,9 +42,10 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::Duration;
+use telepathy_audio::RnnModel;
 #[cfg(target_family = "wasm")]
 use telepathy_audio::WebAudioWrapper;
-use telepathy_audio::{AudioHost, RnnModel};
+use telepathy_audio::devices::AudioHost;
 use tokio::select;
 use tokio::sync::mpsc::{Receiver as MReceiver, Sender as MSender, channel};
 use tokio::sync::{Mutex, Notify, RwLock};

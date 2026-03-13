@@ -12,21 +12,12 @@
 //!
 //! ## Channel Closure Behavior
 //!
-//! When the input channel closes (sender dropped), both processors return
-//! `Ok(())` gracefully. This is the normal shutdown mechanism triggered when
-//! the audio handle is dropped.
+//! When the data source closes (`AudioDataSource::recv` returns
+//! `ClosedOrFailed::Closed`), both processors return `Ok(())` gracefully. This
+//! is the normal shutdown mechanism triggered when the audio handle is dropped.
 //!
-//! ## Typical Usage Pattern
-//!
-//! ```rust,no_run
-//! use std::thread;
-//! // Spawn processor in dedicated thread
-//! // let handle = thread::spawn(move || {
-//! //     input_processor(input, output, sample_rate, denoiser, codec, state)
-//! // });
-//! // ...
-//! // handle.join().unwrap();
-//! ```
+//! Callers typically spawn [`input_processor`] and [`output_processor`] in
+//! dedicated threads, since they perform blocking I/O on the source/sink.
 
 use crate::constants::MINIMUM_SILENCE_LENGTH;
 use crate::error::Error;
@@ -48,30 +39,12 @@ use rubato::{FixedSync, Resampler};
 ///
 /// This function handles the complete input processing pipeline:
 /// - Reading from the audio input source
-/// - Resampling to 48kHz if noise suppression is enabled
+/// - Resampling from `input_rate` to `output_rate` (when they differ)
 /// - Applying input volume adjustment
 /// - Noise suppression (if enabled)
 /// - RMS calculation and threshold detection
 /// - Silence transition handling
 /// - Converting to i16 samples for network transmission
-///
-/// ## Sample Rate Behavior
-///
-/// The processor's output sample rate is determined by the `ratio` parameter,
-/// which is calculated by the caller (typically in `build_common`). The ratio
-/// determines the resampling behavior:
-///
-/// - **ratio = 1.0**: No resampling (pass-through)
-/// - **ratio > 1.0**: Upsampling (e.g., 44.1kHz → 48kHz when denoise enabled)
-/// - **ratio < 1.0**: Downsampling
-///
-/// The caller determines the appropriate ratio based on:
-/// - **Denoise enabled**: ratio = 48000 / input_rate (always upsample to 48kHz)
-/// - **Custom output_sample_rate**: ratio = output_rate / input_rate
-/// - **Neither**: ratio = 1.0 (pass-through at device rate)
-///
-/// This design moves ratio calculation to the caller for improved testability
-/// and flexibility, allowing custom output rates when denoising is disabled.
 ///
 /// ## Threading
 ///
@@ -81,18 +54,21 @@ use rubato::{FixedSync, Resampler};
 ///
 /// ## Channel Communication
 ///
-/// - Sends `Bytes` (i16 samples as bytes) to the output channel
-/// - Channel closure causes function to return `Ok(())`
+/// - Sends `PooledBuffer` (encoded or raw i16 bytes) to the `AudioDataSink`
+/// - Sink closure causes function to return `Ok(())`
 ///
 /// # Arguments
 ///
 /// * `input` - The audio input source implementing `AudioInput`
-/// * `output` - Channel for sending processed audio frames (as `Bytes`)
-/// * `ratio` - Resampling ratio (output_rate / input_rate). Calculated by caller
-///   based on denoise setting and optional custom output sample rate.
+/// * `sink` - Destination for processed audio frames, implementing
+///   `AudioDataSink`. Receives a `PooledBuffer` per frame.
+/// * `input_rate` - Sample rate of the audio input device in Hz.
+/// * `output_rate` - Target network/output sample rate in Hz. The processor
+///   resamples from `input_rate` to `output_rate` when they differ.
 /// * `denoiser` - Optional noise suppression state (requires 48kHz input)
 /// * `state` - Shared state for volume, mute, and statistics
-/// * `encoder_option` - Optional SEA encoder for codec encoding
+/// * `encoder_option` - Optional SEA encoder; encodes into the `PooledBuffer`
+///   before sending when present.
 ///
 /// # Returns
 ///
@@ -249,16 +225,21 @@ pub fn input_processor<I: AudioInput>(
 ///
 /// ## Channel Communication
 ///
-/// - Receives `Bytes` (i16 samples as bytes) from the input channel
+/// - Receives `Bytes` from the `AudioDataSource` (blocking `recv`)
 /// - Drops frames when output is full (tracks loss via state)
 /// - Ignores frames when deafened
 ///
 /// # Arguments
 ///
-/// * `input` - Channel for receiving audio frames (as `Bytes`)
-/// * `output` - The audio output destination implementing `AudioOutput`
-/// * `ratio` - Resampling ratio (output_rate / input_rate)
+/// * `source` - Source of audio frames implementing `AudioDataSource`. Each
+///   frame is `Bytes` containing i16 samples (raw or encoded).
+/// * `output` - The audio output destination implementing `AudioOutput`.
+/// * `input_rate` - Network/source sample rate in Hz.
+/// * `output_rate` - Sample rate of the audio output device in Hz. The
+///   processor resamples from `input_rate` to `output_rate` when they differ.
 /// * `state` - Shared state for volume, deafen, and statistics
+/// * `decoder_option` - Optional `SeaDecoder` for decoding received frames
+///   before playback. When `None`, frames are treated as raw i16 samples.
 ///
 /// # Returns
 ///

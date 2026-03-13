@@ -27,7 +27,7 @@
 //! }
 //! ```
 
-use crate::AudioHost;
+use crate::devices::AudioHost;
 use crate::error::Error;
 use crate::internal::processing::wide_mul;
 #[cfg(target_family = "wasm")]

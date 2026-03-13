@@ -1,6 +1,6 @@
 //! Channel adapter implementations.
 //!
-//! `telepathy_audio` is trait-based (`AudioDataSink` / `AudioDataSource`) and does not require
+//! `telepathy-audio` is trait-based (`AudioDataSink` / `AudioDataSource`) and does not require
 //! any specific channel crate. This module provides **ready-to-use** adapters for
 //! `std::sync::mpsc` so you can get started quickly without writing boilerplate.
 //!
@@ -33,7 +33,7 @@
 //!
 //! For input delivery, use [`MpscSink`].
 
-use crate::PooledBuffer;
+use crate::internal::buffer_pool::PooledBuffer;
 use crate::io::traits::{AudioDataSink, AudioDataSource, ClosedOrFailed};
 use bytes::Bytes;
 use std::sync::mpsc;

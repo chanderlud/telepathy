@@ -1,6 +1,6 @@
 #![cfg(not(target_family = "wasm"))]
 
-//! Throughput benchmarks for telepathy_audio processing stacks.
+//! Throughput benchmarks for telepathy-audio processing stacks.
 //!
 //! Measures throughput for both input and output processing stacks
 //! using simulated audio through mock implementations.
@@ -28,7 +28,9 @@ use telepathy_audio::sea::codec::common::SeaError;
 use telepathy_audio::sea::codec::file::SeaFileHeader;
 use telepathy_audio::sea::decoder::SeaDecoder;
 use telepathy_audio::sea::encoder::{EncoderSettings, SeaEncoder};
-use telepathy_audio::{AudioDataSink, AudioDataSource, ClosedOrFailed, PooledBuffer};
+use telepathy_audio::internal::buffer_pool::PooledBuffer;
+use telepathy_audio::io::{AudioDataSink, AudioDataSource};
+use telepathy_audio::io::traits::ClosedOrFailed;
 
 #[derive(Clone)]
 struct KanalSink(Sender<PooledBuffer>);

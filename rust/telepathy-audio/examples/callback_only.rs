@@ -1,4 +1,5 @@
-use telepathy_audio::{AudioHost, AudioInputBuilder};
+use telepathy_audio::devices::AudioHost;
+use telepathy_audio::io::AudioInputBuilder;
 
 fn main() -> Result<(), telepathy_audio::Error> {
     let host = AudioHost::new();

@@ -16,7 +16,7 @@
 //!
 //! This is a **vendored** (embedded) copy of the SEA codec, not an external
 //! dependency. The following modifications were made to tailor it for real-time
-//! streaming audio in telepathy_audio:
+//! streaming audio in telepathy-audio:
 //!
 //! - **Streaming API** — Converted from a file-based API to a frame-based streaming
 //!   API suitable for real-time encoding and decoding.

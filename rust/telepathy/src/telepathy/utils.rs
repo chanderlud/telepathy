@@ -17,7 +17,7 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::time::Duration;
-use telepathy_audio::PooledBuffer;
+use telepathy_audio::internal::buffer_pool::PooledBuffer;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::select;
 use tokio::sync::Notify;

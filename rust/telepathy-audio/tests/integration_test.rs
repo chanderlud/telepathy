@@ -1,14 +1,10 @@
-//! Integration tests for telepathy_audio library.
+//! Integration tests for telepathy-audio library.
 //!
 //! These tests verify the full workflow of device enumeration and selection.
 
 #![cfg(not(target_family = "wasm"))]
 
-use telepathy_audio::{
-    AudioDeviceInfo, AudioDeviceList, AudioHost, DeviceError, get_default_input_device,
-    get_default_output_device, get_input_device, get_output_device, list_all_devices,
-    list_input_devices, list_output_devices,
-};
+use telepathy_audio::devices::{get_default_input_device, get_default_output_device, get_input_device, get_output_device, list_all_devices, list_input_devices, list_output_devices, AudioDeviceInfo, AudioDeviceList, AudioHost, DeviceError};
 
 /// Test full enumeration and selection workflow.
 #[test]

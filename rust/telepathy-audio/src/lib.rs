@@ -1,7 +1,7 @@
-//! # Telepathy Audio Library
+//! # Telepathy Real Time Audio
 //!
 //! A standalone audio processing library that provides device enumeration,
-//! audio capture, playback, and processing capabilities with codec support.
+//! audio capture, playback, and processing capabilities in real time.
 //!
 //! ## Features
 //!
@@ -230,11 +230,6 @@
 //! deafened.store(true, Relaxed);     // Deafen output
 //! ```
 
-// =============================================================================
-// Public modules
-// =============================================================================
-
-/// Channel adapter implementations (e.g. `std::sync::mpsc`).
 pub mod adapters;
 
 /// Device enumeration and selection.
@@ -256,83 +251,27 @@ pub mod io;
 /// WAV and SEA codec files with automatic resampling and volume control.
 pub mod player;
 
-/// Public constants.
-///
-/// Contains audio processing constants like frame size.
-pub mod constants;
-
 /// Error types.
 ///
 /// Contains error types used throughout the library.
 pub mod error;
-
-// =============================================================================
-// Internal modules (private)
-// =============================================================================
 
 /// Internal implementation details
 /// Exposed publicly for benchmarks but not intended for external use.
 #[doc(hidden)]
 pub mod internal;
 
-/// Platform-specific implementations
-mod platform;
 #[doc(hidden)]
 pub mod sea;
 
-// =============================================================================
-// Re-exports for backward compatibility
-// =============================================================================
+#[doc(hidden)]
+pub mod constants;
 
-// Re-export device enumeration API
-pub use devices::{
-    AudioDeviceInfo, AudioDeviceList, AudioHost, DeviceError, DeviceHandle,
-    get_default_input_device, get_default_output_device, get_input_device, get_output_device,
-    list_all_devices, list_input_devices, list_output_devices,
-};
+/// Platform-specific implementations
+mod platform;
 
-// Re-export audio input/output API (from new io module)
-pub use adapters::{MpscSink, MpscSource};
-pub use io::input::{AudioInputBuilder, AudioInputConfig, AudioInputHandle};
-pub use io::output::{AudioOutputBuilder, AudioOutputConfig, AudioOutputHandle};
-pub use io::traits::{AudioDataSink, AudioDataSource, ClosedOrFailed};
-
-/// A pooled byte buffer that returns to the pool when dropped.
-///
-/// `PooledBytes` wraps a `Bytes` buffer and implements `Deref<Target=Bytes>`,
-/// allowing transparent access to the underlying data. When dropped, it
-/// attempts to return the buffer to the pool for reuse (if the reference
-/// count is 1).
-///
-/// This type is used by `AudioInputBuilder` callbacks and channels to
-/// enable efficient buffer reuse during audio processing.
-pub use internal::buffer_pool::{PooledBuffer, PooledBytes};
-
-// Re-export error types
-pub use error::Error;
-
-// Re-export constants
 pub use constants::FRAME_SIZE;
-
-/// Converts decibel values to linear multipliers.
-///
-/// Uses the standard audio engineering formula: `10^(dB / 20)`.
-/// Useful for volume control where 0 dB = unity gain.
-pub use internal::utils::db_to_multiplier;
-
-/// SIMD-optimized audio multiplication with automatic CPU feature detection.
-///
-/// Multiplies audio samples by a factor, using AVX-512, AVX2, or scalar
-/// implementations based on runtime CPU capabilities. Results are clamped
-/// to [-1.0, 1.0]. See [`internal::processing`] module for details.
-pub use internal::processing::wide_mul;
-
-// Re-export player API
-/// Framework-agnostic audio player for WAV and SEA codec files.
-///
-/// Supports automatic format detection, resampling, volume control,
-/// and graceful cancellation with fade-out.
-pub use player::{AudioPlayer, SoundHandle, wav_to_sea};
+pub use error::Error;
 
 // Re-export web audio wrapper for WASM consumers
 #[cfg(target_family = "wasm")]

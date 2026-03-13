@@ -1,4 +1,4 @@
-//! End-to-end latency integration test for telepathy_audio.
+//! End-to-end latency integration test for telepathy-audio.
 //!
 //! This test verifies that audio flows through the complete processing
 //! pipeline and measures total end-to-end latency.

@@ -1,5 +1,5 @@
 [package]
-name = "relay_server"
+name = "relay-server"
 version = "0.1.0"
 edition = "2024"
 

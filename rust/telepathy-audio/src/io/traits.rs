@@ -1,6 +1,6 @@
 //! Trait-based data delivery abstractions for audio I/O.
 //!
-//! These traits decouple `telepathy_audio` from any specific channel implementation.
+//! These traits decouple `telepathy-audio` from any specific channel implementation.
 //! Consumers can provide their own sink/source implementations (e.g. flume, crossbeam,
 //! tokio mpsc) while keeping the processing pipeline unchanged.
 
