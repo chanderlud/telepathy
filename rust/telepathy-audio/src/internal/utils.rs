@@ -11,7 +11,7 @@
 //!
 //! ## Silence Transitions
 //!
-//! [`make_transition_up`] and [`make_transition_down`] create smooth ramps
+//! `hann_fade_in` and `hann_fade_out` create smooth ramps
 //! between silence and audio to prevent audible clicks and pops. These are
 //! used by the input processor when silence detection is enabled.
 //!
@@ -22,7 +22,7 @@
 //!
 //! ## Stream Wrapper
 //!
-//! [`SendStream`] wraps a cpal stream to allow sending across thread boundaries.
+//! `SendStream` wraps a cpal stream to allow sending across thread boundaries.
 //! This is necessary because cpal streams are not inherently `Send`.
 
 use crate::error::Error;

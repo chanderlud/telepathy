@@ -11,9 +11,9 @@ use telepathy_audio::internal::buffer_pool::PooledBuffer;
 use telepathy_audio::internal::processor::{input_processor, output_processor};
 use telepathy_audio::internal::state::{InputProcessorState, OutputProcessorState};
 use telepathy_audio::internal::traits::{AudioInput, AudioOutput};
-use telepathy_audio::{Error, FRAME_SIZE};
-use telepathy_audio::io::{AudioDataSink, AudioDataSource};
 use telepathy_audio::io::traits::ClosedOrFailed;
+use telepathy_audio::io::{AudioDataSink, AudioDataSource};
+use telepathy_audio::{Error, FRAME_SIZE};
 
 struct TestAudioInput {
     samples_remaining: usize,

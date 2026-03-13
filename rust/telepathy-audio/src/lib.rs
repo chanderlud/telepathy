@@ -8,18 +8,24 @@
 //! - **Device Management**: Enumerate and select audio input/output devices
 //! - **Audio Capture**: High-quality audio input with optional noise suppression
 //! - **Audio Playback**: Low-latency audio output with automatic resampling
-//! - **Codec Support**: SEA codec encoding/decoding for efficient transmission
+//! - **Codec Support**: Encoding/decoding for efficient transmission using a modified verison of <https://github.com/Daninet/sea-codec>
 //! - **SIMD Optimization**: Hardware-accelerated audio processing with automatic detection
 //!   - AVX-512 for 16-element aligned frames (on supported CPUs)
 //!   - AVX2 for 8-element aligned frames (on supported CPUs)
 //!   - Scalar fallback when alignment requirements aren't met
-//! - **Cross-Platform**: Native support for Windows, macOS, Linux, and WebAssembly
+//! - **Cross-Platform**: Native support for Windows, macOS, Linux, Android, iOS, and WebAssembly
 //!
-//! ## Channel adapters
 //!
-//! The crate is trait-based (`AudioDataSink` / `AudioDataSource`) and does not require any
-//! specific channel library. For convenience, `telepathy_audio::adapters` provides ready-to-use
-//! `std::sync::mpsc` implementations: [`MpscSink`] and [`MpscSource`].
+//! ## Platform Support
+//!
+//! | Platform | Backend | Threading | Denoising | SEA Codec |
+//! |----------|---------|-----------|------|-----|
+//! | Windows  | WASAPI  | OS threads | ✅ | ✅ |
+//! | macOS    | CoreAudio | OS threads |✅|✅|
+//! | Linux    | ALSA    | OS threads |✅|✅|
+//! | Android  | AAudio  |  OS threads |✅|✅|
+//! | iOS      | CoreAudio  |  OS threads |✅|✅|
+//! | Web      | AudioWorklet/WebAudio | Web Workers |✅|✅|
 //!
 //! ## Module Organization
 //!
@@ -31,20 +37,6 @@
 //!   - [`io`] - Audio input/output builders and handles
 //!   - [`player`] - Audio file playback (WAV and SEA codec)
 //!   - [`error`] - Error types
-//!   - [`constants`] - Public constants (FRAME_SIZE, etc.)
-//!
-//! - **Internal Modules** (not part of public API):
-//!   - `internal` - Processing pipeline implementation
-//!   - `platform` - Platform-specific code (WASM)
-//!
-//! ## Platform Support
-//!
-//! | Platform | Backend | Threading |
-//! |----------|---------|-----------|
-//! | Windows  | WASAPI  | `std::thread` (OS threads) |
-//! | macOS    | CoreAudio | `std::thread` (OS threads) |
-//! | Linux    | ALSA    | `std::thread` (OS threads) |
-//! | Web      | AudioWorklet/WebAudio | `wasm_thread` (Web Workers) |
 //!
 //! ### WASM Threading
 //!
@@ -57,6 +49,12 @@
 //! - **Nightly Rust** (optional): For atomics support via `build-std`
 //!
 //! See the README for detailed WASM setup instructions and browser compatibility.
+//!
+//! ## Channel adapters
+//!
+//! The crate is trait-based (`AudioDataSink` / `AudioDataSource`) and does not require any
+//! specific channel library. For convenience, `telepathy_audio::adapters` provides ready-to-use
+//! `std::sync::mpsc` implementations: [`MpscSink`](crate::adapters::MpscSink) and [`MpscSource`](crate::adapters::MpscSource).
 //!
 //! ## Basic Usage
 //!
@@ -231,43 +229,18 @@
 //! ```
 
 pub mod adapters;
-
-/// Device enumeration and selection.
-///
-/// This module provides functionality for listing available audio devices
-/// and selecting specific devices for input or output.
 pub mod devices;
-
-/// Audio I/O module.
-///
-/// This module provides high-level builders and handles for audio capture
-/// and playback. Use [`io::input::AudioInputBuilder`] for audio input and
-/// [`io::output::AudioOutputBuilder`] for audio output.
-pub mod io;
-
-/// Audio file playback.
-///
-/// This module provides a framework-agnostic audio player supporting
-/// WAV and SEA codec files with automatic resampling and volume control.
-pub mod player;
-
-/// Error types.
-///
-/// Contains error types used throughout the library.
 pub mod error;
-
-/// Internal implementation details
-/// Exposed publicly for benchmarks but not intended for external use.
-#[doc(hidden)]
-pub mod internal;
-
-#[doc(hidden)]
-pub mod sea;
+pub mod io;
+pub mod player;
 
 #[doc(hidden)]
 pub mod constants;
+#[doc(hidden)]
+pub mod internal;
+#[doc(hidden)]
+pub mod sea;
 
-/// Platform-specific implementations
 mod platform;
 
 pub use constants::FRAME_SIZE;

@@ -2,8 +2,8 @@ use bytes::Bytes;
 use crossbeam::channel;
 use telepathy_audio::devices::AudioHost;
 use telepathy_audio::internal::buffer_pool::PooledBuffer;
-use telepathy_audio::io::{AudioDataSink, AudioDataSource, AudioInputBuilder, AudioOutputBuilder};
 use telepathy_audio::io::traits::ClosedOrFailed;
+use telepathy_audio::io::{AudioDataSink, AudioDataSource, AudioInputBuilder, AudioOutputBuilder};
 
 #[derive(Clone)]
 struct CrossbeamSink(channel::Sender<PooledBuffer>);

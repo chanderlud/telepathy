@@ -22,15 +22,15 @@ use std::thread;
 use std::time::Duration;
 use telepathy_audio::FRAME_SIZE;
 use telepathy_audio::internal::NETWORK_FRAME;
+use telepathy_audio::internal::buffer_pool::PooledBuffer;
 use telepathy_audio::internal::processor::{input_processor, output_processor};
 use telepathy_audio::internal::state::{InputProcessorState, OutputProcessorState};
+use telepathy_audio::io::traits::ClosedOrFailed;
+use telepathy_audio::io::{AudioDataSink, AudioDataSource};
 use telepathy_audio::sea::codec::common::SeaError;
 use telepathy_audio::sea::codec::file::SeaFileHeader;
 use telepathy_audio::sea::decoder::SeaDecoder;
 use telepathy_audio::sea::encoder::{EncoderSettings, SeaEncoder};
-use telepathy_audio::internal::buffer_pool::PooledBuffer;
-use telepathy_audio::io::{AudioDataSink, AudioDataSource};
-use telepathy_audio::io::traits::ClosedOrFailed;
 
 #[derive(Clone)]
 struct KanalSink(Sender<PooledBuffer>);

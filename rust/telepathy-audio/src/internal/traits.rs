@@ -12,7 +12,7 @@
 //!
 //! - [`RingBufferInput`] - Lock-free ring buffer input for native platforms (uses rtrb)
 //! - [`RingBufferOutput`] - Lock-free ring buffer output for native platforms (uses rtrb)
-//! - [`WebOutput`] - Shared buffer output for WASM (uses Arc<Mutex<Vec<f32>>>)
+//! - `WebOutput` - Shared buffer output for WASM (uses `Arc<Mutex<Vec<f32>>>`)
 //!
 //! ## Buffer Size
 //!

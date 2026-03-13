@@ -6,8 +6,8 @@
 //!
 //! ## Modules
 //!
-//! - [`input`] - Audio input capture with noise suppression and codec encoding
-//! - [`output`] - Audio output playback with codec decoding and volume control
+//! - [`input`](mod@crate::io::input) - Audio input capture with noise suppression and codec encoding
+//! - [`output`](mod@crate::io::output) - Audio output playback with codec decoding and volume control
 //!
 //! ## Example
 //!

@@ -4,7 +4,11 @@
 
 #![cfg(not(target_family = "wasm"))]
 
-use telepathy_audio::devices::{get_default_input_device, get_default_output_device, get_input_device, get_output_device, list_all_devices, list_input_devices, list_output_devices, AudioDeviceInfo, AudioDeviceList, AudioHost, DeviceError};
+use telepathy_audio::devices::{
+    AudioDeviceInfo, AudioDeviceList, AudioHost, DeviceError, get_default_input_device,
+    get_default_output_device, get_input_device, get_output_device, list_all_devices,
+    list_input_devices, list_output_devices,
+};
 
 /// Test full enumeration and selection workflow.
 #[test]

@@ -30,13 +30,13 @@ use tokio::task::JoinError;
 pub enum Error {
     /// Device-related errors (e.g., device not found, enumeration failed).
     ///
-    /// Occurs during device enumeration via [`list_input_devices`](crate::list_input_devices),
-    /// [`list_output_devices`](crate::list_output_devices), or device selection.
+    /// Occurs during device enumeration via [`list_input_devices`](crate::devices::list_input_devices),
+    /// [`list_output_devices`](crate::devices::list_output_devices), or device selection.
     Device(String),
     /// Audio stream errors (e.g., stream creation failed, stream error during playback).
     ///
-    /// Occurs during [`AudioInputBuilder::build`](crate::AudioInputBuilder::build) or
-    /// [`AudioOutputBuilder::build`](crate::AudioOutputBuilder::build), or when
+    /// Occurs during [`AudioInputBuilder::build`](crate::io::input::AudioInputBuilder::build) or
+    /// [`AudioOutputBuilder::build`](crate::io::output::AudioOutputBuilder::build), or when
     /// the underlying audio stream encounters an error.
     Stream(String),
     /// Audio processing errors (e.g., resampling failed, codec error).
@@ -52,7 +52,7 @@ pub enum Error {
     /// Configuration errors.
     ///
     /// Occurs when builder configuration is invalid, such as missing
-    /// required callback in [`AudioInputBuilder`](crate::AudioInputBuilder).
+    /// required callback in [`AudioInputBuilder`](crate::io::input::AudioInputBuilder).
     Config(String),
     JoinError(JoinError),
     /// WASM threading errors (WASM only).
@@ -101,8 +101,8 @@ impl From<DeviceError> for Error {
 
 /// Converts cpal device enumeration errors.
 ///
-/// Occurs when [`list_input_devices`](crate::list_input_devices) or
-/// [`list_output_devices`](crate::list_output_devices) fails to enumerate devices.
+/// Occurs when [`list_input_devices`](crate::devices::list_input_devices) or
+/// [`list_output_devices`](crate::devices::list_output_devices) fails to enumerate devices.
 impl From<cpal::DevicesError> for Error {
     fn from(err: cpal::DevicesError) -> Self {
         Error::Device(err.to_string())
@@ -112,8 +112,8 @@ impl From<cpal::DevicesError> for Error {
 /// Converts cpal stream configuration errors.
 ///
 /// Occurs when querying device's default stream configuration during
-/// [`AudioInputBuilder::build`](crate::AudioInputBuilder::build) or
-/// [`AudioOutputBuilder::build`](crate::AudioOutputBuilder::build).
+/// [`AudioInputBuilder::build`](crate::io::input::AudioInputBuilder::build) or
+/// [`AudioOutputBuilder::build`](crate::io::output::AudioOutputBuilder::build).
 impl From<cpal::DefaultStreamConfigError> for Error {
     fn from(err: cpal::DefaultStreamConfigError) -> Self {
         Error::Stream(err.to_string())
@@ -150,7 +150,7 @@ impl From<cpal::PauseStreamError> for Error {
 
 /// Converts rubato resampler construction errors.
 ///
-/// Occurs when [`resampler_factory`](crate::resampler_factory) fails to
+/// Occurs when [`resampler_factory`](crate::internal::utils::resampler_factory) fails to
 /// create a resampler with invalid parameters.
 impl From<rubato::ResamplerConstructionError> for Error {
     fn from(err: rubato::ResamplerConstructionError) -> Self {

@@ -2,7 +2,7 @@
 //!
 //! This module provides a high-level API for capturing and processing audio input.
 //! It handles device selection, resampling, noise suppression, codec encoding,
-//! and delivers processed audio through a user-provided [`AudioDataSink`](crate::AudioDataSink).
+//! and delivers processed audio through a user-provided [`AudioDataSink`].
 //!
 //! # Example (Native)
 //!
@@ -37,7 +37,7 @@
 //!
 //! # Example (WASM)
 //!
-//! On WASM targets, a [`WebAudioWrapper`](crate::platform::web_audio::WebAudioWrapper)
+//! On WASM targets, a `WebAudioWrapper`
 //! must be created ahead of time (async) and provided to the builder before calling
 //! [`build`](AudioInputBuilder::build):
 //!
@@ -766,9 +766,9 @@ where
 /// ## Platform Differences
 ///
 /// - **Native**: Uses cpal stream and rtrb ring buffer for input communication
-/// - **WASM**: Uses a pre-set [`WebAudioWrapper`](crate::platform::web_audio::WebAudioWrapper)
+/// - **WASM**: Uses a pre-set `WebAudioWrapper`
 ///   and Web Audio API; the wrapper must be provided via
-///   [`AudioInputBuilder::web_audio_wrapper`] before calling `build()`
+///   `AudioInputBuilder::web_audio_wrapper` before calling `build()`
 ///
 /// ## Drop vs stop()
 ///
