@@ -939,6 +939,7 @@ where
     Ok(stream)
 }
 
+#[cfg(not(target_family = "wasm"))]
 fn input_stream_helper(
     input_sender: &mut RingBufferSender,
     input_channels: usize,
