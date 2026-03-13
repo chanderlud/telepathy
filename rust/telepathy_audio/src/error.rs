@@ -229,3 +229,9 @@ impl From<wasm_bindgen::JsValue> for Error {
         Error::Processing(format!("JavaScript error: {:?}", err))
     }
 }
+
+impl From<audioadapter_buffers::SizeError> for Error {
+    fn from(err: audioadapter_buffers::SizeError) -> Self {
+        Error::Processing(format!("audioadapter_buffers::SizeError: {:?}", err))
+    }
+}

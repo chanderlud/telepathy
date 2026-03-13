@@ -5,40 +5,6 @@
 //! requirements.
 
 pub use nnnoiseless::FRAME_SIZE;
-use rubato::{SincInterpolationParameters, SincInterpolationType, WindowFunction};
-
-/// Parameters used for resampling throughout the application.
-///
-/// These parameters provide high-quality resampling suitable for real-time
-/// audio processing. See [rubato documentation](https://docs.rs/rubato) for
-/// detailed parameter descriptions.
-///
-/// ## Parameter Rationale
-///
-/// - **`sinc_len: 256`** - Sinc filter length. Higher values provide better
-///   frequency response but increase latency and CPU usage. 256 offers an
-///   excellent quality/performance balance for voice audio.
-///
-/// - **`f_cutoff: 0.95`** - Anti-aliasing filter cutoff as fraction of Nyquist.
-///   0.95 preserves frequencies up to 95% of Nyquist while attenuating aliases.
-///   Suitable for voice which doesn't require the full spectrum.
-///
-/// - **`interpolation: Linear`** - Interpolation type between sinc table entries.
-///   Linear interpolation is fast and sufficient for the oversampling factor used.
-///
-/// - **`oversampling_factor: 256`** - Resolution of the sinc table. Higher values
-///   improve accuracy at the cost of memory. 256 provides excellent precision.
-///
-/// - **`window: BlackmanHarris2`** - Window function applied to sinc filter.
-///   Blackman-Harris provides excellent stopband attenuation (~92dB) which
-///   effectively eliminates aliasing artifacts.
-pub(crate) const RESAMPLER_PARAMETERS: SincInterpolationParameters = SincInterpolationParameters {
-    sinc_len: 256,
-    f_cutoff: 0.95,
-    interpolation: SincInterpolationType::Linear,
-    oversampling_factor: 256,
-    window: WindowFunction::BlackmanHarris2,
-};
 
 /// Minimum number of consecutive silent frames before silence is detected.
 ///

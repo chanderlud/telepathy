@@ -18,11 +18,12 @@
 //! cargo bench --target wasm32-unknown-unknown --bench wasm_operations -Z build-std=std,panic_abort
 //! ```
 
+use audioadapter_buffers::direct::InterleavedSlice;
 use std::hint::black_box;
 
 use bytes::BytesMut;
 use nnnoiseless::{DenoiseState, FRAME_SIZE};
-use rubato::{Resampler, SincFixedIn};
+use rubato::{FixedSync, Resampler};
 use wasm_bindgen_test::{Criterion, wasm_bindgen_bench};
 
 use telepathy_audio::internal::utils::resampler_factory;
@@ -120,27 +121,37 @@ pub fn bench_denoise(c: &mut Criterion) {
 /// Benchmarks rubato resampling for a realistic 44.1kHz↔48kHz ratio.
 #[wasm_bindgen_bench]
 pub fn bench_resample(c: &mut Criterion) {
-    let ratio = 44_100.0_f64 / 48_000.0_f64;
-    let in_len = (FRAME_SIZE as f64 / ratio).ceil() as usize;
+    let input_rate = 44_100;
+    let output_rate = 48_000;
+    let mut resampler =
+        resampler_factory(input_rate, output_rate, 1, FRAME_SIZE, FixedSync::Output)
+            .expect("resampler_factory");
+    let in_len = resampler
+        .as_ref()
+        .map(|resampler| resampler.input_frames_next())
+        .unwrap_or(FRAME_SIZE);
+    let post_len = resampler
+        .as_ref()
+        .map(|resampler| resampler.output_frames_max())
+        .unwrap_or(FRAME_SIZE);
 
     let src = dummy_float_frame();
-    let pre_vec: Vec<f32> = src[..in_len].to_vec();
-    let pre_buf = [pre_vec];
-
-    // rubato requires 10 extra spaces in the output buffer as a safety margin
-    let post_len = (FRAME_SIZE as f64 + 10_f64) as usize;
-    let mut post_vec = Vec::with_capacity(post_len);
-    post_vec.resize(post_len, 0_f32);
-    let mut post_buf = [post_vec];
-
-    let mut resampler: Option<SincFixedIn<f32>> =
-        resampler_factory(ratio, 1, in_len).expect("resampler_factory");
+    let pre_buf: Vec<f32> = src[..in_len].to_vec();
+    let mut post_buf = vec![0_f32; post_len];
 
     c.bench_function("rubato_process_into_buffer", |b| {
         b.iter(|| {
             if let Some(ref mut resampler) = resampler {
+                let input_adapter =
+                    InterleavedSlice::new(&pre_buf, 1, in_len).expect("InterleavedSlice::new");
+                let mut output_adapter = InterleavedSlice::new_mut(&mut post_buf, 1, post_len)
+                    .expect("InterleavedSlice::new_mut");
                 let processed = resampler
-                    .process_into_buffer(black_box(&pre_buf), black_box(&mut post_buf), None)
+                    .process_into_buffer(
+                        black_box(&input_adapter),
+                        black_box(&mut output_adapter),
+                        None,
+                    )
                     .expect("process_into_buffer");
                 black_box(processed.1);
             } else {

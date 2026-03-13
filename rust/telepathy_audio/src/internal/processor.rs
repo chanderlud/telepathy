@@ -39,9 +39,10 @@ use crate::internal::utils::resampler_factory;
 use crate::io::traits::{AudioDataSink, AudioDataSource, ClosedOrFailed};
 use crate::sea::decoder::SeaDecoder;
 use crate::sea::encoder::SeaEncoder;
+use audioadapter_buffers::direct::InterleavedSlice;
 use log::{debug, warn};
 use nnnoiseless::{DenoiseState, FRAME_SIZE};
-use rubato::Resampler;
+use rubato::{FixedSync, Resampler};
 
 /// Processes audio input and sends it to the output channel.
 ///
@@ -100,7 +101,8 @@ use rubato::Resampler;
 pub fn input_processor<I: AudioInput>(
     mut input: I,
     sink: impl AudioDataSink,
-    ratio: f64,
+    input_rate: usize,
+    output_rate: usize,
     mut denoiser: Option<Box<DenoiseState>>,
     state: InputProcessorState,
     mut encoder_option: Option<SeaEncoder>,
@@ -108,24 +110,24 @@ pub fn input_processor<I: AudioInput>(
     // the maximum value for i16 as f32
     let max_i16_f32 = i16::MAX as f32;
 
-    // rubato requires 10 extra spaces in the output buffer as a safety margin
-    let post_len = (FRAME_SIZE as f64 + 10_f64) as usize;
-    let in_len = (FRAME_SIZE as f64 / ratio).ceil() as usize;
-
-    // resampler is Some if resampling is needed
-    let mut resampler = resampler_factory(ratio, 1, in_len)?;
-    // the input for the resampler
-    let mut pre_vec = Vec::with_capacity(in_len);
-    pre_vec.resize(in_len, 0_f32);
-    let mut pre_buf = [pre_vec];
-    // the output for the resampler
-    let mut post_vec = Vec::with_capacity(post_len);
-    post_vec.resize(post_len, 0_f32);
-    let mut post_buf = [post_vec];
     // the output for rnnoise
     let mut out_buf = [0_f32; FRAME_SIZE];
     // output for 16 bit samples
     let mut int_buffer = [0; FRAME_SIZE];
+
+    // resampler is Some if resampling is needed
+    let mut resampler =
+        resampler_factory(input_rate, output_rate, 1, FRAME_SIZE, FixedSync::Output)?;
+    // the maximum number of samples per input
+    let input_buffer_size = resampler
+        .as_ref()
+        .map(|r| r.input_frames_max())
+        .unwrap_or(FRAME_SIZE);
+
+    // the input for the resampler
+    let mut pre_buf = vec![0_f32; input_buffer_size];
+    // the output for the resampler
+    let mut post_buf = vec![0_f32; FRAME_SIZE];
 
     // the position in pre_buf
     let mut position = 0;
@@ -133,9 +135,13 @@ pub fn input_processor<I: AudioInput>(
     let mut silence_length = 0_u16;
 
     loop {
-        let read = input.read_into(&mut pre_buf[0][position..in_len])?;
+        let in_len = resampler
+            .as_ref()
+            .map(|r| r.input_frames_next())
+            .unwrap_or(FRAME_SIZE);
+        let read = input.read_into(&mut pre_buf[position..in_len])?;
         if read == 0 {
-            debug!("Input processor ended (EOF)");
+            debug!("Resampler loop ended (EOF)");
             break;
         }
         position += read;
@@ -152,15 +158,19 @@ pub fn input_processor<I: AudioInput>(
 
         let (target_buffer, len) = if let Some(resampler) = &mut resampler {
             // resample the data
-            let processed = resampler.process_into_buffer(&pre_buf, &mut post_buf, None)?;
-            (&mut post_buf[0], processed.1)
+            let input_adapter = InterleavedSlice::new(&pre_buf, 1, in_len)?;
+            let mut output_adapter = InterleavedSlice::new_mut(&mut post_buf, 1, FRAME_SIZE)?;
+            let processed =
+                resampler.process_into_buffer(&input_adapter, &mut output_adapter, None)?;
+            (&mut post_buf, processed.1)
         } else {
-            (&mut pre_buf[0], FRAME_SIZE)
+            (&mut pre_buf, FRAME_SIZE)
         };
 
-        // the first frame may be smaller than FRAME_SIZE
+        // TODO may no longer be needed
+        // the first frame may be smaller than frame_size
         if len != FRAME_SIZE {
-            warn!("input_processor: len != FRAME_SIZE: {}", len);
+            warn!("base_resampler: len != frame_size: {}", len);
             continue;
         }
 
@@ -256,24 +266,29 @@ pub fn input_processor<I: AudioInput>(
 pub fn output_processor<O: AudioOutput>(
     source: impl AudioDataSource,
     mut output: O,
-    ratio: f64,
+    input_rate: usize,
+    output_rate: usize,
     state: OutputProcessorState,
     mut decoder_option: Option<SeaDecoder>,
 ) -> Result<(), Error> {
     // base scale to convert i16 to f32
     let scale = 1_f32 / i16::MAX as f32;
-    // rubato requires 10 extra spaces in the output buffer as a safety margin
-    let post_len = (FRAME_SIZE as f64 * ratio + 10_f64) as usize;
 
-    let mut decoded_buf = [0_i16; FRAME_SIZE];
     // resampler is Some if resampling is needed
-    let mut resampler_option = resampler_factory(ratio, 1, FRAME_SIZE)?;
-    // the input for the resampler
-    let pre_buf = [&mut [0_f32; FRAME_SIZE]];
-    // the output for the resampler
-    let mut post_vec = Vec::with_capacity(post_len);
-    post_vec.resize(post_len, 0_f32);
-    let mut post_buf = [post_vec];
+    let mut resampler_option =
+        resampler_factory(input_rate, output_rate, 1, FRAME_SIZE, FixedSync::Input)?;
+    // the maximum number of samples per output
+    let output_buffer_size = resampler_option
+        .as_ref()
+        .map(|r| r.output_frames_max())
+        .unwrap_or(FRAME_SIZE);
+
+    // The output of the decoder
+    let mut decoded_buf = [0_i16; FRAME_SIZE];
+    // The input for the resampler
+    let mut pre_buf = [0_f32; FRAME_SIZE];
+    // The output for the resampler
+    let mut post_buf = vec![0_f32; output_buffer_size];
 
     loop {
         let buffer = match source.recv() {
@@ -298,18 +313,22 @@ pub fn output_processor<O: AudioOutput>(
         };
 
         // convert the i16 samples to f32 & apply the output volume
-        wide_i16_to_f32(int_samples, pre_buf[0], scale * state.output_volume());
+        wide_i16_to_f32(int_samples, &mut pre_buf, scale * state.output_volume());
         // send the rms to the statistics collector
-        state.send_rms(calculate_rms(pre_buf[0]));
+        state.send_rms(calculate_rms(&pre_buf));
         // get finalized samples
         let float_samples = if let Some(resampler) = &mut resampler_option {
             // resample the data
-            let processed = resampler.process_into_buffer(&pre_buf, &mut post_buf, None)?;
+            let input_adapter = InterleavedSlice::new(&pre_buf, 1, FRAME_SIZE)?;
+            let mut output_adapter =
+                InterleavedSlice::new_mut(&mut post_buf, 1, output_buffer_size)?;
+            let processed =
+                resampler.process_into_buffer(&input_adapter, &mut output_adapter, None)?;
             // send the resampled data to the output stream
-            &post_buf[0][..processed.1]
+            &post_buf[..processed.1]
         } else {
             // if no resampling is needed, send the data to the output stream
-            &*pre_buf[0]
+            &pre_buf
         };
 
         let lost = output.write_samples(float_samples)?;

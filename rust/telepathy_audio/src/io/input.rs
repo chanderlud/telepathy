@@ -460,7 +460,7 @@ where
     /// # Arguments
     ///
     /// * `processor_input` - The audio input source for the processor
-    /// * `input_sample_rate` - Device's native sample rate in Hz
+    /// * `input_rate` - Device's native sample rate in Hz
     ///
     /// # Returns
     ///
@@ -469,7 +469,7 @@ where
     fn build_common<I: AudioInput + Send + 'static>(
         self,
         processor_input: I,
-        input_sample_rate: u32,
+        input_rate: u32,
     ) -> Result<InputBuildContext, Error> {
         // Create shared atomic state (use provided shared atomics or create new ones)
         let input_volume = self
@@ -506,18 +506,16 @@ where
             DEFAULT_POOL_CAPACITY,
         );
         // determine the output sample rate
-        let sample_rate = if self.config.denoise_enabled {
+        let output_rate = if self.config.denoise_enabled {
             48_000
         } else {
-            self.config.output_sample_rate.unwrap_or(input_sample_rate)
+            self.config.output_sample_rate.unwrap_or(input_rate)
         };
-        // calculate the required ratio
-        let ratio = sample_rate as f64 / input_sample_rate as f64;
         // create the encoder if needed
         let encoder = if self.config.codec_enabled {
             Some(SeaEncoder::new(
                 1,
-                sample_rate,
+                output_rate,
                 EncoderSettings {
                     residual_bits: self.config.codec_residual_bits,
                     vbr: self.config.codec_vbr,
@@ -528,10 +526,17 @@ where
             None
         };
 
-        // spawn processor thread (safe_spawn catches panics on WASM when threading is unavailable)
+        // spawn processor thread
         let processor_handle = thread::safe_spawn(move || {
-            if let Err(e) = input_processor(processor_input, sink, ratio, denoiser, state, encoder)
-            {
+            if let Err(e) = input_processor(
+                processor_input,
+                sink,
+                input_rate as usize,
+                output_rate as usize,
+                denoiser,
+                state,
+                encoder,
+            ) {
                 error!("Input processor error: {}", e);
             }
             debug!("Input processor thread ended");
@@ -869,18 +874,15 @@ where
     let stream = device.build_input_stream(
         config,
         move |data: &[T], _: &_| {
-            let Ok(chunk) = input_sender
-                .producer
-                .write_chunk_uninit(data.len() / input_channels)
-            else {
-                return;
-            };
-
-            chunk.fill_from_iter(data.chunks(input_channels).map(|frame| {
-                // Convert device format T to f32
-                frame[0].to_float_sample()
-            }));
-            input_sender.notify.notify_one();
+            input_stream_helper(
+                &mut input_sender,
+                input_channels,
+                data.len(),
+                data.chunks(input_channels).map(|frame| {
+                    // Convert device format T to f32
+                    frame[0].to_float_sample()
+                }),
+            );
         },
         move |err| {
             log::error!("Input stream error: {}", err);
@@ -914,19 +916,16 @@ where
     let stream = device.build_input_stream(
         config,
         move |data: &[T], _: &_| {
-            let Ok(chunk) = input_sender
-                .producer
-                .write_chunk_uninit(data.len() / input_channels)
-            else {
-                return;
-            };
-
-            chunk.fill_from_iter(data.chunks(input_channels).map(|frame| {
-                // Convert device format T to f64, then to f32
-                let sample_f64 = frame[0].to_float_sample();
-                sample_f64 as f32
-            }));
-            input_sender.notify.notify_one();
+            input_stream_helper(
+                &mut input_sender,
+                input_channels,
+                data.len(),
+                data.chunks(input_channels).map(|frame| {
+                    // Convert device format T to f64, then to f32
+                    let sample_f64 = frame[0].to_float_sample();
+                    sample_f64 as f32
+                }),
+            );
         },
         move |err| {
             log::error!("Input stream error: {}", err);
@@ -938,4 +937,21 @@ where
     )?;
 
     Ok(stream)
+}
+
+fn input_stream_helper(
+    input_sender: &mut RingBufferSender,
+    input_channels: usize,
+    data_len: usize,
+    sample_iter: impl Iterator<Item = f32>,
+) {
+    let Ok(chunk) = input_sender
+        .producer
+        .write_chunk_uninit(data_len / input_channels)
+    else {
+        return;
+    };
+
+    chunk.fill_from_iter(sample_iter);
+    input_sender.notify.notify_one();
 }

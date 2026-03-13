@@ -13,13 +13,14 @@ crate-type = ["lib"]
 
 [dependencies]
 atomic_float = "1"
+audioadapter-buffers = "2"
 bytes = "1"
 crossbeam = "0.8"
 cfg-if = "1"
 cpal = { version = "0.17", features = ["wasm-bindgen"] }
 log = "0.4"
 nnnoiseless = { version = "0.5", default-features = false }
-rubato = { version = "0.16", default-features = false }
+rubato = "1"
 libm = "0.2"
 tokio = { version = "1", features = ["time", "sync", "rt", "macros"] }
 rtrb = "0.3"

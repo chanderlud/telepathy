@@ -66,7 +66,16 @@ fn callback_sink_receives_frames() {
     });
 
     let input = TestAudioInput::new(FRAME_SIZE * 10);
-    input_processor(input, sink, 1.0, None, InputProcessorState::default(), None).unwrap();
+    input_processor(
+        input,
+        sink,
+        48_000,
+        48_000,
+        None,
+        InputProcessorState::default(),
+        None,
+    )
+    .unwrap();
 
     assert!(frames.load(Relaxed) > 0);
 }
@@ -89,7 +98,8 @@ fn sink_errors_propagate() {
     let err = input_processor(
         input,
         FailingSink,
-        1.0,
+        48_000,
+        48_000,
         None,
         InputProcessorState::default(),
         None,
@@ -139,7 +149,15 @@ fn custom_source_drives_output_processor() {
     }
     let source = QueueSource::new(frames);
 
-    output_processor(source, output, 1.0, OutputProcessorState::default(), None).unwrap();
+    output_processor(
+        source,
+        output,
+        48_000,
+        48_000,
+        OutputProcessorState::default(),
+        None,
+    )
+    .unwrap();
 
     assert!(frames_counter.load(Relaxed) > 0);
 }
