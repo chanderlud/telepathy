@@ -1,11 +1,13 @@
-//! Channel adapters for `telepathy_audio` I/O traits.
+//! Channel adapters for `telepathy-audio` I/O traits.
 //!
-//! `telepathy_audio` is intentionally decoupled from any specific channel library.
+//! `telepathy-audio` is intentionally decoupled from any specific channel library.
 //! The main `telepathy` crate continues to use `kanal` internally by providing
 //! adapters that implement the trait-based I/O surface.
 
 use bytes::Bytes;
-use telepathy_audio::{AudioDataSink, AudioDataSource, ClosedOrFailed, PooledBuffer};
+use telepathy_audio::internal::buffer_pool::PooledBuffer;
+use telepathy_audio::io::traits::ClosedOrFailed;
+use telepathy_audio::io::{AudioDataSink, AudioDataSource};
 
 /// An `AudioDataSink` backed by a `kanal` channel.
 pub struct KanalSink {

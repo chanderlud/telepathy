@@ -1,4 +1,4 @@
-/// channel adapters for telepathy_audio I/O traits
+/// channel adapters for telepathy-audio I/O traits
 /// flutter_rust_bridge:ignore
 mod audio_adapters;
 /// implementations for core telepathy functionality
@@ -45,7 +45,9 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::time::Duration;
-use telepathy_audio::{AudioDeviceInfo, Host, RnnModel, db_to_multiplier, list_all_devices};
+use telepathy_audio::devices::{AudioDeviceInfo, list_all_devices};
+use telepathy_audio::internal::utils::db_to_multiplier;
+use telepathy_audio::{Host, RnnModel};
 use tokio::select;
 use tokio::sync::mpsc::{Receiver as MReceiver, Sender as MSender, channel};
 use tokio::sync::{Mutex, Notify};

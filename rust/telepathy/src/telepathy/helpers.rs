@@ -26,9 +26,10 @@ use std::sync::atomic::Ordering::Relaxed;
 use std::time::Duration;
 #[cfg(target_family = "wasm")]
 use telepathy_audio::WebAudioWrapper;
-use telepathy_audio::{
-    AudioInputBuilder, AudioInputHandle, AudioOutputBuilder, AudioOutputHandle, PooledBuffer,
-    get_input_device,
+use telepathy_audio::devices::get_input_device;
+use telepathy_audio::internal::buffer_pool::PooledBuffer;
+use telepathy_audio::io::{
+    AudioInputBuilder, AudioInputHandle, AudioOutputBuilder, AudioOutputHandle,
 };
 #[cfg(not(target_family = "wasm"))]
 use tokio::fs::File;
@@ -282,7 +283,7 @@ where
         Ok(())
     }
 
-    /// helper method to set up audio input stack using the telepathy_audio library
+    /// helper method to set up audio input stack using the telepathy-audio library
     pub(crate) async fn setup_input(
         &self,
         codec_options: (bool, bool, f32),
@@ -337,7 +338,7 @@ where
         Ok(InputHelper::new(handle, receiver))
     }
 
-    /// helper method to set up audio output stack using the telepathy_audio library
+    /// helper method to set up audio output stack using the telepathy-audio library
     pub(crate) async fn setup_output(
         &self,
         remote_sample_rate: f64,
