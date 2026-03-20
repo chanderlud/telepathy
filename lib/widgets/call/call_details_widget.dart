@@ -23,8 +23,11 @@ class CallDetailsWidget extends StatelessWidget {
               (BuildContext context, StateController stateController, _) {
             return Text(
                 '${stateController.activeRoom != null ? "Room" : "Call"} ${stateController.status.toLowerCase()}',
-                style: const TextStyle(fontSize: 20));
+                style: const TextStyle(
+                    fontSize: 20, fontWeight: FontWeight.w600));
           }),
+          const SizedBox(height: 8),
+          const Divider(height: 1),
           const SizedBox(height: 8),
           Expanded(
             child: Column(
@@ -44,7 +47,9 @@ class CallDetailsWidget extends StatelessWidget {
                     },
                   ),
                 ),
-                const SizedBox(height: 6),
+                const SizedBox(height: 10),
+                const Divider(height: 1),
+                const SizedBox(height: 10),
                 const Text('Input level'),
                 const SizedBox(height: 7),
                 RepaintBoundary(
@@ -67,47 +72,69 @@ class CallDetailsWidget extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 12),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
+                const Divider(height: 1),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 16,
+                  runSpacing: 10,
+                  crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
                     Selector<StatisticsController, int>(
                       selector: (context, c) => c.latency,
                       builder: (context, latency, child) {
                         Color color = getColor(latency / 200);
-                        return Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            SvgPicture.asset('assets/icons/Latency.svg',
-                                colorFilter:
-                                    ColorFilter.mode(color, BlendMode.srcIn),
-                                semanticsLabel: 'Latency icon'),
-                            const SizedBox(width: 7),
-                            Text('$latency ms',
-                                style: const TextStyle(height: 0)),
-                          ],
+                        return Tooltip(
+                          message: 'Round-trip latency',
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              SvgPicture.asset('assets/icons/Latency.svg',
+                                  colorFilter:
+                                      ColorFilter.mode(color, BlendMode.srcIn),
+                                  semanticsLabel: 'Latency icon'),
+                              const SizedBox(width: 7),
+                              Text('$latency ms',
+                                  style: const TextStyle(height: 0)),
+                            ],
+                          ),
                         );
                       },
                     ),
-                    const Spacer(),
-                    SvgPicture.asset('assets/icons/Upload.svg',
-                        semanticsLabel: 'Upload icon'),
-                    const SizedBox(width: 4),
-                    Selector<StatisticsController, String>(
-                      selector: (context, c) => c.upload,
-                      builder: (context, upload, child) {
-                        return Text(upload, style: const TextStyle(height: 0));
-                      },
+                    Tooltip(
+                      message: 'Upload bitrate',
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          SvgPicture.asset('assets/icons/Upload.svg',
+                              semanticsLabel: 'Upload icon'),
+                          const SizedBox(width: 4),
+                          Selector<StatisticsController, String>(
+                            selector: (context, c) => c.upload,
+                            builder: (context, upload, child) {
+                              return Text(upload,
+                                  style: const TextStyle(height: 0));
+                            },
+                          ),
+                        ],
+                      ),
                     ),
-                    const Spacer(),
-                    SvgPicture.asset('assets/icons/Download.svg',
-                        semanticsLabel: 'Download icon'),
-                    const SizedBox(width: 4),
-                    Selector<StatisticsController, String>(
-                      selector: (context, c) => c.download,
-                      builder: (context, download, child) {
-                        return Text(download,
-                            style: const TextStyle(height: 0));
-                      },
+                    Tooltip(
+                      message: 'Download bitrate',
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          SvgPicture.asset('assets/icons/Download.svg',
+                              semanticsLabel: 'Download icon'),
+                          const SizedBox(width: 4),
+                          Selector<StatisticsController, String>(
+                            selector: (context, c) => c.download,
+                            builder: (context, download, child) {
+                              return Text(download,
+                                  style: const TextStyle(height: 0));
+                            },
+                          ),
+                        ],
+                      ),
                     ),
                   ],
                 ),

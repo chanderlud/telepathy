@@ -144,6 +144,11 @@ class ProfilesController with ChangeNotifier {
     return room;
   }
 
+  void removeRoom(Room room) {
+    rooms.remove(room.id);
+    saveRooms();
+  }
+
   Future<void> saveRooms() async {
     // notify listeners right away because the rooms are already updated
     notifyListeners();

@@ -12,15 +12,15 @@ class HomePage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    const Widget contactsList = SortedContactsList();
+
     return Scaffold(
       body: Padding(
           padding: const EdgeInsets.all(20.0),
           child: SafeArea(
-              bottom: false,
+              bottom: true,
               child: LayoutBuilder(
                   builder: (BuildContext context, BoxConstraints constraints) {
-                const Widget contactsList = SortedContactsList();
-
                 if (constraints.maxWidth > 600) {
                   return Column(
                     children: [
@@ -31,8 +31,8 @@ class HomePage extends StatelessWidget {
                               constraints: const BoxConstraints(maxHeight: 275),
                               child: Row(
                                 mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
-                                  // Animated call-details / form area
                                   AnimatedSize(
                                     duration: const Duration(milliseconds: 250),
                                     curve: Curves.easeInOut,
@@ -53,12 +53,23 @@ class HomePage extends StatelessWidget {
                                           )
                                         : const SizedBox.shrink(),
                                   ),
-
-                                  // Contacts list always present, just expands when the left bit collapses
-                                  Flexible(
-                                    fit: FlexFit.loose,
+                                  Expanded(
                                     child: stateController.activeRoom != null
-                                        ? const RoomDetailsWidget()
+                                        ? Row(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.stretch,
+                                            children: [
+                                              Flexible(
+                                                flex: 5,
+                                                child: RoomDetailsWidget(),
+                                              ),
+                                              const SizedBox(width: 20),
+                                              const Expanded(
+                                                flex: 6,
+                                                child: contactsList,
+                                              ),
+                                            ],
+                                          )
                                         : contactsList,
                                   ),
                                 ],
@@ -100,23 +111,54 @@ class HomePage extends StatelessWidget {
                   );
                 } else {
                   return Column(children: [
-                    Container(
-                      constraints: const BoxConstraints(maxHeight: 250),
-                      child: contactsList,
+                    Consumer<StateController>(
+                      builder: (BuildContext context,
+                          StateController stateController, Widget? child) {
+                        return Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (stateController.activeRoom != null) ...[
+                              const SizedBox(
+                                height: 200,
+                                child: RoomDetailsWidget(),
+                              ),
+                              const SizedBox(height: 12),
+                            ],
+                            contactsList,
+                          ],
+                        );
+                      },
                     ),
                     const SizedBox(height: 20),
-                    HomeTabView(
+                    Consumer<StateController>(
+                      builder: (BuildContext context,
+                          StateController stateController, Widget? child) {
+                      final scheme = Theme.of(context).colorScheme;
+                      return HomeTabView(
+                        key: ValueKey(
+                            'home_tabs_${stateController.isCallActive}'),
                         widgetOne: const CallControls(),
                         widgetTwo: const Padding(
                             padding: EdgeInsets.only(
                                 left: 10, right: 10, top: 5, bottom: 10),
                             child: ChatWidget()),
-                        colorOne:
-                            Theme.of(context).colorScheme.tertiaryContainer,
-                        colorTwo:
-                            Theme.of(context).colorScheme.secondaryContainer,
+                        colorOne: scheme.tertiaryContainer,
+                        colorTwo: scheme.secondaryContainer,
                         iconOne: const Icon(Icons.call),
-                        iconTwo: const Icon(Icons.chat))
+                        iconTwo: const Icon(Icons.chat),
+                        widgetThree: stateController.isCallActive
+                            ? const Padding(
+                                padding: EdgeInsets.symmetric(
+                                    horizontal: 12, vertical: 8),
+                                child: CallDetailsWidget(),
+                              )
+                            : null,
+                        colorThree: scheme.secondaryContainer,
+                        iconThree: stateController.isCallActive
+                            ? const Icon(Icons.analytics_outlined)
+                            : null,
+                      );
+                    }),
                   ]);
                 }
               }))),
