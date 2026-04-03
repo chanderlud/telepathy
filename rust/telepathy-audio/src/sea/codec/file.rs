@@ -114,6 +114,8 @@ impl SeaFile {
         header: SeaFileHeader,
         encoder_settings: &EncoderSettings,
     ) -> Result<Self, SeaError> {
+        encoder_settings.validate()?;
+
         let encoder = if encoder_settings.vbr {
             let vbr_encoder = VbrEncoder::new(&header, &encoder_settings.clone());
             Some(ActiveEncoder::Vbr(vbr_encoder))
@@ -197,7 +199,7 @@ impl SeaFile {
             &self.scratch_residuals,
             output,
             &mut self.chunk_serializer.packer,
-        );
+        )?;
 
         if self.header.chunk_size == 0 {
             self.header.chunk_size = output.len() as u16;

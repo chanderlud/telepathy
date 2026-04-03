@@ -26,6 +26,27 @@ impl Default for EncoderSettings {
     }
 }
 
+impl EncoderSettings {
+    pub(crate) fn validate(&self) -> Result<(), SeaError> {
+        if !(1..=8).contains(&self.scale_factor_bits) {
+            return Err(SeaError::InvalidParameters);
+        }
+
+        if self.scale_factor_frames == 0 {
+            return Err(SeaError::InvalidParameters);
+        }
+
+        if !self
+            .frames_per_chunk
+            .is_multiple_of(self.scale_factor_frames as u16)
+        {
+            return Err(SeaError::InvalidParameters);
+        }
+
+        Ok(())
+    }
+}
+
 pub struct SeaEncoder {
     file: SeaFile,
     written_frames: u32,

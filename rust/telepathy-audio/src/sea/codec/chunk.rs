@@ -39,7 +39,9 @@ impl SeaChunk {
         residuals: &[u8],
         output: &mut Vec<u8>,
         packer: &mut BitPacker,
-    ) {
+    ) -> Result<(), SeaError> {
+        encoder_settings.validate()?;
+
         let is_vbr = !vbr_residual_sizes.is_empty();
         let chunk_type = if is_vbr {
             SeaChunkType::Vbr
@@ -50,6 +52,9 @@ impl SeaChunk {
             SeaResidualSize::from(libm::floorf(encoder_settings.residual_bits) as u8);
         let scale_factor_bits = encoder_settings.scale_factor_bits;
         let scale_factor_frames = encoder_settings.scale_factor_frames;
+        if file_header.frames_per_chunk != encoder_settings.frames_per_chunk {
+            return Err(SeaError::InvalidParameters);
+        }
 
         output.clear();
         output.extend_from_slice(&[
@@ -106,6 +111,8 @@ impl SeaChunk {
             }
         }
         output.extend_from_slice(packer.finish());
+
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]

@@ -147,9 +147,8 @@ impl VbrEncoder {
     }
 
     fn analyze(&mut self, input_slice: &[i16], residual_bits: &mut Vec<u8>) {
-        let analyze_residual_size = SeaResidualSize::from(Self::base_residual_bits(
-            self.vbr_target_bitrate,
-        ));
+        let analyze_residual_size =
+            SeaResidualSize::from(Self::base_residual_bits(self.vbr_target_bitrate));
 
         let slice_size = self.scale_factor_frames as usize * self.channels;
 

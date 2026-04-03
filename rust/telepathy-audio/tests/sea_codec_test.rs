@@ -262,3 +262,28 @@ fn invalid_frame_paths() {
     assert!(matches!(res_type, Err(SeaError::InvalidFrame)));
     assert!(matches!(res_sf, Err(SeaError::InvalidFrame)));
 }
+
+#[test]
+fn invalid_encoder_settings_are_rejected() {
+    let invalid_scale_factor_bits = EncoderSettings {
+        scale_factor_bits: 0,
+        ..EncoderSettings::default()
+    };
+    let invalid_scale_factor_frames = EncoderSettings {
+        scale_factor_frames: 0,
+        ..EncoderSettings::default()
+    };
+    let invalid_chunk_divisibility = EncoderSettings {
+        frames_per_chunk: 480,
+        scale_factor_frames: 21,
+        ..EncoderSettings::default()
+    };
+
+    let res_bits = SeaEncoder::new(1, SAMPLE_RATE, invalid_scale_factor_bits);
+    let res_frames = SeaEncoder::new(1, SAMPLE_RATE, invalid_scale_factor_frames);
+    let res_divisibility = SeaEncoder::new(1, SAMPLE_RATE, invalid_chunk_divisibility);
+
+    assert!(matches!(res_bits, Err(SeaError::InvalidParameters)));
+    assert!(matches!(res_frames, Err(SeaError::InvalidParameters)));
+    assert!(matches!(res_divisibility, Err(SeaError::InvalidParameters)));
+}

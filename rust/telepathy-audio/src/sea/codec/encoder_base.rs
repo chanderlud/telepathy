@@ -198,7 +198,9 @@ impl EncoderBase {
         current_residuals.resize(best_residual_bits.len(), 0);
 
         for channel_offset in 0..self.channels {
-            let (dqt, dqt_stride) = self.dequant_tab.get_dqt(residual_size[channel_offset] as usize);
+            let (dqt, dqt_stride) = self
+                .dequant_tab
+                .get_dqt(residual_size[channel_offset] as usize);
 
             let scalefactor_reciprocals = self
                 .dequant_tab
@@ -248,26 +250,29 @@ impl EncoderBase {
         current_residuals.resize(best_residual_bits.len(), 0);
 
         for channel_offset in 0..self.channels {
-            let (dqt, dqt_stride) = self.dequant_tab.get_dqt(residual_size[channel_offset] as usize);
+            let (dqt, dqt_stride) = self
+                .dequant_tab
+                .get_dqt(residual_size[channel_offset] as usize);
 
             let scalefactor_reciprocals = self
                 .dequant_tab
                 .get_scalefactor_reciprocals(residual_size[channel_offset] as usize);
 
-            let (best_rank, best_lms, best_scalefactor) = self.get_residuals_with_scalefactor_limit(
-                self.channels,
-                dqt,
-                dqt_stride,
-                scalefactor_reciprocals,
-                &samples[channel_offset..],
-                self.prev_scalefactor[channel_offset],
-                &self.lms[channel_offset],
-                residual_size[channel_offset],
-                2,
-                true,
-                &mut best_residual_bits,
-                &mut current_residuals,
-            );
+            let (best_rank, best_lms, best_scalefactor) = self
+                .get_residuals_with_scalefactor_limit(
+                    self.channels,
+                    dqt,
+                    dqt_stride,
+                    scalefactor_reciprocals,
+                    &samples[channel_offset..],
+                    self.prev_scalefactor[channel_offset],
+                    &self.lms[channel_offset],
+                    residual_size[channel_offset],
+                    2,
+                    true,
+                    &mut best_residual_bits,
+                    &mut current_residuals,
+                );
 
             self.prev_scalefactor[channel_offset] = best_scalefactor;
             self.lms[channel_offset] = best_lms;

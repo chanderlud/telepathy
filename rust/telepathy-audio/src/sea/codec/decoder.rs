@@ -53,9 +53,9 @@ impl Decoder {
                     let predicted = lms[channel_index].predict();
                     let quantized = *residual as usize;
                     let (flat_dqt, stride) = match vbr_residuals {
-                        Some(vbr_residuals) => {
-                            self.dequant_tab.get_dqt(vbr_residuals[channel_index] as usize)
-                        }
+                        Some(vbr_residuals) => self
+                            .dequant_tab
+                            .get_dqt(vbr_residuals[channel_index] as usize),
                         None => fixed_dqt.unwrap(),
                     };
                     let dequantized = flat_dqt[scale_factor as usize * stride + quantized];

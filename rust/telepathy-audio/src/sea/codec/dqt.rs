@@ -109,10 +109,10 @@ impl SeaDequantTab {
 
         let scale_factors = Self::calculate_scale_factors(residual_bits, scale_factor_bits);
 
-        for s in 0..scalefactor_items {
+        for factor in scale_factors.iter().take(scalefactor_items) {
             // zig zag pattern decreases quantization error
             for item in dqt.iter().take(dqt_items) {
-                let val = libm::roundf(scale_factors[s] as f32 * item) as i32;
+                let val = libm::roundf(*factor as f32 * item) as i32;
                 output.push(val);
                 output.push(-val);
             }
@@ -122,6 +122,9 @@ impl SeaDequantTab {
     }
 
     pub fn get_dqt(&self, residual_bits: usize) -> (&[i32], usize) {
-        (&self.cached_dqt[residual_bits], 1usize << residual_bits as u32)
+        (
+            &self.cached_dqt[residual_bits],
+            1usize << residual_bits as u32,
+        )
     }
 }
