@@ -3,7 +3,11 @@
 use bytes::BytesMut;
 use nnnoiseless::FRAME_SIZE;
 use telepathy_audio::sea::{
-    codec::{bits::{BitPacker, BitUnpacker}, common::SeaError, file::SeaFileHeader},
+    codec::{
+        bits::{BitPacker, BitUnpacker},
+        common::SeaError,
+        file::SeaFileHeader,
+    },
     decoder::SeaDecoder,
     encoder::{EncoderSettings, SeaEncoder},
 };
@@ -58,10 +62,17 @@ fn cbr_round_trip() {
     let mut encoded = BytesMut::new();
     encoder.encode_frame(frame, &mut encoded).unwrap();
 
-    let header = header_from_encoder(1, settings.frames_per_chunk, SAMPLE_RATE, encoder.chunk_size());
+    let header = header_from_encoder(
+        1,
+        settings.frames_per_chunk,
+        SAMPLE_RATE,
+        encoder.chunk_size(),
+    );
     let mut decoder = SeaDecoder::new(header).unwrap();
     let mut decoded = [0_i16; FRAME_SIZE];
-    decoder.decode_frame(encoded.as_ref(), &mut decoded).unwrap();
+    decoder
+        .decode_frame(encoded.as_ref(), &mut decoded)
+        .unwrap();
 
     assert!(max_abs_diff(&frame, &decoded) <= 500);
 }
@@ -78,10 +89,17 @@ fn vbr_round_trip() {
     let mut encoded = BytesMut::new();
     encoder.encode_frame(frame, &mut encoded).unwrap();
 
-    let header = header_from_encoder(1, settings.frames_per_chunk, SAMPLE_RATE, encoder.chunk_size());
+    let header = header_from_encoder(
+        1,
+        settings.frames_per_chunk,
+        SAMPLE_RATE,
+        encoder.chunk_size(),
+    );
     let mut decoder = SeaDecoder::new(header).unwrap();
     let mut decoded = [0_i16; FRAME_SIZE];
-    decoder.decode_frame(encoded.as_ref(), &mut decoded).unwrap();
+    decoder
+        .decode_frame(encoded.as_ref(), &mut decoded)
+        .unwrap();
 
     assert!(max_abs_diff(&frame, &decoded) <= 500);
 }
@@ -97,10 +115,17 @@ fn multi_channel_cbr_round_trip() {
     let mut encoded = BytesMut::new();
     encoder.encode_frame(frame, &mut encoded).unwrap();
 
-    let header = header_from_encoder(2, settings.frames_per_chunk, SAMPLE_RATE, encoder.chunk_size());
+    let header = header_from_encoder(
+        2,
+        settings.frames_per_chunk,
+        SAMPLE_RATE,
+        encoder.chunk_size(),
+    );
     let mut decoder = SeaDecoder::new(header).unwrap();
     let mut decoded = [0_i16; FRAME_SIZE];
-    decoder.decode_frame(encoded.as_ref(), &mut decoded).unwrap();
+    decoder
+        .decode_frame(encoded.as_ref(), &mut decoded)
+        .unwrap();
 
     assert!(max_abs_diff(&frame, &decoded) <= 500);
 }
@@ -113,10 +138,17 @@ fn silence_round_trip() {
     let mut encoded = BytesMut::new();
     encoder.encode_frame(frame, &mut encoded).unwrap();
 
-    let header = header_from_encoder(1, settings.frames_per_chunk, SAMPLE_RATE, encoder.chunk_size());
+    let header = header_from_encoder(
+        1,
+        settings.frames_per_chunk,
+        SAMPLE_RATE,
+        encoder.chunk_size(),
+    );
     let mut decoder = SeaDecoder::new(header).unwrap();
     let mut decoded = [1_i16; FRAME_SIZE];
-    decoder.decode_frame(encoded.as_ref(), &mut decoded).unwrap();
+    decoder
+        .decode_frame(encoded.as_ref(), &mut decoded)
+        .unwrap();
 
     assert!(decoded.iter().all(|&sample| (sample as i32).abs() <= 500));
 }
@@ -129,10 +161,17 @@ fn full_scale_round_trip() {
     let mut encoded = BytesMut::new();
     encoder.encode_frame(frame, &mut encoded).unwrap();
 
-    let header = header_from_encoder(1, settings.frames_per_chunk, SAMPLE_RATE, encoder.chunk_size());
+    let header = header_from_encoder(
+        1,
+        settings.frames_per_chunk,
+        SAMPLE_RATE,
+        encoder.chunk_size(),
+    );
     let mut decoder = SeaDecoder::new(header).unwrap();
     let mut decoded = [0_i16; FRAME_SIZE];
-    decoder.decode_frame(encoded.as_ref(), &mut decoded).unwrap();
+    decoder
+        .decode_frame(encoded.as_ref(), &mut decoded)
+        .unwrap();
 
     assert!(max_abs_diff(&frame, &decoded) <= 20_000);
 }
@@ -163,13 +202,20 @@ fn decoder_reuses_scratch_buffers_across_frames() {
     let mut encoded = BytesMut::new();
     encoder.encode_frame(frame, &mut encoded).unwrap();
 
-    let header = header_from_encoder(1, settings.frames_per_chunk, SAMPLE_RATE, encoder.chunk_size());
+    let header = header_from_encoder(
+        1,
+        settings.frames_per_chunk,
+        SAMPLE_RATE,
+        encoder.chunk_size(),
+    );
     let mut decoder = SeaDecoder::new(header).unwrap();
     let mut decoded = [0_i16; FRAME_SIZE];
 
     for _ in 0..100 {
         decoded.fill(0);
-        decoder.decode_frame(encoded.as_ref(), &mut decoded).unwrap();
+        decoder
+            .decode_frame(encoded.as_ref(), &mut decoded)
+            .unwrap();
         assert!(decoded.iter().any(|&sample| sample != 0));
     }
 }
@@ -177,7 +223,7 @@ fn decoder_reuses_scratch_buffers_across_frames() {
 #[test]
 fn bitpacker_bitunpacker_round_trip() {
     let values: [u8; 16] = [0, 1, 2, 7, 3, 4, 5, 6, 1, 0, 7, 2, 3, 5, 4, 6];
-    let mut packer = BitPacker::new();
+    let mut packer = BitPacker::default();
     packer.reset();
     for value in values {
         packer.push(value as u32, 3);

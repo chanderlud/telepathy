@@ -29,6 +29,7 @@ pub struct ChunkInfo {
 pub struct SeaChunk;
 
 impl SeaChunk {
+    #[allow(clippy::too_many_arguments)]
     pub fn serialize_into(
         file_header: &SeaFileHeader,
         lms: &[SeaLMS],
@@ -107,6 +108,7 @@ impl SeaChunk {
         output.extend_from_slice(packer.finish());
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn parse_into(
         encoded: &[u8],
         file_header: &SeaFileHeader,

@@ -91,6 +91,7 @@ impl BitUnpacker {
     }
 }
 
+#[derive(Default)]
 pub struct BitPacker {
     accum: u32,
     bits_stored: u32,
@@ -98,14 +99,6 @@ pub struct BitPacker {
 }
 
 impl BitPacker {
-    pub fn new() -> Self {
-        Self {
-            accum: 0,
-            bits_stored: 0,
-            output: Vec::new(),
-        }
-    }
-
     pub fn reset(&mut self) {
         self.accum = 0;
         self.bits_stored = 0;

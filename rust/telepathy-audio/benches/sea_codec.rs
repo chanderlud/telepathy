@@ -5,7 +5,10 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use nnnoiseless::FRAME_SIZE;
 use std::hint::black_box;
 use telepathy_audio::sea::{
-    codec::{bits::{BitPacker, BitUnpacker}, file::SeaFileHeader},
+    codec::{
+        bits::{BitPacker, BitUnpacker},
+        file::SeaFileHeader,
+    },
     decoder::SeaDecoder,
     encoder::{EncoderSettings, SeaEncoder},
 };
@@ -75,7 +78,12 @@ pub fn bench_sea_codec(c: &mut Criterion) {
         let mut encoder = SeaEncoder::new(1, SAMPLE_RATE, settings.clone()).unwrap();
         let mut encoded = BytesMut::new();
         encoder.encode_frame(cbr_frame, &mut encoded).unwrap();
-        let header = header_from_encoder(1, settings.frames_per_chunk, SAMPLE_RATE, encoder.chunk_size());
+        let header = header_from_encoder(
+            1,
+            settings.frames_per_chunk,
+            SAMPLE_RATE,
+            encoder.chunk_size(),
+        );
         let mut decoder = SeaDecoder::new(header).unwrap();
         let mut output = [0_i16; FRAME_SIZE];
 
@@ -95,7 +103,12 @@ pub fn bench_sea_codec(c: &mut Criterion) {
         let mut encoder = SeaEncoder::new(1, SAMPLE_RATE, settings.clone()).unwrap();
         let mut encoded = BytesMut::new();
         encoder.encode_frame(vbr_frame, &mut encoded).unwrap();
-        let header = header_from_encoder(1, settings.frames_per_chunk, SAMPLE_RATE, encoder.chunk_size());
+        let header = header_from_encoder(
+            1,
+            settings.frames_per_chunk,
+            SAMPLE_RATE,
+            encoder.chunk_size(),
+        );
         let mut decoder = SeaDecoder::new(header).unwrap();
         let mut output = [0_i16; FRAME_SIZE];
 
@@ -113,7 +126,12 @@ pub fn bench_sea_codec(c: &mut Criterion) {
         let mut encoded = BytesMut::new();
         encoder.encode_frame(cbr_frame, &mut encoded).unwrap();
 
-        let header = header_from_encoder(1, settings.frames_per_chunk, SAMPLE_RATE, encoder.chunk_size());
+        let header = header_from_encoder(
+            1,
+            settings.frames_per_chunk,
+            SAMPLE_RATE,
+            encoder.chunk_size(),
+        );
         let mut decoder = SeaDecoder::new(header).unwrap();
         let mut output = [0_i16; FRAME_SIZE];
 
@@ -130,7 +148,7 @@ pub fn bench_sea_codec(c: &mut Criterion) {
 
     group.bench_function("bench_bitpacker_roundtrip", |b| {
         let residuals: Vec<u8> = (0..FRAME_SIZE).map(|i| (i % 8) as u8).collect();
-        let mut packer = BitPacker::new();
+        let mut packer = BitPacker::default();
         let mut unpacker = BitUnpacker::new_const_bits(3);
 
         b.iter(|| {

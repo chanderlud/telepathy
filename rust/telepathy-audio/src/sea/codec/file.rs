@@ -87,7 +87,7 @@ pub(crate) struct ChunkSerializer {
 impl ChunkSerializer {
     fn new() -> Self {
         Self {
-            packer: BitPacker::new(),
+            packer: BitPacker::default(),
             unpacker: BitUnpacker::new_const_bits(1),
         }
     }
