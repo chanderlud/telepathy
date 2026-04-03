@@ -9,9 +9,9 @@ use log::{debug, error, info, warn};
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::{Arc, Mutex};
+use telepathy_audio::FRAME_SIZE;
 use telepathy_audio::internal::NETWORK_FRAME;
-use telepathy_audio::internal::buffer_pool::BufferPool;
-use telepathy_audio::{FRAME_SIZE, PooledBuffer, PooledBytes};
+use telepathy_audio::internal::buffer_pool::{BufferPool, PooledBuffer, PooledBytes};
 use tokio::select;
 #[cfg(not(target_family = "wasm"))]
 use tokio::time::{Instant, timeout};

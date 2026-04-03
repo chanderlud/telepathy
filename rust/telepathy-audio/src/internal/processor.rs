@@ -1,0 +1,323 @@
+//! Core audio processor functions.
+//!
+//! This module contains the main audio processing functions for input
+//! and output streams, including resampling, noise suppression, volume
+//! control, and silence detection.
+//!
+//! ## Threading Model
+//!
+//! Both [`input_processor`] and [`output_processor`] are designed to run in
+//! dedicated threads. They perform blocking operations on ring buffers/channels
+//! and should not be called from async contexts without spawning a blocking task.
+//!
+//! ## Channel Closure Behavior
+//!
+//! When the data source closes (`AudioDataSource::recv` returns
+//! `ClosedOrFailed::Closed`), both processors return `Ok(())` gracefully. This
+//! is the normal shutdown mechanism triggered when the audio handle is dropped.
+//!
+//! Callers typically spawn [`input_processor`] and [`output_processor`] in
+//! dedicated threads, since they perform blocking I/O on the source/sink.
+
+use crate::constants::MINIMUM_SILENCE_LENGTH;
+use crate::error::Error;
+use crate::internal::NETWORK_FRAME;
+use crate::internal::buffer_pool::BufferPool;
+use crate::internal::processing::*;
+use crate::internal::state::{InputProcessorState, OutputProcessorState};
+use crate::internal::traits::{AudioInput, AudioOutput};
+use crate::internal::utils::resampler_factory;
+use crate::io::traits::{AudioDataSink, AudioDataSource, ClosedOrFailed};
+use crate::sea::decoder::SeaDecoder;
+use crate::sea::encoder::SeaEncoder;
+use audioadapter_buffers::direct::InterleavedSlice;
+use log::{debug, warn};
+use nnnoiseless::{DenoiseState, FRAME_SIZE};
+use rubato::{FixedSync, Resampler};
+
+/// Processes audio input and sends it to the output channel.
+///
+/// This function handles the complete input processing pipeline:
+/// - Reading from the audio input source
+/// - Resampling from `input_rate` to `output_rate` (when they differ)
+/// - Applying input volume adjustment
+/// - Noise suppression (if enabled)
+/// - RMS calculation and threshold detection
+/// - Silence transition handling
+/// - Converting to i16 samples for network transmission
+///
+/// ## Threading
+///
+/// This function is designed to run in a dedicated thread. It performs blocking
+/// reads from the input source and blocking sends to the output channel. The
+/// function returns when the input source signals end-of-stream (read returns 0).
+///
+/// ## Channel Communication
+///
+/// - Sends `PooledBuffer` (encoded or raw i16 bytes) to the `AudioDataSink`
+/// - Sink closure causes function to return `Ok(())`
+///
+/// # Arguments
+///
+/// * `input` - The audio input source implementing `AudioInput`
+/// * `sink` - Destination for processed audio frames, implementing
+///   `AudioDataSink`. Receives a `PooledBuffer` per frame.
+/// * `input_rate` - Sample rate of the audio input device in Hz.
+/// * `output_rate` - Target network/output sample rate in Hz. The processor
+///   resamples from `input_rate` to `output_rate` when they differ.
+/// * `denoiser` - Optional noise suppression state (requires 48kHz input)
+/// * `state` - Shared state for volume, mute, and statistics
+/// * `encoder_option` - Optional SEA encoder; encodes into the `PooledBuffer`
+///   before sending when present.
+///
+/// # Returns
+///
+/// Returns `Ok(())` when the input stream ends or channel closes, or an error
+/// if processing fails.
+pub fn input_processor<I: AudioInput>(
+    mut input: I,
+    sink: impl AudioDataSink,
+    input_rate: usize,
+    output_rate: usize,
+    mut denoiser: Option<Box<DenoiseState>>,
+    state: InputProcessorState,
+    mut encoder_option: Option<SeaEncoder>,
+) -> Result<(), Error> {
+    // the maximum value for i16 as f32
+    let max_i16_f32 = i16::MAX as f32;
+
+    // the output for rnnoise
+    let mut out_buf = [0_f32; FRAME_SIZE];
+    // output for 16 bit samples
+    let mut int_buffer = [0; FRAME_SIZE];
+
+    // resampler is Some if resampling is needed
+    let mut resampler =
+        resampler_factory(input_rate, output_rate, 1, FRAME_SIZE, FixedSync::Output)?;
+    // the maximum number of samples per input
+    let input_buffer_size = resampler
+        .as_ref()
+        .map(|r| r.input_frames_max())
+        .unwrap_or(FRAME_SIZE);
+
+    // the input for the resampler
+    let mut pre_buf = vec![0_f32; input_buffer_size];
+    // the output for the resampler
+    let mut post_buf = vec![0_f32; FRAME_SIZE];
+
+    // the position in pre_buf
+    let mut position = 0;
+    // a counter for short silence detection
+    let mut silence_length = 0_u16;
+
+    loop {
+        let in_len = resampler
+            .as_ref()
+            .map(|r| r.input_frames_next())
+            .unwrap_or(FRAME_SIZE);
+        let read = input.read_into(&mut pre_buf[position..in_len])?;
+        if read == 0 {
+            debug!("Resampler loop ended (EOF)");
+            break;
+        }
+        position += read;
+
+        if state.is_muted() {
+            position = 0;
+            silence_length = 0;
+            continue;
+        } else if position < in_len {
+            continue;
+        } else {
+            position = 0;
+        }
+
+        let (target_buffer, len) = if let Some(resampler) = &mut resampler {
+            // resample the data
+            let input_adapter = InterleavedSlice::new(&pre_buf, 1, in_len)?;
+            let mut output_adapter = InterleavedSlice::new_mut(&mut post_buf, 1, FRAME_SIZE)?;
+            let processed =
+                resampler.process_into_buffer(&input_adapter, &mut output_adapter, None)?;
+            (&mut post_buf, processed.1)
+        } else {
+            (&mut pre_buf, FRAME_SIZE)
+        };
+
+        // TODO may no longer be needed
+        // the first frame may be smaller than frame_size
+        if len != FRAME_SIZE {
+            warn!("base_resampler: len != frame_size: {}", len);
+            continue;
+        }
+
+        // apply the input volume & scale the samples to -32768.0 to 32767.0
+        wide_float_scaler(
+            &mut target_buffer[..len],
+            max_i16_f32 * state.input_volume(),
+        );
+
+        if let Some(ref mut denoiser) = denoiser {
+            // denoise the frame
+            denoiser.process_frame(&mut out_buf, &target_buffer[..len]);
+        } else {
+            out_buf = target_buffer[..len].try_into()?;
+        };
+
+        // calculate the rms
+        let rms = calculate_rms(&out_buf);
+        // send the rms to the statistics collector
+        state.send_rms(rms);
+
+        // check if the frame is below the rms threshold
+        if rms < state.rms_threshold() {
+            if silence_length < MINIMUM_SILENCE_LENGTH {
+                silence_length += 1; // short silences are ignored
+            } else {
+                continue; // long ones are dropped
+            }
+        } else {
+            silence_length = 0;
+        }
+
+        // use SIMD-accelerated f32 to i16 conversion
+        wide_f32_to_i16(&out_buf, &mut int_buffer);
+
+        // acquire a buffer from the pool
+        let mut pooled = BufferPool::acquire(state.buffer_pool());
+        if let Some(encoder) = &mut encoder_option {
+            // encode frame into the pooled buffer
+            encoder.encode_frame(int_buffer, pooled.inner_mut())?;
+        } else {
+            // copy frame data into the pooled buffer
+            pooled.inner_mut().copy_from_slice(unsafe {
+                std::slice::from_raw_parts(int_buffer.as_ptr() as *const u8, NETWORK_FRAME)
+            });
+        }
+
+        // send buffer to network
+        match sink.send(pooled) {
+            Ok(()) => (),
+            Err(ClosedOrFailed::Closed) => break,
+            // propagate failures
+            Err(ClosedOrFailed::Failed(error)) => Err(error)?,
+        }
+    }
+
+    debug!("Input processor ended");
+    Ok(())
+}
+
+/// Processes audio output from the network and sends it to the output device.
+///
+/// This function handles the complete output processing pipeline:
+/// - Receiving audio frames from the network
+/// - Converting from i16 to f32 samples
+/// - Applying output volume adjustment
+/// - RMS calculation for statistics
+/// - Resampling to the output device sample rate
+/// - Handling deafen state and buffer overflow
+///
+/// ## Threading
+///
+/// This function is designed to run in a dedicated thread. It performs blocking
+/// receives from the input channel and writes to the output sink. The function
+/// returns when the input channel closes (sender dropped).
+///
+/// ## Channel Communication
+///
+/// - Receives `Bytes` from the `AudioDataSource` (blocking `recv`)
+/// - Drops frames when output is full (tracks loss via state)
+/// - Ignores frames when deafened
+///
+/// # Arguments
+///
+/// * `source` - Source of audio frames implementing `AudioDataSource`. Each
+///   frame is `Bytes` containing i16 samples (raw or encoded).
+/// * `output` - The audio output destination implementing `AudioOutput`.
+/// * `input_rate` - Network/source sample rate in Hz.
+/// * `output_rate` - Sample rate of the audio output device in Hz. The
+///   processor resamples from `input_rate` to `output_rate` when they differ.
+/// * `state` - Shared state for volume, deafen, and statistics
+/// * `decoder_option` - Optional `SeaDecoder` for decoding received frames
+///   before playback. When `None`, frames are treated as raw i16 samples.
+///
+/// # Returns
+///
+/// Returns `Ok(())` when the input channel closes, or an error if processing fails.
+pub fn output_processor<O: AudioOutput>(
+    source: impl AudioDataSource,
+    mut output: O,
+    input_rate: usize,
+    output_rate: usize,
+    state: OutputProcessorState,
+    mut decoder_option: Option<SeaDecoder>,
+) -> Result<(), Error> {
+    // base scale to convert i16 to f32
+    let scale = 1_f32 / i16::MAX as f32;
+
+    // resampler is Some if resampling is needed
+    let mut resampler_option =
+        resampler_factory(input_rate, output_rate, 1, FRAME_SIZE, FixedSync::Input)?;
+    // the maximum number of samples per output
+    let output_buffer_size = resampler_option
+        .as_ref()
+        .map(|r| r.output_frames_max())
+        .unwrap_or(FRAME_SIZE);
+
+    // The output of the decoder
+    let mut decoded_buf = [0_i16; FRAME_SIZE];
+    // The input for the resampler
+    let mut pre_buf = [0_f32; FRAME_SIZE];
+    // The output for the resampler
+    let mut post_buf = vec![0_f32; output_buffer_size];
+
+    loop {
+        let buffer = match source.recv() {
+            Ok(b) => b,
+            Err(ClosedOrFailed::Closed) => break,
+            Err(ClosedOrFailed::Failed(error)) => Err(error)?,
+        };
+
+        let int_samples = if state.is_deafened() {
+            continue;
+        } else if output.is_full() {
+            state.send_loss(FRAME_SIZE);
+            continue; // ignore frames while output is full
+        } else if let Some(decoder) = &mut decoder_option {
+            decoder.decode_frame(&buffer, &mut decoded_buf)?;
+            &decoded_buf
+        } else if buffer.len() != NETWORK_FRAME {
+            warn!("output frame != FRAME_SIZE: {}", buffer.len());
+            continue;
+        } else {
+            unsafe { std::slice::from_raw_parts(buffer.as_ptr() as *const i16, FRAME_SIZE) }
+        };
+
+        // convert the i16 samples to f32 & apply the output volume
+        wide_i16_to_f32(int_samples, &mut pre_buf, scale * state.output_volume());
+        // send the rms to the statistics collector
+        state.send_rms(calculate_rms(&pre_buf));
+        // get finalized samples
+        let float_samples = if let Some(resampler) = &mut resampler_option {
+            // resample the data
+            let input_adapter = InterleavedSlice::new(&pre_buf, 1, FRAME_SIZE)?;
+            let mut output_adapter =
+                InterleavedSlice::new_mut(&mut post_buf, 1, output_buffer_size)?;
+            let processed =
+                resampler.process_into_buffer(&input_adapter, &mut output_adapter, None)?;
+            // send the resampled data to the output stream
+            &post_buf[..processed.1]
+        } else {
+            // if no resampling is needed, send the data to the output stream
+            &pre_buf
+        };
+
+        let lost = output.write_samples(float_samples)?;
+        if lost > 0 {
+            state.send_loss(lost);
+        }
+    }
+
+    debug!("Output processor ended");
+    Ok(())
+}

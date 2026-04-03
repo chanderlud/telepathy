@@ -1,7 +1,7 @@
-//! Flutter wrapper for the telepathy_audio player.
+//! Flutter wrapper for the telepathy-audio player.
 //!
 //! This module provides Flutter-specific bindings for the audio player,
-//! wrapping the framework-agnostic `telepathy_audio::AudioPlayer` with
+//! wrapping the framework-agnostic `telepathy-audio::AudioPlayer` with
 //! Flutter Rust Bridge attributes for Dart interop.
 
 use crate::error::DartError;
@@ -9,7 +9,8 @@ use flutter_rust_bridge::frb;
 #[cfg(not(target_family = "wasm"))]
 use std::path::Path;
 use std::sync::Arc;
-use telepathy_audio::{AudioPlayer, Host, SoundHandle, wav_to_sea};
+use telepathy_audio::Host;
+use telepathy_audio::player::{AudioPlayer, SoundHandle, wav_to_sea};
 #[cfg(not(target_family = "wasm"))]
 use tokio::fs::File;
 #[cfg(not(target_family = "wasm"))]
@@ -19,7 +20,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 ///
 /// This struct provides Flutter Rust Bridge attributes for seamless
 /// Dart integration while delegating all audio functionality to
-/// the `telepathy_audio` library.
+/// the `telepathy-audio` library.
 #[frb(opaque)]
 pub struct SoundPlayer(AudioPlayer);
 

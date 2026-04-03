@@ -34,7 +34,7 @@
 - Flutter to Rust (and back) is enabled by [Flutter Rust Bridge](https://pub.dev/packages/flutter_rust_bridge)
 - This design enables the same codebase to target desktop, mobile, and web
 
-![a diagram explaining the high level structure of the telepathy app](assets/diagrams/telepathy-design.svg)
+![a diagram explaining the high level structure of the telepathy app](https://chanchan.dev/vectors/diagrams/telepathy-design.svg)
 
 ### Audio Processing Stack
 - Denoising runs on the sending side; each participant in a call decides if they want to use their compute resources to denoise their audio input
@@ -44,8 +44,11 @@
 - In a classic two-way call, each client runs a sending stack and a receiving stack
 - In a Telepathy room, certain parts of each stack are duplicated to support more participants
 
-![a diagram describing the telepathy audio processing stack](assets/diagrams/audio-processing-stack.svg)
+![a diagram describing the telepathy audio processing stack](https://chanchan.dev/vectors/diagrams/audio-processing-stack.svg)
 
 ## UI Screenshots
-![screenshot of telepathy main user interface](https://chanchan.dev/static/images/telepathy.png)
-![screenshot of telepathy settings user interface](https://chanchan.dev/static/images/telepathy-settings.png)
+![screenshot of telepathy main user interface](https://chanchan.dev/cdn-cgi/image/width=828,fit=scale-down,format=auto/images/projects/telepathy/cover.png)
+![screenshot of telepathy settings user interface](https://chanchan.dev/cdn-cgi/image/width=828,fit=scale-down,format=auto/images/projects/telepathy/settings.png)
+
+## Learn More
+[chanchan.dev](https://chanchan.dev/work/telepathy)

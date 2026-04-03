@@ -1,8 +1,8 @@
 [workspace]
 members = [
-    "relay_server",
+    "relay-server",
     "telepathy",
-    "telepathy_audio"
+    "telepathy-audio"
 ]
 resolver = "2"
 
