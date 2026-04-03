@@ -184,3 +184,105 @@ impl AudioOutput for RingBufferOutput {
         }
     }
 }
+
+#[cfg(all(test, not(target_family = "wasm")))]
+mod tests {
+    use super::*;
+    use rtrb::RingBuffer;
+    use std::sync::Arc;
+    use std::thread;
+
+    #[test]
+    fn ring_buffer_output_not_full_when_empty() {
+        let (producer, _consumer) = RingBuffer::<f32>::new(480);
+        let output = RingBufferOutput::new(producer);
+        assert!(!output.is_full());
+    }
+
+    #[test]
+    fn ring_buffer_output_is_full_when_saturated() {
+        let (producer, _consumer) = RingBuffer::<f32>::new(480);
+        let mut output = RingBufferOutput::new(producer);
+        let samples = vec![1.0; 480];
+        output.write_samples(&samples).unwrap();
+        assert!(output.is_full());
+    }
+
+    #[test]
+    fn ring_buffer_output_write_samples_returns_zero_loss_on_space() {
+        let (producer, _consumer) = RingBuffer::<f32>::new(480);
+        let mut output = RingBufferOutput::new(producer);
+        let samples = vec![0.25; 480];
+
+        let loss = output.write_samples(&samples).unwrap();
+        assert_eq!(loss, 0);
+    }
+
+    #[test]
+    fn ring_buffer_output_write_samples_drops_when_full() {
+        let (producer, _consumer) = RingBuffer::<f32>::new(480);
+        let mut output = RingBufferOutput::new(producer);
+        let samples = vec![0.5; 480];
+        output.write_samples(&samples).unwrap();
+
+        let loss = output.write_samples(&samples).unwrap();
+        assert_eq!(loss, samples.len());
+    }
+
+    #[test]
+    fn ring_buffer_output_partial_write_when_partially_full() {
+        let capacity = 10;
+        let (producer, _consumer) = RingBuffer::<f32>::new(capacity);
+        let mut output = RingBufferOutput::new(producer);
+        output.write_samples(&vec![0.1; 5]).unwrap();
+
+        let samples = vec![0.2; 8];
+        let loss = output.write_samples(&samples).unwrap();
+        assert_eq!(loss, 3);
+    }
+
+    #[test]
+    fn ring_buffer_output_written_samples_readable_by_consumer() {
+        let (producer, mut consumer) = RingBuffer::<f32>::new(8);
+        let mut output = RingBufferOutput::new(producer);
+        let samples = [0.1, 0.2, 0.3, 0.4];
+        output.write_samples(&samples).unwrap();
+
+        let chunk = consumer.read_chunk(samples.len()).unwrap();
+        let actual: Vec<f32> = chunk.into_iter().collect();
+        assert_eq!(actual, samples);
+    }
+
+    #[test]
+    fn ring_buffer_input_reads_available_samples() {
+        let (mut producer, consumer) = RingBuffer::<f32>::new(480);
+        let notify = Arc::new(Condvar::new());
+        let mut input = RingBufferInput::new(consumer, notify.clone());
+        let expected: Vec<f32> = (0..480).map(|i| i as f32).collect();
+        let chunk = producer.write_chunk_uninit(expected.len()).unwrap();
+        chunk.fill_from_iter(expected.iter().copied());
+        notify.notify_one();
+
+        let handle = thread::spawn(move || {
+            let mut dst = vec![0.0; 480];
+            let read = input.read_into(&mut dst).unwrap();
+            (read, dst)
+        });
+
+        let (read, actual) = handle.join().unwrap();
+        assert_eq!(read, 480);
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn ring_buffer_input_returns_zero_on_abandoned() {
+        let (producer, consumer) = RingBuffer::<f32>::new(480);
+        let notify = Arc::new(Condvar::new());
+        let mut input = RingBufferInput::new(consumer, notify);
+        drop(producer);
+
+        let mut dst = vec![0.0; 480];
+        let read = input.read_into(&mut dst).unwrap();
+        assert_eq!(read, 0);
+    }
+}

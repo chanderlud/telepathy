@@ -164,3 +164,201 @@ impl Default for OutputProcessorState {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::internal::buffer_pool::DEFAULT_POOL_CAPACITY;
+
+    fn approx_eq(a: f32, b: f32) {
+        assert!((a - b).abs() <= f32::EPSILON * 4.0);
+    }
+
+    #[test]
+    fn input_state_default_volume_is_one() {
+        let state = InputProcessorState::default();
+        approx_eq(state.input_volume(), 1.0);
+    }
+
+    #[test]
+    fn input_state_default_not_muted() {
+        let state = InputProcessorState::default();
+        assert!(!state.is_muted());
+    }
+
+    #[test]
+    fn input_state_default_rms_threshold_is_one() {
+        let state = InputProcessorState::default();
+        approx_eq(state.rms_threshold(), 1.0);
+    }
+
+    #[test]
+    fn input_state_volume_reflects_atomic() {
+        let input_volume = Arc::new(AtomicF32::new(1.0));
+        let rms_threshold = Arc::new(AtomicF32::new(1.0));
+        let muted = Arc::new(AtomicBool::new(false));
+        let rms_sender = Arc::new(AtomicF32::new(0.0));
+        let state = InputProcessorState::new(
+            &input_volume,
+            &rms_threshold,
+            &muted,
+            rms_sender,
+            DEFAULT_POOL_CAPACITY,
+        );
+
+        input_volume.store(0.42, Relaxed);
+        approx_eq(state.input_volume(), 0.42);
+    }
+
+    #[test]
+    fn input_state_mute_reflects_atomic() {
+        let input_volume = Arc::new(AtomicF32::new(1.0));
+        let rms_threshold = Arc::new(AtomicF32::new(1.0));
+        let muted = Arc::new(AtomicBool::new(false));
+        let rms_sender = Arc::new(AtomicF32::new(0.0));
+        let state = InputProcessorState::new(
+            &input_volume,
+            &rms_threshold,
+            &muted,
+            rms_sender,
+            DEFAULT_POOL_CAPACITY,
+        );
+
+        muted.store(true, Relaxed);
+        assert!(state.is_muted());
+    }
+
+    #[test]
+    fn input_state_rms_threshold_reflects_atomic() {
+        let input_volume = Arc::new(AtomicF32::new(1.0));
+        let rms_threshold = Arc::new(AtomicF32::new(1.0));
+        let muted = Arc::new(AtomicBool::new(false));
+        let rms_sender = Arc::new(AtomicF32::new(0.0));
+        let state = InputProcessorState::new(
+            &input_volume,
+            &rms_threshold,
+            &muted,
+            rms_sender,
+            DEFAULT_POOL_CAPACITY,
+        );
+
+        rms_threshold.store(0.27, Relaxed);
+        approx_eq(state.rms_threshold(), 0.27);
+    }
+
+    #[test]
+    fn input_state_send_rms_uses_max() {
+        let input_volume = Arc::new(AtomicF32::new(1.0));
+        let rms_threshold = Arc::new(AtomicF32::new(1.0));
+        let muted = Arc::new(AtomicBool::new(false));
+        let rms_sender = Arc::new(AtomicF32::new(0.0));
+        let state = InputProcessorState::new(
+            &input_volume,
+            &rms_threshold,
+            &muted,
+            rms_sender.clone(),
+            DEFAULT_POOL_CAPACITY,
+        );
+
+        state.send_rms(0.3);
+        state.send_rms(0.1);
+
+        approx_eq(rms_sender.load(Relaxed), 0.3);
+    }
+
+    #[test]
+    fn input_state_send_rms_updates_upward() {
+        let input_volume = Arc::new(AtomicF32::new(1.0));
+        let rms_threshold = Arc::new(AtomicF32::new(1.0));
+        let muted = Arc::new(AtomicBool::new(false));
+        let rms_sender = Arc::new(AtomicF32::new(0.0));
+        let state = InputProcessorState::new(
+            &input_volume,
+            &rms_threshold,
+            &muted,
+            rms_sender.clone(),
+            DEFAULT_POOL_CAPACITY,
+        );
+
+        state.send_rms(0.1);
+        state.send_rms(0.9);
+
+        approx_eq(rms_sender.load(Relaxed), 0.9);
+    }
+
+    #[test]
+    fn output_state_default_volume_is_one() {
+        let state = OutputProcessorState::default();
+        approx_eq(state.output_volume(), 1.0);
+    }
+
+    #[test]
+    fn output_state_default_not_deafened() {
+        let state = OutputProcessorState::default();
+        assert!(!state.is_deafened());
+    }
+
+    #[test]
+    fn output_state_volume_reflects_atomic() {
+        let output_volume = Arc::new(AtomicF32::new(1.0));
+        let rms_sender = Arc::new(AtomicF32::new(0.0));
+        let deafened = Arc::new(AtomicBool::new(false));
+        let loss_sender = Arc::new(AtomicUsize::new(0));
+        let state =
+            OutputProcessorState::new(&output_volume, rms_sender, &deafened, loss_sender);
+
+        output_volume.store(0.63, Relaxed);
+        approx_eq(state.output_volume(), 0.63);
+    }
+
+    #[test]
+    fn output_state_deafen_reflects_atomic() {
+        let output_volume = Arc::new(AtomicF32::new(1.0));
+        let rms_sender = Arc::new(AtomicF32::new(0.0));
+        let deafened = Arc::new(AtomicBool::new(false));
+        let loss_sender = Arc::new(AtomicUsize::new(0));
+        let state =
+            OutputProcessorState::new(&output_volume, rms_sender, &deafened, loss_sender);
+
+        deafened.store(true, Relaxed);
+        assert!(state.is_deafened());
+    }
+
+    #[test]
+    fn output_state_send_rms_uses_max() {
+        let output_volume = Arc::new(AtomicF32::new(1.0));
+        let rms_sender = Arc::new(AtomicF32::new(0.0));
+        let deafened = Arc::new(AtomicBool::new(false));
+        let loss_sender = Arc::new(AtomicUsize::new(0));
+        let state = OutputProcessorState::new(
+            &output_volume,
+            rms_sender.clone(),
+            &deafened,
+            loss_sender,
+        );
+
+        state.send_rms(0.4);
+        state.send_rms(0.2);
+
+        approx_eq(rms_sender.load(Relaxed), 0.4);
+    }
+
+    #[test]
+    fn output_state_send_loss_accumulates() {
+        let output_volume = Arc::new(AtomicF32::new(1.0));
+        let rms_sender = Arc::new(AtomicF32::new(0.0));
+        let deafened = Arc::new(AtomicBool::new(false));
+        let loss_sender = Arc::new(AtomicUsize::new(0));
+        let state = OutputProcessorState::new(
+            &output_volume,
+            rms_sender,
+            &deafened,
+            loss_sender.clone(),
+        );
+
+        state.send_loss(3);
+        state.send_loss(3);
+
+        assert_eq!(loss_sender.load(Relaxed), 6);
+    }
+}
