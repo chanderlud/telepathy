@@ -113,10 +113,8 @@ impl VbrEncoder {
 
         let base_residual_bits = vbr_target_bitrate as u8;
 
-        residual_sizes.resize(errors.len(), base_residual_bits);
-        for item in residual_sizes.iter_mut() {
-            *item = base_residual_bits;
-        }
+        residual_sizes.resize(errors.len(), 0);
+        residual_sizes.fill(base_residual_bits);
 
         for index in scratch_indices.iter().take(minus_one_items) {
             residual_sizes[*index as usize] = base_residual_bits - 1;
@@ -138,7 +136,7 @@ impl VbrEncoder {
     }
 
     fn analyze(&mut self, input_slice: &[i16], residual_bits: &mut Vec<u8>) {
-        let analyze_residual_size = SeaResidualSize::from(self.vbr_target_bitrate as u8 + 1);
+        let analyze_residual_size = SeaResidualSize::from(self.vbr_target_bitrate as u8);
 
         let slice_size = self.scale_factor_frames as usize * self.channels;
 
@@ -147,9 +145,7 @@ impl VbrEncoder {
 
         self.scratch_residual_sizes
             .resize(self.channels, analyze_residual_size);
-        for item in self.scratch_residual_sizes.iter_mut() {
-            *item = analyze_residual_size;
-        }
+        self.scratch_residual_sizes.fill(analyze_residual_size);
 
         self.scratch_analyze_scale_factors.resize(slice_size, 0);
         self.scratch_analyze_residuals.resize(slice_size, 0);
@@ -160,7 +156,7 @@ impl VbrEncoder {
         self.scratch_errors.resize(errors_len, 0);
 
         for (slice_index, input_slice_chunk) in input_slice.chunks(slice_size).enumerate() {
-            self.base_encoder.get_residuals_for_chunk(
+            self.base_encoder.get_residuals_for_chunk_fast(
                 input_slice_chunk,
                 &self.scratch_residual_sizes,
                 &mut self.scratch_analyze_scale_factors,
