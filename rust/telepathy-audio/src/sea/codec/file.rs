@@ -241,7 +241,7 @@ impl SeaFile {
         let decoder = self.decoder.as_mut().unwrap();
 
         let expected_len = self.header.frames_per_chunk as usize * self.header.channels as usize;
-        if output.len() < expected_len {
+        if output.len() != expected_len {
             return Err(SeaError::InvalidFrame);
         }
 
