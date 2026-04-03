@@ -129,3 +129,52 @@ impl SeaDequantTab {
         &self.cached_dqt[residual_bits]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::SeaDequantTab;
+    use crate::sea::codec::{common::SeaResidualSize, encoder_base::sea_div, qt::SeaQuantTab};
+
+    fn all_residual_sizes() -> [SeaResidualSize; 8] {
+        [
+            SeaResidualSize::One,
+            SeaResidualSize::Two,
+            SeaResidualSize::Three,
+            SeaResidualSize::Four,
+            SeaResidualSize::Five,
+            SeaResidualSize::Six,
+            SeaResidualSize::Seven,
+            SeaResidualSize::Eight,
+        ]
+    }
+
+    #[test]
+    fn quantize_then_dequantize_round_trip_over_scalefactors() {
+        let quant = SeaQuantTab::init();
+        let dequant = SeaDequantTab::init(4);
+        let scale_factor_indices = [0usize, 5, 15];
+
+        for residual_size in all_residual_sizes() {
+            let bits = residual_size as usize;
+            let clamp_limit = residual_size.to_binary_combinations() as i32;
+            let quant_offset = quant.offsets[bits] as i32 + clamp_limit;
+
+            for scale_factor in scale_factor_indices {
+                let reciprocal = dequant.get_scalefactor_reciprocals(bits)[scale_factor] as i64;
+                let dqt_row = &dequant.get_dqt(bits)[scale_factor];
+
+                for expected in dqt_row {
+                    let scaled = sea_div(*expected, reciprocal);
+                    let clamped = scaled.clamp(-clamp_limit, clamp_limit);
+                    let quantized = quant.quant_tab[(quant_offset + clamped) as usize] as usize;
+                    let reconstructed = dqt_row[quantized];
+
+                    assert_eq!(
+                        reconstructed, *expected,
+                        "round-trip mismatch: bits={bits}, sf={scale_factor}, expected={expected}, quantized={quantized}"
+                    );
+                }
+            }
+        }
+    }
+}

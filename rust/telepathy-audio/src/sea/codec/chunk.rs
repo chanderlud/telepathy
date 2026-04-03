@@ -307,3 +307,88 @@ impl SeaChunk {
         output
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::SeaChunk;
+    use crate::sea::{
+        codec::{
+            common::{SeaError, SeaResidualSize},
+            decoder::Decoder,
+            file::{SeaFile, SeaFileHeader},
+        },
+        encoder::EncoderSettings,
+    };
+
+    fn synthetic_frame() -> [i16; 480] {
+        let mut frame = [0i16; 480];
+        for (i, sample) in frame.iter_mut().enumerate() {
+            let a = ((i as i32 * 97) % 2000) - 1000;
+            let b = ((i as i32 * 31) % 400) - 200;
+            *sample = (a * 12 + b * 6) as i16;
+        }
+        frame
+    }
+
+    fn mean_abs_error(a: &[i16], b: &[i16]) -> u64 {
+        a.iter()
+            .zip(b.iter())
+            .map(|(x, y)| (*x as i32 - *y as i32).unsigned_abs() as u64)
+            .sum::<u64>()
+            / a.len() as u64
+    }
+
+    #[test]
+    fn cbr_chunk_encode_decode_within_error_bounds() {
+        let header = SeaFileHeader {
+            version: 1,
+            channels: 1,
+            chunk_size: 0,
+            frames_per_chunk: 480,
+            sample_rate: 16_000,
+        };
+        let settings = EncoderSettings::default();
+        let input = synthetic_frame();
+
+        let mut file = SeaFile::new(header, &settings).unwrap();
+        let encoded = file.make_chunk(&input).unwrap();
+
+        let chunk = SeaChunk::from_slice(&encoded, &file.header).unwrap();
+        let decoder = Decoder::init(1, chunk.scale_factor_bits as usize);
+        let decoded = decoder.decode_cbr(&chunk);
+
+        let mae = mean_abs_error(&input, &decoded);
+        assert!(mae <= 2500, "mae too high: {mae}");
+    }
+
+    #[test]
+    fn from_slice_rejects_malformed_chunk_headers() {
+        let header = SeaFileHeader {
+            version: 1,
+            channels: 1,
+            chunk_size: 128,
+            frames_per_chunk: 480,
+            sample_rate: 16_000,
+        };
+
+        let invalid_type = [0xFF, 0x31, 20, 0x5A];
+        assert!(matches!(
+            SeaChunk::from_slice(&invalid_type, &header),
+            Err(SeaError::InvalidFrame)
+        ));
+
+        let invalid_scalefactor_bits = [0x01, 0x01, 20, 0x5A];
+        assert!(matches!(
+            SeaChunk::from_slice(&invalid_scalefactor_bits, &header),
+            Err(SeaError::InvalidFrame)
+        ));
+    }
+
+    #[test]
+    fn residual_size_try_from_u8_boundaries() {
+        assert_eq!(SeaResidualSize::try_from_u8(0), None);
+        assert_eq!(SeaResidualSize::try_from_u8(1), Some(SeaResidualSize::One));
+        assert_eq!(SeaResidualSize::try_from_u8(8), Some(SeaResidualSize::Eight));
+        assert_eq!(SeaResidualSize::try_from_u8(9), None);
+    }
+}

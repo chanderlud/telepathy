@@ -93,3 +93,46 @@ impl SeaLMS {
         SeaLMS { history, weights }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::SeaLMS;
+
+    #[test]
+    fn predict_update_round_trip_tracks_signal() {
+        let mut lms = SeaLMS::init_vec(1).pop().unwrap();
+        let samples = [1200i16, -300, 900, -1100, 700, -50, 400, -800];
+
+        for sample in samples {
+            let predicted = lms.predict();
+            let residual = sample as i32 - predicted;
+            let reconstructed = predicted + residual;
+            assert_eq!(reconstructed, sample as i32);
+
+            lms.update(sample, residual);
+            assert_eq!(lms.history[super::LMS_LEN - 1], sample as i32);
+        }
+    }
+
+    #[test]
+    fn weights_converge_for_stationary_signal() {
+        let mut lms = SeaLMS::init_vec(1).pop().unwrap();
+        let target = 1500i16;
+        let mut abs_residuals = Vec::with_capacity(256);
+
+        for _ in 0..256 {
+            let predicted = lms.predict();
+            let residual = target as i32 - predicted;
+            abs_residuals.push(residual.unsigned_abs() as u64);
+            lms.update(target, residual);
+        }
+
+        let head_avg: u64 = abs_residuals[..32].iter().sum::<u64>() / 32;
+        let tail_avg: u64 = abs_residuals[224..].iter().sum::<u64>() / 32;
+
+        assert!(
+            tail_avg < head_avg,
+            "expected convergence, head_avg={head_avg}, tail_avg={tail_avg}"
+        );
+    }
+}
