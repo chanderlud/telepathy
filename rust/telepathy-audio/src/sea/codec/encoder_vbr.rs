@@ -23,6 +23,14 @@ pub struct VbrEncoder {
 const TARGET_RESIDUAL_DISTRIBUTION: [f32; 6] = [0.00, 0.00, 0.95, 0.05, 0.00, 0.00]; // TODO: it needs tuning
 
 impl VbrEncoder {
+    fn clamp_residual_bits(bits: u8) -> u8 {
+        bits.clamp(1, 8)
+    }
+
+    fn base_residual_bits(vbr_target_bitrate: f32) -> u8 {
+        Self::clamp_residual_bits(vbr_target_bitrate as u8)
+    }
+
     pub fn new(file_header: &SeaFileHeader, encoder_settings: &EncoderSettings) -> Self {
         VbrEncoder {
             channels: file_header.channels as usize,
@@ -111,32 +119,37 @@ impl VbrEncoder {
         let [minus_one_items, _, plus_one_items, plus_two_items] =
             Self::interpolate_distribution(sortable_items, vbr_target_bitrate);
 
-        let base_residual_bits = vbr_target_bitrate as u8;
+        let base_residual_bits = Self::base_residual_bits(vbr_target_bitrate);
 
         residual_sizes.resize(errors.len(), 0);
         residual_sizes.fill(base_residual_bits);
 
         for index in scratch_indices.iter().take(minus_one_items) {
-            residual_sizes[*index as usize] = base_residual_bits - 1;
+            residual_sizes[*index as usize] =
+                Self::clamp_residual_bits(base_residual_bits.saturating_sub(1));
         }
 
         for index in scratch_indices[(sortable_items - plus_two_items - plus_one_items)..]
             .iter()
             .take(plus_one_items)
         {
-            residual_sizes[*index as usize] = base_residual_bits + 1;
+            residual_sizes[*index as usize] =
+                Self::clamp_residual_bits(base_residual_bits.saturating_add(1));
         }
 
         for index in scratch_indices[sortable_items - plus_two_items..]
             .iter()
             .take(plus_two_items)
         {
-            residual_sizes[*index as usize] = base_residual_bits + 2;
+            residual_sizes[*index as usize] =
+                Self::clamp_residual_bits(base_residual_bits.saturating_add(2));
         }
     }
 
     fn analyze(&mut self, input_slice: &[i16], residual_bits: &mut Vec<u8>) {
-        let analyze_residual_size = SeaResidualSize::from(self.vbr_target_bitrate as u8);
+        let analyze_residual_size = SeaResidualSize::from(Self::base_residual_bits(
+            self.vbr_target_bitrate,
+        ));
 
         let slice_size = self.scale_factor_frames as usize * self.channels;
 
