@@ -50,16 +50,7 @@ impl SeaResidualSize {
 
     #[inline(always)]
     pub fn to_binary_combinations(self) -> usize {
-        match self {
-            SeaResidualSize::One => 2,
-            SeaResidualSize::Two => 4,
-            SeaResidualSize::Three => 8,
-            SeaResidualSize::Four => 16,
-            SeaResidualSize::Five => 32,
-            SeaResidualSize::Six => 64,
-            SeaResidualSize::Seven => 128,
-            SeaResidualSize::Eight => 256,
-        }
+        1usize << (self as u32)
     }
 }
 

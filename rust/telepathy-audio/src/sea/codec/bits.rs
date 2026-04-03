@@ -1,6 +1,6 @@
 pub struct BitUnpacker {
     bits_stored: u32,
-    carry: u32,
+    carry: u64,
     bitlengths: Vec<u8>,
     bitlengths_index: usize,
     output: Vec<u8>,
@@ -35,14 +35,14 @@ impl BitUnpacker {
         self.output.clear();
     }
 
-    const MASKS: [u32; 9] = [0, 1, 3, 7, 15, 31, 63, 127, 255];
+    const MASKS: [u64; 9] = [0, 1, 3, 7, 15, 31, 63, 127, 255];
 
     fn process_bytes_const(&mut self, input: &[u8]) {
         let bits = self.bitlengths[0] as u32;
         let mask = BitUnpacker::MASKS[bits as usize];
 
         for input_byte in input {
-            let value: u32 = (self.carry << 8) | (*input_byte as u32);
+            let value = (self.carry << 8) | u64::from(*input_byte);
             self.bits_stored += 8;
 
             while self.bits_stored >= bits {
@@ -51,13 +51,17 @@ impl BitUnpacker {
                 self.bits_stored -= bits;
             }
 
-            self.carry = value & ((1 << self.bits_stored) - 1);
+            self.carry = if self.bits_stored == 0 {
+                0
+            } else {
+                value & ((1u64 << self.bits_stored) - 1)
+            };
         }
     }
 
     fn process_bytes_variable(&mut self, input: &[u8]) {
         for input_byte in input {
-            let value: u32 = (self.carry << 8) | (*input_byte as u32);
+            let value = (self.carry << 8) | u64::from(*input_byte);
             self.bits_stored += 8;
 
             while self.bitlengths_index < self.bitlengths.len()
@@ -71,7 +75,11 @@ impl BitUnpacker {
                 self.bitlengths_index += 1;
             }
 
-            self.carry = value & ((1 << self.bits_stored) - 1);
+            self.carry = if self.bits_stored == 0 {
+                0
+            } else {
+                value & ((1u64 << self.bits_stored) - 1)
+            };
         }
     }
 
@@ -93,7 +101,7 @@ impl BitUnpacker {
 
 #[derive(Default)]
 pub struct BitPacker {
-    accum: u32,
+    accum: u64,
     bits_stored: u32,
     output: Vec<u8>,
 }
@@ -115,14 +123,18 @@ impl BitPacker {
             input,
             bits
         );
-        self.accum = (self.accum << bits) | value;
+        self.accum = (self.accum << bits) | u64::from(value);
         self.bits_stored += bits as u32;
 
-        if self.bits_stored >= 8 {
+        while self.bits_stored >= 8 {
             let value = self.accum >> (self.bits_stored - 8);
             self.output.push(value as u8);
             self.bits_stored -= 8;
-            self.accum &= (1 << self.bits_stored) - 1;
+            self.accum = if self.bits_stored == 0 {
+                0
+            } else {
+                self.accum & ((1u64 << self.bits_stored) - 1)
+            };
         }
     }
 

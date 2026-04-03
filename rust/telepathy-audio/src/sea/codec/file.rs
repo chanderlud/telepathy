@@ -60,16 +60,14 @@ impl SeaFileHeader {
         Ok(res)
     }
 
-    pub fn serialize(&self) -> Vec<u8> {
-        let mut output = Vec::new();
-
-        output.extend_from_slice(&SEAC_MAGIC.to_be_bytes());
-        output.extend_from_slice(&self.version.to_le_bytes());
-        output.extend_from_slice(&self.channels.to_le_bytes());
-        output.extend_from_slice(&self.chunk_size.to_le_bytes());
-        output.extend_from_slice(&self.frames_per_chunk.to_le_bytes());
-        output.extend_from_slice(&self.sample_rate.to_le_bytes());
-
+    pub fn serialize(&self) -> [u8; 14] {
+        let mut output = [0u8; 14];
+        output[0..4].copy_from_slice(&SEAC_MAGIC.to_be_bytes());
+        output[4] = self.version;
+        output[5] = self.channels;
+        output[6..8].copy_from_slice(&self.chunk_size.to_le_bytes());
+        output[8..10].copy_from_slice(&self.frames_per_chunk.to_le_bytes());
+        output[10..14].copy_from_slice(&self.sample_rate.to_le_bytes());
         output
     }
 }

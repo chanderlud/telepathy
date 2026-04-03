@@ -45,6 +45,7 @@ impl EncoderBase {
         &self,
         channels: usize,
         dequant_tab: &[i32],
+        dqt_stride: usize,
         samples: &[i16],
         scalefactor: i32,
         lms: &mut SeaLMS,
@@ -72,7 +73,7 @@ impl EncoderBase {
             let clamped = scaled.clamp(-clamp_limit, clamp_limit);
             let quantized = quant_tab.quant_tab[(quant_tab_offset + clamped) as usize];
 
-            let dequantized = dequant_tab[quantized as usize];
+            let dequantized = dequant_tab[scalefactor as usize * dqt_stride + quantized as usize];
             let reconstructed = clamp_i16(predicted + dequantized);
 
             let error: i64 = sample as i64 - reconstructed as i64;
@@ -95,7 +96,8 @@ impl EncoderBase {
     fn get_residuals_with_best_scalefactor(
         &self,
         channels: usize,
-        dequant_tab: &[Vec<i32>],
+        dequant_tab: &[i32],
+        dqt_stride: usize,
         scalefactor_reciprocals: &[i32],
         samples: &[i16],
         prev_scalefactor: i32, // provided as optimization, can be 0
@@ -118,11 +120,10 @@ impl EncoderBase {
 
             current_lms.clone_from(ref_lms);
 
-            let dqt = &dequant_tab[scalefactor as usize];
-
             let current_rank = self.calculate_residuals(
                 channels,
-                dqt,
+                dequant_tab,
+                dqt_stride,
                 samples,
                 scalefactor,
                 &mut current_lms,
@@ -158,9 +159,7 @@ impl EncoderBase {
         current_residuals.resize(best_residual_bits.len(), 0);
 
         for channel_offset in 0..self.channels {
-            let dqt: &Vec<Vec<i32>> = self
-                .dequant_tab
-                .get_dqt(residual_size[channel_offset] as usize);
+            let (dqt, dqt_stride) = self.dequant_tab.get_dqt(residual_size[channel_offset] as usize);
 
             let scalefactor_reciprocals = self
                 .dequant_tab
@@ -169,6 +168,7 @@ impl EncoderBase {
             let (best_rank, best_lms, best_scalefactor) = self.get_residuals_with_best_scalefactor(
                 self.channels,
                 dqt,
+                dqt_stride,
                 scalefactor_reciprocals,
                 &samples[channel_offset..],
                 self.prev_scalefactor[channel_offset],

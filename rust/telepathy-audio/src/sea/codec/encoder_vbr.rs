@@ -83,23 +83,12 @@ impl VbrEncoder {
         }
 
         let mut res = [0usize; 4];
-        let mut sum = 0usize;
-
-        // distribute remaining using TARGET_RESIDUAL_DISTRIBUTION
-        while sum < items {
-            let remaining = items - sum;
-            for i in 0..4 {
-                let value = (remaining as f32 * percentages[i]) as usize;
-                sum += value;
-                res[i] += value;
-            }
-
-            // if remaining is not enough to distribute based on TARGET_RESIDUAL_DISTRIBUTION
-            if items - sum == remaining {
-                sum += remaining;
-                res[1] += remaining
-            }
+        let mut assigned = 0usize;
+        for i in 0..4 {
+            res[i] = libm::floorf(items as f32 * percentages[i]) as usize;
+            assigned += res[i];
         }
+        res[1] += items - assigned;
 
         res
     }

@@ -43,7 +43,8 @@ impl SeaLMS {
     pub fn update(&mut self, sample: i16, residual: i32) {
         let delta = residual >> (FLOATING_BITS + 1);
         for i in 0..LMS_LEN {
-            self.weights[i] += if self.history[i] < 0 { -delta } else { delta };
+            let sign = (self.history[i] >> 31) | 1;
+            self.weights[i] += delta * sign;
         }
 
         self.history.copy_within(1.., 0);
