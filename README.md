@@ -1,6 +1,6 @@
 ## Features
 
-- [Flutter](https://flutter.dev/) UI with Windows, Linux, macOS, iOS, and Android support
+- [Flutter](https://flutter.dev/) UI with Windows, Linux, macOS, iOS, Android, and web support
 - [libp2p](https://libp2p.io/) networking and cryptography, enables p2p networking without port forwarding
 - Lossless raw audio and [SEA codec](https://github.com/Daninet/sea-codec) options
 - [nnnoiseless](https://github.com/jneem/nnnoiseless) noise suppression
@@ -20,6 +20,17 @@
 - Lossless audio codec support
 - QUIC datagrams for live audio streams
 - p2p updates for desktop clients
+
+## Local Development
+- Flutter, Dart, and Cargo are required for building the project
+- For development, use `flutter run -d <device>` or `flutter build <device> --debug`
+- Live reload is supported in JetBrains and other IDEs with the Flutter plugin
+- For release builds, use `flutter build <device>`
+
+### Additional Requirements
+- Android development requires Android Studio
+- macOS and iOS development requires Xcode
+- Web development requires the latest wasm-pack and wasm-opt & the nightly Rust toolchain
 
 ## History
 
