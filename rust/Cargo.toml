@@ -2,7 +2,8 @@
 members = [
     "relay-server",
     "telepathy-core",
-    "telepathy-audio"
+    "telepathy-audio",
+    "telepathy-tui"
 ]
 resolver = "2"
 
