@@ -1,8 +1,6 @@
-use std::mem;
-
 pub struct BitUnpacker {
     bits_stored: u32,
-    carry: u32,
+    carry: u64,
     bitlengths: Vec<u8>,
     bitlengths_index: usize,
     output: Vec<u8>,
@@ -19,24 +17,32 @@ impl BitUnpacker {
         }
     }
 
-    pub fn new_var_bits(bitlengths: &[u8]) -> Self {
-        Self {
-            bits_stored: 0,
-            carry: 0,
-            bitlengths: bitlengths.to_vec(),
-            bitlengths_index: 0,
-            output: Vec::new(),
-        }
+    pub fn reset_const(&mut self, bitlength: u8) {
+        self.bits_stored = 0;
+        self.carry = 0;
+        self.bitlengths.clear();
+        self.bitlengths.push(bitlength);
+        self.bitlengths_index = 0;
+        self.output.clear();
     }
 
-    const MASKS: [u32; 9] = [0, 1, 3, 7, 15, 31, 63, 127, 255];
+    pub fn reset_var(&mut self, bitlengths: &[u8]) {
+        self.bits_stored = 0;
+        self.carry = 0;
+        self.bitlengths.clear();
+        self.bitlengths.extend_from_slice(bitlengths);
+        self.bitlengths_index = 0;
+        self.output.clear();
+    }
+
+    const MASKS: [u64; 9] = [0, 1, 3, 7, 15, 31, 63, 127, 255];
 
     fn process_bytes_const(&mut self, input: &[u8]) {
         let bits = self.bitlengths[0] as u32;
         let mask = BitUnpacker::MASKS[bits as usize];
 
         for input_byte in input {
-            let value: u32 = (self.carry << 8) | (*input_byte as u32);
+            let value = (self.carry << 8) | u64::from(*input_byte);
             self.bits_stored += 8;
 
             while self.bits_stored >= bits {
@@ -45,13 +51,17 @@ impl BitUnpacker {
                 self.bits_stored -= bits;
             }
 
-            self.carry = value & ((1 << self.bits_stored) - 1);
+            self.carry = if self.bits_stored == 0 {
+                0
+            } else {
+                value & ((1u64 << self.bits_stored) - 1)
+            };
         }
     }
 
     fn process_bytes_variable(&mut self, input: &[u8]) {
         for input_byte in input {
-            let value: u32 = (self.carry << 8) | (*input_byte as u32);
+            let value = (self.carry << 8) | u64::from(*input_byte);
             self.bits_stored += 8;
 
             while self.bitlengths_index < self.bitlengths.len()
@@ -65,7 +75,11 @@ impl BitUnpacker {
                 self.bitlengths_index += 1;
             }
 
-            self.carry = value & ((1 << self.bits_stored) - 1);
+            self.carry = if self.bits_stored == 0 {
+                0
+            } else {
+                value & ((1u64 << self.bits_stored) - 1)
+            };
         }
     }
 
@@ -77,28 +91,26 @@ impl BitUnpacker {
         self.process_bytes_variable(input);
     }
 
-    pub fn finish(&mut self) -> Vec<u8> {
-        self.bitlengths.clear();
+    pub fn finish(&mut self) -> &[u8] {
         self.bitlengths_index = 0;
         self.carry = 0;
         self.bits_stored = 0;
-        mem::take(&mut self.output)
+        &self.output
     }
 }
 
+#[derive(Default)]
 pub struct BitPacker {
-    accum: u32,
+    accum: u64,
     bits_stored: u32,
     output: Vec<u8>,
 }
 
 impl BitPacker {
-    pub fn new() -> Self {
-        Self {
-            accum: 0,
-            bits_stored: 0,
-            output: Vec::new(),
-        }
+    pub fn reset(&mut self) {
+        self.accum = 0;
+        self.bits_stored = 0;
+        self.output.clear();
     }
 
     pub fn push(&mut self, input: u32, bits: u8) {
@@ -111,18 +123,22 @@ impl BitPacker {
             input,
             bits
         );
-        self.accum = (self.accum << bits) | value;
+        self.accum = (self.accum << bits) | u64::from(value);
         self.bits_stored += bits as u32;
 
-        if self.bits_stored >= 8 {
+        while self.bits_stored >= 8 {
             let value = self.accum >> (self.bits_stored - 8);
             self.output.push(value as u8);
             self.bits_stored -= 8;
-            self.accum &= (1 << self.bits_stored) - 1;
+            self.accum = if self.bits_stored == 0 {
+                0
+            } else {
+                self.accum & ((1u64 << self.bits_stored) - 1)
+            };
         }
     }
 
-    pub fn finish(&mut self) -> Vec<u8> {
+    pub fn finish(&mut self) -> &[u8] {
         if self.bits_stored > 0 {
             let byte = (self.accum << (8 - self.bits_stored)) as u8;
             self.output.push(byte);
@@ -130,6 +146,6 @@ impl BitPacker {
         self.accum = 0;
         self.bits_stored = 0;
 
-        mem::take(&mut self.output)
+        &self.output
     }
 }

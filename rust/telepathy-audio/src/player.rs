@@ -683,7 +683,8 @@ pub async fn wav_to_sea(bytes: Vec<u8>, residual_bits: f32) -> Result<Vec<u8>, E
             frames_per_chunk: FRAME_SIZE as u16,
             sample_rate,
         }
-        .serialize();
+        .serialize()
+        .to_vec();
 
         // Create an interleaved scratch buffer for channel-aware unpacking.
         let mut buf: Vec<i16> = vec![0; FRAME_SIZE * channels as usize];

@@ -50,16 +50,7 @@ impl SeaResidualSize {
 
     #[inline(always)]
     pub fn to_binary_combinations(self) -> usize {
-        match self {
-            SeaResidualSize::One => 2,
-            SeaResidualSize::Two => 4,
-            SeaResidualSize::Three => 8,
-            SeaResidualSize::Four => 16,
-            SeaResidualSize::Five => 32,
-            SeaResidualSize::Six => 64,
-            SeaResidualSize::Seven => 128,
-            SeaResidualSize::Eight => 256,
-        }
+        1usize << (self as u32)
     }
 }
 
@@ -75,13 +66,12 @@ pub enum SeaError {
     MetadataTooLarge,
 }
 
-#[derive(Debug)]
-pub struct EncodedSamples {
-    pub scale_factors: Vec<u8>,
-    pub residuals: Vec<u8>,
-    pub residual_bits: Vec<u8>,
-}
-
 pub trait SeaEncoderTrait {
-    fn encode(&mut self, input_slice: &[i16]) -> EncodedSamples;
+    fn encode_into(
+        &mut self,
+        input_slice: &[i16],
+        scale_factors: &mut Vec<u8>,
+        residuals: &mut Vec<u8>,
+        residual_bits: &mut Vec<u8>,
+    );
 }

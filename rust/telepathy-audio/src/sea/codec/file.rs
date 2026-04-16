@@ -1,11 +1,13 @@
 use super::{
-    chunk::SeaChunkType,
+    bits::{BitPacker, BitUnpacker},
+    chunk::{SeaChunk, SeaChunkType},
     common::{SEAC_MAGIC, SeaEncoderTrait, SeaError},
     decoder::Decoder,
     encoder_cbr::CbrEncoder,
     encoder_vbr::VbrEncoder,
+    lms::SeaLMS,
 };
-use crate::sea::{codec::chunk::SeaChunk, encoder::EncoderSettings};
+use crate::sea::encoder::EncoderSettings;
 
 #[derive(Debug, Clone)]
 pub struct SeaFileHeader {
@@ -58,16 +60,14 @@ impl SeaFileHeader {
         Ok(res)
     }
 
-    pub fn serialize(&self) -> Vec<u8> {
-        let mut output = Vec::new();
-
-        output.extend_from_slice(&SEAC_MAGIC.to_be_bytes());
-        output.extend_from_slice(&self.version.to_le_bytes());
-        output.extend_from_slice(&self.channels.to_le_bytes());
-        output.extend_from_slice(&self.chunk_size.to_le_bytes());
-        output.extend_from_slice(&self.frames_per_chunk.to_le_bytes());
-        output.extend_from_slice(&self.sample_rate.to_le_bytes());
-
+    pub fn serialize(&self) -> [u8; 14] {
+        let mut output = [0u8; 14];
+        output[0..4].copy_from_slice(&SEAC_MAGIC.to_be_bytes());
+        output[4] = self.version;
+        output[5] = self.channels;
+        output[6..8].copy_from_slice(&self.chunk_size.to_le_bytes());
+        output[8..10].copy_from_slice(&self.frames_per_chunk.to_le_bytes());
+        output[10..14].copy_from_slice(&self.sample_rate.to_le_bytes());
         output
     }
 }
@@ -77,6 +77,20 @@ pub(crate) enum ActiveEncoder {
     Vbr(VbrEncoder),
 }
 
+pub(crate) struct ChunkSerializer {
+    pub(crate) packer: BitPacker,
+    pub(crate) unpacker: BitUnpacker,
+}
+
+impl ChunkSerializer {
+    fn new() -> Self {
+        Self {
+            packer: BitPacker::default(),
+            unpacker: BitUnpacker::new_const_bits(1),
+        }
+    }
+}
+
 pub struct SeaFile {
     pub header: SeaFileHeader,
 
@@ -84,6 +98,15 @@ pub struct SeaFile {
 
     pub(crate) encoder: Option<ActiveEncoder>,
     pub(crate) encoder_settings: Option<EncoderSettings>,
+
+    // Scratch buffers for chunk serialization/deserialization
+    chunk_serializer: ChunkSerializer,
+    scratch_lms: Vec<SeaLMS>,
+    scratch_scale_factors: Vec<u8>,
+    scratch_vbr_residual_sizes: Vec<u8>,
+    scratch_residuals: Vec<u8>,
+    scratch_vbr_bitlengths: Vec<u8>,
+    lms_snapshot: Vec<SeaLMS>,
 }
 
 impl SeaFile {
@@ -91,6 +114,8 @@ impl SeaFile {
         header: SeaFileHeader,
         encoder_settings: &EncoderSettings,
     ) -> Result<Self, SeaError> {
+        encoder_settings.validate()?;
+
         let encoder = if encoder_settings.vbr {
             let vbr_encoder = VbrEncoder::new(&header, &encoder_settings.clone());
             Some(ActiveEncoder::Vbr(vbr_encoder))
@@ -104,32 +129,77 @@ impl SeaFile {
             decoder: None,
             encoder,
             encoder_settings: Some(encoder_settings.clone()),
+            chunk_serializer: ChunkSerializer::new(),
+            scratch_lms: Vec::new(),
+            scratch_scale_factors: Vec::new(),
+            scratch_vbr_residual_sizes: Vec::new(),
+            scratch_residuals: Vec::new(),
+            scratch_vbr_bitlengths: Vec::new(),
+            lms_snapshot: Vec::new(),
         })
     }
 
-    pub fn make_chunk(&mut self, samples: &[i16]) -> Result<Vec<u8>, SeaError> {
+    pub fn new_for_decoding(header: SeaFileHeader) -> Self {
+        SeaFile {
+            header,
+            decoder: None,
+            encoder: None,
+            encoder_settings: None,
+            chunk_serializer: ChunkSerializer::new(),
+            scratch_lms: Vec::new(),
+            scratch_scale_factors: Vec::new(),
+            scratch_vbr_residual_sizes: Vec::new(),
+            scratch_residuals: Vec::new(),
+            scratch_vbr_bitlengths: Vec::new(),
+            lms_snapshot: Vec::new(),
+        }
+    }
+
+    pub fn make_chunk(&mut self, samples: &[i16], output: &mut Vec<u8>) -> Result<(), SeaError> {
         let encoder_settings = self.encoder_settings.as_ref().unwrap();
         let encoder = self.encoder.as_mut().unwrap();
 
-        let initial_lms = match encoder {
-            ActiveEncoder::Cbr(encoder) => encoder.get_lms().clone(),
-            ActiveEncoder::Vbr(encoder) => encoder.get_lms().clone(),
-        };
+        // Snapshot LMS using clone_from to reuse allocation
+        match encoder {
+            ActiveEncoder::Cbr(encoder) => {
+                self.lms_snapshot.clone_from(encoder.get_lms());
+            }
+            ActiveEncoder::Vbr(encoder) => {
+                self.lms_snapshot.clone_from(encoder.get_lms());
+            }
+        }
 
-        let encoded = match encoder {
-            ActiveEncoder::Cbr(encoder) => encoder.encode(samples),
-            ActiveEncoder::Vbr(encoder) => encoder.encode(samples),
-        };
+        // Encode into scratch buffers
+        // For CBR, residual_bits will remain empty; for VBR it will be populated
+        match encoder {
+            ActiveEncoder::Cbr(encoder) => {
+                self.scratch_vbr_residual_sizes.clear();
+                encoder.encode_into(
+                    samples,
+                    &mut self.scratch_scale_factors,
+                    &mut self.scratch_residuals,
+                    &mut self.scratch_vbr_residual_sizes,
+                );
+            }
+            ActiveEncoder::Vbr(encoder) => encoder.encode_into(
+                samples,
+                &mut self.scratch_scale_factors,
+                &mut self.scratch_residuals,
+                &mut self.scratch_vbr_residual_sizes,
+            ),
+        }
 
-        let chunk = SeaChunk::new(
+        // Serialize chunk directly into caller-provided output buffer
+        SeaChunk::serialize_into(
             &self.header,
-            &initial_lms,
+            &self.lms_snapshot,
             encoder_settings,
-            encoded.scale_factors,
-            encoded.residual_bits,
-            encoded.residuals,
-        );
-        let output = chunk.serialize();
+            &self.scratch_scale_factors,
+            &self.scratch_vbr_residual_sizes,
+            &self.scratch_residuals,
+            output,
+            &mut self.chunk_serializer.packer,
+        )?;
 
         if self.header.chunk_size == 0 {
             self.header.chunk_size = output.len() as u16;
@@ -142,7 +212,7 @@ impl SeaFile {
             assert_eq!(self.header.chunk_size, output.len() as u16);
         }
 
-        Ok(output)
+        Ok(())
     }
 
     pub fn samples_from_frame(
@@ -150,26 +220,49 @@ impl SeaFile {
         frame: &[u8],
         output: &mut [i16; 480],
     ) -> Result<(), SeaError> {
-        let chunk = SeaChunk::from_slice(frame, &self.header)?;
+        // Parse chunk into scratch buffers
+        let chunk_info = SeaChunk::parse_into(
+            frame,
+            &self.header,
+            &mut self.scratch_lms,
+            &mut self.scratch_scale_factors,
+            &mut self.scratch_vbr_residual_sizes,
+            &mut self.scratch_residuals,
+            &mut self.scratch_vbr_bitlengths,
+            &mut self.chunk_serializer.unpacker,
+        )?;
 
         if self.decoder.is_none() {
             self.decoder = Some(Decoder::init(
                 self.header.channels as usize,
-                chunk.scale_factor_bits as usize,
+                chunk_info.scale_factor_bits as usize,
             ));
         }
         let decoder = self.decoder.as_mut().unwrap();
-        let decoded = match chunk.chunk_type {
-            SeaChunkType::Cbr => decoder.decode_cbr(&chunk),
-            SeaChunkType::Vbr => decoder.decode_vbr(&chunk),
-        };
 
         let expected_len = self.header.frames_per_chunk as usize * self.header.channels as usize;
-        if decoded.len() != expected_len {
-            Err(SeaError::InvalidFrame)
-        } else {
-            output.copy_from_slice(decoded.as_slice());
-            Ok(())
+        if output.len() != expected_len {
+            return Err(SeaError::InvalidFrame);
         }
+
+        match chunk_info.chunk_type {
+            SeaChunkType::Cbr => decoder.decode_cbr_into(
+                &chunk_info,
+                &mut self.scratch_lms,
+                &self.scratch_scale_factors,
+                &self.scratch_residuals,
+                &mut output[..expected_len],
+            ),
+            SeaChunkType::Vbr => decoder.decode_vbr_into(
+                &chunk_info,
+                &mut self.scratch_lms,
+                &self.scratch_scale_factors,
+                &self.scratch_vbr_residual_sizes,
+                &self.scratch_residuals,
+                &mut output[..expected_len],
+            ),
+        }
+
+        Ok(())
     }
 }

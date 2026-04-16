@@ -1,4 +1,4 @@
-mod bits;
+pub mod bits;
 mod chunk;
 pub mod common;
 mod decoder;
