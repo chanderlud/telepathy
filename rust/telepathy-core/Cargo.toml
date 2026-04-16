@@ -1,6 +1,6 @@
 [package]
-name = "telepathy"
-version = "2.6.1"
+name = "telepathy_core"
+version = "2.6.3"
 edition = "2024"
 build = "build.rs"
 
@@ -15,7 +15,7 @@ tokio-util = { version = "0.7", features = ["codec", "compat"] }
 log = "0.4"
 kanal = "0.1.1"
 atomic_float = "1"
-flutter_rust_bridge = { version = "=2.11.1", default-features = false, features = ["rust-async", "thread-pool", "dart-opaque", "anyhow"] }
+flutter_rust_bridge = { version = "=2.12.0", default-features = false, features = ["rust-async", "thread-pool", "dart-opaque", "anyhow"] }
 lazy_static = "1"
 libp2p-stream = { version = "0.4.0-alpha" }
 chrono = "*"

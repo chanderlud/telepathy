@@ -3,9 +3,9 @@ pub(crate) mod callbacks;
 
 use crate::error::{DartError, Error, ErrorKind};
 use crate::frb_generated::StreamSink;
-use crate::telepathy::messages::Attachment;
-use crate::telepathy::screenshare::{Decoder, Encoder};
-use crate::telepathy::{ConnectionState, screenshare};
+use crate::internal::messages::Attachment;
+use crate::internal::screenshare::{Decoder, Encoder};
+use crate::internal::{ConnectionState, screenshare};
 use atomic_float::AtomicF32;
 use chrono::{DateTime, Local};
 #[cfg(not(target_family = "wasm"))]

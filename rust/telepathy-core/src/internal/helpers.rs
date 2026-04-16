@@ -1,12 +1,12 @@
 use crate::error::ErrorKind;
 use crate::flutter::DartNotify;
 use crate::flutter::callbacks::{FrbCallbacks, FrbStatisticsCallback};
-use crate::telepathy::audio_adapters::{KanalSink, KanalSource};
-use crate::telepathy::core::TelepathyCore;
-use crate::telepathy::messages::{AudioHeader, Message};
+use crate::internal::audio_adapters::{KanalSink, KanalSource};
+use crate::internal::core::TelepathyCore;
+use crate::internal::messages::{AudioHeader, Message};
 #[cfg(not(target_family = "wasm"))]
-use crate::telepathy::screenshare;
-use crate::telepathy::{
+use crate::internal::screenshare;
+use crate::internal::{
     CHAT_PROTOCOL, EarlyCallState, Result, StartScreenshare, StatisticsCollectorState,
 };
 use crate::{Behaviour, BehaviourEvent};

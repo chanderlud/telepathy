@@ -3,7 +3,7 @@ import 'package:provider/provider.dart';
 import 'package:telepathy/controllers/index.dart';
 import 'package:telepathy/screens/settings/sections/overlay/color_picker_dialog.dart';
 import 'package:telepathy/screens/settings/sections/overlay/overlay_position_widget.dart';
-import 'package:telepathy/src/rust/overlay/overlay.dart';
+import 'package:telepathy/core/rust/overlay/overlay.dart';
 import 'package:telepathy/widgets/common/index.dart';
 
 class OverlaySettings extends StatefulWidget {

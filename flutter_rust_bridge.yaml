@@ -1,4 +1,4 @@
 rust_input: crate
-rust_root: rust/telepathy
-dart_output: lib/src/rust
+rust_root: rust/telepathy-core
+dart_output: lib/core/rust
 enable_lifetime: true

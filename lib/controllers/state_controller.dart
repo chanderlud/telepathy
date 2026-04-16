@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:telepathy/core/utils/index.dart';
-import 'package:telepathy/src/rust/flutter.dart';
+import 'package:telepathy/core/rust/flutter.dart';
 import 'package:telepathy/models/index.dart';
 
 /// A controller which helps bridge the gap between the UI and backend.
