@@ -250,7 +250,6 @@ async fn init_core_client(
     core.set_efficiency_mode(preferences.efficiency_mode);
     core.set_input_device(preferences.input_device_id.clone()).await;
     core.set_output_device(preferences.output_device_id.clone()).await;
-    core.start_manager().await;
 
     if !active_profile.id.is_empty() {
         match secret_store.load_keypair(&active_profile.id).await {
@@ -264,6 +263,8 @@ async fn init_core_client(
             }
             Err(error) => return Err(AppError::Storage(error)),
         }
+
+        core.start_manager().await;
 
         for contact in &active_profile.contacts {
             let peer_id = match secret_store
