@@ -13,6 +13,8 @@ use std::time::Duration;
 
 #[cfg(windows)]
 use crate::overlay::windows;
+#[cfg(windows)]
+use crate::internal::runtime::spawn_task;
 use crate::overlay::{BACKGROUND_COLOR, FONT_COLOR, FONT_HEIGHT};
 #[cfg(windows)]
 use kanal::Sender;
@@ -119,7 +121,7 @@ impl Overlay {
         };
 
         let other_this = this.clone();
-        tokio::spawn(async move {
+        spawn_task(async move {
             other_this.controller().await;
         });
 

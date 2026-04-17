@@ -11,6 +11,8 @@ pub mod core;
 /// flutter_rust_bridge:ignore
 mod helpers;
 /// flutter_rust_bridge:ignore
+pub(crate) mod runtime;
+/// flutter_rust_bridge:ignore
 pub(crate) mod messages;
 pub(crate) mod screenshare;
 /// networking code for live audio streams
@@ -26,6 +28,7 @@ use crate::error::{DartError, Error, ErrorKind};
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::core::TelepathyCore;
 use crate::internal::helpers::OutputHelper;
+use crate::internal::runtime::spawn_task;
 use crate::overlay::overlay::Overlay;
 use crate::types::{ChatMessage, CodecConfig, Contact, NetworkConfig, ScreenshareConfig};
 use atomic_float::AtomicF32;
@@ -50,7 +53,6 @@ use telepathy_audio::devices::list_all_devices;
 use telepathy_audio::internal::utils::db_to_multiplier;
 use telepathy_audio::{Host, RnnModel};
 use tokio::select;
-use tokio::spawn;
 use tokio::sync::mpsc::{Receiver as MReceiver, Sender as MSender, channel};
 use tokio::sync::{Mutex, Notify};
 use tokio::task::JoinHandle;
@@ -226,7 +228,7 @@ where
         }
         // spawn room controller
         let self_clone = self.inner.clone();
-        self.handles.lock().await.push(spawn(async move {
+        self.handles.lock().await.push(spawn_task(async move {
             let stop_io = Default::default();
             if let Err(error) = self_clone
                 .room_controller(receiver, cancel, &stop_io, end_call)

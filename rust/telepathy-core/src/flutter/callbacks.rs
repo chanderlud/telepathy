@@ -3,9 +3,9 @@ use crate::flutter::{
     SessionStatus, Statistics, invoke, notify,
 };
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
+use crate::internal::runtime::spawn_task;
 use libp2p::PeerId;
 use std::sync::Arc;
-use tokio::spawn;
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 
@@ -51,7 +51,7 @@ impl CoreCallbacks<FlutterStatisticsCallback> for FlutterCallbacks {
         let accept_call = self.accept_call.clone();
         let contact_id = contact_id.to_owned();
         let dart_cancel = FrontendNotify::new(cancel);
-        spawn(async move { invoke(&accept_call, (contact_id, ringtone, dart_cancel)).await })
+        spawn_task(async move { invoke(&accept_call, (contact_id, ringtone, dart_cancel)).await })
     }
 
     fn message_received(&self, chat_message: ChatMessage) -> impl Future<Output = ()> + Send {

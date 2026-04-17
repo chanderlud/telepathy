@@ -4,6 +4,7 @@ use crate::audio::ios::{configure_audio_session, deactivate_audio_session};
 use crate::error::ErrorKind;
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::messages::Message;
+use crate::internal::runtime::spawn_task;
 use crate::internal::sockets::{
     ConstSocket, SendingSockets, SharedSockets, Transport, TransportStream, audio_input,
     audio_output,
@@ -44,7 +45,6 @@ use telepathy_audio::RnnModel;
 use telepathy_audio::WebAudioWrapper;
 use telepathy_audio::devices::AudioHost;
 use tokio::select;
-use tokio::spawn;
 use tokio::sync::mpsc::{Receiver as MReceiver, Sender as MSender, channel};
 use tokio::sync::{Mutex, Notify, RwLock};
 use tokio::task::JoinHandle;
@@ -147,7 +147,7 @@ where
 
         // start the session manager
         let manager_clone = self.clone();
-        Some(spawn(async move {
+        Some(spawn_task(async move {
             let mut retries = 0;
             // break when stop_manager==true
             while !manager_clone.core_state.stop_manager.load(Relaxed) {
@@ -206,7 +206,7 @@ where
         let stop_handler = Arc::new(Notify::new());
         let stop_handler_clone = stop_handler.clone();
         let self_clone = self.clone();
-        let stream_handler_handle = spawn(async move {
+        let stream_handler_handle = spawn_task(async move {
             self_clone
                 .incoming_stream_handler(control, stop_handler_clone)
                 .await
@@ -302,7 +302,7 @@ where
                         let control_option = message.header.is_some()
                             .then(|| swarm.behaviour().stream.new_control());
                         let self_clone = self.clone();
-                        spawn(async move {
+                        spawn_task(async move {
                             let result = self_clone.start_screenshare(message, control_option).await;
                             if let Err(error) = result {
                                 error!("failed to start screenshare: {error:?}");
@@ -729,7 +729,7 @@ where
         };
 
         let self_clone = self.clone();
-        spawn(async move {
+        spawn_task(async move {
             self_clone
                 .session_outer(peer, control, stream, state, contact, message_channel)
                 .await;
@@ -1132,7 +1132,7 @@ where
             )
             .await?;
 
-        let statistics_handle = spawn(statistics_collector(
+        let statistics_handle = spawn_task(statistics_collector(
             statistics_state,
             self.callbacks.statistics_callback(),
             stop_io.clone(),
@@ -1143,14 +1143,14 @@ where
         if let Some(o) = optional {
             let (write, read) = o.audio_transport.split();
 
-            let input_handle = spawn(audio_input(
+            let input_handle = spawn_task(audio_input(
                 input_helper.receiver(),
                 ConstSocket::new(write),
                 stop_io.clone(),
                 upload_bandwidth,
             ));
 
-            let output_handle = spawn(audio_output(
+            let output_handle = spawn_task(audio_output(
                 output_helper.sender(),
                 read,
                 stop_io.clone(),
@@ -1383,14 +1383,14 @@ where
             )
             .await?;
 
-        let input_handle = spawn(audio_input(
+        let input_handle = spawn_task(audio_input(
             input_helper.receiver(),
             SendingSockets::new(new_sockets.clone()),
             stop_io.clone(),
             statistics_state.upload_bandwidth.clone(),
         ));
 
-        let statistics_handle = spawn(statistics_collector(
+        let statistics_handle = spawn_task(statistics_collector(
             statistics_state.clone(),
             self.callbacks.statistics_callback(),
             stop_io.clone(),
@@ -1427,7 +1427,7 @@ where
                                 )
                                 .await?;
                             // begin sending
-                            let handle = spawn(audio_output(
+                            let handle = spawn_task(audio_output(
                                 helper.sender(),
                                 read,
                                 stop_io.clone(),

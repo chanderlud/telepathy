@@ -1,6 +1,7 @@
 use crate::error::{DartError, Error, ErrorKind};
 use crate::internal::ConnectionState;
 use crate::internal::messages::Attachment;
+use crate::internal::runtime::spawn_task;
 pub use crate::internal::screenshare::{Capabilities, RecordingConfig};
 use crate::internal::screenshare::{Device, ScreenshareConfigDisk, encoder_from_str};
 use atomic_float::AtomicF32;
@@ -334,7 +335,7 @@ impl ScreenshareConfig {
         let config = disk_config.map(ScreenshareConfig::from).unwrap_or_default();
 
         let capabilities_clone = Arc::clone(&config.capabilities);
-        tokio::spawn(async move {
+        spawn_task(async move {
             let c = Capabilities::new().await;
             *capabilities_clone.write().await = c;
         });

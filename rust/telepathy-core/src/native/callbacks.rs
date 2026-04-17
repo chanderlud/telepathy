@@ -1,10 +1,10 @@
 use std::sync::Arc;
 use libp2p::PeerId;
-use tokio::spawn;
 use tokio::sync::{oneshot, watch, Notify};
 use tokio::task::JoinHandle;
 use crate::flutter::{CallState, ChatMessage, Contact, FrontendNotify, SessionStatus, Statistics};
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
+use crate::internal::runtime::spawn_task;
 use crate::native::{NativeCallbacks, NativeStatisticsCallback};
 
 impl CoreCallbacks<NativeStatisticsCallback> for NativeCallbacks {
@@ -41,7 +41,7 @@ impl CoreCallbacks<NativeStatisticsCallback> for NativeCallbacks {
         let accept_call = Arc::clone(&self.accept_call);
         let contact_id = contact_id.to_string();
         let cancel_signal = Arc::clone(cancel);
-        spawn(async move {
+        spawn_task(async move {
             let (response_tx, response_rx) = oneshot::channel();
             let (cancel_tx, cancel_rx) = watch::channel(false);
 
