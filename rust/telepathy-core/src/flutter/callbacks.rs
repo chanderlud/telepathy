@@ -1,12 +1,13 @@
 use crate::flutter::{
-    CallState, ChatMessage, Contact, DartNotify, FlutterCallbacks, FlutterStatisticsCallback,
+    CallState, ChatMessage, Contact, FrontendNotify, FlutterCallbacks, FlutterStatisticsCallback,
     SessionStatus, Statistics, invoke, notify,
 };
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
-use flutter_rust_bridge::{JoinHandle, spawn};
 use libp2p::PeerId;
 use std::sync::Arc;
+use tokio::spawn;
 use tokio::sync::Notify;
+use tokio::task::JoinHandle;
 
 impl CoreCallbacks<FlutterStatisticsCallback> for FlutterCallbacks {
     fn session_status(
@@ -31,7 +32,7 @@ impl CoreCallbacks<FlutterStatisticsCallback> for FlutterCallbacks {
 
     fn screenshare_started(
         &self,
-        stop: DartNotify,
+        stop: FrontendNotify,
         sender: bool,
     ) -> impl Future<Output = ()> + Send {
         notify(&self.screenshare_started, (stop, sender))
@@ -49,7 +50,7 @@ impl CoreCallbacks<FlutterStatisticsCallback> for FlutterCallbacks {
     ) -> JoinHandle<bool> {
         let accept_call = self.accept_call.clone();
         let contact_id = contact_id.to_owned();
-        let dart_cancel = DartNotify::new(cancel);
+        let dart_cancel = FrontendNotify::new(cancel);
         spawn(async move { invoke(&accept_call, (contact_id, ringtone, dart_cancel)).await })
     }
 

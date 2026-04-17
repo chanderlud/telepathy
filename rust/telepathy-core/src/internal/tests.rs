@@ -10,6 +10,7 @@ use std::process::Command;
 use telepathy_audio::devices::AudioHost;
 use tokio::sync::OnceCell;
 use tokio::time::interval;
+use crate::types::SessionStatus;
 
 static RELAY: OnceCell<RelayInfo> = OnceCell::const_new();
 static PROFILES: &[NetProfile] = &[

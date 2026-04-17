@@ -1,5 +1,4 @@
 use crate::error::ErrorKind;
-use crate::flutter::DartNotify;
 use crate::internal::audio_adapters::{KanalSink, KanalSource};
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::core::TelepathyCore;
@@ -9,6 +8,7 @@ use crate::internal::screenshare;
 use crate::internal::{
     CHAT_PROTOCOL, EarlyCallState, Result, StartScreenshare, StatisticsCollectorState,
 };
+use crate::types::FrontendNotify;
 use crate::{Behaviour, BehaviourEvent};
 use bytes::Bytes;
 use libp2p::futures::StreamExt;
@@ -222,7 +222,7 @@ where
 
         let stop = Arc::new(Notify::new());
         *state.stop_screenshare.lock().await = Some(stop.clone());
-        let dart_stop = DartNotify {
+        let dart_stop = FrontendNotify {
             inner: stop.clone(),
         };
 

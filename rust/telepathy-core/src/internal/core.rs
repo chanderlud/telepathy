@@ -2,9 +2,6 @@ use crate::BehaviourEvent;
 #[cfg(target_os = "ios")]
 use crate::audio::ios::{configure_audio_session, deactivate_audio_session};
 use crate::error::ErrorKind;
-use crate::flutter::{
-    CallState, ChatMessage, CodecConfig, Contact, NetworkConfig, ScreenshareConfig, SessionStatus,
-};
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::messages::Message;
 use crate::internal::sockets::{
@@ -23,13 +20,13 @@ use crate::internal::{
 use crate::internal::{ConnectionState, Result};
 use crate::overlay::CONNECTED;
 use crate::overlay::overlay::Overlay;
+use crate::types::{
+    CallState, ChatMessage, CodecConfig, Contact, NetworkConfig, ScreenshareConfig, SessionStatus,
+};
 use atomic_float::AtomicF32;
 use chrono::Local;
-#[cfg(target_family = "wasm")]
-use flutter_rust_bridge::JoinHandle;
-use flutter_rust_bridge::for_generated::futures::StreamExt;
-use flutter_rust_bridge::spawn;
 use libp2p::core::ConnectedPoint;
+use libp2p::futures::StreamExt;
 use libp2p::identity::Keypair;
 use libp2p::multiaddr::Protocol;
 use libp2p::swarm::{ConnectionId, SwarmEvent};
@@ -47,9 +44,9 @@ use telepathy_audio::RnnModel;
 use telepathy_audio::WebAudioWrapper;
 use telepathy_audio::devices::AudioHost;
 use tokio::select;
+use tokio::spawn;
 use tokio::sync::mpsc::{Receiver as MReceiver, Sender as MSender, channel};
 use tokio::sync::{Mutex, Notify, RwLock};
-#[cfg(not(target_family = "wasm"))]
 use tokio::task::JoinHandle;
 #[cfg(not(target_family = "wasm"))]
 use tokio::time::{Instant, Interval, interval, sleep_until, timeout};

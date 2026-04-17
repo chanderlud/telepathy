@@ -28,9 +28,11 @@
 
 use crate::audio::player::*;
 use crate::flutter::*;
+use crate::internal::screenshare::*;
 use crate::overlay::overlay::*;
+use crate::types::*;
 use flutter_rust_bridge::for_generated::byteorder::{NativeEndian, ReadBytesExt, WriteBytesExt};
-use flutter_rust_bridge::for_generated::{Lifetimeable, Lockable, transform_result_dco};
+use flutter_rust_bridge::for_generated::{transform_result_dco, Lifetimeable, Lockable};
 use flutter_rust_bridge::{Handler, IntoIntoDart};
 
 // Section: boilerplate
@@ -41,7 +43,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 507519854;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -641993000;
 
 // Section: executor
 
@@ -49,7 +51,7 @@ flutter_rust_bridge::frb_generated_default_handler!();
 
 // Section: wire_funcs
 
-fn wire__crate__flutter__Capabilities_default_impl(
+fn wire__crate__internal__screenshare__Capabilities_default_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -74,14 +76,15 @@ fn wire__crate__flutter__Capabilities_default_impl(
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, ()>((move || {
-                    let output_ok = Result::<_, ()>::Ok(crate::flutter::Capabilities::default())?;
+                    let output_ok =
+                        Result::<_, ()>::Ok(crate::internal::screenshare::Capabilities::default())?;
                     Ok(output_ok)
                 })())
             }
         },
     )
 }
-fn wire__crate__flutter__Capabilities_devices_impl(
+fn wire__crate__internal__screenshare__Capabilities_devices_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -121,14 +124,15 @@ fn wire__crate__flutter__Capabilities_devices_impl(
                     }
                 }
                 let api_that_guard = api_that_guard.unwrap();
-                let output_ok =
-                    Result::<_, ()>::Ok(crate::flutter::Capabilities::devices(&*api_that_guard))?;
+                let output_ok = Result::<_, ()>::Ok(
+                    crate::internal::screenshare::Capabilities::devices(&*api_that_guard),
+                )?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__flutter__Capabilities_encoders_impl(
+fn wire__crate__internal__screenshare__Capabilities_encoders_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -168,14 +172,15 @@ fn wire__crate__flutter__Capabilities_encoders_impl(
                     }
                 }
                 let api_that_guard = api_that_guard.unwrap();
-                let output_ok =
-                    Result::<_, ()>::Ok(crate::flutter::Capabilities::encoders(&*api_that_guard))?;
+                let output_ok = Result::<_, ()>::Ok(
+                    crate::internal::screenshare::Capabilities::encoders(&*api_that_guard),
+                )?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__flutter__ChatMessage_attachments_impl(
+fn wire__crate__types__ChatMessage_attachments_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -215,15 +220,14 @@ fn wire__crate__flutter__ChatMessage_attachments_impl(
                     }
                 }
                 let api_that_guard = api_that_guard.unwrap();
-                let output_ok = Result::<_, ()>::Ok(crate::flutter::ChatMessage::attachments(
-                    &*api_that_guard,
-                ))?;
+                let output_ok =
+                    Result::<_, ()>::Ok(crate::types::ChatMessage::attachments(&*api_that_guard))?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__flutter__ChatMessage_auto_accessor_get_text_impl(
+fn wire__crate__types__ChatMessage_auto_accessor_get_text_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -269,7 +273,7 @@ fn wire__crate__flutter__ChatMessage_auto_accessor_get_text_impl(
         },
     )
 }
-fn wire__crate__flutter__ChatMessage_auto_accessor_set_text_impl(
+fn wire__crate__types__ChatMessage_auto_accessor_set_text_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -320,7 +324,7 @@ fn wire__crate__flutter__ChatMessage_auto_accessor_set_text_impl(
         },
     )
 }
-fn wire__crate__flutter__ChatMessage_clear_attachments_impl(
+fn wire__crate__types__ChatMessage_clear_attachments_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -361,14 +365,14 @@ fn wire__crate__flutter__ChatMessage_clear_attachments_impl(
                 }
                 let mut api_that_guard = api_that_guard.unwrap();
                 let output_ok = Result::<_, ()>::Ok({
-                    crate::flutter::ChatMessage::clear_attachments(&mut *api_that_guard);
+                    crate::types::ChatMessage::clear_attachments(&mut *api_that_guard);
                 })?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__flutter__ChatMessage_is_sender_impl(
+fn wire__crate__types__ChatMessage_is_sender_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -409,7 +413,7 @@ fn wire__crate__flutter__ChatMessage_is_sender_impl(
                     }
                 }
                 let api_that_guard = api_that_guard.unwrap();
-                let output_ok = Result::<_, ()>::Ok(crate::flutter::ChatMessage::is_sender(
+                let output_ok = Result::<_, ()>::Ok(crate::types::ChatMessage::is_sender(
                     &*api_that_guard,
                     api_identity,
                 ))?;
@@ -418,7 +422,7 @@ fn wire__crate__flutter__ChatMessage_is_sender_impl(
         },
     )
 }
-fn wire__crate__flutter__ChatMessage_time_impl(
+fn wire__crate__types__ChatMessage_time_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -459,13 +463,13 @@ fn wire__crate__flutter__ChatMessage_time_impl(
                 }
                 let api_that_guard = api_that_guard.unwrap();
                 let output_ok =
-                    Result::<_, ()>::Ok(crate::flutter::ChatMessage::time(&*api_that_guard))?;
+                    Result::<_, ()>::Ok(crate::types::ChatMessage::time(&*api_that_guard))?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__flutter__CodecConfig_default_impl(
+fn wire__crate__types__CodecConfig_default_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -490,14 +494,14 @@ fn wire__crate__flutter__CodecConfig_default_impl(
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, ()>((move || {
-                    let output_ok = Result::<_, ()>::Ok(crate::flutter::CodecConfig::default())?;
+                    let output_ok = Result::<_, ()>::Ok(crate::types::CodecConfig::default())?;
                     Ok(output_ok)
                 })())
             }
         },
     )
 }
-fn wire__crate__flutter__CodecConfig_new_impl(
+fn wire__crate__types__CodecConfig_new_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -523,7 +527,7 @@ fn wire__crate__flutter__CodecConfig_new_impl(
             let api_residual_bits = <f32>::sse_decode(&mut deserializer);
             deserializer.end();
             transform_result_sse::<_, ()>((move || {
-                let output_ok = Result::<_, ()>::Ok(crate::flutter::CodecConfig::new(
+                let output_ok = Result::<_, ()>::Ok(crate::types::CodecConfig::new(
                     api_enabled,
                     api_vbr,
                     api_residual_bits,
@@ -533,7 +537,7 @@ fn wire__crate__flutter__CodecConfig_new_impl(
         },
     )
 }
-fn wire__crate__flutter__CodecConfig_set_enabled_impl(
+fn wire__crate__types__CodecConfig_set_enabled_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -575,14 +579,14 @@ fn wire__crate__flutter__CodecConfig_set_enabled_impl(
                 }
                 let api_that_guard = api_that_guard.unwrap();
                 let output_ok = Result::<_, ()>::Ok({
-                    crate::flutter::CodecConfig::set_enabled(&*api_that_guard, api_enabled);
+                    crate::types::CodecConfig::set_enabled(&*api_that_guard, api_enabled);
                 })?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__flutter__CodecConfig_set_residual_bits_impl(
+fn wire__crate__types__CodecConfig_set_residual_bits_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -624,7 +628,7 @@ fn wire__crate__flutter__CodecConfig_set_residual_bits_impl(
                 }
                 let api_that_guard = api_that_guard.unwrap();
                 let output_ok = Result::<_, ()>::Ok({
-                    crate::flutter::CodecConfig::set_residual_bits(
+                    crate::types::CodecConfig::set_residual_bits(
                         &*api_that_guard,
                         api_residual_bits,
                     );
@@ -634,7 +638,7 @@ fn wire__crate__flutter__CodecConfig_set_residual_bits_impl(
         },
     )
 }
-fn wire__crate__flutter__CodecConfig_set_vbr_impl(
+fn wire__crate__types__CodecConfig_set_vbr_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -676,14 +680,14 @@ fn wire__crate__flutter__CodecConfig_set_vbr_impl(
                 }
                 let api_that_guard = api_that_guard.unwrap();
                 let output_ok = Result::<_, ()>::Ok({
-                    crate::flutter::CodecConfig::set_vbr(&*api_that_guard, api_vbr);
+                    crate::types::CodecConfig::set_vbr(&*api_that_guard, api_vbr);
                 })?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__flutter__CodecConfig_to_values_impl(
+fn wire__crate__types__CodecConfig_to_values_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -724,13 +728,13 @@ fn wire__crate__flutter__CodecConfig_to_values_impl(
                 }
                 let api_that_guard = api_that_guard.unwrap();
                 let output_ok =
-                    Result::<_, ()>::Ok(crate::flutter::CodecConfig::to_values(&*api_that_guard))?;
+                    Result::<_, ()>::Ok(crate::types::CodecConfig::to_values(&*api_that_guard))?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__flutter__Contact_from_parts_impl(
+fn wire__crate__types__Contact_from_parts_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -757,13 +761,13 @@ fn wire__crate__flutter__Contact_from_parts_impl(
             deserializer.end();
             transform_result_sse::<_, crate::error::DartError>((move || {
                 let output_ok =
-                    crate::flutter::Contact::from_parts(api_id, api_nickname, api_peer_id)?;
+                    crate::types::Contact::from_parts(api_id, api_nickname, api_peer_id)?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__flutter__Contact_id_impl(
+fn wire__crate__types__Contact_id_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -803,13 +807,13 @@ fn wire__crate__flutter__Contact_id_impl(
                     }
                 }
                 let api_that_guard = api_that_guard.unwrap();
-                let output_ok = Result::<_, ()>::Ok(crate::flutter::Contact::id(&*api_that_guard))?;
+                let output_ok = Result::<_, ()>::Ok(crate::types::Contact::id(&*api_that_guard))?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__flutter__Contact_id_eq_impl(
+fn wire__crate__types__Contact_id_eq_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -851,13 +855,13 @@ fn wire__crate__flutter__Contact_id_eq_impl(
                 }
                 let api_that_guard = api_that_guard.unwrap();
                 let output_ok =
-                    Result::<_, ()>::Ok(crate::flutter::Contact::id_eq(&*api_that_guard, api_id))?;
+                    Result::<_, ()>::Ok(crate::types::Contact::id_eq(&*api_that_guard, api_id))?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__flutter__Contact_new_impl(
+fn wire__crate__types__Contact_new_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -882,13 +886,13 @@ fn wire__crate__flutter__Contact_new_impl(
             let api_peer_id = <String>::sse_decode(&mut deserializer);
             deserializer.end();
             transform_result_sse::<_, crate::error::DartError>((move || {
-                let output_ok = crate::flutter::Contact::new(api_nickname, api_peer_id)?;
+                let output_ok = crate::types::Contact::new(api_nickname, api_peer_id)?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__flutter__Contact_nickname_impl(
+fn wire__crate__types__Contact_nickname_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -929,13 +933,13 @@ fn wire__crate__flutter__Contact_nickname_impl(
                 }
                 let api_that_guard = api_that_guard.unwrap();
                 let output_ok =
-                    Result::<_, ()>::Ok(crate::flutter::Contact::nickname(&*api_that_guard))?;
+                    Result::<_, ()>::Ok(crate::types::Contact::nickname(&*api_that_guard))?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__flutter__Contact_peer_id_impl(
+fn wire__crate__types__Contact_peer_id_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -976,13 +980,13 @@ fn wire__crate__flutter__Contact_peer_id_impl(
                 }
                 let api_that_guard = api_that_guard.unwrap();
                 let output_ok =
-                    Result::<_, ()>::Ok(crate::flutter::Contact::peer_id(&*api_that_guard))?;
+                    Result::<_, ()>::Ok(crate::types::Contact::peer_id(&*api_that_guard))?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__flutter__Contact_pub_clone_impl(
+fn wire__crate__types__Contact_pub_clone_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -1023,13 +1027,13 @@ fn wire__crate__flutter__Contact_pub_clone_impl(
                 }
                 let api_that_guard = api_that_guard.unwrap();
                 let output_ok =
-                    Result::<_, ()>::Ok(crate::flutter::Contact::pub_clone(&*api_that_guard))?;
+                    Result::<_, ()>::Ok(crate::types::Contact::pub_clone(&*api_that_guard))?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__flutter__Contact_set_nickname_impl(
+fn wire__crate__types__Contact_set_nickname_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -1071,112 +1075,7 @@ fn wire__crate__flutter__Contact_set_nickname_impl(
                 }
                 let mut api_that_guard = api_that_guard.unwrap();
                 let output_ok = Result::<_, ()>::Ok({
-                    crate::flutter::Contact::set_nickname(&mut *api_that_guard, api_nickname);
-                })?;
-                Ok(output_ok)
-            })())
-        },
-    )
-}
-fn wire__crate__flutter__DartNotify_notified_impl(
-    port_: flutter_rust_bridge::for_generated::MessagePort,
-    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
-    rust_vec_len_: i32,
-    data_len_: i32,
-) {
-    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
-        flutter_rust_bridge::for_generated::TaskInfo {
-            debug_name: "DartNotify_notified",
-            port: Some(port_),
-            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
-        },
-        move || {
-            let message = unsafe {
-                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
-                    ptr_,
-                    rust_vec_len_,
-                    data_len_,
-                )
-            };
-            let mut deserializer =
-                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
-            let api_that = <RustOpaqueMoi<
-                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<DartNotify>,
-            >>::sse_decode(&mut deserializer);
-            deserializer.end();
-            move |context| async move {
-                transform_result_sse::<_, ()>(
-                    (move || async move {
-                        let mut api_that_guard = None;
-                        let decode_indices_ =
-                            flutter_rust_bridge::for_generated::lockable_compute_decode_order(
-                                vec![flutter_rust_bridge::for_generated::LockableOrderInfo::new(
-                                    &api_that, 0, false,
-                                )],
-                            );
-                        for i in decode_indices_ {
-                            match i {
-                                0 => {
-                                    api_that_guard =
-                                        Some(api_that.lockable_decode_async_ref().await)
-                                }
-                                _ => unreachable!(),
-                            }
-                        }
-                        let api_that_guard = api_that_guard.unwrap();
-                        let output_ok = Result::<_, ()>::Ok({
-                            crate::flutter::DartNotify::notified(&*api_that_guard).await;
-                        })?;
-                        Ok(output_ok)
-                    })()
-                    .await,
-                )
-            }
-        },
-    )
-}
-fn wire__crate__flutter__DartNotify_notify_impl(
-    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
-    rust_vec_len_: i32,
-    data_len_: i32,
-) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
-    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
-        flutter_rust_bridge::for_generated::TaskInfo {
-            debug_name: "DartNotify_notify",
-            port: None,
-            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
-        },
-        move || {
-            let message = unsafe {
-                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
-                    ptr_,
-                    rust_vec_len_,
-                    data_len_,
-                )
-            };
-            let mut deserializer =
-                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
-            let api_that = <RustOpaqueMoi<
-                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<DartNotify>,
-            >>::sse_decode(&mut deserializer);
-            deserializer.end();
-            transform_result_sse::<_, ()>((move || {
-                let mut api_that_guard = None;
-                let decode_indices_ =
-                    flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
-                        flutter_rust_bridge::for_generated::LockableOrderInfo::new(
-                            &api_that, 0, false,
-                        ),
-                    ]);
-                for i in decode_indices_ {
-                    match i {
-                        0 => api_that_guard = Some(api_that.lockable_decode_sync_ref()),
-                        _ => unreachable!(),
-                    }
-                }
-                let api_that_guard = api_that_guard.unwrap();
-                let output_ok = Result::<_, ()>::Ok({
-                    crate::flutter::DartNotify::notify(&*api_that_guard);
+                    crate::types::Contact::set_nickname(&mut *api_that_guard, api_nickname);
                 })?;
                 Ok(output_ok)
             })())
@@ -1191,7 +1090,7 @@ fn wire__crate__flutter__FlutterCallbacks_new_impl(
     FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec,_>(flutter_rust_bridge::for_generated::TaskInfo{ debug_name: "FlutterCallbacks_new", port: None, mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync }, move || { 
             let message = unsafe { flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(ptr_, rust_vec_len_, data_len_) };
             let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
-            let api_accept_call = decode_DartFn_Inputs_record_string_opt_list_prim_u_8_strict_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_dart_notify_Output_bool_AnyhowException(<flutter_rust_bridge::DartOpaque>::sse_decode(&mut deserializer));
+            let api_accept_call = decode_DartFn_Inputs_record_string_opt_list_prim_u_8_strict_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_Output_bool_AnyhowException(<flutter_rust_bridge::DartOpaque>::sse_decode(&mut deserializer));
 let api_get_contact = decode_DartFn_Inputs_list_prim_u_8_strict_Output_opt_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerContact_AnyhowException(<flutter_rust_bridge::DartOpaque>::sse_decode(&mut deserializer));
 let api_call_state = decode_DartFn_Inputs_call_state_Output_unit_AnyhowException(<flutter_rust_bridge::DartOpaque>::sse_decode(&mut deserializer));
 let api_session_status = decode_DartFn_Inputs_record_string_session_status_Output_unit_AnyhowException(<flutter_rust_bridge::DartOpaque>::sse_decode(&mut deserializer));
@@ -1199,7 +1098,7 @@ let api_get_contacts = decode_DartFn_Inputs_unit_Output_list_Auto_Owned_RustOpaq
 let api_statistics = decode_DartFn_Inputs_statistics_Output_unit_AnyhowException(<flutter_rust_bridge::DartOpaque>::sse_decode(&mut deserializer));
 let api_message_received = decode_DartFn_Inputs_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerChatMessage_Output_unit_AnyhowException(<flutter_rust_bridge::DartOpaque>::sse_decode(&mut deserializer));
 let api_manager_active = decode_DartFn_Inputs_record_bool_bool_Output_unit_AnyhowException(<flutter_rust_bridge::DartOpaque>::sse_decode(&mut deserializer));
-let api_screenshare_started = decode_DartFn_Inputs_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_dart_notify_bool_Output_unit_AnyhowException(<flutter_rust_bridge::DartOpaque>::sse_decode(&mut deserializer));deserializer.end();
+let api_screenshare_started = decode_DartFn_Inputs_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_bool_Output_unit_AnyhowException(<flutter_rust_bridge::DartOpaque>::sse_decode(&mut deserializer));deserializer.end();
                 transform_result_sse::<_, ()>((move || {
                      let output_ok = Result::<_,()>::Ok(crate::flutter::FlutterCallbacks::new(api_accept_call, api_get_contact, api_call_state, api_session_status, api_get_contacts, api_statistics, api_message_received, api_manager_active, api_screenshare_started))?;   Ok(output_ok)
                 })()) })
@@ -1252,7 +1151,112 @@ fn wire__crate__audio__player__FlutterSoundHandle_cancel_impl(
         },
     )
 }
-fn wire__crate__flutter__NetworkConfig_default_impl(
+fn wire__crate__types__FrontendNotify_notified_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "FrontendNotify_notified",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<FrontendNotify>,
+            >>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| async move {
+                transform_result_sse::<_, ()>(
+                    (move || async move {
+                        let mut api_that_guard = None;
+                        let decode_indices_ =
+                            flutter_rust_bridge::for_generated::lockable_compute_decode_order(
+                                vec![flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                                    &api_that, 0, false,
+                                )],
+                            );
+                        for i in decode_indices_ {
+                            match i {
+                                0 => {
+                                    api_that_guard =
+                                        Some(api_that.lockable_decode_async_ref().await)
+                                }
+                                _ => unreachable!(),
+                            }
+                        }
+                        let api_that_guard = api_that_guard.unwrap();
+                        let output_ok = Result::<_, ()>::Ok({
+                            crate::types::FrontendNotify::notified(&*api_that_guard).await;
+                        })?;
+                        Ok(output_ok)
+                    })()
+                    .await,
+                )
+            }
+        },
+    )
+}
+fn wire__crate__types__FrontendNotify_notify_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "FrontendNotify_notify",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<FrontendNotify>,
+            >>::sse_decode(&mut deserializer);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let mut api_that_guard = None;
+                let decode_indices_ =
+                    flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
+                        flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                            &api_that, 0, false,
+                        ),
+                    ]);
+                for i in decode_indices_ {
+                    match i {
+                        0 => api_that_guard = Some(api_that.lockable_decode_sync_ref()),
+                        _ => unreachable!(),
+                    }
+                }
+                let api_that_guard = api_that_guard.unwrap();
+                let output_ok = Result::<_, ()>::Ok({
+                    crate::types::FrontendNotify::notify(&*api_that_guard);
+                })?;
+                Ok(output_ok)
+            })())
+        },
+    )
+}
+fn wire__crate__types__NetworkConfig_default_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -1277,14 +1281,14 @@ fn wire__crate__flutter__NetworkConfig_default_impl(
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, ()>((move || {
-                    let output_ok = Result::<_, ()>::Ok(crate::flutter::NetworkConfig::default())?;
+                    let output_ok = Result::<_, ()>::Ok(crate::types::NetworkConfig::default())?;
                     Ok(output_ok)
                 })())
             }
         },
     )
 }
-fn wire__crate__flutter__NetworkConfig_get_relay_address_impl(
+fn wire__crate__types__NetworkConfig_get_relay_address_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -1331,8 +1335,7 @@ fn wire__crate__flutter__NetworkConfig_get_relay_address_impl(
                         }
                         let api_that_guard = api_that_guard.unwrap();
                         let output_ok = Result::<_, ()>::Ok(
-                            crate::flutter::NetworkConfig::get_relay_address(&*api_that_guard)
-                                .await,
+                            crate::types::NetworkConfig::get_relay_address(&*api_that_guard).await,
                         )?;
                         Ok(output_ok)
                     })()
@@ -1342,7 +1345,7 @@ fn wire__crate__flutter__NetworkConfig_get_relay_address_impl(
         },
     )
 }
-fn wire__crate__flutter__NetworkConfig_get_relay_id_impl(
+fn wire__crate__types__NetworkConfig_get_relay_id_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -1389,7 +1392,7 @@ fn wire__crate__flutter__NetworkConfig_get_relay_id_impl(
                         }
                         let api_that_guard = api_that_guard.unwrap();
                         let output_ok = Result::<_, ()>::Ok(
-                            crate::flutter::NetworkConfig::get_relay_id(&*api_that_guard).await,
+                            crate::types::NetworkConfig::get_relay_id(&*api_that_guard).await,
                         )?;
                         Ok(output_ok)
                     })()
@@ -1399,7 +1402,7 @@ fn wire__crate__flutter__NetworkConfig_get_relay_id_impl(
         },
     )
 }
-fn wire__crate__flutter__NetworkConfig_new_impl(
+fn wire__crate__types__NetworkConfig_new_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -1424,14 +1427,13 @@ fn wire__crate__flutter__NetworkConfig_new_impl(
             let api_relay_id = <String>::sse_decode(&mut deserializer);
             deserializer.end();
             transform_result_sse::<_, crate::error::DartError>((move || {
-                let output_ok =
-                    crate::flutter::NetworkConfig::new(api_relay_address, api_relay_id)?;
+                let output_ok = crate::types::NetworkConfig::new(api_relay_address, api_relay_id)?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__flutter__NetworkConfig_set_relay_address_impl(
+fn wire__crate__types__NetworkConfig_set_relay_address_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -1478,7 +1480,7 @@ fn wire__crate__flutter__NetworkConfig_set_relay_address_impl(
                             }
                         }
                         let api_that_guard = api_that_guard.unwrap();
-                        let output_ok = crate::flutter::NetworkConfig::set_relay_address(
+                        let output_ok = crate::types::NetworkConfig::set_relay_address(
                             &*api_that_guard,
                             api_relay_address,
                         )
@@ -1491,7 +1493,7 @@ fn wire__crate__flutter__NetworkConfig_set_relay_address_impl(
         },
     )
 }
-fn wire__crate__flutter__NetworkConfig_set_relay_id_impl(
+fn wire__crate__types__NetworkConfig_set_relay_id_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -1538,7 +1540,7 @@ fn wire__crate__flutter__NetworkConfig_set_relay_id_impl(
                             }
                         }
                         let api_that_guard = api_that_guard.unwrap();
-                        let output_ok = crate::flutter::NetworkConfig::set_relay_id(
+                        let output_ok = crate::types::NetworkConfig::set_relay_id(
                             &*api_that_guard,
                             api_relay_id,
                         )
@@ -2123,7 +2125,7 @@ fn wire__crate__overlay__overlay__Overlay_show_impl(
         },
     )
 }
-fn wire__crate__flutter__RecordingConfig_bitrate_impl(
+fn wire__crate__internal__screenshare__RecordingConfig_bitrate_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -2163,15 +2165,15 @@ fn wire__crate__flutter__RecordingConfig_bitrate_impl(
                     }
                 }
                 let api_that_guard = api_that_guard.unwrap();
-                let output_ok = Result::<_, ()>::Ok(crate::flutter::RecordingConfig::bitrate(
-                    &*api_that_guard,
-                ))?;
+                let output_ok = Result::<_, ()>::Ok(
+                    crate::internal::screenshare::RecordingConfig::bitrate(&*api_that_guard),
+                )?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__flutter__RecordingConfig_device_impl(
+fn wire__crate__internal__screenshare__RecordingConfig_device_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -2211,14 +2213,15 @@ fn wire__crate__flutter__RecordingConfig_device_impl(
                     }
                 }
                 let api_that_guard = api_that_guard.unwrap();
-                let output_ok =
-                    Result::<_, ()>::Ok(crate::flutter::RecordingConfig::device(&*api_that_guard))?;
+                let output_ok = Result::<_, ()>::Ok(
+                    crate::internal::screenshare::RecordingConfig::device(&*api_that_guard),
+                )?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__flutter__RecordingConfig_encoder_impl(
+fn wire__crate__internal__screenshare__RecordingConfig_encoder_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -2258,15 +2261,15 @@ fn wire__crate__flutter__RecordingConfig_encoder_impl(
                     }
                 }
                 let api_that_guard = api_that_guard.unwrap();
-                let output_ok = Result::<_, ()>::Ok(crate::flutter::RecordingConfig::encoder(
-                    &*api_that_guard,
-                ))?;
+                let output_ok = Result::<_, ()>::Ok(
+                    crate::internal::screenshare::RecordingConfig::encoder(&*api_that_guard),
+                )?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__flutter__RecordingConfig_framerate_impl(
+fn wire__crate__internal__screenshare__RecordingConfig_framerate_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -2306,15 +2309,15 @@ fn wire__crate__flutter__RecordingConfig_framerate_impl(
                     }
                 }
                 let api_that_guard = api_that_guard.unwrap();
-                let output_ok = Result::<_, ()>::Ok(crate::flutter::RecordingConfig::framerate(
-                    &*api_that_guard,
-                ))?;
+                let output_ok = Result::<_, ()>::Ok(
+                    crate::internal::screenshare::RecordingConfig::framerate(&*api_that_guard),
+                )?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__flutter__RecordingConfig_height_impl(
+fn wire__crate__internal__screenshare__RecordingConfig_height_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -2354,14 +2357,15 @@ fn wire__crate__flutter__RecordingConfig_height_impl(
                     }
                 }
                 let api_that_guard = api_that_guard.unwrap();
-                let output_ok =
-                    Result::<_, ()>::Ok(crate::flutter::RecordingConfig::height(&*api_that_guard))?;
+                let output_ok = Result::<_, ()>::Ok(
+                    crate::internal::screenshare::RecordingConfig::height(&*api_that_guard),
+                )?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__flutter__ScreenshareConfig_capabilities_impl(
+fn wire__crate__types__ScreenshareConfig_capabilities_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -2408,7 +2412,7 @@ fn wire__crate__flutter__ScreenshareConfig_capabilities_impl(
                         }
                         let api_that_guard = api_that_guard.unwrap();
                         let output_ok = Result::<_, ()>::Ok(
-                            crate::flutter::ScreenshareConfig::capabilities(&*api_that_guard).await,
+                            crate::types::ScreenshareConfig::capabilities(&*api_that_guard).await,
                         )?;
                         Ok(output_ok)
                     })()
@@ -2418,7 +2422,7 @@ fn wire__crate__flutter__ScreenshareConfig_capabilities_impl(
         },
     )
 }
-fn wire__crate__flutter__ScreenshareConfig_default_impl(
+fn wire__crate__types__ScreenshareConfig_default_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -2444,14 +2448,14 @@ fn wire__crate__flutter__ScreenshareConfig_default_impl(
             move |context| {
                 transform_result_sse::<_, ()>((move || {
                     let output_ok =
-                        Result::<_, ()>::Ok(crate::flutter::ScreenshareConfig::default())?;
+                        Result::<_, ()>::Ok(crate::types::ScreenshareConfig::default())?;
                     Ok(output_ok)
                 })())
             }
         },
     )
 }
-fn wire__crate__flutter__ScreenshareConfig_new_impl(
+fn wire__crate__types__ScreenshareConfig_new_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -2479,7 +2483,7 @@ fn wire__crate__flutter__ScreenshareConfig_new_impl(
                 transform_result_sse::<_, ()>(
                     (move || async move {
                         let output_ok = Result::<_, ()>::Ok(
-                            crate::flutter::ScreenshareConfig::new(api_buffer).await,
+                            crate::types::ScreenshareConfig::new(api_buffer).await,
                         )?;
                         Ok(output_ok)
                     })()
@@ -2489,7 +2493,7 @@ fn wire__crate__flutter__ScreenshareConfig_new_impl(
         },
     )
 }
-fn wire__crate__flutter__ScreenshareConfig_recording_config_impl(
+fn wire__crate__types__ScreenshareConfig_recording_config_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -2536,7 +2540,7 @@ fn wire__crate__flutter__ScreenshareConfig_recording_config_impl(
                         }
                         let api_that_guard = api_that_guard.unwrap();
                         let output_ok = Result::<_, ()>::Ok(
-                            crate::flutter::ScreenshareConfig::recording_config(&*api_that_guard)
+                            crate::types::ScreenshareConfig::recording_config(&*api_that_guard)
                                 .await,
                         )?;
                         Ok(output_ok)
@@ -2547,7 +2551,7 @@ fn wire__crate__flutter__ScreenshareConfig_recording_config_impl(
         },
     )
 }
-fn wire__crate__flutter__ScreenshareConfig_to_bytes_impl(
+fn wire__crate__types__ScreenshareConfig_to_bytes_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -2587,13 +2591,13 @@ fn wire__crate__flutter__ScreenshareConfig_to_bytes_impl(
                     }
                 }
                 let api_that_guard = api_that_guard.unwrap();
-                let output_ok = crate::flutter::ScreenshareConfig::to_bytes(&*api_that_guard)?;
+                let output_ok = crate::types::ScreenshareConfig::to_bytes(&*api_that_guard)?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__flutter__ScreenshareConfig_update_recording_config_impl(
+fn wire__crate__types__ScreenshareConfig_update_recording_config_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -2644,7 +2648,7 @@ fn wire__crate__flutter__ScreenshareConfig_update_recording_config_impl(
                             }
                         }
                         let api_that_guard = api_that_guard.unwrap();
-                        let output_ok = crate::flutter::ScreenshareConfig::update_recording_config(
+                        let output_ok = crate::types::ScreenshareConfig::update_recording_config(
                             &*api_that_guard,
                             api_encoder,
                             api_device,
@@ -4862,7 +4866,7 @@ fn wire__crate__flutter__send_to_dart_logger_set_stream_sink_impl(
         },
     )
 }
-fn wire__crate__flutter__statistics_default_impl(
+fn wire__crate__types__statistics_default_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -4887,7 +4891,7 @@ fn wire__crate__flutter__statistics_default_impl(
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, ()>((move || {
-                    let output_ok = Result::<_, ()>::Ok(crate::flutter::Statistics::default())?;
+                    let output_ok = Result::<_, ()>::Ok(crate::types::Statistics::default())?;
                     Ok(output_ok)
                 })())
             }
@@ -4961,12 +4965,12 @@ fn decode_DartFn_Inputs_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRu
 }
 fn decode_DartFn_Inputs_call_state_Output_unit_AnyhowException(
     dart_opaque: flutter_rust_bridge::DartOpaque,
-) -> impl Fn(crate::flutter::CallState) -> flutter_rust_bridge::DartFnFuture<()> {
+) -> impl Fn(crate::types::CallState) -> flutter_rust_bridge::DartFnFuture<()> {
     use flutter_rust_bridge::IntoDart;
 
     async fn body(
         dart_opaque: flutter_rust_bridge::DartOpaque,
-        arg0: crate::flutter::CallState,
+        arg0: crate::types::CallState,
     ) -> () {
         let args = vec![arg0.into_into_dart().into_dart()];
         let message = FLUTTER_RUST_BRIDGE_HANDLER
@@ -4987,7 +4991,7 @@ fn decode_DartFn_Inputs_call_state_Output_unit_AnyhowException(
         ans
     }
 
-    move |arg0: crate::flutter::CallState| {
+    move |arg0: crate::types::CallState| {
         flutter_rust_bridge::for_generated::convert_into_dart_fn_future(body(
             dart_opaque.clone(),
             arg0,
@@ -5026,12 +5030,15 @@ fn decode_DartFn_Inputs_list_prim_u_8_strict_Output_opt_box_autoadd_Auto_Owned_R
         ))
     }
 }
-fn decode_DartFn_Inputs_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_dart_notify_bool_Output_unit_AnyhowException(
+fn decode_DartFn_Inputs_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_bool_Output_unit_AnyhowException(
     dart_opaque: flutter_rust_bridge::DartOpaque,
-) -> impl Fn((DartNotify, bool)) -> flutter_rust_bridge::DartFnFuture<()> {
+) -> impl Fn((FrontendNotify, bool)) -> flutter_rust_bridge::DartFnFuture<()> {
     use flutter_rust_bridge::IntoDart;
 
-    async fn body(dart_opaque: flutter_rust_bridge::DartOpaque, arg0: (DartNotify, bool)) -> () {
+    async fn body(
+        dart_opaque: flutter_rust_bridge::DartOpaque,
+        arg0: (FrontendNotify, bool),
+    ) -> () {
         let args = vec![arg0.into_into_dart().into_dart()];
         let message = FLUTTER_RUST_BRIDGE_HANDLER
             .dart_fn_invoke(dart_opaque, args)
@@ -5051,7 +5058,7 @@ fn decode_DartFn_Inputs_record_auto_owned_rust_opaque_flutter_rust_bridgefor_gen
         ans
     }
 
-    move |arg0: (DartNotify, bool)| {
+    move |arg0: (FrontendNotify, bool)| {
         flutter_rust_bridge::for_generated::convert_into_dart_fn_future(body(
             dart_opaque.clone(),
             arg0,
@@ -5090,14 +5097,14 @@ fn decode_DartFn_Inputs_record_bool_bool_Output_unit_AnyhowException(
         ))
     }
 }
-fn decode_DartFn_Inputs_record_string_opt_list_prim_u_8_strict_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_dart_notify_Output_bool_AnyhowException(
+fn decode_DartFn_Inputs_record_string_opt_list_prim_u_8_strict_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_Output_bool_AnyhowException(
     dart_opaque: flutter_rust_bridge::DartOpaque,
-) -> impl Fn((String, Option<Vec<u8>>, DartNotify)) -> flutter_rust_bridge::DartFnFuture<bool> {
+) -> impl Fn((String, Option<Vec<u8>>, FrontendNotify)) -> flutter_rust_bridge::DartFnFuture<bool> {
     use flutter_rust_bridge::IntoDart;
 
     async fn body(
         dart_opaque: flutter_rust_bridge::DartOpaque,
-        arg0: (String, Option<Vec<u8>>, DartNotify),
+        arg0: (String, Option<Vec<u8>>, FrontendNotify),
     ) -> bool {
         let args = vec![arg0.into_into_dart().into_dart()];
         let message = FLUTTER_RUST_BRIDGE_HANDLER
@@ -5118,7 +5125,7 @@ fn decode_DartFn_Inputs_record_string_opt_list_prim_u_8_strict_auto_owned_rust_o
         ans
     }
 
-    move |arg0: (String, Option<Vec<u8>>, DartNotify)| {
+    move |arg0: (String, Option<Vec<u8>>, FrontendNotify)| {
         flutter_rust_bridge::for_generated::convert_into_dart_fn_future(body(
             dart_opaque.clone(),
             arg0,
@@ -5127,12 +5134,12 @@ fn decode_DartFn_Inputs_record_string_opt_list_prim_u_8_strict_auto_owned_rust_o
 }
 fn decode_DartFn_Inputs_record_string_session_status_Output_unit_AnyhowException(
     dart_opaque: flutter_rust_bridge::DartOpaque,
-) -> impl Fn((String, crate::flutter::SessionStatus)) -> flutter_rust_bridge::DartFnFuture<()> {
+) -> impl Fn((String, crate::types::SessionStatus)) -> flutter_rust_bridge::DartFnFuture<()> {
     use flutter_rust_bridge::IntoDart;
 
     async fn body(
         dart_opaque: flutter_rust_bridge::DartOpaque,
-        arg0: (String, crate::flutter::SessionStatus),
+        arg0: (String, crate::types::SessionStatus),
     ) -> () {
         let args = vec![arg0.into_into_dart().into_dart()];
         let message = FLUTTER_RUST_BRIDGE_HANDLER
@@ -5153,7 +5160,7 @@ fn decode_DartFn_Inputs_record_string_session_status_Output_unit_AnyhowException
         ans
     }
 
-    move |arg0: (String, crate::flutter::SessionStatus)| {
+    move |arg0: (String, crate::types::SessionStatus)| {
         flutter_rust_bridge::for_generated::convert_into_dart_fn_future(body(
             dart_opaque.clone(),
             arg0,
@@ -5162,12 +5169,12 @@ fn decode_DartFn_Inputs_record_string_session_status_Output_unit_AnyhowException
 }
 fn decode_DartFn_Inputs_statistics_Output_unit_AnyhowException(
     dart_opaque: flutter_rust_bridge::DartOpaque,
-) -> impl Fn(crate::flutter::Statistics) -> flutter_rust_bridge::DartFnFuture<()> {
+) -> impl Fn(crate::types::Statistics) -> flutter_rust_bridge::DartFnFuture<()> {
     use flutter_rust_bridge::IntoDart;
 
     async fn body(
         dart_opaque: flutter_rust_bridge::DartOpaque,
-        arg0: crate::flutter::Statistics,
+        arg0: crate::types::Statistics,
     ) -> () {
         let args = vec![arg0.into_into_dart().into_dart()];
         let message = FLUTTER_RUST_BRIDGE_HANDLER
@@ -5188,7 +5195,7 @@ fn decode_DartFn_Inputs_statistics_Output_unit_AnyhowException(
         ans
     }
 
-    move |arg0: crate::flutter::Statistics| {
+    move |arg0: crate::types::Statistics| {
         flutter_rust_bridge::for_generated::convert_into_dart_fn_future(body(
             dart_opaque.clone(),
             arg0,
@@ -5243,13 +5250,13 @@ flutter_rust_bridge::frb_generated_moi_arc_impl_value!(
     flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Contact>
 );
 flutter_rust_bridge::frb_generated_moi_arc_impl_value!(
-    flutter_rust_bridge::for_generated::RustAutoOpaqueInner<DartNotify>
-);
-flutter_rust_bridge::frb_generated_moi_arc_impl_value!(
     flutter_rust_bridge::for_generated::RustAutoOpaqueInner<FlutterCallbacks>
 );
 flutter_rust_bridge::frb_generated_moi_arc_impl_value!(
     flutter_rust_bridge::for_generated::RustAutoOpaqueInner<FlutterSoundHandle>
+);
+flutter_rust_bridge::frb_generated_moi_arc_impl_value!(
+    flutter_rust_bridge::for_generated::RustAutoOpaqueInner<FrontendNotify>
 );
 flutter_rust_bridge::frb_generated_moi_arc_impl_value!(
     flutter_rust_bridge::for_generated::RustAutoOpaqueInner<NetworkConfig>
@@ -5330,16 +5337,6 @@ impl SseDecode for Contact {
     }
 }
 
-impl SseDecode for DartNotify {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
-        let mut inner = <RustOpaqueMoi<
-            flutter_rust_bridge::for_generated::RustAutoOpaqueInner<DartNotify>,
-        >>::sse_decode(deserializer);
-        return flutter_rust_bridge::for_generated::rust_auto_opaque_decode_owned(inner);
-    }
-}
-
 impl SseDecode for FlutterCallbacks {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -5355,6 +5352,16 @@ impl SseDecode for FlutterSoundHandle {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut inner = <RustOpaqueMoi<
             flutter_rust_bridge::for_generated::RustAutoOpaqueInner<FlutterSoundHandle>,
+        >>::sse_decode(deserializer);
+        return flutter_rust_bridge::for_generated::rust_auto_opaque_decode_owned(inner);
+    }
+}
+
+impl SseDecode for FrontendNotify {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut inner = <RustOpaqueMoi<
+            flutter_rust_bridge::for_generated::RustAutoOpaqueInner<FrontendNotify>,
         >>::sse_decode(deserializer);
         return flutter_rust_bridge::for_generated::rust_auto_opaque_decode_owned(inner);
     }
@@ -5477,16 +5484,6 @@ impl SseDecode for RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpa
 }
 
 impl SseDecode
-    for RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<DartNotify>>
-{
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
-        let mut inner = <usize>::sse_decode(deserializer);
-        return decode_rust_opaque_moi(inner);
-    }
-}
-
-impl SseDecode
     for RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<FlutterCallbacks>>
 {
     // Codec=Sse (Serialization based), see doc to use other codecs
@@ -5498,6 +5495,16 @@ impl SseDecode
 
 impl SseDecode
     for RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<FlutterSoundHandle>>
+{
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut inner = <usize>::sse_decode(deserializer);
+        return decode_rust_opaque_moi(inner);
+    }
+}
+
+impl SseDecode
+    for RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<FrontendNotify>>
 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -5599,29 +5606,29 @@ impl SseDecode for bool {
     }
 }
 
-impl SseDecode for crate::flutter::CallState {
+impl SseDecode for crate::types::CallState {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut tag_ = <i32>::sse_decode(deserializer);
         match tag_ {
             0 => {
-                return crate::flutter::CallState::Connected;
+                return crate::types::CallState::Connected;
             }
             1 => {
-                return crate::flutter::CallState::Waiting;
+                return crate::types::CallState::Waiting;
             }
             2 => {
                 let mut var_field0 = <String>::sse_decode(deserializer);
-                return crate::flutter::CallState::RoomJoin(var_field0);
+                return crate::types::CallState::RoomJoin(var_field0);
             }
             3 => {
                 let mut var_field0 = <String>::sse_decode(deserializer);
-                return crate::flutter::CallState::RoomLeave(var_field0);
+                return crate::types::CallState::RoomLeave(var_field0);
             }
             4 => {
                 let mut var_field0 = <String>::sse_decode(deserializer);
                 let mut var_field1 = <bool>::sse_decode(deserializer);
-                return crate::flutter::CallState::CallEnded(var_field0, var_field1);
+                return crate::types::CallState::CallEnded(var_field0, var_field1);
             }
             _ => {
                 unimplemented!("");
@@ -5776,10 +5783,10 @@ impl SseDecode for Option<Vec<u8>> {
     }
 }
 
-impl SseDecode for (DartNotify, bool) {
+impl SseDecode for (FrontendNotify, bool) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
-        let mut var_field0 = <DartNotify>::sse_decode(deserializer);
+        let mut var_field0 = <FrontendNotify>::sse_decode(deserializer);
         let mut var_field1 = <bool>::sse_decode(deserializer);
         return (var_field0, var_field1);
     }
@@ -5831,21 +5838,21 @@ impl SseDecode for (String, Vec<u8>) {
     }
 }
 
-impl SseDecode for (String, Option<Vec<u8>>, DartNotify) {
+impl SseDecode for (String, Option<Vec<u8>>, FrontendNotify) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_field0 = <String>::sse_decode(deserializer);
         let mut var_field1 = <Option<Vec<u8>>>::sse_decode(deserializer);
-        let mut var_field2 = <DartNotify>::sse_decode(deserializer);
+        let mut var_field2 = <FrontendNotify>::sse_decode(deserializer);
         return (var_field0, var_field1, var_field2);
     }
 }
 
-impl SseDecode for (String, crate::flutter::SessionStatus) {
+impl SseDecode for (String, crate::types::SessionStatus) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_field0 = <String>::sse_decode(deserializer);
-        let mut var_field1 = <crate::flutter::SessionStatus>::sse_decode(deserializer);
+        let mut var_field1 = <crate::types::SessionStatus>::sse_decode(deserializer);
         return (var_field0, var_field1);
     }
 }
@@ -5857,27 +5864,27 @@ impl SseDecode for crate::flutter::SendToDartLogger {
     }
 }
 
-impl SseDecode for crate::flutter::SessionStatus {
+impl SseDecode for crate::types::SessionStatus {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut tag_ = <i32>::sse_decode(deserializer);
         match tag_ {
             0 => {
-                return crate::flutter::SessionStatus::Connecting;
+                return crate::types::SessionStatus::Connecting;
             }
             1 => {
                 let mut var_relayed = <bool>::sse_decode(deserializer);
                 let mut var_remoteAddress = <String>::sse_decode(deserializer);
-                return crate::flutter::SessionStatus::Connected {
+                return crate::types::SessionStatus::Connected {
                     relayed: var_relayed,
                     remote_address: var_remoteAddress,
                 };
             }
             2 => {
-                return crate::flutter::SessionStatus::Inactive;
+                return crate::types::SessionStatus::Inactive;
             }
             3 => {
-                return crate::flutter::SessionStatus::Unknown;
+                return crate::types::SessionStatus::Unknown;
             }
             _ => {
                 unimplemented!("");
@@ -5886,7 +5893,7 @@ impl SseDecode for crate::flutter::SessionStatus {
     }
 }
 
-impl SseDecode for crate::flutter::Statistics {
+impl SseDecode for crate::types::Statistics {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_inputLevel = <f32>::sse_decode(deserializer);
@@ -5895,7 +5902,7 @@ impl SseDecode for crate::flutter::Statistics {
         let mut var_uploadBandwidth = <usize>::sse_decode(deserializer);
         let mut var_downloadBandwidth = <usize>::sse_decode(deserializer);
         let mut var_loss = <usize>::sse_decode(deserializer);
-        return crate::flutter::Statistics {
+        return crate::types::Statistics {
             input_level: var_inputLevel,
             output_level: var_outputLevel,
             latency: var_latency,
@@ -5941,27 +5948,32 @@ fn pde_ffi_dispatcher_primary_impl(
 ) {
     // Codec=Pde (Serialization + dispatch), see doc to use other codecs
     match func_id {
-        1 => wire__crate__flutter__Capabilities_default_impl(port, ptr, rust_vec_len, data_len),
-        10 => wire__crate__flutter__CodecConfig_default_impl(port, ptr, rust_vec_len, data_len),
-        24 => wire__crate__flutter__DartNotify_notified_impl(port, ptr, rust_vec_len, data_len),
-        28 => wire__crate__flutter__NetworkConfig_default_impl(port, ptr, rust_vec_len, data_len),
-        29 => wire__crate__flutter__NetworkConfig_get_relay_address_impl(
+        1 => wire__crate__internal__screenshare__Capabilities_default_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        10 => wire__crate__types__CodecConfig_default_impl(port, ptr, rust_vec_len, data_len),
+        26 => wire__crate__types__FrontendNotify_notified_impl(port, ptr, rust_vec_len, data_len),
+        28 => wire__crate__types__NetworkConfig_default_impl(port, ptr, rust_vec_len, data_len),
+        29 => wire__crate__types__NetworkConfig_get_relay_address_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
         30 => {
-            wire__crate__flutter__NetworkConfig_get_relay_id_impl(port, ptr, rust_vec_len, data_len)
+            wire__crate__types__NetworkConfig_get_relay_id_impl(port, ptr, rust_vec_len, data_len)
         }
-        32 => wire__crate__flutter__NetworkConfig_set_relay_address_impl(
+        32 => wire__crate__types__NetworkConfig_set_relay_address_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
         33 => {
-            wire__crate__flutter__NetworkConfig_set_relay_id_impl(port, ptr, rust_vec_len, data_len)
+            wire__crate__types__NetworkConfig_set_relay_id_impl(port, ptr, rust_vec_len, data_len)
         }
         34 => {
             wire__crate__overlay__overlay__Overlay_default_impl(port, ptr, rust_vec_len, data_len)
@@ -5997,23 +6009,21 @@ fn pde_ffi_dispatcher_primary_impl(
             data_len,
         ),
         44 => wire__crate__overlay__overlay__Overlay_show_impl(port, ptr, rust_vec_len, data_len),
-        50 => wire__crate__flutter__ScreenshareConfig_capabilities_impl(
+        50 => wire__crate__types__ScreenshareConfig_capabilities_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        51 => {
-            wire__crate__flutter__ScreenshareConfig_default_impl(port, ptr, rust_vec_len, data_len)
-        }
-        52 => wire__crate__flutter__ScreenshareConfig_new_impl(port, ptr, rust_vec_len, data_len),
-        53 => wire__crate__flutter__ScreenshareConfig_recording_config_impl(
+        51 => wire__crate__types__ScreenshareConfig_default_impl(port, ptr, rust_vec_len, data_len),
+        52 => wire__crate__types__ScreenshareConfig_new_impl(port, ptr, rust_vec_len, data_len),
+        53 => wire__crate__types__ScreenshareConfig_recording_config_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        55 => wire__crate__flutter__ScreenshareConfig_update_recording_config_impl(
+        55 => wire__crate__types__ScreenshareConfig_update_recording_config_impl(
             port,
             ptr,
             rust_vec_len,
@@ -6064,7 +6074,7 @@ fn pde_ffi_dispatcher_primary_impl(
             rust_vec_len,
             data_len,
         ),
-        97 => wire__crate__flutter__statistics_default_impl(port, ptr, rust_vec_len, data_len),
+        97 => wire__crate__types__statistics_default_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -6077,52 +6087,76 @@ fn pde_ffi_dispatcher_sync_impl(
 ) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
     // Codec=Pde (Serialization + dispatch), see doc to use other codecs
     match func_id {
-        2 => wire__crate__flutter__Capabilities_devices_impl(ptr, rust_vec_len, data_len),
-        3 => wire__crate__flutter__Capabilities_encoders_impl(ptr, rust_vec_len, data_len),
-        4 => wire__crate__flutter__ChatMessage_attachments_impl(ptr, rust_vec_len, data_len),
-        5 => wire__crate__flutter__ChatMessage_auto_accessor_get_text_impl(
+        2 => wire__crate__internal__screenshare__Capabilities_devices_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        6 => wire__crate__flutter__ChatMessage_auto_accessor_set_text_impl(
+        3 => wire__crate__internal__screenshare__Capabilities_encoders_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        7 => wire__crate__flutter__ChatMessage_clear_attachments_impl(ptr, rust_vec_len, data_len),
-        8 => wire__crate__flutter__ChatMessage_is_sender_impl(ptr, rust_vec_len, data_len),
-        9 => wire__crate__flutter__ChatMessage_time_impl(ptr, rust_vec_len, data_len),
-        11 => wire__crate__flutter__CodecConfig_new_impl(ptr, rust_vec_len, data_len),
-        12 => wire__crate__flutter__CodecConfig_set_enabled_impl(ptr, rust_vec_len, data_len),
-        13 => wire__crate__flutter__CodecConfig_set_residual_bits_impl(ptr, rust_vec_len, data_len),
-        14 => wire__crate__flutter__CodecConfig_set_vbr_impl(ptr, rust_vec_len, data_len),
-        15 => wire__crate__flutter__CodecConfig_to_values_impl(ptr, rust_vec_len, data_len),
-        16 => wire__crate__flutter__Contact_from_parts_impl(ptr, rust_vec_len, data_len),
-        17 => wire__crate__flutter__Contact_id_impl(ptr, rust_vec_len, data_len),
-        18 => wire__crate__flutter__Contact_id_eq_impl(ptr, rust_vec_len, data_len),
-        19 => wire__crate__flutter__Contact_new_impl(ptr, rust_vec_len, data_len),
-        20 => wire__crate__flutter__Contact_nickname_impl(ptr, rust_vec_len, data_len),
-        21 => wire__crate__flutter__Contact_peer_id_impl(ptr, rust_vec_len, data_len),
-        22 => wire__crate__flutter__Contact_pub_clone_impl(ptr, rust_vec_len, data_len),
-        23 => wire__crate__flutter__Contact_set_nickname_impl(ptr, rust_vec_len, data_len),
-        25 => wire__crate__flutter__DartNotify_notify_impl(ptr, rust_vec_len, data_len),
-        26 => wire__crate__flutter__FlutterCallbacks_new_impl(ptr, rust_vec_len, data_len),
-        27 => {
+        4 => wire__crate__types__ChatMessage_attachments_impl(ptr, rust_vec_len, data_len),
+        5 => {
+            wire__crate__types__ChatMessage_auto_accessor_get_text_impl(ptr, rust_vec_len, data_len)
+        }
+        6 => {
+            wire__crate__types__ChatMessage_auto_accessor_set_text_impl(ptr, rust_vec_len, data_len)
+        }
+        7 => wire__crate__types__ChatMessage_clear_attachments_impl(ptr, rust_vec_len, data_len),
+        8 => wire__crate__types__ChatMessage_is_sender_impl(ptr, rust_vec_len, data_len),
+        9 => wire__crate__types__ChatMessage_time_impl(ptr, rust_vec_len, data_len),
+        11 => wire__crate__types__CodecConfig_new_impl(ptr, rust_vec_len, data_len),
+        12 => wire__crate__types__CodecConfig_set_enabled_impl(ptr, rust_vec_len, data_len),
+        13 => wire__crate__types__CodecConfig_set_residual_bits_impl(ptr, rust_vec_len, data_len),
+        14 => wire__crate__types__CodecConfig_set_vbr_impl(ptr, rust_vec_len, data_len),
+        15 => wire__crate__types__CodecConfig_to_values_impl(ptr, rust_vec_len, data_len),
+        16 => wire__crate__types__Contact_from_parts_impl(ptr, rust_vec_len, data_len),
+        17 => wire__crate__types__Contact_id_impl(ptr, rust_vec_len, data_len),
+        18 => wire__crate__types__Contact_id_eq_impl(ptr, rust_vec_len, data_len),
+        19 => wire__crate__types__Contact_new_impl(ptr, rust_vec_len, data_len),
+        20 => wire__crate__types__Contact_nickname_impl(ptr, rust_vec_len, data_len),
+        21 => wire__crate__types__Contact_peer_id_impl(ptr, rust_vec_len, data_len),
+        22 => wire__crate__types__Contact_pub_clone_impl(ptr, rust_vec_len, data_len),
+        23 => wire__crate__types__Contact_set_nickname_impl(ptr, rust_vec_len, data_len),
+        24 => wire__crate__flutter__FlutterCallbacks_new_impl(ptr, rust_vec_len, data_len),
+        25 => {
             wire__crate__audio__player__FlutterSoundHandle_cancel_impl(ptr, rust_vec_len, data_len)
         }
-        31 => wire__crate__flutter__NetworkConfig_new_impl(ptr, rust_vec_len, data_len),
+        27 => wire__crate__types__FrontendNotify_notify_impl(ptr, rust_vec_len, data_len),
+        31 => wire__crate__types__NetworkConfig_new_impl(ptr, rust_vec_len, data_len),
         40 => wire__crate__overlay__overlay__Overlay_screen_resolution_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        45 => wire__crate__flutter__RecordingConfig_bitrate_impl(ptr, rust_vec_len, data_len),
-        46 => wire__crate__flutter__RecordingConfig_device_impl(ptr, rust_vec_len, data_len),
-        47 => wire__crate__flutter__RecordingConfig_encoder_impl(ptr, rust_vec_len, data_len),
-        48 => wire__crate__flutter__RecordingConfig_framerate_impl(ptr, rust_vec_len, data_len),
-        49 => wire__crate__flutter__RecordingConfig_height_impl(ptr, rust_vec_len, data_len),
-        54 => wire__crate__flutter__ScreenshareConfig_to_bytes_impl(ptr, rust_vec_len, data_len),
+        45 => wire__crate__internal__screenshare__RecordingConfig_bitrate_impl(
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        46 => wire__crate__internal__screenshare__RecordingConfig_device_impl(
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        47 => wire__crate__internal__screenshare__RecordingConfig_encoder_impl(
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        48 => wire__crate__internal__screenshare__RecordingConfig_framerate_impl(
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        49 => wire__crate__internal__screenshare__RecordingConfig_height_impl(
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        54 => wire__crate__types__ScreenshareConfig_to_bytes_impl(ptr, rust_vec_len, data_len),
         56 => wire__crate__audio__player__SoundPlayer_host_impl(ptr, rust_vec_len, data_len),
         57 => wire__crate__audio__player__SoundPlayer_new_impl(ptr, rust_vec_len, data_len),
         60 => wire__crate__audio__player__SoundPlayer_update_output_volume_impl(
@@ -6238,21 +6272,6 @@ impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<Contact>> for Contact {
 }
 
 // Codec=Dco (DartCObject based), see doc to use other codecs
-impl flutter_rust_bridge::IntoDart for FrbWrapper<DartNotify> {
-    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
-        flutter_rust_bridge::for_generated::rust_auto_opaque_encode::<_, MoiArc<_>>(self.0)
-            .into_dart()
-    }
-}
-impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for FrbWrapper<DartNotify> {}
-
-impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<DartNotify>> for DartNotify {
-    fn into_into_dart(self) -> FrbWrapper<DartNotify> {
-        self.into()
-    }
-}
-
-// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for FrbWrapper<FlutterCallbacks> {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         flutter_rust_bridge::for_generated::rust_auto_opaque_encode::<_, MoiArc<_>>(self.0)
@@ -6281,6 +6300,21 @@ impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
 
 impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<FlutterSoundHandle>> for FlutterSoundHandle {
     fn into_into_dart(self) -> FrbWrapper<FlutterSoundHandle> {
+        self.into()
+    }
+}
+
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for FrbWrapper<FrontendNotify> {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        flutter_rust_bridge::for_generated::rust_auto_opaque_encode::<_, MoiArc<_>>(self.0)
+            .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for FrbWrapper<FrontendNotify> {}
+
+impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<FrontendNotify>> for FrontendNotify {
+    fn into_into_dart(self) -> FrbWrapper<FrontendNotify> {
         self.into()
     }
 }
@@ -6392,18 +6426,18 @@ impl flutter_rust_bridge::IntoIntoDart<crate::AudioDevice> for crate::AudioDevic
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
-impl flutter_rust_bridge::IntoDart for crate::flutter::CallState {
+impl flutter_rust_bridge::IntoDart for crate::types::CallState {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         match self {
-            crate::flutter::CallState::Connected => [0.into_dart()].into_dart(),
-            crate::flutter::CallState::Waiting => [1.into_dart()].into_dart(),
-            crate::flutter::CallState::RoomJoin(field0) => {
+            crate::types::CallState::Connected => [0.into_dart()].into_dart(),
+            crate::types::CallState::Waiting => [1.into_dart()].into_dart(),
+            crate::types::CallState::RoomJoin(field0) => {
                 [2.into_dart(), field0.into_into_dart().into_dart()].into_dart()
             }
-            crate::flutter::CallState::RoomLeave(field0) => {
+            crate::types::CallState::RoomLeave(field0) => {
                 [3.into_dart(), field0.into_into_dart().into_dart()].into_dart()
             }
-            crate::flutter::CallState::CallEnded(field0, field1) => [
+            crate::types::CallState::CallEnded(field0, field1) => [
                 4.into_dart(),
                 field0.into_into_dart().into_dart(),
                 field1.into_into_dart().into_dart(),
@@ -6415,9 +6449,9 @@ impl flutter_rust_bridge::IntoDart for crate::flutter::CallState {
         }
     }
 }
-impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::flutter::CallState {}
-impl flutter_rust_bridge::IntoIntoDart<crate::flutter::CallState> for crate::flutter::CallState {
-    fn into_into_dart(self) -> crate::flutter::CallState {
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::types::CallState {}
+impl flutter_rust_bridge::IntoIntoDart<crate::types::CallState> for crate::types::CallState {
+    fn into_into_dart(self) -> crate::types::CallState {
         self
     }
 }
@@ -6451,11 +6485,11 @@ impl flutter_rust_bridge::IntoIntoDart<crate::flutter::SendToDartLogger>
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
-impl flutter_rust_bridge::IntoDart for crate::flutter::SessionStatus {
+impl flutter_rust_bridge::IntoDart for crate::types::SessionStatus {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         match self {
-            crate::flutter::SessionStatus::Connecting => [0.into_dart()].into_dart(),
-            crate::flutter::SessionStatus::Connected {
+            crate::types::SessionStatus::Connecting => [0.into_dart()].into_dart(),
+            crate::types::SessionStatus::Connected {
                 relayed,
                 remote_address,
             } => [
@@ -6464,24 +6498,24 @@ impl flutter_rust_bridge::IntoDart for crate::flutter::SessionStatus {
                 remote_address.into_into_dart().into_dart(),
             ]
             .into_dart(),
-            crate::flutter::SessionStatus::Inactive => [2.into_dart()].into_dart(),
-            crate::flutter::SessionStatus::Unknown => [3.into_dart()].into_dart(),
+            crate::types::SessionStatus::Inactive => [2.into_dart()].into_dart(),
+            crate::types::SessionStatus::Unknown => [3.into_dart()].into_dart(),
             _ => {
                 unimplemented!("");
             }
         }
     }
 }
-impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::flutter::SessionStatus {}
-impl flutter_rust_bridge::IntoIntoDart<crate::flutter::SessionStatus>
-    for crate::flutter::SessionStatus
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::types::SessionStatus {}
+impl flutter_rust_bridge::IntoIntoDart<crate::types::SessionStatus>
+    for crate::types::SessionStatus
 {
-    fn into_into_dart(self) -> crate::flutter::SessionStatus {
+    fn into_into_dart(self) -> crate::types::SessionStatus {
         self
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
-impl flutter_rust_bridge::IntoDart for crate::flutter::Statistics {
+impl flutter_rust_bridge::IntoDart for crate::types::Statistics {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
             self.input_level.into_into_dart().into_dart(),
@@ -6494,9 +6528,9 @@ impl flutter_rust_bridge::IntoDart for crate::flutter::Statistics {
         .into_dart()
     }
 }
-impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::flutter::Statistics {}
-impl flutter_rust_bridge::IntoIntoDart<crate::flutter::Statistics> for crate::flutter::Statistics {
-    fn into_into_dart(self) -> crate::flutter::Statistics {
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::types::Statistics {}
+impl flutter_rust_bridge::IntoIntoDart<crate::types::Statistics> for crate::types::Statistics {
+    fn into_into_dart(self) -> crate::types::Statistics {
         self
     }
 }
@@ -6543,13 +6577,6 @@ impl SseEncode for Contact {
     }
 }
 
-impl SseEncode for DartNotify {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
-        <RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<DartNotify>>>::sse_encode(flutter_rust_bridge::for_generated::rust_auto_opaque_encode::<_, MoiArc<_>>(self), serializer);
-    }
-}
-
 impl SseEncode for FlutterCallbacks {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -6561,6 +6588,13 @@ impl SseEncode for FlutterSoundHandle {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<FlutterSoundHandle>>>::sse_encode(flutter_rust_bridge::for_generated::rust_auto_opaque_encode::<_, MoiArc<_>>(self), serializer);
+    }
+}
+
+impl SseEncode for FrontendNotify {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<FrontendNotify>>>::sse_encode(flutter_rust_bridge::for_generated::rust_auto_opaque_encode::<_, MoiArc<_>>(self), serializer);
     }
 }
 
@@ -6667,17 +6701,6 @@ impl SseEncode for RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpa
 }
 
 impl SseEncode
-    for RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<DartNotify>>
-{
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
-        let (ptr, size) = self.sse_encode_raw();
-        <usize>::sse_encode(ptr, serializer);
-        <i32>::sse_encode(size, serializer);
-    }
-}
-
-impl SseEncode
     for RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<FlutterCallbacks>>
 {
     // Codec=Sse (Serialization based), see doc to use other codecs
@@ -6690,6 +6713,17 @@ impl SseEncode
 
 impl SseEncode
     for RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<FlutterSoundHandle>>
+{
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        let (ptr, size) = self.sse_encode_raw();
+        <usize>::sse_encode(ptr, serializer);
+        <i32>::sse_encode(size, serializer);
+    }
+}
+
+impl SseEncode
+    for RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<FrontendNotify>>
 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -6792,25 +6826,25 @@ impl SseEncode for bool {
     }
 }
 
-impl SseEncode for crate::flutter::CallState {
+impl SseEncode for crate::types::CallState {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         match self {
-            crate::flutter::CallState::Connected => {
+            crate::types::CallState::Connected => {
                 <i32>::sse_encode(0, serializer);
             }
-            crate::flutter::CallState::Waiting => {
+            crate::types::CallState::Waiting => {
                 <i32>::sse_encode(1, serializer);
             }
-            crate::flutter::CallState::RoomJoin(field0) => {
+            crate::types::CallState::RoomJoin(field0) => {
                 <i32>::sse_encode(2, serializer);
                 <String>::sse_encode(field0, serializer);
             }
-            crate::flutter::CallState::RoomLeave(field0) => {
+            crate::types::CallState::RoomLeave(field0) => {
                 <i32>::sse_encode(3, serializer);
                 <String>::sse_encode(field0, serializer);
             }
-            crate::flutter::CallState::CallEnded(field0, field1) => {
+            crate::types::CallState::CallEnded(field0, field1) => {
                 <i32>::sse_encode(4, serializer);
                 <String>::sse_encode(field0, serializer);
                 <bool>::sse_encode(field1, serializer);
@@ -6953,10 +6987,10 @@ impl SseEncode for Option<Vec<u8>> {
     }
 }
 
-impl SseEncode for (DartNotify, bool) {
+impl SseEncode for (FrontendNotify, bool) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
-        <DartNotify>::sse_encode(self.0, serializer);
+        <FrontendNotify>::sse_encode(self.0, serializer);
         <bool>::sse_encode(self.1, serializer);
     }
 }
@@ -7002,20 +7036,20 @@ impl SseEncode for (String, Vec<u8>) {
     }
 }
 
-impl SseEncode for (String, Option<Vec<u8>>, DartNotify) {
+impl SseEncode for (String, Option<Vec<u8>>, FrontendNotify) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <String>::sse_encode(self.0, serializer);
         <Option<Vec<u8>>>::sse_encode(self.1, serializer);
-        <DartNotify>::sse_encode(self.2, serializer);
+        <FrontendNotify>::sse_encode(self.2, serializer);
     }
 }
 
-impl SseEncode for (String, crate::flutter::SessionStatus) {
+impl SseEncode for (String, crate::types::SessionStatus) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <String>::sse_encode(self.0, serializer);
-        <crate::flutter::SessionStatus>::sse_encode(self.1, serializer);
+        <crate::types::SessionStatus>::sse_encode(self.1, serializer);
     }
 }
 
@@ -7024,14 +7058,14 @@ impl SseEncode for crate::flutter::SendToDartLogger {
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {}
 }
 
-impl SseEncode for crate::flutter::SessionStatus {
+impl SseEncode for crate::types::SessionStatus {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         match self {
-            crate::flutter::SessionStatus::Connecting => {
+            crate::types::SessionStatus::Connecting => {
                 <i32>::sse_encode(0, serializer);
             }
-            crate::flutter::SessionStatus::Connected {
+            crate::types::SessionStatus::Connected {
                 relayed,
                 remote_address,
             } => {
@@ -7039,10 +7073,10 @@ impl SseEncode for crate::flutter::SessionStatus {
                 <bool>::sse_encode(relayed, serializer);
                 <String>::sse_encode(remote_address, serializer);
             }
-            crate::flutter::SessionStatus::Inactive => {
+            crate::types::SessionStatus::Inactive => {
                 <i32>::sse_encode(2, serializer);
             }
-            crate::flutter::SessionStatus::Unknown => {
+            crate::types::SessionStatus::Unknown => {
                 <i32>::sse_encode(3, serializer);
             }
             _ => {
@@ -7052,7 +7086,7 @@ impl SseEncode for crate::flutter::SessionStatus {
     }
 }
 
-impl SseEncode for crate::flutter::Statistics {
+impl SseEncode for crate::types::Statistics {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <f32>::sse_encode(self.input_level, serializer);
@@ -7103,11 +7137,13 @@ mod io {
     use super::*;
     use crate::audio::player::*;
     use crate::flutter::*;
+    use crate::internal::screenshare::*;
     use crate::overlay::overlay::*;
+    use crate::types::*;
     use flutter_rust_bridge::for_generated::byteorder::{
         NativeEndian, ReadBytesExt, WriteBytesExt,
     };
-    use flutter_rust_bridge::for_generated::{Lifetimeable, Lockable, transform_result_dco};
+    use flutter_rust_bridge::for_generated::{transform_result_dco, Lifetimeable, Lockable};
     use flutter_rust_bridge::{Handler, IntoIntoDart};
 
     // Section: boilerplate
@@ -7185,20 +7221,6 @@ mod io {
     }
 
     #[unsafe(no_mangle)]
-    pub extern "C" fn frbgen_telepathy_rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDartNotify(
-        ptr: *const std::ffi::c_void,
-    ) {
-        MoiArc::<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<DartNotify>>::increment_strong_count(ptr as _);
-    }
-
-    #[unsafe(no_mangle)]
-    pub extern "C" fn frbgen_telepathy_rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDartNotify(
-        ptr: *const std::ffi::c_void,
-    ) {
-        MoiArc::<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<DartNotify>>::decrement_strong_count(ptr as _);
-    }
-
-    #[unsafe(no_mangle)]
     pub extern "C" fn frbgen_telepathy_rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFlutterCallbacks(
         ptr: *const std::ffi::c_void,
     ) {
@@ -7224,6 +7246,20 @@ mod io {
         ptr: *const std::ffi::c_void,
     ) {
         MoiArc::<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<FlutterSoundHandle>>::decrement_strong_count(ptr as _);
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn frbgen_telepathy_rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFrontendNotify(
+        ptr: *const std::ffi::c_void,
+    ) {
+        MoiArc::<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<FrontendNotify>>::increment_strong_count(ptr as _);
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn frbgen_telepathy_rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFrontendNotify(
+        ptr: *const std::ffi::c_void,
+    ) {
+        MoiArc::<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<FrontendNotify>>::decrement_strong_count(ptr as _);
     }
 
     #[unsafe(no_mangle)]
@@ -7324,13 +7360,15 @@ mod web {
     use super::*;
     use crate::audio::player::*;
     use crate::flutter::*;
+    use crate::internal::screenshare::*;
     use crate::overlay::overlay::*;
+    use crate::types::*;
     use flutter_rust_bridge::for_generated::byteorder::{
         NativeEndian, ReadBytesExt, WriteBytesExt,
     };
     use flutter_rust_bridge::for_generated::wasm_bindgen;
     use flutter_rust_bridge::for_generated::wasm_bindgen::prelude::*;
-    use flutter_rust_bridge::for_generated::{Lifetimeable, Lockable, transform_result_dco};
+    use flutter_rust_bridge::for_generated::{transform_result_dco, Lifetimeable, Lockable};
     use flutter_rust_bridge::{Handler, IntoIntoDart};
 
     // Section: boilerplate
@@ -7408,20 +7446,6 @@ mod web {
     }
 
     #[wasm_bindgen]
-    pub fn rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDartNotify(
-        ptr: *const std::ffi::c_void,
-    ) {
-        MoiArc::<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<DartNotify>>::increment_strong_count(ptr as _);
-    }
-
-    #[wasm_bindgen]
-    pub fn rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDartNotify(
-        ptr: *const std::ffi::c_void,
-    ) {
-        MoiArc::<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<DartNotify>>::decrement_strong_count(ptr as _);
-    }
-
-    #[wasm_bindgen]
     pub fn rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFlutterCallbacks(
         ptr: *const std::ffi::c_void,
     ) {
@@ -7447,6 +7471,20 @@ mod web {
         ptr: *const std::ffi::c_void,
     ) {
         MoiArc::<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<FlutterSoundHandle>>::decrement_strong_count(ptr as _);
+    }
+
+    #[wasm_bindgen]
+    pub fn rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFrontendNotify(
+        ptr: *const std::ffi::c_void,
+    ) {
+        MoiArc::<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<FrontendNotify>>::increment_strong_count(ptr as _);
+    }
+
+    #[wasm_bindgen]
+    pub fn rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFrontendNotify(
+        ptr: *const std::ffi::c_void,
+    ) {
+        MoiArc::<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<FrontendNotify>>::decrement_strong_count(ptr as _);
     }
 
     #[wasm_bindgen]

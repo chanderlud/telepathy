@@ -1,14 +1,13 @@
 use crate::error::{Error, ErrorKind};
-use crate::flutter::Statistics;
 use crate::internal::callbacks::CoreStatisticsCallback;
 use crate::internal::messages::Message;
 use crate::internal::sockets::{TIMESTAMP_BUFFER_CAPACITY, Transport, TransportStream};
 use crate::internal::{ConnectionState, StatisticsCollectorState};
 use crate::overlay::{CONNECTED, LATENCY, LOSS};
-use flutter_rust_bridge::for_generated::futures::{Sink, SinkExt};
+use crate::types::Statistics;
 use kanal::AsyncReceiver;
 use libp2p::bytes::Bytes;
-use libp2p::futures::StreamExt;
+use libp2p::futures::{Sink, SinkExt, StreamExt};
 use libp2p::swarm::ConnectionId;
 use log::debug;
 use speedy::{Readable, Writable};

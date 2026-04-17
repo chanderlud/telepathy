@@ -1,13 +1,13 @@
-use crate::flutter::{CallState, ChatMessage, Contact, SessionStatus, Statistics};
+use crate::types::{CallState, ChatMessage, Contact, FrontendNotify, SessionStatus, Statistics};
 #[cfg(test)]
 use async_trait::async_trait;
-use flutter_rust_bridge::JoinHandle;
 use libp2p::PeerId;
 #[cfg(test)]
 use mockall::automock;
 use std::future::Future;
 use std::sync::Arc;
 use tokio::sync::Notify;
+use tokio::task::JoinHandle;
 
 #[cfg_attr(test, automock)]
 #[cfg_attr(test, async_trait)]
@@ -26,7 +26,7 @@ pub(crate) trait CoreCallbacks<S: CoreStatisticsCallback> {
 
     fn screenshare_started(
         &self,
-        stop: crate::flutter::DartNotify,
+        stop: FrontendNotify,
         sender: bool,
     ) -> impl Future<Output = ()> + Send;
 

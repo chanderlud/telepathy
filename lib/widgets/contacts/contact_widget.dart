@@ -7,7 +7,7 @@ import 'package:telepathy/core/rust/audio/player.dart';
 import 'package:telepathy/core/rust/error.dart';
 import 'package:telepathy/core/rust/flutter.dart';
 import 'package:telepathy/widgets/common/index.dart';
-import 'package:telepathy/core/rust/flutter.dart';
+import 'package:telepathy/core/rust/types.dart';
 
 /// A widget which displays a single contact.
 class ContactWidget extends StatefulWidget {

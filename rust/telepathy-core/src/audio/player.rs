@@ -5,7 +5,6 @@
 //! Flutter Rust Bridge attributes for Dart interop.
 
 use crate::error::DartError;
-use flutter_rust_bridge::frb;
 #[cfg(not(target_family = "wasm"))]
 use std::path::Path;
 use std::sync::Arc;
@@ -21,7 +20,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 /// This struct provides Flutter Rust Bridge attributes for seamless
 /// Dart integration while delegating all audio functionality to
 /// the `telepathy-audio` library.
-#[frb(opaque)]
+#[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(opaque))]
 pub struct SoundPlayer(AudioPlayer);
 
 impl SoundPlayer {
@@ -31,7 +30,7 @@ impl SoundPlayer {
     ///
     /// * `output_volume` - Output volume in decibels. 0 dB is unity gain,
     ///   negative values attenuate, positive values amplify.
-    #[frb(sync)]
+    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
     pub fn new(output_volume: f32) -> SoundPlayer {
         SoundPlayer(AudioPlayer::new(output_volume))
     }
@@ -39,7 +38,7 @@ impl SoundPlayer {
     /// Returns a reference to the audio host.
     ///
     /// This can be used to enumerate devices or access other host functionality.
-    #[frb(sync)]
+    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
     pub fn host(&self) -> Arc<Host> {
         self.0.host()
     }
@@ -78,7 +77,7 @@ impl SoundPlayer {
     /// # Arguments
     ///
     /// * `volume` - New volume in decibels.
-    #[frb(sync)]
+    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
     pub fn update_output_volume(&self, volume: f32) {
         self.0.set_volume(volume);
     }
@@ -98,14 +97,14 @@ impl SoundPlayer {
 ///
 /// This handle wraps the library's `SoundHandle` and provides Flutter
 /// Rust Bridge attributes for Dart interop.
-#[frb(opaque)]
+#[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(opaque))]
 pub struct FlutterSoundHandle(SoundHandle);
 
 impl FlutterSoundHandle {
     /// Cancels the sound playback.
     ///
     /// This triggers a graceful fade-out to prevent audio pops/clicks.
-    #[frb(sync)]
+    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
     pub fn cancel(&self) {
         self.0.cancel();
     }

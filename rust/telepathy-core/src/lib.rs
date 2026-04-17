@@ -4,13 +4,15 @@ use telepathy_audio::devices::AudioDeviceInfo;
 
 pub mod audio;
 pub mod error;
-// #[cfg(feature = "native")]
+#[cfg(feature = "flutter")]
 pub mod flutter;
+#[cfg(feature = "flutter")]
 mod frb_generated;
 mod internal;
-// #[cfg(feature = "native")]
+#[cfg(feature = "native")]
 pub mod native;
 pub mod overlay;
+pub mod types;
 
 pub struct AudioDevice {
     pub name: String,

@@ -1,5 +1,5 @@
 import 'package:telepathy/models/room.dart';
-import 'package:telepathy/core/rust/flutter.dart';
+import 'package:telepathy/core/rust/types.dart';
 
 class Profile {
   final String id;

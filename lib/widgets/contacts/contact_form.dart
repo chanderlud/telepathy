@@ -9,7 +9,7 @@ import 'package:telepathy/core/utils/room_format_utils.dart';
 import 'package:telepathy/core/rust/error.dart';
 import 'package:telepathy/core/rust/flutter.dart';
 import 'package:telepathy/widgets/common/index.dart';
-import 'package:telepathy/core/rust/flutter.dart';
+import 'package:telepathy/core/rust/types.dart';
 
 /// A widget which allows the user to add a contact.
 class ContactForm extends StatefulWidget {

@@ -23,16 +23,13 @@ pub(crate) mod utils;
 
 use crate::AudioDevice;
 use crate::error::{DartError, Error, ErrorKind};
-use crate::flutter::*;
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::core::TelepathyCore;
 use crate::internal::helpers::OutputHelper;
 use crate::overlay::overlay::Overlay;
+use crate::types::{ChatMessage, CodecConfig, Contact, NetworkConfig, ScreenshareConfig};
 use atomic_float::AtomicF32;
 use chrono::Local;
-#[cfg(target_family = "wasm")]
-use flutter_rust_bridge::JoinHandle;
-use flutter_rust_bridge::spawn;
 use kanal::AsyncReceiver;
 use kanal::{AsyncSender, unbounded_async};
 use libp2p::core::ConnectedPoint;
@@ -53,9 +50,9 @@ use telepathy_audio::devices::list_all_devices;
 use telepathy_audio::internal::utils::db_to_multiplier;
 use telepathy_audio::{Host, RnnModel};
 use tokio::select;
+use tokio::spawn;
 use tokio::sync::mpsc::{Receiver as MReceiver, Sender as MSender, channel};
 use tokio::sync::{Mutex, Notify};
-#[cfg(not(target_family = "wasm"))]
 use tokio::task::JoinHandle;
 #[cfg(not(target_family = "wasm"))]
 use tokio::time::timeout;
