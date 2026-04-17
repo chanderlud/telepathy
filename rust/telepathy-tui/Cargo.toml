@@ -16,5 +16,5 @@ serde_json = "1"
 telepathy-core = { package = "telepathy_core", version = "2", path = "../telepathy-core", default-features = false, features = ["native"] }
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
-tuirealm = { version = "3", default-features = false, features = ["crossterm"] }
+tuirealm = { version = "3", default-features = false, features = ["crossterm", "async-ports"] }
 uuid = { version = "1", features = ["v4", "serde"] }

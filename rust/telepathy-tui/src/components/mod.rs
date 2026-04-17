@@ -1,17 +1,63 @@
-use ratatui::Frame;
-use ratatui::layout::Alignment;
-use ratatui::widgets::{Block, Borders, Paragraph};
+//! Component scaffolding for telepathy-tui.
+//!
+//! T4 only ships an empty placeholder component used to satisfy mounts in
+//! [`crate::app::model::Model`]; the real components for the contacts pane,
+//! call controls, chat pane, status bar and overlays land in T5/T6.
 
-use crate::state::AppState;
+use tuirealm::command::{Cmd, CmdResult};
+use tuirealm::ratatui::layout::Rect;
+use tuirealm::ratatui::widgets::Paragraph;
+use tuirealm::{
+    AttrValue, Attribute, Component, Event, Frame, MockComponent, Props, State as TuiState,
+};
 
-pub fn render_placeholder(frame: &mut Frame<'_>, state: &AppState) {
-    let block = Block::default()
-        .title("Telepathy TUI")
-        .borders(Borders::ALL);
+use crate::events::{CoreEvent, Id, Msg};
 
-    let text = format!("{}\n\nPress q to quit.", state.placeholder_message);
-    let paragraph = Paragraph::new(text)
-        .block(block)
-        .alignment(Alignment::Center);
-    frame.render_widget(paragraph, frame.area());
+/// Empty component used by [`Model`](crate::app::model::Model) for every
+/// [`Id`] until the real components are implemented.
+#[derive(Default)]
+pub struct PlaceholderComponent {
+    props: Props,
+}
+
+impl MockComponent for PlaceholderComponent {
+    fn view(&mut self, frame: &mut Frame, area: Rect) {
+        if self.props.get_or(Attribute::Display, AttrValue::Flag(true)) == AttrValue::Flag(true) {
+            frame.render_widget(Paragraph::new(""), area);
+        }
+    }
+
+    fn query(&self, attr: Attribute) -> Option<AttrValue> {
+        self.props.get(attr)
+    }
+
+    fn attr(&mut self, attr: Attribute, value: AttrValue) {
+        self.props.set(attr, value);
+    }
+
+    fn state(&self) -> TuiState {
+        TuiState::None
+    }
+
+    fn perform(&mut self, _cmd: Cmd) -> CmdResult {
+        CmdResult::None
+    }
+}
+
+impl Component<Msg, CoreEvent> for PlaceholderComponent {
+    fn on(&mut self, _ev: Event<CoreEvent>) -> Option<Msg> {
+        None
+    }
+}
+
+/// All component identifiers that [`Model::new`](crate::app::model::Model::new)
+/// mounts at startup with [`PlaceholderComponent`]. T5 will replace these
+/// stubs one identifier at a time.
+pub fn placeholder_ids() -> &'static [Id] {
+    &[
+        Id::ContactsPane,
+        Id::CallControlsPane,
+        Id::ChatPane,
+        Id::StatusBar,
+    ]
 }

@@ -7,5 +7,5 @@ mod storage;
 #[tokio::main]
 async fn main() -> Result<(), app::AppError> {
     env_logger::init();
-    app::run()
+    app::run().await
 }

@@ -1,0 +1,489 @@
+//! tuirealm [`Model`] implementation for telepathy-tui.
+//!
+//! The model owns the tuirealm `Application`, the terminal bridge, the shared
+//! [`AppState`], persistent [`AppConfig`] / [`SecretStore`] handles, and a
+//! redraw/quit flag. All state mutation in response to a [`Msg`] happens here.
+
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use tokio::runtime::Handle;
+use tuirealm::terminal::{CrosstermTerminalAdapter, TerminalAdapter, TerminalBridge};
+use tuirealm::{Application, Sub, SubClause, SubEventClause, Update};
+
+use crate::components::PlaceholderComponent;
+use crate::events::{CoreEvent, Id, Msg, SettingKey, SettingValue, VolumeKind};
+use crate::state::{AppState, ChatEntry};
+use crate::storage::SecretStore;
+use crate::storage::config::{self, AppConfig};
+
+/// Debounce window used before persisting a [`Msg::VolumeChanged`].
+pub const VOLUME_DEBOUNCE: Duration = Duration::from_millis(200);
+
+/// Owns every piece of state required to drive the tuirealm event loop.
+pub struct Model<T>
+where
+    T: TerminalAdapter,
+{
+    pub app: Application<Id, Msg, CoreEvent>,
+    pub terminal: TerminalBridge<T>,
+    pub state: Arc<Mutex<AppState>>,
+    pub config: AppConfig,
+    pub secret_store: SecretStore,
+    pub handle: Handle,
+    pub quit: bool,
+    pub redraw: bool,
+    pub volume_debounce: HashMap<VolumeKind, Instant>,
+}
+
+impl Model<CrosstermTerminalAdapter> {
+    /// Construct a new model wired to the supplied tuirealm application,
+    /// terminal adapter, state and persistence handles.
+    pub fn new(
+        app: Application<Id, Msg, CoreEvent>,
+        terminal: TerminalBridge<CrosstermTerminalAdapter>,
+        state: Arc<Mutex<AppState>>,
+        config: AppConfig,
+        secret_store: SecretStore,
+        handle: Handle,
+    ) -> Self {
+        Self {
+            app,
+            terminal,
+            state,
+            config,
+            secret_store,
+            handle,
+            quit: false,
+            redraw: true,
+            volume_debounce: HashMap::new(),
+        }
+    }
+}
+
+impl<T> Model<T>
+where
+    T: TerminalAdapter,
+{
+    /// Render the current frame. T5 will replace this with the proper layout.
+    pub fn view(&mut self) {
+        let _ = self.terminal.draw(|frame| {
+            let area = frame.area();
+            self.app.view(&Id::StatusBar, frame, area);
+        });
+    }
+
+    fn lock_state(&self) -> std::sync::MutexGuard<'_, AppState> {
+        match self.state.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        }
+    }
+
+    fn save_config(&self) {
+        if let Err(error) = config::save_config(&self.config) {
+            log::error!("failed to persist config: {error}");
+        }
+    }
+
+    fn refresh_active_profile_view(&mut self) {
+        if let Some(profile) = self
+            .config
+            .profiles
+            .iter()
+            .find(|p| p.id == self.config.active_profile_id)
+            .cloned()
+        {
+            let mut guard = self.lock_state();
+            guard.active_profile = profile.clone();
+            guard.contacts = profile.contacts;
+            guard.rooms = profile.rooms;
+        }
+    }
+
+    fn apply_setting(&mut self, key: SettingKey, value: SettingValue) {
+        let prefs = &mut self.config.preferences;
+        match (key, value) {
+            (SettingKey::RelayAddress, SettingValue::Str(v)) => prefs.relay_address = v,
+            (SettingKey::RelayId, SettingValue::Str(v)) => prefs.relay_id = v,
+            (SettingKey::OutputVolumeDb, SettingValue::Float(v)) => prefs.output_volume_db = v,
+            (SettingKey::InputVolumeDb, SettingValue::Float(v)) => prefs.input_volume_db = v,
+            (SettingKey::SoundVolumeDb, SettingValue::Float(v)) => prefs.sound_volume_db = v,
+            (SettingKey::InputSensitivityDb, SettingValue::Float(v)) => {
+                prefs.input_sensitivity_db = v
+            }
+            (SettingKey::OutputDeviceId, SettingValue::OptStr(v)) => prefs.output_device_id = v,
+            (SettingKey::InputDeviceId, SettingValue::OptStr(v)) => prefs.input_device_id = v,
+            (SettingKey::UseDenoise, SettingValue::Bool(v)) => prefs.use_denoise = v,
+            (SettingKey::DenoiseModel, SettingValue::OptStr(v)) => prefs.denoise_model = v,
+            (SettingKey::PlayCustomRingtones, SettingValue::Bool(v)) => {
+                prefs.play_custom_ringtones = v
+            }
+            (SettingKey::CustomRingtonePath, SettingValue::OptStr(v)) => {
+                prefs.custom_ringtone_path = v
+            }
+            (SettingKey::EfficiencyMode, SettingValue::Bool(v)) => prefs.efficiency_mode = v,
+            (SettingKey::CodecEnabled, SettingValue::Bool(v)) => prefs.codec_enabled = v,
+            (SettingKey::CodecVbr, SettingValue::Bool(v)) => prefs.codec_vbr = v,
+            (SettingKey::CodecResidualBits, SettingValue::Float(v)) => prefs.codec_residual_bits = v,
+            (key, value) => {
+                log::warn!("setting/value mismatch: key={key:?} value={value:?}");
+            }
+        }
+    }
+
+    fn mount_overlay(&mut self, id: Id) {
+        let _ = self.app.umount(&id);
+        let _ = self.app.mount(
+            id,
+            Box::new(PlaceholderComponent::default()),
+            vec![Sub::new(SubEventClause::Tick, SubClause::Always)],
+        );
+    }
+
+    fn unmount(&mut self, id: &Id) {
+        let _ = self.app.umount(id);
+    }
+}
+
+impl<T> Update<Msg> for Model<T>
+where
+    T: TerminalAdapter,
+{
+    fn update(&mut self, msg: Option<Msg>) -> Option<Msg> {
+        let msg = match msg {
+            Some(m) => m,
+            None => return None,
+        };
+        self.redraw = true;
+
+        match msg {
+            Msg::Quit => {
+                self.quit = true;
+            }
+            Msg::None => {}
+
+            Msg::FocusContacts => {
+                let _ = self.app.active(&Id::ContactsPane);
+            }
+            Msg::FocusCallControls => {
+                let _ = self.app.active(&Id::CallControlsPane);
+            }
+            Msg::FocusChat => {
+                let _ = self.app.active(&Id::ChatPane);
+            }
+            Msg::OpenSettings => {
+                self.mount_overlay(Id::SettingsOverlay);
+            }
+            Msg::CloseSettings => {
+                self.unmount(&Id::SettingsOverlay);
+            }
+
+            // Contacts ---------------------------------------------------
+            Msg::ContactSelected(peer_id) => {
+                self.lock_state().active_peer = Some(peer_id);
+            }
+            Msg::ContactAdd(nickname, _peer_id) => {
+                let profile_id = self.config.active_profile_id.clone();
+                if let Err(error) =
+                    config::add_contact(&mut self.config, &profile_id, nickname.clone())
+                {
+                    log::error!("contact add failed: {error}");
+                } else {
+                    self.save_config();
+                    self.refresh_active_profile_view();
+                }
+            }
+            Msg::ContactDelete(contact_id) => {
+                let profile_id = self.config.active_profile_id.clone();
+                if let Err(error) =
+                    config::remove_contact(&mut self.config, &profile_id, &contact_id)
+                {
+                    log::error!("contact delete failed: {error}");
+                } else {
+                    let secret_store = self.secret_store.clone();
+                    let profile_id_async = profile_id.clone();
+                    let contact_id_async = contact_id.clone();
+                    self.handle.spawn(async move {
+                        if let Err(error) = secret_store
+                            .delete_contact_peer_id(&profile_id_async, &contact_id_async)
+                            .await
+                        {
+                            log::error!("secret delete failed: {error}");
+                        }
+                    });
+                    self.save_config();
+                    self.refresh_active_profile_view();
+                }
+            }
+            Msg::ContactRename(contact_id, nickname) => {
+                let profile_id = self.config.active_profile_id.clone();
+                if let Err(error) =
+                    config::rename_contact(&mut self.config, &profile_id, &contact_id, nickname)
+                {
+                    log::error!("contact rename failed: {error}");
+                } else {
+                    self.save_config();
+                    self.refresh_active_profile_view();
+                }
+            }
+
+            // Rooms ------------------------------------------------------
+            Msg::RoomSelected(_) => {}
+            Msg::RoomAdd(nickname, peer_ids) => {
+                let profile_id = self.config.active_profile_id.clone();
+                if let Err(error) =
+                    config::add_room(&mut self.config, &profile_id, nickname, peer_ids)
+                {
+                    log::error!("room add failed: {error}");
+                } else {
+                    self.save_config();
+                    self.refresh_active_profile_view();
+                }
+            }
+            Msg::RoomDelete(nickname) => {
+                let profile_id = self.config.active_profile_id.clone();
+                if let Err(error) = config::remove_room(&mut self.config, &profile_id, &nickname) {
+                    log::error!("room delete failed: {error}");
+                } else {
+                    self.save_config();
+                    self.refresh_active_profile_view();
+                }
+            }
+            Msg::RoomJoin(_) => {
+                let handle = self.handle.clone();
+                handle.spawn(async move {
+                    // Core room-join wiring lands in T5/T6.
+                });
+            }
+
+            // Call -------------------------------------------------------
+            Msg::StartCall => {
+                let peer = self.lock_state().active_peer.clone();
+                let handle = self.handle.clone();
+                handle.spawn(async move {
+                    let _ = peer;
+                });
+            }
+            Msg::EndCall => {
+                let handle = self.handle.clone();
+                handle.spawn(async move {});
+            }
+            Msg::ToggleMute => {
+                let muted = {
+                    let mut guard = self.lock_state();
+                    guard.muted = !guard.muted;
+                    guard.muted
+                };
+                let handle = self.handle.clone();
+                handle.spawn(async move {
+                    let _ = muted;
+                });
+            }
+            Msg::ToggleDeafen => {
+                let deafened = {
+                    let mut guard = self.lock_state();
+                    guard.deafened = !guard.deafened;
+                    guard.deafened
+                };
+                let handle = self.handle.clone();
+                handle.spawn(async move {
+                    let _ = deafened;
+                });
+            }
+            Msg::VolumeChanged(kind, value) => {
+                let now = Instant::now();
+                self.volume_debounce.insert(kind, now);
+                {
+                    let mut guard = self.lock_state();
+                    guard.volume_debounce.insert(kind, now);
+                }
+                let prefs = &mut self.config.preferences;
+                match kind {
+                    VolumeKind::Output => prefs.output_volume_db = value,
+                    VolumeKind::Input => prefs.input_volume_db = value,
+                    VolumeKind::Sound => prefs.sound_volume_db = value,
+                    VolumeKind::InputSensitivity => prefs.input_sensitivity_db = value,
+                }
+                let state = self.state.clone();
+                let mut config_snapshot = self.config.clone();
+                let handle = self.handle.clone();
+                handle.spawn(async move {
+                    tokio::time::sleep(VOLUME_DEBOUNCE).await;
+                    let still_latest = {
+                        let guard = state.lock().unwrap_or_else(|p| p.into_inner());
+                        guard
+                            .volume_debounce
+                            .get(&kind)
+                            .map(|stored| *stored == now)
+                            .unwrap_or(false)
+                    };
+                    if still_latest
+                        && let Err(error) = persist_volume(&mut config_snapshot, kind, value)
+                    {
+                        log::error!("volume persist failed: {error}");
+                    }
+                });
+            }
+            Msg::AudioTestToggle => {
+                let handle = self.handle.clone();
+                handle.spawn(async move {});
+            }
+            Msg::RestartManager => {
+                let handle = self.handle.clone();
+                handle.spawn(async move {});
+            }
+
+            // Chat -------------------------------------------------------
+            Msg::SendMessage(text) => {
+                let peer = self.lock_state().active_peer.clone();
+                let handle = self.handle.clone();
+                handle.spawn(async move {
+                    let _ = (peer, text);
+                });
+            }
+
+            // Settings ---------------------------------------------------
+            Msg::SettingChanged(key, value) => {
+                self.apply_setting(key, value);
+                self.save_config();
+            }
+
+            // Profiles ---------------------------------------------------
+            Msg::ProfileCreate(nickname) => {
+                let _ = config::create_profile(&mut self.config, nickname);
+                self.save_config();
+            }
+            Msg::ProfileDelete(profile_id) => {
+                if let Err(error) = config::delete_profile(&mut self.config, &profile_id) {
+                    log::error!("profile delete failed: {error}");
+                } else {
+                    let secret_store = self.secret_store.clone();
+                    let profile_id_async = profile_id.clone();
+                    self.handle.spawn(async move {
+                        if let Err(error) =
+                            secret_store.delete_profile_keys(&profile_id_async).await
+                        {
+                            log::error!("profile secret delete failed: {error}");
+                        }
+                    });
+                    self.save_config();
+                }
+            }
+            Msg::ProfileSwitch(profile_id) => {
+                if let Err(error) = config::switch_profile(&mut self.config, &profile_id) {
+                    log::error!("profile switch failed: {error}");
+                } else {
+                    self.save_config();
+                    if let Some(profile) = self
+                        .config
+                        .profiles
+                        .iter()
+                        .find(|p| p.id == self.config.active_profile_id)
+                        .cloned()
+                    {
+                        self.lock_state().replace_active_profile(profile);
+                    }
+                }
+            }
+
+            // Incoming call response ------------------------------------
+            Msg::AcceptCall {
+                request_id,
+                accepted,
+            } => {
+                let response = {
+                    let mut guard = self.lock_state();
+                    if guard
+                        .incoming_prompt
+                        .as_ref()
+                        .map(|p| p.request_id == request_id)
+                        .unwrap_or(false)
+                    {
+                        guard.incoming_prompt = None;
+                        guard.pending_accept_cancel = None;
+                        guard.pending_accept_response.take()
+                    } else {
+                        None
+                    }
+                };
+                if let Some(tx) = response {
+                    self.handle.spawn(async move {
+                        let _ = tx.send(accepted);
+                    });
+                }
+                self.unmount(&Id::IncomingCallDialog);
+            }
+
+            // Forwarded core events --------------------------------------
+            Msg::CoreEvent(core) => match core {
+                CoreEvent::CallStateChanged(state) => {
+                    self.lock_state().call_state = state;
+                }
+                CoreEvent::SessionStatusChanged(peer, status) => {
+                    self.lock_state().sessions.insert(peer, status);
+                }
+                CoreEvent::MessageReceived(peer_id, text) => {
+                    self.lock_state()
+                        .chat_messages
+                        .push(ChatEntry { peer_id, text });
+                }
+                CoreEvent::StatisticsUpdated(stats) => {
+                    self.lock_state().statistics = stats;
+                }
+                CoreEvent::ManagerActiveChanged(active, restartable) => {
+                    let mut guard = self.lock_state();
+                    guard.manager_active = active;
+                    guard.manager_restartable = restartable;
+                }
+                CoreEvent::IncomingCall { .. } => {
+                    self.mount_overlay(Id::IncomingCallDialog);
+                }
+                CoreEvent::IncomingCallCancelled { request_id } => {
+                    let response = {
+                        let mut guard = self.lock_state();
+                        if guard
+                            .incoming_prompt
+                            .as_ref()
+                            .map(|p| p.request_id == request_id)
+                            .unwrap_or(false)
+                        {
+                            guard.incoming_prompt = None;
+                            guard.pending_accept_cancel = None;
+                            guard.pending_accept_response.take()
+                        } else {
+                            None
+                        }
+                    };
+                    if let Some(tx) = response {
+                        self.handle.spawn(async move {
+                            let _ = tx.send(false);
+                        });
+                    }
+                    self.unmount(&Id::IncomingCallDialog);
+                }
+                CoreEvent::LogLine(line) => {
+                    self.lock_state().push_log(line);
+                }
+            },
+        }
+
+        None
+    }
+}
+
+/// Persist a single volume preference change after the debounce window.
+fn persist_volume(
+    config: &mut AppConfig,
+    kind: VolumeKind,
+    value: f32,
+) -> Result<(), crate::storage::StorageError> {
+    match kind {
+        VolumeKind::Output => config.preferences.output_volume_db = value,
+        VolumeKind::Input => config.preferences.input_volume_db = value,
+        VolumeKind::Sound => config.preferences.sound_volume_db = value,
+        VolumeKind::InputSensitivity => config.preferences.input_sensitivity_db = value,
+    }
+    config::save_config(config)
+}
