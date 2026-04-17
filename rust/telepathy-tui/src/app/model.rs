@@ -194,18 +194,71 @@ where
             Msg::ContactSelected(peer_id) => {
                 self.lock_state().active_peer = Some(peer_id);
             }
-            Msg::ContactAdd(nickname, _peer_id) => {
+            Msg::ContactAdd(nickname, peer_id) => {
                 let profile_id = self.lock_config().active_profile_id.clone();
-                let result = {
+                let contact_id = {
                     let mut config = self.lock_config();
-                    config::add_contact(&mut config, &profile_id, nickname.clone())
+                    match config::add_contact(&mut config, &profile_id, nickname.clone()) {
+                        Ok(contact_id) => contact_id,
+                        Err(error) => {
+                            log::error!("contact add failed: {error}");
+                            return None;
+                        }
+                    }
                 };
-                if let Err(error) = result {
-                    log::error!("contact add failed: {error}");
-                } else {
-                    self.save_config();
-                    self.refresh_active_profile_view();
-                }
+                let secret_store = self.secret_store.clone();
+                let config = self.config.clone();
+                let state = self.state.clone();
+                let profile_id_async = profile_id.clone();
+                let contact_id_async = contact_id.clone();
+                self.handle.spawn(async move {
+                    let store_result = secret_store
+                        .store_contact_peer_id(&profile_id_async, &contact_id_async, &peer_id)
+                        .await;
+
+                    if let Err(error) = store_result {
+                        log::error!(
+                            "failed to store peer id for contact {} in profile {}: {error}",
+                            contact_id_async,
+                            profile_id_async
+                        );
+                        let rollback_result = {
+                            let mut config_guard = config.lock().unwrap_or_else(|p| p.into_inner());
+                            config::remove_contact(
+                                &mut config_guard,
+                                &profile_id_async,
+                                &contact_id_async,
+                            )
+                        };
+                        if let Err(rollback_error) = rollback_result {
+                            log::error!(
+                                "failed to rollback contact add for {} in profile {}: {rollback_error}",
+                                contact_id_async,
+                                profile_id_async
+                            );
+                        }
+                    } else {
+                        let config_guard = config.lock().unwrap_or_else(|p| p.into_inner());
+                        if let Err(error) = config::save_config(&config_guard) {
+                            log::error!("failed to persist config: {error}");
+                        }
+                    }
+
+                    let active_profile = {
+                        let config_guard = config.lock().unwrap_or_else(|p| p.into_inner());
+                        config_guard
+                            .profiles
+                            .iter()
+                            .find(|profile| profile.id == config_guard.active_profile_id)
+                            .cloned()
+                    };
+                    if let Some(active_profile) = active_profile {
+                        let mut state_guard = state.lock().unwrap_or_else(|p| p.into_inner());
+                        state_guard.active_profile = active_profile.clone();
+                        state_guard.contacts = active_profile.contacts;
+                        state_guard.rooms = active_profile.rooms;
+                    }
+                });
             }
             Msg::ContactDelete(contact_id) => {
                 let profile_id = self.lock_config().active_profile_id.clone();
