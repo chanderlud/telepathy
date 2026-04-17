@@ -21,9 +21,9 @@ pub(crate) mod utils;
 use crate::error::{DartError, Error, ErrorKind};
 use crate::flutter::callbacks::FrbCallbacks;
 use crate::flutter::*;
+use crate::internal::core::TelepathyCore;
+use crate::internal::helpers::OutputHelper;
 use crate::overlay::overlay::Overlay;
-use crate::telepathy::core::TelepathyCore;
-use crate::telepathy::helpers::OutputHelper;
 use atomic_float::AtomicF32;
 use chrono::Local;
 #[cfg(target_family = "wasm")]

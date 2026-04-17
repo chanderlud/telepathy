@@ -1,10 +1,10 @@
 use crate::error::{Error, ErrorKind};
 use crate::flutter::Statistics;
 use crate::flutter::callbacks::FrbStatisticsCallback;
+use crate::internal::messages::Message;
+use crate::internal::sockets::{TIMESTAMP_BUFFER_CAPACITY, Transport, TransportStream};
+use crate::internal::{ConnectionState, StatisticsCollectorState};
 use crate::overlay::{CONNECTED, LATENCY, LOSS};
-use crate::telepathy::messages::Message;
-use crate::telepathy::sockets::{TIMESTAMP_BUFFER_CAPACITY, Transport, TransportStream};
-use crate::telepathy::{ConnectionState, StatisticsCollectorState};
 use flutter_rust_bridge::for_generated::futures::{Sink, SinkExt};
 use kanal::AsyncReceiver;
 use libp2p::bytes::Bytes;

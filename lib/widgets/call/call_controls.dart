@@ -4,9 +4,9 @@ import 'package:provider/provider.dart';
 import 'package:telepathy/controllers/index.dart';
 import 'package:telepathy/core/utils/index.dart';
 import 'package:telepathy/screens/settings/view.dart';
-import 'package:telepathy/src/rust/audio/player.dart';
-import 'package:telepathy/src/rust/flutter.dart';
-import 'package:telepathy/src/rust/telepathy.dart';
+import 'package:telepathy/core/rust/audio/player.dart';
+import 'package:telepathy/core/rust/flutter.dart';
+import 'package:telepathy/core/rust/internal.dart';
 
 /// A widget with commonly used controls for a call.
 class CallControls extends StatefulWidget {

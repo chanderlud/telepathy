@@ -6,23 +6,23 @@ use crate::flutter::callbacks::{FrbCallbacks, FrbStatisticsCallback};
 use crate::flutter::{
     CallState, ChatMessage, CodecConfig, Contact, NetworkConfig, ScreenshareConfig, SessionStatus,
 };
-use crate::overlay::CONNECTED;
-use crate::overlay::overlay::Overlay;
-use crate::telepathy::messages::Message;
-use crate::telepathy::sockets::{
+use crate::internal::messages::Message;
+use crate::internal::sockets::{
     ConstSocket, SendingSockets, SharedSockets, Transport, TransportStream, audio_input,
     audio_output,
 };
-use crate::telepathy::utils::{
+use crate::internal::utils::{
     loopback, read_message, select_best_connection, statistics_collector,
     stream_to_audio_transport, write_message,
 };
-use crate::telepathy::{
+use crate::internal::{
     CHAT_PROTOCOL, DCUTR_TIMEOUT, EarlyCallState, HELLO_TIMEOUT, KEEP_ALIVE, OptionalCallArgs,
     RoomConnection, RoomMessage, RoomState, SESSION_MAX_FRAME_LENGTH, SessionState, SharedDeviceId,
     StartScreenshare, StatisticsCollectorState,
 };
-use crate::telepathy::{ConnectionState, Result};
+use crate::internal::{ConnectionState, Result};
+use crate::overlay::CONNECTED;
+use crate::overlay::overlay::Overlay;
 use atomic_float::AtomicF32;
 use chrono::Local;
 #[cfg(target_family = "wasm")]

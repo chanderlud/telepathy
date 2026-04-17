@@ -51,6 +51,6 @@ android {
 
 apply from: "../cargokit/gradle/plugin.gradle"
 cargokit {
-    manifestDir = "../../rust/telepathy"
-    libname = "telepathy"
+    manifestDir = "../../rust/telepathy-core"
+    libname = "telepathy_core"
 }

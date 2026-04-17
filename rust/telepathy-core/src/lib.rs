@@ -5,8 +5,10 @@ pub mod audio;
 pub mod error;
 pub mod flutter;
 mod frb_generated;
+mod internal;
 pub mod overlay;
-pub mod telepathy;
+
+pub use internal::{AudioDevice, Telepathy};
 
 // https://github.com/RustAudio/cpal/issues/720#issuecomment-1311813294
 #[cfg(target_os = "android")]
