@@ -121,7 +121,7 @@ impl From<ConnectionState> for SessionStatus {
 pub struct ChatMessage {
     pub text: String,
 
-    pub(crate) receiver: PeerId,
+    pub receiver: PeerId,
 
     pub(crate) timestamp: DateTime<Local>,
 

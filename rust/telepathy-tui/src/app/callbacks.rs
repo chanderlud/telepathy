@@ -183,9 +183,7 @@ pub fn build_callbacks(
     )
 }
 
-/// Best-effort peer-id formatting for [`ChatMessage`] without exposing
-/// crate-private fields. The full message struct is opaque so we fall back to
-/// an empty string when no public accessor is available.
-fn format_peer(_message: &telepathy_core::types::ChatMessage) -> String {
-    String::new()
+/// Returns the chat peer id used to route incoming messages in the TUI model.
+fn format_peer(message: &telepathy_core::types::ChatMessage) -> String {
+    message.receiver.to_string()
 }
