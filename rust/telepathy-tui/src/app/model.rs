@@ -31,7 +31,7 @@ where
     pub app: Application<Id, Msg, CoreEvent>,
     pub terminal: TerminalBridge<T>,
     pub state: Arc<Mutex<AppState>>,
-    pub config: AppConfig,
+    pub config: Arc<Mutex<AppConfig>>,
     pub secret_store: SecretStore,
     pub handle: Handle,
     pub core: Arc<NativeTelepathy>,
@@ -56,7 +56,7 @@ impl Model<CrosstermTerminalAdapter> {
             app,
             terminal,
             state,
-            config,
+            config: Arc::new(Mutex::new(config)),
             secret_store,
             handle,
             core,
@@ -80,26 +80,30 @@ where
     }
 
     fn lock_state(&self) -> std::sync::MutexGuard<'_, AppState> {
-        match self.state.lock() {
-            Ok(g) => g,
-            Err(p) => p.into_inner(),
-        }
+        self.state.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    fn lock_config(&self) -> std::sync::MutexGuard<'_, AppConfig> {
+        self.config.lock().unwrap_or_else(|p| p.into_inner())
     }
 
     fn save_config(&self) {
-        if let Err(error) = config::save_config(&self.config) {
+        let config = self.lock_config();
+        if let Err(error) = config::save_config(&config) {
             log::error!("failed to persist config: {error}");
         }
     }
 
     fn refresh_active_profile_view(&mut self) {
-        if let Some(profile) = self
-            .config
-            .profiles
-            .iter()
-            .find(|p| p.id == self.config.active_profile_id)
-            .cloned()
-        {
+        let profile = {
+            let config = self.lock_config();
+            config
+                .profiles
+                .iter()
+                .find(|p| p.id == config.active_profile_id)
+                .cloned()
+        };
+        if let Some(profile) = profile {
             let mut guard = self.lock_state();
             guard.active_profile = profile.clone();
             guard.contacts = profile.contacts;
@@ -108,7 +112,8 @@ where
     }
 
     fn apply_setting(&mut self, key: SettingKey, value: SettingValue) {
-        let prefs = &mut self.config.preferences;
+        let mut config = self.lock_config();
+        let prefs = &mut config.preferences;
         match (key, value) {
             (SettingKey::RelayAddress, SettingValue::Str(v)) => prefs.relay_address = v,
             (SettingKey::RelayId, SettingValue::Str(v)) => prefs.relay_id = v,
@@ -190,10 +195,12 @@ where
                 self.lock_state().active_peer = Some(peer_id);
             }
             Msg::ContactAdd(nickname, _peer_id) => {
-                let profile_id = self.config.active_profile_id.clone();
-                if let Err(error) =
-                    config::add_contact(&mut self.config, &profile_id, nickname.clone())
-                {
+                let profile_id = self.lock_config().active_profile_id.clone();
+                let result = {
+                    let mut config = self.lock_config();
+                    config::add_contact(&mut config, &profile_id, nickname.clone())
+                };
+                if let Err(error) = result {
                     log::error!("contact add failed: {error}");
                 } else {
                     self.save_config();
@@ -201,10 +208,12 @@ where
                 }
             }
             Msg::ContactDelete(contact_id) => {
-                let profile_id = self.config.active_profile_id.clone();
-                if let Err(error) =
-                    config::remove_contact(&mut self.config, &profile_id, &contact_id)
-                {
+                let profile_id = self.lock_config().active_profile_id.clone();
+                let result = {
+                    let mut config = self.lock_config();
+                    config::remove_contact(&mut config, &profile_id, &contact_id)
+                };
+                if let Err(error) = result {
                     log::error!("contact delete failed: {error}");
                 } else {
                     let secret_store = self.secret_store.clone();
@@ -223,10 +232,12 @@ where
                 }
             }
             Msg::ContactRename(contact_id, nickname) => {
-                let profile_id = self.config.active_profile_id.clone();
-                if let Err(error) =
-                    config::rename_contact(&mut self.config, &profile_id, &contact_id, nickname)
-                {
+                let profile_id = self.lock_config().active_profile_id.clone();
+                let result = {
+                    let mut config = self.lock_config();
+                    config::rename_contact(&mut config, &profile_id, &contact_id, nickname)
+                };
+                if let Err(error) = result {
                     log::error!("contact rename failed: {error}");
                 } else {
                     self.save_config();
@@ -237,10 +248,12 @@ where
             // Rooms ------------------------------------------------------
             Msg::RoomSelected(_) => {}
             Msg::RoomAdd(nickname, peer_ids) => {
-                let profile_id = self.config.active_profile_id.clone();
-                if let Err(error) =
-                    config::add_room(&mut self.config, &profile_id, nickname, peer_ids)
-                {
+                let profile_id = self.lock_config().active_profile_id.clone();
+                let result = {
+                    let mut config = self.lock_config();
+                    config::add_room(&mut config, &profile_id, nickname, peer_ids)
+                };
+                if let Err(error) = result {
                     log::error!("room add failed: {error}");
                 } else {
                     self.save_config();
@@ -248,8 +261,12 @@ where
                 }
             }
             Msg::RoomDelete(nickname) => {
-                let profile_id = self.config.active_profile_id.clone();
-                if let Err(error) = config::remove_room(&mut self.config, &profile_id, &nickname) {
+                let profile_id = self.lock_config().active_profile_id.clone();
+                let result = {
+                    let mut config = self.lock_config();
+                    config::remove_room(&mut config, &profile_id, &nickname)
+                };
+                if let Err(error) = result {
                     log::error!("room delete failed: {error}");
                 } else {
                     self.save_config();
@@ -284,7 +301,7 @@ where
                     let guard = self.lock_state();
                     (guard.active_peer.clone(), guard.contacts.clone())
                 };
-                let profile_id = self.config.active_profile_id.clone();
+                let profile_id = self.lock_config().active_profile_id.clone();
                 let secret_store = self.secret_store.clone();
                 let core = self.core.clone();
                 self.handle.spawn(async move {
@@ -334,15 +351,18 @@ where
                     let mut guard = self.lock_state();
                     guard.volume_debounce.insert(kind, now);
                 }
-                let prefs = &mut self.config.preferences;
-                match kind {
-                    VolumeKind::Output => prefs.output_volume_db = value,
-                    VolumeKind::Input => prefs.input_volume_db = value,
-                    VolumeKind::Sound => prefs.sound_volume_db = value,
-                    VolumeKind::InputSensitivity => prefs.input_sensitivity_db = value,
+                {
+                    let mut config = self.lock_config();
+                    let prefs = &mut config.preferences;
+                    match kind {
+                        VolumeKind::Output => prefs.output_volume_db = value,
+                        VolumeKind::Input => prefs.input_volume_db = value,
+                        VolumeKind::Sound => prefs.sound_volume_db = value,
+                        VolumeKind::InputSensitivity => prefs.input_sensitivity_db = value,
+                    }
                 }
                 let state = self.state.clone();
-                let mut config_snapshot = self.config.clone();
+                let config = self.config.clone();
                 let handle = self.handle.clone();
                 handle.spawn(async move {
                     tokio::time::sleep(VOLUME_DEBOUNCE).await;
@@ -354,10 +374,11 @@ where
                             .map(|stored| *stored == now)
                             .unwrap_or(false)
                     };
-                    if still_latest
-                        && let Err(error) = persist_volume(&mut config_snapshot, kind, value)
-                    {
-                        log::error!("volume persist failed: {error}");
+                    if still_latest {
+                        let guard = config.lock().unwrap_or_else(|p| p.into_inner());
+                        if let Err(error) = config::save_config(&guard) {
+                            log::error!("volume persist failed: {error}");
+                        }
                     }
                 });
             }
@@ -390,7 +411,7 @@ where
                     let guard = self.lock_state();
                     (guard.active_peer.clone(), guard.contacts.clone())
                 };
-                let profile_id = self.config.active_profile_id.clone();
+                let profile_id = self.lock_config().active_profile_id.clone();
                 let secret_store = self.secret_store.clone();
                 let core = self.core.clone();
                 let message_text = text.clone();
@@ -428,11 +449,18 @@ where
 
             // Profiles ---------------------------------------------------
             Msg::ProfileCreate(nickname) => {
-                let _ = config::create_profile(&mut self.config, nickname);
+                {
+                    let mut config = self.lock_config();
+                    let _ = config::create_profile(&mut config, nickname);
+                }
                 self.save_config();
             }
             Msg::ProfileDelete(profile_id) => {
-                if let Err(error) = config::delete_profile(&mut self.config, &profile_id) {
+                let result = {
+                    let mut config = self.lock_config();
+                    config::delete_profile(&mut config, &profile_id)
+                };
+                if let Err(error) = result {
                     log::error!("profile delete failed: {error}");
                 } else {
                     let secret_store = self.secret_store.clone();
@@ -448,17 +476,23 @@ where
                 }
             }
             Msg::ProfileSwitch(profile_id) => {
-                if let Err(error) = config::switch_profile(&mut self.config, &profile_id) {
+                let result = {
+                    let mut config = self.lock_config();
+                    config::switch_profile(&mut config, &profile_id)
+                };
+                if let Err(error) = result {
                     log::error!("profile switch failed: {error}");
                 } else {
                     self.save_config();
-                    if let Some(profile) = self
-                        .config
-                        .profiles
-                        .iter()
-                        .find(|p| p.id == self.config.active_profile_id)
-                        .cloned()
-                    {
+                    let profile = {
+                        let config = self.lock_config();
+                        config
+                            .profiles
+                            .iter()
+                            .find(|p| p.id == config.active_profile_id)
+                            .cloned()
+                    };
+                    if let Some(profile) = profile {
                         self.lock_state().replace_active_profile(profile);
                     }
                 }
@@ -581,17 +615,3 @@ async fn resolve_core_contact(
         .ok()
 }
 
-/// Persist a single volume preference change after the debounce window.
-fn persist_volume(
-    config: &mut AppConfig,
-    kind: VolumeKind,
-    value: f32,
-) -> Result<(), crate::storage::StorageError> {
-    match kind {
-        VolumeKind::Output => config.preferences.output_volume_db = value,
-        VolumeKind::Input => config.preferences.input_volume_db = value,
-        VolumeKind::Sound => config.preferences.sound_volume_db = value,
-        VolumeKind::InputSensitivity => config.preferences.input_sensitivity_db = value,
-    }
-    config::save_config(config)
-}
