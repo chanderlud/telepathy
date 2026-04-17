@@ -22,7 +22,7 @@ use tokio::sync::mpsc;
 use tuirealm::terminal::{CrosstermTerminalAdapter, TerminalBridge};
 use tuirealm::{Application, EventListenerCfg, PollStrategy, Sub, SubClause, SubEventClause, Update};
 
-use crate::components::{PlaceholderComponent, placeholder_ids};
+use crate::components::{CoreEventBridgeComponent, PlaceholderComponent, placeholder_ids};
 use crate::events::{CoreEvent, Id, Msg};
 use crate::state::AppState;
 use crate::storage::config::{self, ProfileMeta};
@@ -77,6 +77,16 @@ pub async fn run() -> Result<(), AppError> {
         )
         .map_err(|error| AppError::Application(error.to_string()))?;
     }
+
+    app.mount(
+        Id::CoreEventBridge,
+        Box::new(CoreEventBridgeComponent),
+        vec![Sub::new(
+            SubEventClause::Discriminant(CoreEvent::LogLine(String::new())),
+            SubClause::Always,
+        )],
+    )
+    .map_err(|error| AppError::Application(error.to_string()))?;
 
     let terminal = TerminalBridge::init(
         CrosstermTerminalAdapter::new()

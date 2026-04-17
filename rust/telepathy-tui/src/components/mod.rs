@@ -50,6 +50,37 @@ impl Component<Msg, CoreEvent> for PlaceholderComponent {
     }
 }
 
+/// Bridges core user events from the event loop into model messages.
+#[derive(Default)]
+pub struct CoreEventBridgeComponent;
+
+impl MockComponent for CoreEventBridgeComponent {
+    fn view(&mut self, _frame: &mut Frame, _area: Rect) {}
+
+    fn query(&self, _attr: Attribute) -> Option<AttrValue> {
+        None
+    }
+
+    fn attr(&mut self, _attr: Attribute, _value: AttrValue) {}
+
+    fn state(&self) -> TuiState {
+        TuiState::None
+    }
+
+    fn perform(&mut self, _cmd: Cmd) -> CmdResult {
+        CmdResult::None
+    }
+}
+
+impl Component<Msg, CoreEvent> for CoreEventBridgeComponent {
+    fn on(&mut self, ev: Event<CoreEvent>) -> Option<Msg> {
+        match ev {
+            Event::User(core_event) => Some(Msg::CoreEvent(core_event)),
+            _ => None,
+        }
+    }
+}
+
 /// All component identifiers that [`Model::new`](crate::app::model::Model::new)
 /// mounts at startup with [`PlaceholderComponent`]. T5 will replace these
 /// stubs one identifier at a time.

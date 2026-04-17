@@ -202,6 +202,7 @@ pub enum Id {
     CallControlsPane,
     ChatPane,
     StatusBar,
+    CoreEventBridge,
     SettingsOverlay,
     IncomingCallDialog,
     ConfirmDialog,
