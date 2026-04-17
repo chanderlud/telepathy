@@ -363,6 +363,7 @@ where
                 }
                 let state = self.state.clone();
                 let config = self.config.clone();
+                let core = self.core.clone();
                 let handle = self.handle.clone();
                 handle.spawn(async move {
                     tokio::time::sleep(VOLUME_DEBOUNCE).await;
@@ -375,6 +376,12 @@ where
                             .unwrap_or(false)
                     };
                     if still_latest {
+                        match kind {
+                            VolumeKind::Output => core.set_output_volume(value),
+                            VolumeKind::Input => core.set_input_volume(value),
+                            VolumeKind::InputSensitivity => core.set_rms_threshold(value),
+                            VolumeKind::Sound => {}
+                        }
                         let guard = config.lock().unwrap_or_else(|p| p.into_inner());
                         if let Err(error) = config::save_config(&guard) {
                             log::error!("volume persist failed: {error}");
