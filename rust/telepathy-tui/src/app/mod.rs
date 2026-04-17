@@ -81,10 +81,7 @@ pub async fn run() -> Result<(), AppError> {
     app.mount(
         Id::CoreEventBridge,
         Box::new(CoreEventBridgeComponent),
-        vec![Sub::new(
-            SubEventClause::Discriminant(CoreEvent::LogLine(String::new())),
-            SubClause::Always,
-        )],
+        vec![Sub::new(SubEventClause::Any, SubClause::Always)],
     )
     .map_err(|error| AppError::Application(error.to_string()))?;
 
