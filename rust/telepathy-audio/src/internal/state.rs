@@ -304,8 +304,7 @@ mod tests {
         let rms_sender = Arc::new(AtomicF32::new(0.0));
         let deafened = Arc::new(AtomicBool::new(false));
         let loss_sender = Arc::new(AtomicUsize::new(0));
-        let state =
-            OutputProcessorState::new(&output_volume, rms_sender, &deafened, loss_sender);
+        let state = OutputProcessorState::new(&output_volume, rms_sender, &deafened, loss_sender);
 
         output_volume.store(0.63, Relaxed);
         approx_eq(state.output_volume(), 0.63);
@@ -317,8 +316,7 @@ mod tests {
         let rms_sender = Arc::new(AtomicF32::new(0.0));
         let deafened = Arc::new(AtomicBool::new(false));
         let loss_sender = Arc::new(AtomicUsize::new(0));
-        let state =
-            OutputProcessorState::new(&output_volume, rms_sender, &deafened, loss_sender);
+        let state = OutputProcessorState::new(&output_volume, rms_sender, &deafened, loss_sender);
 
         deafened.store(true, Relaxed);
         assert!(state.is_deafened());
@@ -330,12 +328,8 @@ mod tests {
         let rms_sender = Arc::new(AtomicF32::new(0.0));
         let deafened = Arc::new(AtomicBool::new(false));
         let loss_sender = Arc::new(AtomicUsize::new(0));
-        let state = OutputProcessorState::new(
-            &output_volume,
-            rms_sender.clone(),
-            &deafened,
-            loss_sender,
-        );
+        let state =
+            OutputProcessorState::new(&output_volume, rms_sender.clone(), &deafened, loss_sender);
 
         state.send_rms(0.4);
         state.send_rms(0.2);
@@ -349,12 +343,8 @@ mod tests {
         let rms_sender = Arc::new(AtomicF32::new(0.0));
         let deafened = Arc::new(AtomicBool::new(false));
         let loss_sender = Arc::new(AtomicUsize::new(0));
-        let state = OutputProcessorState::new(
-            &output_volume,
-            rms_sender,
-            &deafened,
-            loss_sender.clone(),
-        );
+        let state =
+            OutputProcessorState::new(&output_volume, rms_sender, &deafened, loss_sender.clone());
 
         state.send_loss(3);
         state.send_loss(3);

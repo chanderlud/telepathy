@@ -211,7 +211,7 @@ impl fmt::Debug for AudioHost {
 /// # Example
 ///
 /// ```rust,no_run
-/// use telepathy_audio::{AudioHost, list_input_devices};
+/// use telepathy_audio::devices::{AudioHost, list_input_devices};
 ///
 /// let host = AudioHost::new();
 /// let devices = list_input_devices(&host).unwrap();
@@ -240,7 +240,7 @@ pub fn list_input_devices(host: &AudioHost) -> Result<Vec<AudioDeviceInfo>, Devi
 /// # Example
 ///
 /// ```rust,no_run
-/// use telepathy_audio::{AudioHost, list_output_devices};
+/// use telepathy_audio::devices::{AudioHost, list_output_devices};
 ///
 /// let host = AudioHost::new();
 /// let devices = list_output_devices(&host).unwrap();
@@ -269,7 +269,7 @@ pub fn list_output_devices(host: &AudioHost) -> Result<Vec<AudioDeviceInfo>, Dev
 /// # Example
 ///
 /// ```rust,no_run
-/// use telepathy_audio::{AudioHost, list_all_devices};
+/// use telepathy_audio::devices::{AudioHost, list_all_devices};
 ///
 /// let host = AudioHost::new();
 /// let devices = list_all_devices(&host).unwrap();
@@ -300,7 +300,7 @@ pub fn list_all_devices(host: &AudioHost) -> Result<AudioDeviceList, DeviceError
 /// # Example
 ///
 /// ```rust,no_run
-/// use telepathy_audio::{AudioHost, get_input_device};
+/// use telepathy_audio::devices::{AudioHost, get_input_device};
 ///
 /// let host = AudioHost::new();
 ///
@@ -355,7 +355,7 @@ pub fn get_input_device(
 /// # Example
 ///
 /// ```rust,no_run
-/// use telepathy_audio::{AudioHost, get_output_device};
+/// use telepathy_audio::devices::{AudioHost, get_output_device};
 ///
 /// let host = AudioHost::new();
 ///
@@ -411,7 +411,7 @@ pub fn get_output_device(
 /// # Example
 ///
 /// ```rust,no_run
-/// use telepathy_audio::{AudioHost, get_default_input_device};
+/// use telepathy_audio::devices::{AudioHost, get_default_input_device};
 ///
 /// let host = AudioHost::new();
 /// let device = get_default_input_device(&host).unwrap();
@@ -432,7 +432,7 @@ pub fn get_default_input_device(host: &AudioHost) -> Result<DeviceHandle, Device
 /// # Example
 ///
 /// ```rust,no_run
-/// use telepathy_audio::{AudioHost, get_default_output_device};
+/// use telepathy_audio::devices::{AudioHost, get_default_output_device};
 ///
 /// let host = AudioHost::new();
 /// let device = get_default_output_device(&host).unwrap();

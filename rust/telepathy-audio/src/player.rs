@@ -12,7 +12,7 @@
 //! ## Usage
 //!
 //! ```rust,no_run
-//! use telepathy_audio::{AudioPlayer, SoundHandle};
+//! use telepathy_audio::player::{AudioPlayer, SoundHandle};
 //!
 //! async fn play_sound() {
 //!     // Create a player with -6dB volume
@@ -377,7 +377,7 @@ impl AudioPlayer {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use telepathy_audio::AudioPlayer;
+    /// use telepathy_audio::player::AudioPlayer;
     ///
     /// // Create player at half volume (-6 dB)
     /// let player = AudioPlayer::new(-6.0);

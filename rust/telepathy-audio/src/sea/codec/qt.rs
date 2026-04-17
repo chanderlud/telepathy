@@ -55,11 +55,7 @@ impl SeaQuantTab {
 #[cfg(test)]
 mod tests {
     use super::SeaQuantTab;
-    use crate::sea::codec::{
-        common::SeaResidualSize,
-        dqt::SeaDequantTab,
-        encoder_base::sea_div,
-    };
+    use crate::sea::codec::{common::SeaResidualSize, dqt::SeaDequantTab, encoder_base::sea_div};
 
     fn all_residual_sizes() -> [SeaResidualSize; 8] {
         [

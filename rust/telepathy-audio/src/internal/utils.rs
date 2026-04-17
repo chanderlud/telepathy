@@ -45,7 +45,7 @@ use rubato::{Fft, FixedSync};
 /// # Examples
 ///
 /// ```rust
-/// use telepathy_audio::db_to_multiplier;
+/// use telepathy_audio::internal::utils::db_to_multiplier;
 ///
 /// // 0 dB = unity gain (multiplier of 1.0)
 /// assert!((db_to_multiplier(0.0) - 1.0).abs() < 0.001);
@@ -92,7 +92,9 @@ pub fn resampler_factory(
     if input_rate == output_rate {
         Ok(None)
     } else if channels == 0 {
-        Err(Error::Processing("Resampler requires > 0 channels".to_string()))
+        Err(Error::Processing(
+            "Resampler requires > 0 channels".to_string(),
+        ))
     } else {
         // create the resampler if needed
         Ok(Some(Fft::<f32>::new(

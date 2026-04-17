@@ -388,7 +388,10 @@ mod tests {
     fn residual_size_try_from_u8_boundaries() {
         assert_eq!(SeaResidualSize::try_from_u8(0), None);
         assert_eq!(SeaResidualSize::try_from_u8(1), Some(SeaResidualSize::One));
-        assert_eq!(SeaResidualSize::try_from_u8(8), Some(SeaResidualSize::Eight));
+        assert_eq!(
+            SeaResidualSize::try_from_u8(8),
+            Some(SeaResidualSize::Eight)
+        );
         assert_eq!(SeaResidualSize::try_from_u8(9), None);
     }
 }

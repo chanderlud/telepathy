@@ -290,7 +290,15 @@ pub fn output_processor<O: AudioOutput>(
             warn!("output frame != FRAME_SIZE: {}", buffer.len());
             continue;
         } else {
-            unsafe { std::slice::from_raw_parts(buffer.as_ptr() as *const i16, FRAME_SIZE) }
+            // The `Bytes` payload is only u8-aligned, so we cannot reinterpret its
+            // pointer as `*const i16` (that would violate `from_raw_parts`'s
+            // alignment precondition and is undefined behaviour). Instead, copy
+            // the native-endian byte pairs written by `input_processor` into our
+            // already-aligned `decoded_buf`.
+            for (dst, src) in decoded_buf.iter_mut().zip(buffer.chunks_exact(2)) {
+                *dst = i16::from_ne_bytes([src[0], src[1]]);
+            }
+            &decoded_buf
         };
 
         // convert the i16 samples to f32 & apply the output volume

@@ -7,7 +7,7 @@ use log::{LevelFilter, info};
 use relay_server::{RelayInfo, spawn_relay};
 use std::net::{IpAddr, Ipv4Addr};
 use std::process::Command;
-use telepathy_audio::AudioHost;
+use telepathy_audio::devices::AudioHost;
 use tokio::sync::OnceCell;
 use tokio::time::interval;
 

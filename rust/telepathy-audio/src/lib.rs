@@ -61,7 +61,7 @@
 //! ### Device Enumeration
 //!
 //! ```rust,no_run
-//! use telepathy_audio::{AudioHost, list_all_devices, get_default_input_device};
+//! use telepathy_audio::devices::{AudioHost, list_all_devices, get_default_input_device};
 //!
 //! // Create an audio host
 //! let host = AudioHost::new();
@@ -78,7 +78,8 @@
 //! ### Audio Input
 //!
 //! ```rust,no_run
-//! use telepathy_audio::{AudioHost, AudioInputBuilder};
+//! use telepathy_audio::devices::AudioHost;
+//! use telepathy_audio::io::AudioInputBuilder;
 //!
 //! let host = AudioHost::new();
 //!
@@ -105,7 +106,8 @@
 //! ```rust,no_run
 //! use bytes::Bytes;
 //! use std::sync::mpsc;
-//! use telepathy_audio::{AudioHost, AudioOutputBuilder};
+//! use telepathy_audio::devices::AudioHost;
+//! use telepathy_audio::io::AudioOutputBuilder;
 //! use telepathy_audio::adapters::MpscSource;
 //!
 //! let host = AudioHost::new();
@@ -132,7 +134,8 @@
 //! ```rust,no_run
 //! use bytes::Bytes;
 //! use std::sync::mpsc;
-//! use telepathy_audio::{AudioHost, AudioOutputBuilder};
+//! use telepathy_audio::devices::AudioHost;
+//! use telepathy_audio::io::AudioOutputBuilder;
 //! use telepathy_audio::adapters::MpscSource;
 //!
 //! let host = AudioHost::new();
@@ -158,7 +161,8 @@
 //! ```rust,no_run
 //! use bytes::Bytes;
 //! use std::sync::mpsc;
-//! use telepathy_audio::{AudioHost, AudioInputBuilder, AudioOutputBuilder};
+//! use telepathy_audio::devices::AudioHost;
+//! use telepathy_audio::io::{AudioInputBuilder, AudioOutputBuilder};
 //! use telepathy_audio::adapters::MpscSource;
 //!
 //! let host = AudioHost::new();
@@ -192,7 +196,8 @@
 //! use atomic_float::AtomicF32;
 //! use bytes::Bytes;
 //! use std::sync::mpsc;
-//! use telepathy_audio::{AudioHost, AudioInputBuilder, AudioOutputBuilder};
+//! use telepathy_audio::devices::AudioHost;
+//! use telepathy_audio::io::{AudioInputBuilder, AudioOutputBuilder};
 //! use telepathy_audio::adapters::MpscSource;
 //!
 //! // Core state that can be shared across components

@@ -69,7 +69,7 @@ const PREFETCH_DISTANCE: usize = 128;
 /// # Example
 ///
 /// ```rust
-/// use telepathy_audio::wide_mul;
+/// use telepathy_audio::internal::processing::wide_mul;
 ///
 /// let mut samples = [0.5f32; 480];
 /// wide_mul(&mut samples, 0.8); // Apply 80% volume
@@ -613,6 +613,7 @@ mod tests {
     }
 
     /// Creates a test frame of i16 samples.
+    #[cfg(target_arch = "x86_64")]
     fn dummy_int_frame() -> [i16; FRAME_SIZE] {
         let mut frame = [0_i16; FRAME_SIZE];
         for (i, sample) in frame.iter_mut().enumerate() {
