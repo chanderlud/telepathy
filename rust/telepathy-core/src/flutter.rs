@@ -343,7 +343,7 @@ pub fn rust_set_up() {
                 .level(level)
                 .add_appender(SendToDartLogger {}),
         )
-            .unwrap();
+        .unwrap();
 
         #[cfg(target_family = "wasm")]
         wasm_logger::init(wasm_logger::Config::default());

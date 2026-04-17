@@ -12,7 +12,7 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 [features]
 flutter = ["dep:flutter_rust_bridge"]
 native = []
-default = ["flutter", "native"]
+default = ["flutter"]
 
 [dependencies]
 telepathy-audio = { path = "../telepathy-audio" }

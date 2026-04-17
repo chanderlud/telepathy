@@ -11,9 +11,9 @@ pub mod core;
 /// flutter_rust_bridge:ignore
 mod helpers;
 /// flutter_rust_bridge:ignore
-pub(crate) mod runtime;
-/// flutter_rust_bridge:ignore
 pub(crate) mod messages;
+/// flutter_rust_bridge:ignore
+pub(crate) mod runtime;
 pub(crate) mod screenshare;
 /// networking code for live audio streams
 /// flutter_rust_bridge:ignore

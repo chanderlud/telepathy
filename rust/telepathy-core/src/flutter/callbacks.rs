@@ -1,5 +1,5 @@
 use crate::flutter::{
-    CallState, ChatMessage, Contact, FrontendNotify, FlutterCallbacks, FlutterStatisticsCallback,
+    CallState, ChatMessage, Contact, FlutterCallbacks, FlutterStatisticsCallback, FrontendNotify,
     SessionStatus, Statistics, invoke, notify,
 };
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};

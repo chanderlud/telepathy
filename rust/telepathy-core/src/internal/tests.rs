@@ -2,6 +2,7 @@ use super::*;
 use crate::internal::callbacks::{
     CoreCallbacks, CoreStatisticsCallback, MockCoreCallbacks, MockCoreStatisticsCallback,
 };
+use crate::types::SessionStatus;
 use fast_log::Config;
 use log::{LevelFilter, info};
 use relay_server::{RelayInfo, spawn_relay};
@@ -10,7 +11,6 @@ use std::process::Command;
 use telepathy_audio::devices::AudioHost;
 use tokio::sync::OnceCell;
 use tokio::time::interval;
-use crate::types::SessionStatus;
 
 static RELAY: OnceCell<RelayInfo> = OnceCell::const_new();
 static PROFILES: &[NetProfile] = &[

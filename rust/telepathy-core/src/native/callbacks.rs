@@ -1,11 +1,11 @@
-use std::sync::Arc;
-use libp2p::PeerId;
-use tokio::sync::{oneshot, watch, Notify};
-use tokio::task::JoinHandle;
-use crate::flutter::{CallState, ChatMessage, Contact, FrontendNotify, SessionStatus, Statistics};
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::runtime::spawn_task;
 use crate::native::{NativeCallbacks, NativeStatisticsCallback};
+use crate::types::{CallState, ChatMessage, Contact, FrontendNotify, SessionStatus, Statistics};
+use libp2p::PeerId;
+use std::sync::Arc;
+use tokio::sync::{Notify, oneshot, watch};
+use tokio::task::JoinHandle;
 
 impl CoreCallbacks<NativeStatisticsCallback> for NativeCallbacks {
     async fn session_status(&self, status: SessionStatus, peer: PeerId) {
