@@ -1,10 +1,7 @@
-//! Component scaffolding for telepathy-tui.
-//!
-//! T4 only ships an empty placeholder component used to satisfy mounts in
-//! [`crate::app::model::Model`]; the real components for the contacts pane,
-//! call controls, chat pane, status bar and overlays land in T5/T6.
+//! Components for telepathy-tui.
 
 use tuirealm::command::{Cmd, CmdResult};
+use tuirealm::props::{AnyPropBox, PropBoundExt, PropPayload};
 use tuirealm::ratatui::layout::Rect;
 use tuirealm::ratatui::widgets::Paragraph;
 use tuirealm::{
@@ -12,6 +9,102 @@ use tuirealm::{
 };
 
 use crate::events::{CoreEvent, Id, Msg};
+use crate::state::ChatEntry;
+use crate::storage::config::ContactMeta;
+
+pub mod call_controls_pane;
+pub mod chat_pane;
+pub mod confirm_dialog;
+pub mod contacts_pane;
+pub mod incoming_call_dialog;
+pub mod status_bar;
+
+pub use call_controls_pane::CallControlsPane;
+pub use chat_pane::ChatPane;
+pub use confirm_dialog::ConfirmDialog;
+pub use contacts_pane::ContactsPane;
+pub use incoming_call_dialog::IncomingCallDialog;
+pub use status_bar::StatusBar;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum SessionBadge {
+    Connecting,
+    ConnectedDirect,
+    ConnectedRelayed,
+    Inactive,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ContactsPaneData {
+    pub contacts: Vec<ContactMeta>,
+    pub rooms: Vec<String>,
+    pub sessions: std::collections::HashMap<String, SessionBadge>,
+    pub call_active: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CallControlsData {
+    pub muted: bool,
+    pub deafened: bool,
+    pub call_active: bool,
+    pub manager_active: bool,
+    pub manager_restartable: bool,
+    pub output_vol: f32,
+    pub input_vol: f32,
+    pub sound_vol: f32,
+    pub sensitivity: f32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChatPaneData {
+    pub entries: Vec<ChatEntry>,
+    pub active_peer: Option<String>,
+    pub call_active: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct IncomingCallDialogData {
+    pub request_id: String,
+    pub contact_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConfirmDialogData {
+    pub message: String,
+    pub confirm_msg: Msg,
+}
+
+pub fn payload_attr<T>(value: T) -> AttrValue
+where
+    T: tuirealm::props::PropBound + 'static,
+{
+    AttrValue::Payload(PropPayload::Any(Box::new(value)))
+}
+
+pub fn payload_content<T>(props: &Props) -> Option<T>
+where
+    T: Clone + 'static,
+{
+    let value = props.get(Attribute::Content)?;
+    payload_from_attr(value)
+}
+
+pub fn payload_from_attr<T>(value: AttrValue) -> Option<T>
+where
+    T: Clone + 'static,
+{
+    match value {
+        AttrValue::Payload(PropPayload::Any(payload)) => payload_to_type::<T>(payload),
+        _ => None,
+    }
+}
+
+fn payload_to_type<T>(payload: AnyPropBox) -> Option<T>
+where
+    T: Clone + 'static,
+{
+    payload.as_any().downcast_ref::<T>().cloned()
+}
 
 /// Empty component used by [`Model`](crate::app::model::Model) for every
 /// [`Id`] until the real components are implemented.
@@ -81,14 +174,6 @@ impl Component<Msg, CoreEvent> for CoreEventBridgeComponent {
     }
 }
 
-/// All component identifiers that [`Model::new`](crate::app::model::Model::new)
-/// mounts at startup with [`PlaceholderComponent`]. T5 will replace these
-/// stubs one identifier at a time.
 pub fn placeholder_ids() -> &'static [Id] {
-    &[
-        Id::ContactsPane,
-        Id::CallControlsPane,
-        Id::ChatPane,
-        Id::StatusBar,
-    ]
+    &[Id::CoreEventBridge]
 }

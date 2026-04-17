@@ -18,7 +18,7 @@ use crate::storage::config::{ContactMeta, ProfileMeta, RoomConfig};
 pub const LOG_RING_CAPACITY: usize = 1000;
 
 /// Per-message chat entry rendered by the chat pane.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ChatEntry {
     pub peer_id: String,
     pub text: String,

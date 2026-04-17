@@ -140,6 +140,8 @@ pub enum Msg {
     FocusChat,
     OpenSettings,
     CloseSettings,
+    OpenLogs,
+    CloseLogs,
     Quit,
 
     // Contacts

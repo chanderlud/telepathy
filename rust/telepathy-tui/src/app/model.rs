@@ -9,12 +9,17 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use telepathy_core::native::NativeTelepathy;
-use telepathy_core::types::{CallState, Contact};
+use telepathy_core::types::{CallState, Contact, SessionStatus};
 use tokio::runtime::Handle;
+use tuirealm::ratatui::layout::{Constraint, Layout};
+use tuirealm::ratatui::widgets::Paragraph;
 use tuirealm::terminal::{CrosstermTerminalAdapter, TerminalAdapter, TerminalBridge};
-use tuirealm::{Application, Sub, SubClause, SubEventClause, Update};
+use tuirealm::{Application, AttrValue, Attribute, Sub, SubClause, SubEventClause, Update};
 
-use crate::components::PlaceholderComponent;
+use crate::components::{
+    CallControlsData, ConfirmDialog, ConfirmDialogData, ContactsPaneData, IncomingCallDialog,
+    IncomingCallDialogData, PlaceholderComponent, SessionBadge, payload_attr,
+};
 use crate::events::{CoreEvent, Id, Msg, SettingKey, SettingValue, VolumeKind};
 use crate::state::{AppState, ChatEntry};
 use crate::storage::SecretStore;
@@ -38,6 +43,7 @@ where
     pub quit: bool,
     pub redraw: bool,
     pub volume_debounce: HashMap<VolumeKind, Instant>,
+    pub pending_confirm: bool,
 }
 
 impl Model<CrosstermTerminalAdapter> {
@@ -63,6 +69,7 @@ impl Model<CrosstermTerminalAdapter> {
             quit: false,
             redraw: true,
             volume_debounce: HashMap::new(),
+            pending_confirm: false,
         }
     }
 }
@@ -71,11 +78,35 @@ impl<T> Model<T>
 where
     T: TerminalAdapter,
 {
-    /// Render the current frame. T5 will replace this with the proper layout.
     pub fn view(&mut self) {
+        self.push_state_to_components();
         let _ = self.terminal.draw(|frame| {
             let area = frame.area();
-            self.app.view(&Id::StatusBar, frame, area);
+            if area.width < 80 || area.height < 24 {
+                frame.render_widget(Paragraph::new("Terminal too small (min 80x24)"), area);
+                return;
+            }
+
+            let [main_area, status_area] =
+                Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(area);
+            let [contacts_area, call_area, chat_area] = Layout::horizontal([
+                Constraint::Percentage(30),
+                Constraint::Percentage(30),
+                Constraint::Percentage(40),
+            ])
+            .areas(main_area);
+
+            self.app.view(&Id::ContactsPane, frame, contacts_area);
+            self.app.view(&Id::CallControlsPane, frame, call_area);
+            self.app.view(&Id::ChatPane, frame, chat_area);
+            self.app.view(&Id::StatusBar, frame, status_area);
+
+            if self.app.mounted(&Id::IncomingCallDialog) {
+                self.app.view(&Id::IncomingCallDialog, frame, area);
+            }
+            if self.app.mounted(&Id::ConfirmDialog) {
+                self.app.view(&Id::ConfirmDialog, frame, area);
+            }
         });
     }
 
@@ -155,6 +186,174 @@ where
     fn unmount(&mut self, id: &Id) {
         let _ = self.app.umount(id);
     }
+
+    fn mount_incoming_call_dialog(&mut self) {
+        let _ = self.app.umount(&Id::IncomingCallDialog);
+        let _ = self.app.mount(
+            Id::IncomingCallDialog,
+            Box::new(IncomingCallDialog::default()),
+            vec![Sub::new(
+                SubEventClause::Any,
+                SubClause::IsMounted(Id::IncomingCallDialog),
+            )],
+        );
+    }
+
+    fn mount_confirm_dialog(&mut self, message: String, confirm_msg: Msg) {
+        let _ = self.app.umount(&Id::ConfirmDialog);
+        let _ = self.app.mount(
+            Id::ConfirmDialog,
+            Box::new(ConfirmDialog::default()),
+            vec![Sub::new(
+                SubEventClause::Any,
+                SubClause::IsMounted(Id::ConfirmDialog),
+            )],
+        );
+        let _ = self.app.attr(
+            &Id::ConfirmDialog,
+            Attribute::Content,
+            payload_attr(ConfirmDialogData {
+                message,
+                confirm_msg,
+            }),
+        );
+    }
+
+    fn push_state_to_components(&mut self) {
+        let (
+            profile_name,
+            call_active,
+            call_state_label,
+            contacts,
+            rooms,
+            sessions,
+            muted,
+            deafened,
+            manager_active,
+            manager_restartable,
+            chat_messages,
+            active_peer,
+            incoming_prompt,
+        ) = {
+            let guard = self.lock_state();
+            let call_active = !matches!(guard.call_state.as_ref(), CallState::Waiting);
+            let call_state_label = match guard.call_state.as_ref() {
+                CallState::Connected => "Connected".to_string(),
+                CallState::Waiting => "Waiting".to_string(),
+                CallState::RoomJoin(name) => format!("RoomJoin({name})"),
+                CallState::RoomLeave(name) => format!("RoomLeave({name})"),
+                CallState::CallEnded(peer, timeout) => format!("Ended({peer}, timeout={timeout})"),
+            };
+            (
+                guard.active_profile.nickname.clone(),
+                call_active,
+                call_state_label,
+                guard.contacts.clone(),
+                guard
+                    .rooms
+                    .iter()
+                    .map(|room| room.nickname.clone())
+                    .collect::<Vec<_>>(),
+                guard.sessions.clone(),
+                guard.muted,
+                guard.deafened,
+                guard.manager_active,
+                guard.manager_restartable,
+                guard.chat_messages.clone(),
+                guard.active_peer.clone(),
+                guard.incoming_prompt.clone(),
+            )
+        };
+        let (output_vol, input_vol, sound_vol, sensitivity) = {
+            let config_guard = self.lock_config();
+            (
+                config_guard.preferences.output_volume_db,
+                config_guard.preferences.input_volume_db,
+                config_guard.preferences.sound_volume_db,
+                config_guard.preferences.input_sensitivity_db,
+            )
+        };
+
+        let call_state_label = match call_state_label.as_str() {
+            "Connected" => "Connected".to_string(),
+            "Waiting" => "Waiting".to_string(),
+            _ => call_state_label,
+        };
+        let status_text = format!(
+            "[Profile: {}]  [Status: {}]  [s] Settings  [l] Logs  [q] Quit",
+            profile_name, call_state_label
+        );
+        let _ = self
+            .app
+            .attr(&Id::StatusBar, Attribute::Text, AttrValue::String(status_text));
+
+        let mut session_badges = HashMap::new();
+        for (peer, status) in sessions {
+            let badge = match status.as_ref() {
+                SessionStatus::Connecting => SessionBadge::Connecting,
+                SessionStatus::Connected { relayed: true, .. } => SessionBadge::ConnectedRelayed,
+                SessionStatus::Connected { relayed: false, .. } => SessionBadge::ConnectedDirect,
+                SessionStatus::Inactive | SessionStatus::Unknown => SessionBadge::Inactive,
+            };
+            session_badges.insert(peer, badge);
+        }
+        let _ = self.app.attr(
+            &Id::ContactsPane,
+            Attribute::Content,
+            payload_attr(ContactsPaneData {
+                contacts,
+                rooms,
+                sessions: session_badges,
+                call_active,
+            }),
+        );
+
+        let _ = self.app.attr(
+            &Id::CallControlsPane,
+            Attribute::Content,
+            payload_attr(CallControlsData {
+                muted,
+                deafened,
+                call_active,
+                manager_active,
+                manager_restartable,
+                output_vol,
+                input_vol,
+                sound_vol,
+                sensitivity,
+            }),
+        );
+
+        let _ = self.app.attr(
+            &Id::ChatPane,
+            Attribute::Content,
+            payload_attr(crate::components::ChatPaneData {
+                entries: chat_messages,
+                active_peer,
+                call_active,
+            }),
+        );
+
+        if self.app.mounted(&Id::IncomingCallDialog)
+            && let Some(prompt) = incoming_prompt
+        {
+            let nickname = self
+                .lock_state()
+                .contacts
+                .iter()
+                .find(|contact| contact.id == prompt.contact_id)
+                .map(|contact| contact.nickname.clone())
+                .unwrap_or_else(|| prompt.contact_id.clone());
+            let _ = self.app.attr(
+                &Id::IncomingCallDialog,
+                Attribute::Content,
+                payload_attr(IncomingCallDialogData {
+                    request_id: prompt.request_id,
+                    contact_name: nickname,
+                }),
+            );
+        }
+    }
 }
 
 impl<T> Update<Msg> for Model<T>
@@ -172,7 +371,12 @@ where
             Msg::Quit => {
                 self.quit = true;
             }
-            Msg::None => {}
+            Msg::None => {
+                if self.app.mounted(&Id::ConfirmDialog) {
+                    self.pending_confirm = false;
+                    self.unmount(&Id::ConfirmDialog);
+                }
+            }
 
             Msg::FocusContacts => {
                 let _ = self.app.active(&Id::ContactsPane);
@@ -188,6 +392,12 @@ where
             }
             Msg::CloseSettings => {
                 self.unmount(&Id::SettingsOverlay);
+            }
+            Msg::OpenLogs => {
+                self.mount_overlay(Id::LogsOverlay);
+            }
+            Msg::CloseLogs => {
+                self.unmount(&Id::LogsOverlay);
             }
 
             // Contacts ---------------------------------------------------
@@ -261,6 +471,24 @@ where
                 });
             }
             Msg::ContactDelete(contact_id) => {
+                if self.pending_confirm && self.app.mounted(&Id::ConfirmDialog) {
+                    self.pending_confirm = false;
+                    self.unmount(&Id::ConfirmDialog);
+                } else {
+                    self.pending_confirm = true;
+                    let nickname = self
+                        .lock_state()
+                        .contacts
+                        .iter()
+                        .find(|contact| contact.id == contact_id)
+                        .map(|contact| contact.nickname.clone())
+                        .unwrap_or_else(|| contact_id.clone());
+                    self.mount_confirm_dialog(
+                        format!("Delete contact \"{nickname}\"?"),
+                        Msg::ContactDelete(contact_id),
+                    );
+                    return None;
+                }
                 let profile_id = self.lock_config().active_profile_id.clone();
                 let result = {
                     let mut config = self.lock_config();
@@ -314,6 +542,17 @@ where
                 }
             }
             Msg::RoomDelete(nickname) => {
+                if self.pending_confirm && self.app.mounted(&Id::ConfirmDialog) {
+                    self.pending_confirm = false;
+                    self.unmount(&Id::ConfirmDialog);
+                } else {
+                    self.pending_confirm = true;
+                    self.mount_confirm_dialog(
+                        format!("Delete room \"{nickname}\"?"),
+                        Msg::RoomDelete(nickname),
+                    );
+                    return None;
+                }
                 let profile_id = self.lock_config().active_profile_id.clone();
                 let result = {
                     let mut config = self.lock_config();
@@ -607,8 +846,29 @@ where
                     guard.manager_active = active;
                     guard.manager_restartable = restartable;
                 }
-                CoreEvent::IncomingCall { .. } => {
-                    self.mount_overlay(Id::IncomingCallDialog);
+                CoreEvent::IncomingCall {
+                    request_id,
+                    contact_id,
+                    ..
+                } => {
+                    self.mount_incoming_call_dialog();
+                    let nickname = {
+                        let guard = self.lock_state();
+                        guard
+                            .contacts
+                            .iter()
+                            .find(|contact| contact.id == contact_id)
+                            .map(|contact| contact.nickname.clone())
+                            .unwrap_or(contact_id)
+                    };
+                    let _ = self.app.attr(
+                        &Id::IncomingCallDialog,
+                        Attribute::Content,
+                        payload_attr(IncomingCallDialogData {
+                            request_id,
+                            contact_name: nickname,
+                        }),
+                    );
                 }
                 CoreEvent::IncomingCallCancelled { request_id } => {
                     let response = {

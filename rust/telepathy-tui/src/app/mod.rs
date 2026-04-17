@@ -22,7 +22,10 @@ use tokio::sync::mpsc;
 use tuirealm::terminal::{CrosstermTerminalAdapter, TerminalBridge};
 use tuirealm::{Application, EventListenerCfg, PollStrategy, Sub, SubClause, SubEventClause, Update};
 
-use crate::components::{CoreEventBridgeComponent, PlaceholderComponent, placeholder_ids};
+use crate::components::{
+    CallControlsPane, ChatPane, ConfirmDialog, ContactsPane, CoreEventBridgeComponent,
+    IncomingCallDialog, PlaceholderComponent, StatusBar,
+};
 use crate::events::{CoreEvent, Id, Msg};
 use crate::state::AppState;
 use crate::storage::config::{self, ProfileMeta};
@@ -65,18 +68,66 @@ pub async fn run() -> Result<(), AppError> {
     let event_listener = EventListenerCfg::default()
         .with_handle(handle.clone())
         .async_crossterm_input_listener(Duration::from_millis(10), 3)
+        .tick_interval(Duration::from_secs(1))
         .add_async_port(Box::new(core_event_port), Duration::ZERO, 16);
 
     let mut app: Application<Id, Msg, CoreEvent> = Application::init(event_listener);
 
-    for id in placeholder_ids().iter().cloned() {
-        app.mount(
-            id,
-            Box::new(PlaceholderComponent::default()),
-            vec![Sub::new(SubEventClause::Tick, SubClause::Always)],
-        )
-        .map_err(|error| AppError::Application(error.to_string()))?;
-    }
+    let modal_blocking_clause = SubClause::AndMany(vec![
+        SubClause::Not(Box::new(SubClause::IsMounted(Id::IncomingCallDialog))),
+        SubClause::Not(Box::new(SubClause::IsMounted(Id::ConfirmDialog))),
+    ]);
+
+    app.mount(
+        Id::StatusBar,
+        Box::new(StatusBar::default()),
+        vec![Sub::new(SubEventClause::Any, SubClause::Always)],
+    )
+    .map_err(|error| AppError::Application(error.to_string()))?;
+
+    app.mount(
+        Id::ContactsPane,
+        Box::new(ContactsPane::default()),
+        vec![Sub::new(
+            SubEventClause::Any,
+            modal_blocking_clause.clone(),
+        )],
+    )
+    .map_err(|error| AppError::Application(error.to_string()))?;
+
+    app.mount(
+        Id::CallControlsPane,
+        Box::new(CallControlsPane::default()),
+        vec![
+            Sub::new(SubEventClause::Any, modal_blocking_clause.clone()),
+            Sub::new(SubEventClause::Tick, modal_blocking_clause.clone()),
+        ],
+    )
+    .map_err(|error| AppError::Application(error.to_string()))?;
+
+    app.mount(
+        Id::ChatPane,
+        Box::new(ChatPane::default()),
+        vec![Sub::new(
+            SubEventClause::Any,
+            modal_blocking_clause.clone(),
+        )],
+    )
+    .map_err(|error| AppError::Application(error.to_string()))?;
+
+    app.mount(
+        Id::SettingsOverlay,
+        Box::new(PlaceholderComponent::default()),
+        vec![Sub::new(SubEventClause::Tick, SubClause::Always)],
+    )
+    .map_err(|error| AppError::Application(error.to_string()))?;
+
+    app.mount(
+        Id::LogsOverlay,
+        Box::new(PlaceholderComponent::default()),
+        vec![Sub::new(SubEventClause::Tick, SubClause::Always)],
+    )
+    .map_err(|error| AppError::Application(error.to_string()))?;
 
     app.mount(
         Id::CoreEventBridge,
@@ -84,6 +135,31 @@ pub async fn run() -> Result<(), AppError> {
         vec![Sub::new(SubEventClause::Any, SubClause::Always)],
     )
     .map_err(|error| AppError::Application(error.to_string()))?;
+
+    app.mount(
+        Id::IncomingCallDialog,
+        Box::new(IncomingCallDialog::default()),
+        vec![Sub::new(
+            SubEventClause::Any,
+            SubClause::IsMounted(Id::IncomingCallDialog),
+        )],
+    )
+    .map_err(|error| AppError::Application(error.to_string()))?;
+    let _ = app.umount(&Id::IncomingCallDialog);
+
+    app.mount(
+        Id::ConfirmDialog,
+        Box::new(ConfirmDialog::default()),
+        vec![Sub::new(
+            SubEventClause::Any,
+            SubClause::IsMounted(Id::ConfirmDialog),
+        )],
+    )
+    .map_err(|error| AppError::Application(error.to_string()))?;
+    let _ = app.umount(&Id::ConfirmDialog);
+
+    app.active(&Id::ContactsPane)
+        .map_err(|error| AppError::Application(error.to_string()))?;
 
     let terminal = TerminalBridge::init(
         CrosstermTerminalAdapter::new()
