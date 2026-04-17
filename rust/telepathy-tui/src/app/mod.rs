@@ -15,6 +15,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use thiserror::Error;
+use telepathy_core::native::NativeTelepathy;
+use telepathy_core::types::{CodecConfig, Contact, NetworkConfig};
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 use tuirealm::terminal::{CrosstermTerminalAdapter, TerminalBridge};
@@ -36,6 +38,8 @@ pub enum AppError {
     Io(#[from] io::Error),
     #[error("storage error: {0}")]
     Storage(#[from] StorageError),
+    #[error("core error: {0}")]
+    Core(String),
     #[error("tuirealm application error: {0}")]
     Application(String),
     #[error("terminal error: {0}")]
@@ -48,12 +52,13 @@ pub async fn run() -> Result<(), AppError> {
     let secret_store = SecretStore::from_config(&config)?;
 
     let active_profile = resolve_active_profile(&config);
-    let state = Arc::new(Mutex::new(AppState::new(active_profile)));
+    let state = Arc::new(Mutex::new(AppState::new(active_profile.clone())));
 
     let (tx, rx) = mpsc::channel::<CoreEvent>(256);
 
     let handle = Handle::current();
-    let _callbacks = build_callbacks(tx, state.clone(), handle.clone());
+    let callbacks = build_callbacks(tx, state.clone(), handle.clone());
+    let core = init_core_client(&config, &secret_store, &active_profile, callbacks).await?;
 
     let core_event_port = CoreEventPort::new(rx);
 
@@ -79,7 +84,7 @@ pub async fn run() -> Result<(), AppError> {
     )
     .map_err(|error| AppError::Terminal(error.to_string()))?;
 
-    let mut model = Model::new(app, terminal, state, config, secret_store, handle);
+    let mut model = Model::new(app, terminal, state, config, secret_store, handle, core);
 
     let run_result = run_loop(&mut model);
     let restore_result = model
@@ -130,4 +135,77 @@ fn placeholder_profile() -> ProfileMeta {
         contacts: Vec::new(),
         rooms: Vec::new(),
     }
+}
+
+async fn init_core_client(
+    config: &config::AppConfig,
+    secret_store: &SecretStore,
+    active_profile: &ProfileMeta,
+    callbacks: telepathy_core::native::NativeCallbacks,
+) -> Result<Arc<NativeTelepathy>, AppError> {
+    let preferences = &config.preferences;
+    let network_config =
+        match NetworkConfig::new(preferences.relay_address.clone(), preferences.relay_id.clone()) {
+            Ok(config) => config,
+            Err(error) => {
+                log::warn!("invalid relay config, falling back to defaults: {error:?}");
+                NetworkConfig::default()
+            }
+        };
+    let codec_config = CodecConfig::new(
+        preferences.codec_enabled,
+        preferences.codec_vbr,
+        preferences.codec_residual_bits,
+    );
+
+    let mut core = NativeTelepathy::new_default(&network_config, &codec_config, callbacks);
+    core.set_output_volume(preferences.output_volume_db);
+    core.set_input_volume(preferences.input_volume_db);
+    core.set_rms_threshold(preferences.input_sensitivity_db);
+    core.set_denoise(preferences.use_denoise);
+    core.set_play_custom_ringtones(preferences.play_custom_ringtones);
+    core.set_efficiency_mode(preferences.efficiency_mode);
+    core.set_input_device(preferences.input_device_id.clone()).await;
+    core.set_output_device(preferences.output_device_id.clone()).await;
+    core.start_manager().await;
+
+    if !active_profile.id.is_empty() {
+        match secret_store.load_keypair(&active_profile.id).await {
+            Ok(keypair) => {
+                if let Err(error) = core.set_identity(keypair).await {
+                    return Err(AppError::Core(format!("set identity failed: {error:?}")));
+                }
+            }
+            Err(StorageError::SecretNotFound) => {
+                log::warn!("no profile keypair found for active profile {}", active_profile.id);
+            }
+            Err(error) => return Err(AppError::Storage(error)),
+        }
+
+        for contact in &active_profile.contacts {
+            let peer_id = match secret_store
+                .load_contact_peer_id(&active_profile.id, &contact.id)
+                .await
+            {
+                Ok(peer_id) => peer_id,
+                Err(StorageError::SecretNotFound) => continue,
+                Err(error) => {
+                    log::error!("failed to load peer id for contact {}: {error}", contact.id);
+                    continue;
+                }
+            };
+
+            let core_contact =
+                match Contact::from_parts(contact.id.clone(), contact.nickname.clone(), peer_id) {
+                    Ok(contact) => contact,
+                    Err(error) => {
+                        log::error!("invalid peer id for contact {}: {error:?}", contact.id);
+                        continue;
+                    }
+                };
+            core.start_session(&core_contact).await;
+        }
+    }
+
+    Ok(Arc::new(core))
 }

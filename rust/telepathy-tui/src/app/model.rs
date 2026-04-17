@@ -8,6 +8,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use telepathy_core::native::NativeTelepathy;
+use telepathy_core::types::{CallState, Contact};
 use tokio::runtime::Handle;
 use tuirealm::terminal::{CrosstermTerminalAdapter, TerminalAdapter, TerminalBridge};
 use tuirealm::{Application, Sub, SubClause, SubEventClause, Update};
@@ -16,7 +18,7 @@ use crate::components::PlaceholderComponent;
 use crate::events::{CoreEvent, Id, Msg, SettingKey, SettingValue, VolumeKind};
 use crate::state::{AppState, ChatEntry};
 use crate::storage::SecretStore;
-use crate::storage::config::{self, AppConfig};
+use crate::storage::config::{self, AppConfig, ContactMeta};
 
 /// Debounce window used before persisting a [`Msg::VolumeChanged`].
 pub const VOLUME_DEBOUNCE: Duration = Duration::from_millis(200);
@@ -32,6 +34,7 @@ where
     pub config: AppConfig,
     pub secret_store: SecretStore,
     pub handle: Handle,
+    pub core: Arc<NativeTelepathy>,
     pub quit: bool,
     pub redraw: bool,
     pub volume_debounce: HashMap<VolumeKind, Instant>,
@@ -47,6 +50,7 @@ impl Model<CrosstermTerminalAdapter> {
         config: AppConfig,
         secret_store: SecretStore,
         handle: Handle,
+        core: Arc<NativeTelepathy>,
     ) -> Self {
         Self {
             app,
@@ -55,6 +59,7 @@ impl Model<CrosstermTerminalAdapter> {
             config,
             secret_store,
             handle,
+            core,
             quit: false,
             redraw: true,
             volume_debounce: HashMap::new(),
@@ -251,24 +256,60 @@ where
                     self.refresh_active_profile_view();
                 }
             }
-            Msg::RoomJoin(_) => {
-                let handle = self.handle.clone();
-                handle.spawn(async move {
-                    // Core room-join wiring lands in T5/T6.
+            Msg::RoomJoin(room_name) => {
+                let room_members = {
+                    let guard = self.lock_state();
+                    guard
+                        .rooms
+                        .iter()
+                        .find(|room| room.nickname == room_name)
+                        .map(|room| room.peer_ids.clone())
+                        .unwrap_or_default()
+                };
+                let core = self.core.clone();
+                self.handle.spawn(async move {
+                    if room_members.is_empty() {
+                        log::warn!("room '{room_name}' has no members");
+                        return;
+                    }
+                    if let Err(error) = core.join_room(room_members).await {
+                        log::error!("room join failed: {error:?}");
+                    }
                 });
             }
 
             // Call -------------------------------------------------------
             Msg::StartCall => {
-                let peer = self.lock_state().active_peer.clone();
-                let handle = self.handle.clone();
-                handle.spawn(async move {
-                    let _ = peer;
+                let (active_peer, contacts) = {
+                    let guard = self.lock_state();
+                    (guard.active_peer.clone(), guard.contacts.clone())
+                };
+                let profile_id = self.config.active_profile_id.clone();
+                let secret_store = self.secret_store.clone();
+                let core = self.core.clone();
+                self.handle.spawn(async move {
+                    let Some(contact) = resolve_core_contact(
+                        profile_id,
+                        active_peer,
+                        contacts,
+                        secret_store,
+                    )
+                    .await
+                    else {
+                        log::warn!("cannot start call without an active contact");
+                        return;
+                    };
+                    core.start_session(&contact).await;
+                    if let Err(error) = core.start_call(&contact).await {
+                        log::error!("start call failed: {error:?}");
+                    }
                 });
             }
             Msg::EndCall => {
-                let handle = self.handle.clone();
-                handle.spawn(async move {});
+                let core = self.core.clone();
+                self.handle.spawn(async move {
+                    core.end_call().await;
+                });
             }
             Msg::ToggleMute => {
                 let muted = {
@@ -276,10 +317,7 @@ where
                     guard.muted = !guard.muted;
                     guard.muted
                 };
-                let handle = self.handle.clone();
-                handle.spawn(async move {
-                    let _ = muted;
-                });
+                self.core.set_muted(muted);
             }
             Msg::ToggleDeafen => {
                 let deafened = {
@@ -287,10 +325,7 @@ where
                     guard.deafened = !guard.deafened;
                     guard.deafened
                 };
-                let handle = self.handle.clone();
-                handle.spawn(async move {
-                    let _ = deafened;
-                });
+                self.core.set_deafened(deafened);
             }
             Msg::VolumeChanged(kind, value) => {
                 let now = Instant::now();
@@ -327,20 +362,61 @@ where
                 });
             }
             Msg::AudioTestToggle => {
-                let handle = self.handle.clone();
-                handle.spawn(async move {});
+                let in_call = {
+                    let guard = self.lock_state();
+                    !matches!(guard.call_state.as_ref(), CallState::Waiting)
+                };
+                let core = self.core.clone();
+                self.handle.spawn(async move {
+                    if in_call {
+                        core.end_call().await;
+                    } else if let Err(error) = core.audio_test().await {
+                        log::error!("audio test failed: {error:?}");
+                    }
+                });
             }
             Msg::RestartManager => {
-                let handle = self.handle.clone();
-                handle.spawn(async move {});
+                let core = self.core.clone();
+                self.handle.spawn(async move {
+                    if let Err(error) = core.restart_manager().await {
+                        log::error!("manager restart failed: {error:?}");
+                    }
+                });
             }
 
             // Chat -------------------------------------------------------
             Msg::SendMessage(text) => {
-                let peer = self.lock_state().active_peer.clone();
-                let handle = self.handle.clone();
-                handle.spawn(async move {
-                    let _ = (peer, text);
+                let (active_peer, contacts) = {
+                    let guard = self.lock_state();
+                    (guard.active_peer.clone(), guard.contacts.clone())
+                };
+                let profile_id = self.config.active_profile_id.clone();
+                let secret_store = self.secret_store.clone();
+                let core = self.core.clone();
+                let message_text = text.clone();
+                if let Some(peer_id) = active_peer.clone() {
+                    self.lock_state().chat_messages.push(ChatEntry {
+                        peer_id,
+                        text: message_text.clone(),
+                    });
+                }
+                self.handle.spawn(async move {
+                    let Some(contact) = resolve_core_contact(
+                        profile_id,
+                        active_peer,
+                        contacts,
+                        secret_store,
+                    )
+                    .await
+                    else {
+                        log::warn!("cannot send message without an active contact");
+                        return;
+                    };
+
+                    let mut chat = core.build_chat(&contact, message_text, Vec::new());
+                    if let Err(error) = core.send_chat(&mut chat).await {
+                        log::error!("send chat failed: {error:?}");
+                    }
                 });
             }
 
@@ -471,6 +547,38 @@ where
 
         None
     }
+}
+
+async fn resolve_core_contact(
+    profile_id: String,
+    active_peer: Option<String>,
+    contacts: Vec<ContactMeta>,
+    secret_store: SecretStore,
+) -> Option<Contact> {
+    let active_peer = active_peer?;
+
+    if let Some(meta) = contacts.iter().find(|contact| contact.id == active_peer) {
+        let peer_id = match secret_store.load_contact_peer_id(&profile_id, &meta.id).await {
+            Ok(peer_id) => peer_id,
+            Err(error) => {
+                log::error!("failed to load peer id for active contact {}: {error}", meta.id);
+                return None;
+            }
+        };
+        return Contact::from_parts(meta.id.clone(), meta.nickname.clone(), peer_id)
+            .map_err(|error| {
+                log::error!("failed to build core contact {}: {error:?}", meta.id);
+                error
+            })
+            .ok();
+    }
+
+    Contact::new(active_peer.clone(), active_peer)
+        .map_err(|error| {
+            log::error!("active peer is not a valid peer id: {error:?}");
+            error
+        })
+        .ok()
 }
 
 /// Persist a single volume preference change after the debounce window.
