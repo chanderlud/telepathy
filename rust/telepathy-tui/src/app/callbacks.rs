@@ -52,10 +52,16 @@ pub fn build_callbacks(
             });
             drop(guard);
 
-            let _ = sender.blocking_send(CoreEvent::IncomingCall {
-                request_id: request_id.clone(),
-                contact_id,
-                ringtone,
+            let incoming_sender = sender.clone();
+            let incoming_request_id = request_id.clone();
+            handle.spawn(async move {
+                let _ = incoming_sender
+                    .send(CoreEvent::IncomingCall {
+                        request_id: incoming_request_id,
+                        contact_id,
+                        ringtone,
+                    })
+                    .await;
             });
 
             let cancel_sender = sender.clone();
