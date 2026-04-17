@@ -8,7 +8,7 @@ where
 {
     #[cfg(feature = "flutter")]
     {
-       flutter_rust_bridge::spawn(future)
+        flutter_rust_bridge::spawn(future)
     }
 
     #[cfg(all(feature = "native", not(feature = "flutter")))]
