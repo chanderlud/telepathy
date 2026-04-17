@@ -1,13 +1,13 @@
 use super::*;
-use crate::flutter::callbacks::{
-    FrbStatisticsCallback, MockFrbCallbacks, MockFrbStatisticsCallback,
+use crate::internal::callbacks::{
+    CoreCallbacks, CoreStatisticsCallback, MockCoreCallbacks, MockCoreStatisticsCallback,
 };
 use fast_log::Config;
 use log::{LevelFilter, info};
 use relay_server::{RelayInfo, spawn_relay};
 use std::net::{IpAddr, Ipv4Addr};
 use std::process::Command;
-use telepathy_audio::AudioHost;
+use telepathy_audio::devices::AudioHost;
 use tokio::sync::OnceCell;
 use tokio::time::interval;
 
@@ -128,8 +128,8 @@ impl Contact {
 
 impl<C, S> TelepathyCore<C, S>
 where
-    S: FrbStatisticsCallback + Send + Sync + 'static,
-    C: FrbCallbacks<S> + Send + Sync + 'static,
+    S: CoreStatisticsCallback + Send + Sync + 'static,
+    C: CoreCallbacks<S> + Send + Sync + 'static,
 {
     fn mock(callbacks: C, network_config: &NetworkConfig, codec_config: &CodecConfig) -> Self {
         let screenshare_config = ScreenshareConfig::default();
@@ -293,8 +293,8 @@ fn construct_mock_callbacks(
     contacts: Vec<Contact>,
     is_active: Arc<AtomicBool>,
     is_relayed: Arc<AtomicBool>,
-) -> MockFrbCallbacks<MockFrbStatisticsCallback> {
-    let mut mock: MockFrbCallbacks<MockFrbStatisticsCallback> = MockFrbCallbacks::new();
+) -> MockCoreCallbacks<MockCoreStatisticsCallback> {
+    let mut mock: MockCoreCallbacks<MockCoreStatisticsCallback> = MockCoreCallbacks::new();
 
     // handle session status callbacks
     mock.expect_session_status().returning(move |status, peer| {

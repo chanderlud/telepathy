@@ -7,7 +7,7 @@ import 'package:telepathy/core/utils/index.dart';
 import 'package:telepathy/models/index.dart';
 import 'package:telepathy/core/rust/audio/player.dart';
 import 'package:telepathy/core/rust/error.dart';
-import 'package:telepathy/core/rust/internal.dart';
+import 'package:telepathy/core/rust/flutter.dart';
 
 class RoomWidget extends StatefulWidget {
   final Room room;

@@ -2,10 +2,10 @@ use crate::BehaviourEvent;
 #[cfg(target_os = "ios")]
 use crate::audio::ios::{configure_audio_session, deactivate_audio_session};
 use crate::error::ErrorKind;
-use crate::flutter::callbacks::{FrbCallbacks, FrbStatisticsCallback};
 use crate::flutter::{
     CallState, ChatMessage, CodecConfig, Contact, NetworkConfig, ScreenshareConfig, SessionStatus,
 };
+use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::messages::Message;
 use crate::internal::sockets::{
     ConstSocket, SendingSockets, SharedSockets, Transport, TransportStream, audio_input,
@@ -64,8 +64,8 @@ use wasmtimer::tokio::{Interval, interval, sleep_until, timeout};
 
 pub(crate) struct TelepathyCore<C, S>
 where
-    S: FrbStatisticsCallback + Send + Sync + 'static,
-    C: FrbCallbacks<S> + Send + Sync + 'static,
+    S: CoreStatisticsCallback + Send + Sync + 'static,
+    C: CoreCallbacks<S> + Send + Sync + 'static,
 {
     /// The audio host
     pub(crate) host: AudioHost,
@@ -103,8 +103,8 @@ where
 
 impl<C, S> TelepathyCore<C, S>
 where
-    S: FrbStatisticsCallback + Send + Sync + 'static,
-    C: FrbCallbacks<S> + Send + Sync + 'static,
+    S: CoreStatisticsCallback + Send + Sync + 'static,
+    C: CoreCallbacks<S> + Send + Sync + 'static,
 {
     pub(crate) fn new(
         host: AudioHost,
@@ -1497,8 +1497,8 @@ where
 
 impl<C, S> Clone for TelepathyCore<C, S>
 where
-    S: FrbStatisticsCallback + Send + Sync + 'static,
-    C: FrbCallbacks<S> + Send + Sync + 'static,
+    S: CoreStatisticsCallback + Send + Sync + 'static,
+    C: CoreCallbacks<S> + Send + Sync + 'static,
 {
     fn clone(&self) -> Self {
         Self {

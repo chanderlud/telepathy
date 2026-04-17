@@ -15,7 +15,7 @@ import 'package:telepathy/core/rust/audio/player.dart';
 import 'package:telepathy/core/rust/flutter.dart';
 import 'package:telepathy/core/rust/frb_generated.dart';
 import 'package:telepathy/core/rust/overlay/overlay.dart';
-import 'package:telepathy/core/rust/internal.dart';
+import 'package:telepathy/core/rust/flutter.dart';
 import 'package:window_manager/window_manager.dart';
 
 Future<void> main(List<String> args) async {

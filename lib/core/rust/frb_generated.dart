@@ -11,7 +11,7 @@ import 'flutter.dart';
 import 'frb_generated.dart';
 import 'frb_generated.io.dart'
     if (dart.library.js_interop) 'frb_generated.web.dart';
-import 'internal.dart';
+import 'lib.dart';
 import 'overlay/overlay.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
@@ -72,7 +72,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => -1500580087;
+  int get rustContentHash => 507519854;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -262,23 +262,23 @@ abstract class RustLibApi extends BaseApi {
   void crateAudioPlayerSoundPlayerUpdateOutputVolume(
       {required SoundPlayer that, required double volume});
 
-  Future<void> crateInternalTelepathyAudioTest({required Telepathy that});
+  Future<void> crateFlutterTelepathyAudioTest({required Telepathy that});
 
-  ChatMessage crateInternalTelepathyBuildChat(
+  ChatMessage crateFlutterTelepathyBuildChat(
       {required Telepathy that,
       required Contact contact,
       required String text,
       required List<(String, Uint8List)> attachments});
 
-  Future<void> crateInternalTelepathyEndCall({required Telepathy that});
+  Future<void> crateFlutterTelepathyEndCall({required Telepathy that});
 
-  Future<void> crateInternalTelepathyJoinRoom(
+  Future<void> crateFlutterTelepathyJoinRoom(
       {required Telepathy that, required List<String> memberStrings});
 
   Future<(List<AudioDevice>, List<AudioDevice>)>
-      crateInternalTelepathyListDevices({required Telepathy that});
+      crateFlutterTelepathyListDevices({required Telepathy that});
 
-  Telepathy crateInternalTelepathyNew(
+  Telepathy crateFlutterTelepathyNew(
       {required ArcHost host,
       required NetworkConfig networkConfig,
       required ScreenshareConfig screenshareConfig,
@@ -286,68 +286,68 @@ abstract class RustLibApi extends BaseApi {
       required CodecConfig codecConfig,
       required FlutterCallbacks callbacks});
 
-  void crateInternalTelepathyPauseStatistics({required Telepathy that});
+  void crateFlutterTelepathyPauseStatistics({required Telepathy that});
 
-  Future<void> crateInternalTelepathyRestartManager({required Telepathy that});
+  Future<void> crateFlutterTelepathyRestartManager({required Telepathy that});
 
-  void crateInternalTelepathyResumeStatistics({required Telepathy that});
+  void crateFlutterTelepathyResumeStatistics({required Telepathy that});
 
-  Future<void> crateInternalTelepathySendChat(
+  Future<void> crateFlutterTelepathySendChat(
       {required Telepathy that, required ChatMessage message});
 
-  void crateInternalTelepathySetDeafened(
+  void crateFlutterTelepathySetDeafened(
       {required Telepathy that, required bool deafened});
 
-  void crateInternalTelepathySetDenoise(
+  void crateFlutterTelepathySetDenoise(
       {required Telepathy that, required bool denoise});
 
-  void crateInternalTelepathySetEfficiencyMode(
+  void crateFlutterTelepathySetEfficiencyMode(
       {required Telepathy that, required bool enabled});
 
-  Future<void> crateInternalTelepathySetIdentity(
+  Future<void> crateFlutterTelepathySetIdentity(
       {required Telepathy that, required List<int> key});
 
-  Future<void> crateInternalTelepathySetInputDevice(
+  Future<void> crateFlutterTelepathySetInputDevice(
       {required Telepathy that, String? deviceId});
 
-  void crateInternalTelepathySetInputVolume(
+  void crateFlutterTelepathySetInputVolume(
       {required Telepathy that, required double decibel});
 
-  Future<void> crateInternalTelepathySetModel(
+  Future<void> crateFlutterTelepathySetModel(
       {required Telepathy that, Uint8List? model});
 
-  void crateInternalTelepathySetMuted(
+  void crateFlutterTelepathySetMuted(
       {required Telepathy that, required bool muted});
 
-  Future<void> crateInternalTelepathySetOutputDevice(
+  Future<void> crateFlutterTelepathySetOutputDevice(
       {required Telepathy that, String? deviceId});
 
-  void crateInternalTelepathySetOutputVolume(
+  void crateFlutterTelepathySetOutputVolume(
       {required Telepathy that, required double decibel});
 
-  void crateInternalTelepathySetPlayCustomRingtones(
+  void crateFlutterTelepathySetPlayCustomRingtones(
       {required Telepathy that, required bool play});
 
-  void crateInternalTelepathySetRmsThreshold(
+  void crateFlutterTelepathySetRmsThreshold(
       {required Telepathy that, required double decimal});
 
-  void crateInternalTelepathySetSendCustomRingtone(
+  void crateFlutterTelepathySetSendCustomRingtone(
       {required Telepathy that, required bool send});
 
-  Future<void> crateInternalTelepathyShutdown({required Telepathy that});
+  Future<void> crateFlutterTelepathyShutdown({required Telepathy that});
 
-  Future<void> crateInternalTelepathyStartCall(
+  Future<void> crateFlutterTelepathyStartCall(
       {required Telepathy that, required Contact contact});
 
-  Future<void> crateInternalTelepathyStartManager({required Telepathy that});
+  Future<void> crateFlutterTelepathyStartManager({required Telepathy that});
 
-  Future<void> crateInternalTelepathyStartScreenshare(
+  Future<void> crateFlutterTelepathyStartScreenshare(
       {required Telepathy that, required Contact contact});
 
-  Future<void> crateInternalTelepathyStartSession(
+  Future<void> crateFlutterTelepathyStartSession(
       {required Telepathy that, required Contact contact});
 
-  Future<void> crateInternalTelepathyStopSession(
+  Future<void> crateFlutterTelepathyStopSession(
       {required Telepathy that, required Contact contact});
 
   Stream<String> crateFlutterCreateLogStream();
@@ -2170,7 +2170,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<void> crateInternalTelepathyAudioTest({required Telepathy that}) {
+  Future<void> crateFlutterTelepathyAudioTest({required Telepathy that}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -2183,20 +2183,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: sse_decode_dart_error,
       ),
-      constMeta: kCrateInternalTelepathyAudioTestConstMeta,
+      constMeta: kCrateFlutterTelepathyAudioTestConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathyAudioTestConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathyAudioTestConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_audio_test',
         argNames: ['that'],
       );
 
   @override
-  ChatMessage crateInternalTelepathyBuildChat(
+  ChatMessage crateFlutterTelepathyBuildChat(
       {required Telepathy that,
       required Contact contact,
       required String text,
@@ -2218,20 +2218,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerChatMessage,
         decodeErrorData: null,
       ),
-      constMeta: kCrateInternalTelepathyBuildChatConstMeta,
+      constMeta: kCrateFlutterTelepathyBuildChatConstMeta,
       argValues: [that, contact, text, attachments],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathyBuildChatConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathyBuildChatConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_build_chat',
         argNames: ['that', 'contact', 'text', 'attachments'],
       );
 
   @override
-  Future<void> crateInternalTelepathyEndCall({required Telepathy that}) {
+  Future<void> crateFlutterTelepathyEndCall({required Telepathy that}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -2244,20 +2244,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateInternalTelepathyEndCallConstMeta,
+      constMeta: kCrateFlutterTelepathyEndCallConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathyEndCallConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathyEndCallConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_end_call',
         argNames: ['that'],
       );
 
   @override
-  Future<void> crateInternalTelepathyJoinRoom(
+  Future<void> crateFlutterTelepathyJoinRoom(
       {required Telepathy that, required List<String> memberStrings}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
@@ -2272,13 +2272,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: sse_decode_dart_error,
       ),
-      constMeta: kCrateInternalTelepathyJoinRoomConstMeta,
+      constMeta: kCrateFlutterTelepathyJoinRoomConstMeta,
       argValues: [that, memberStrings],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathyJoinRoomConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathyJoinRoomConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_join_room',
         argNames: ['that', 'memberStrings'],
@@ -2286,7 +2286,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @override
   Future<(List<AudioDevice>, List<AudioDevice>)>
-      crateInternalTelepathyListDevices({required Telepathy that}) {
+      crateFlutterTelepathyListDevices({required Telepathy that}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -2300,20 +2300,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             sse_decode_record_list_audio_device_list_audio_device,
         decodeErrorData: sse_decode_dart_error,
       ),
-      constMeta: kCrateInternalTelepathyListDevicesConstMeta,
+      constMeta: kCrateFlutterTelepathyListDevicesConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathyListDevicesConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathyListDevicesConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_list_devices',
         argNames: ['that'],
       );
 
   @override
-  Telepathy crateInternalTelepathyNew(
+  Telepathy crateFlutterTelepathyNew(
       {required ArcHost host,
       required NetworkConfig networkConfig,
       required ScreenshareConfig screenshareConfig,
@@ -2342,7 +2342,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy,
         decodeErrorData: null,
       ),
-      constMeta: kCrateInternalTelepathyNewConstMeta,
+      constMeta: kCrateFlutterTelepathyNewConstMeta,
       argValues: [
         host,
         networkConfig,
@@ -2355,7 +2355,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathyNewConstMeta => const TaskConstMeta(
+  TaskConstMeta get kCrateFlutterTelepathyNewConstMeta => const TaskConstMeta(
         debugName: 'Telepathy_new',
         argNames: [
           'host',
@@ -2368,7 +2368,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  void crateInternalTelepathyPauseStatistics({required Telepathy that}) {
+  void crateFlutterTelepathyPauseStatistics({required Telepathy that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -2380,20 +2380,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateInternalTelepathyPauseStatisticsConstMeta,
+      constMeta: kCrateFlutterTelepathyPauseStatisticsConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathyPauseStatisticsConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathyPauseStatisticsConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_pause_statistics',
         argNames: ['that'],
       );
 
   @override
-  Future<void> crateInternalTelepathyRestartManager({required Telepathy that}) {
+  Future<void> crateFlutterTelepathyRestartManager({required Telepathy that}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -2406,20 +2406,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: sse_decode_dart_error,
       ),
-      constMeta: kCrateInternalTelepathyRestartManagerConstMeta,
+      constMeta: kCrateFlutterTelepathyRestartManagerConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathyRestartManagerConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathyRestartManagerConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_restart_manager',
         argNames: ['that'],
       );
 
   @override
-  void crateInternalTelepathyResumeStatistics({required Telepathy that}) {
+  void crateFlutterTelepathyResumeStatistics({required Telepathy that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -2431,20 +2431,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateInternalTelepathyResumeStatisticsConstMeta,
+      constMeta: kCrateFlutterTelepathyResumeStatisticsConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathyResumeStatisticsConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathyResumeStatisticsConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_resume_statistics',
         argNames: ['that'],
       );
 
   @override
-  Future<void> crateInternalTelepathySendChat(
+  Future<void> crateFlutterTelepathySendChat(
       {required Telepathy that, required ChatMessage message}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
@@ -2460,20 +2460,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: sse_decode_dart_error,
       ),
-      constMeta: kCrateInternalTelepathySendChatConstMeta,
+      constMeta: kCrateFlutterTelepathySendChatConstMeta,
       argValues: [that, message],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathySendChatConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathySendChatConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_send_chat',
         argNames: ['that', 'message'],
       );
 
   @override
-  void crateInternalTelepathySetDeafened(
+  void crateFlutterTelepathySetDeafened(
       {required Telepathy that, required bool deafened}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
@@ -2487,20 +2487,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateInternalTelepathySetDeafenedConstMeta,
+      constMeta: kCrateFlutterTelepathySetDeafenedConstMeta,
       argValues: [that, deafened],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathySetDeafenedConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathySetDeafenedConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_set_deafened',
         argNames: ['that', 'deafened'],
       );
 
   @override
-  void crateInternalTelepathySetDenoise(
+  void crateFlutterTelepathySetDenoise(
       {required Telepathy that, required bool denoise}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
@@ -2514,20 +2514,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateInternalTelepathySetDenoiseConstMeta,
+      constMeta: kCrateFlutterTelepathySetDenoiseConstMeta,
       argValues: [that, denoise],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathySetDenoiseConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathySetDenoiseConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_set_denoise',
         argNames: ['that', 'denoise'],
       );
 
   @override
-  void crateInternalTelepathySetEfficiencyMode(
+  void crateFlutterTelepathySetEfficiencyMode(
       {required Telepathy that, required bool enabled}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
@@ -2541,20 +2541,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateInternalTelepathySetEfficiencyModeConstMeta,
+      constMeta: kCrateFlutterTelepathySetEfficiencyModeConstMeta,
       argValues: [that, enabled],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathySetEfficiencyModeConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathySetEfficiencyModeConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_set_efficiency_mode',
         argNames: ['that', 'enabled'],
       );
 
   @override
-  Future<void> crateInternalTelepathySetIdentity(
+  Future<void> crateFlutterTelepathySetIdentity(
       {required Telepathy that, required List<int> key}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
@@ -2569,20 +2569,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: sse_decode_dart_error,
       ),
-      constMeta: kCrateInternalTelepathySetIdentityConstMeta,
+      constMeta: kCrateFlutterTelepathySetIdentityConstMeta,
       argValues: [that, key],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathySetIdentityConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathySetIdentityConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_set_identity',
         argNames: ['that', 'key'],
       );
 
   @override
-  Future<void> crateInternalTelepathySetInputDevice(
+  Future<void> crateFlutterTelepathySetInputDevice(
       {required Telepathy that, String? deviceId}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
@@ -2597,20 +2597,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateInternalTelepathySetInputDeviceConstMeta,
+      constMeta: kCrateFlutterTelepathySetInputDeviceConstMeta,
       argValues: [that, deviceId],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathySetInputDeviceConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathySetInputDeviceConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_set_input_device',
         argNames: ['that', 'deviceId'],
       );
 
   @override
-  void crateInternalTelepathySetInputVolume(
+  void crateFlutterTelepathySetInputVolume(
       {required Telepathy that, required double decibel}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
@@ -2624,20 +2624,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateInternalTelepathySetInputVolumeConstMeta,
+      constMeta: kCrateFlutterTelepathySetInputVolumeConstMeta,
       argValues: [that, decibel],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathySetInputVolumeConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathySetInputVolumeConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_set_input_volume',
         argNames: ['that', 'decibel'],
       );
 
   @override
-  Future<void> crateInternalTelepathySetModel(
+  Future<void> crateFlutterTelepathySetModel(
       {required Telepathy that, Uint8List? model}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
@@ -2652,20 +2652,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: sse_decode_dart_error,
       ),
-      constMeta: kCrateInternalTelepathySetModelConstMeta,
+      constMeta: kCrateFlutterTelepathySetModelConstMeta,
       argValues: [that, model],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathySetModelConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathySetModelConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_set_model',
         argNames: ['that', 'model'],
       );
 
   @override
-  void crateInternalTelepathySetMuted(
+  void crateFlutterTelepathySetMuted(
       {required Telepathy that, required bool muted}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
@@ -2679,20 +2679,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateInternalTelepathySetMutedConstMeta,
+      constMeta: kCrateFlutterTelepathySetMutedConstMeta,
       argValues: [that, muted],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathySetMutedConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathySetMutedConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_set_muted',
         argNames: ['that', 'muted'],
       );
 
   @override
-  Future<void> crateInternalTelepathySetOutputDevice(
+  Future<void> crateFlutterTelepathySetOutputDevice(
       {required Telepathy that, String? deviceId}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
@@ -2707,20 +2707,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateInternalTelepathySetOutputDeviceConstMeta,
+      constMeta: kCrateFlutterTelepathySetOutputDeviceConstMeta,
       argValues: [that, deviceId],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathySetOutputDeviceConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathySetOutputDeviceConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_set_output_device',
         argNames: ['that', 'deviceId'],
       );
 
   @override
-  void crateInternalTelepathySetOutputVolume(
+  void crateFlutterTelepathySetOutputVolume(
       {required Telepathy that, required double decibel}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
@@ -2734,20 +2734,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateInternalTelepathySetOutputVolumeConstMeta,
+      constMeta: kCrateFlutterTelepathySetOutputVolumeConstMeta,
       argValues: [that, decibel],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathySetOutputVolumeConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathySetOutputVolumeConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_set_output_volume',
         argNames: ['that', 'decibel'],
       );
 
   @override
-  void crateInternalTelepathySetPlayCustomRingtones(
+  void crateFlutterTelepathySetPlayCustomRingtones(
       {required Telepathy that, required bool play}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
@@ -2761,20 +2761,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateInternalTelepathySetPlayCustomRingtonesConstMeta,
+      constMeta: kCrateFlutterTelepathySetPlayCustomRingtonesConstMeta,
       argValues: [that, play],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathySetPlayCustomRingtonesConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathySetPlayCustomRingtonesConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_set_play_custom_ringtones',
         argNames: ['that', 'play'],
       );
 
   @override
-  void crateInternalTelepathySetRmsThreshold(
+  void crateFlutterTelepathySetRmsThreshold(
       {required Telepathy that, required double decimal}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
@@ -2788,20 +2788,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateInternalTelepathySetRmsThresholdConstMeta,
+      constMeta: kCrateFlutterTelepathySetRmsThresholdConstMeta,
       argValues: [that, decimal],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathySetRmsThresholdConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathySetRmsThresholdConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_set_rms_threshold',
         argNames: ['that', 'decimal'],
       );
 
   @override
-  void crateInternalTelepathySetSendCustomRingtone(
+  void crateFlutterTelepathySetSendCustomRingtone(
       {required Telepathy that, required bool send}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
@@ -2815,20 +2815,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateInternalTelepathySetSendCustomRingtoneConstMeta,
+      constMeta: kCrateFlutterTelepathySetSendCustomRingtoneConstMeta,
       argValues: [that, send],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathySetSendCustomRingtoneConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathySetSendCustomRingtoneConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_set_send_custom_ringtone',
         argNames: ['that', 'send'],
       );
 
   @override
-  Future<void> crateInternalTelepathyShutdown({required Telepathy that}) {
+  Future<void> crateFlutterTelepathyShutdown({required Telepathy that}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -2841,20 +2841,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateInternalTelepathyShutdownConstMeta,
+      constMeta: kCrateFlutterTelepathyShutdownConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathyShutdownConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathyShutdownConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_shutdown',
         argNames: ['that'],
       );
 
   @override
-  Future<void> crateInternalTelepathyStartCall(
+  Future<void> crateFlutterTelepathyStartCall(
       {required Telepathy that, required Contact contact}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
@@ -2870,20 +2870,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: sse_decode_dart_error,
       ),
-      constMeta: kCrateInternalTelepathyStartCallConstMeta,
+      constMeta: kCrateFlutterTelepathyStartCallConstMeta,
       argValues: [that, contact],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathyStartCallConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathyStartCallConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_start_call',
         argNames: ['that', 'contact'],
       );
 
   @override
-  Future<void> crateInternalTelepathyStartManager({required Telepathy that}) {
+  Future<void> crateFlutterTelepathyStartManager({required Telepathy that}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -2896,20 +2896,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateInternalTelepathyStartManagerConstMeta,
+      constMeta: kCrateFlutterTelepathyStartManagerConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathyStartManagerConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathyStartManagerConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_start_manager',
         argNames: ['that'],
       );
 
   @override
-  Future<void> crateInternalTelepathyStartScreenshare(
+  Future<void> crateFlutterTelepathyStartScreenshare(
       {required Telepathy that, required Contact contact}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
@@ -2925,20 +2925,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateInternalTelepathyStartScreenshareConstMeta,
+      constMeta: kCrateFlutterTelepathyStartScreenshareConstMeta,
       argValues: [that, contact],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathyStartScreenshareConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathyStartScreenshareConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_start_screenshare',
         argNames: ['that', 'contact'],
       );
 
   @override
-  Future<void> crateInternalTelepathyStartSession(
+  Future<void> crateFlutterTelepathyStartSession(
       {required Telepathy that, required Contact contact}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
@@ -2954,20 +2954,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateInternalTelepathyStartSessionConstMeta,
+      constMeta: kCrateFlutterTelepathyStartSessionConstMeta,
       argValues: [that, contact],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathyStartSessionConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathyStartSessionConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_start_session',
         argNames: ['that', 'contact'],
       );
 
   @override
-  Future<void> crateInternalTelepathyStopSession(
+  Future<void> crateFlutterTelepathyStopSession(
       {required Telepathy that, required Contact contact}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
@@ -2983,13 +2983,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateInternalTelepathyStopSessionConstMeta,
+      constMeta: kCrateFlutterTelepathyStopSessionConstMeta,
       argValues: [that, contact],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathyStopSessionConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathyStopSessionConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_stop_session',
         argNames: ['that', 'contact'],
@@ -6630,7 +6630,7 @@ class TelepathyImpl extends RustOpaque implements Telepathy {
 
   /// Blocks while an audio test is running
   Future<void> audioTest() =>
-      RustLib.instance.api.crateInternalTelepathyAudioTest(
+      RustLib.instance.api.crateFlutterTelepathyAudioTest(
         that: this,
       );
 
@@ -6638,110 +6638,109 @@ class TelepathyImpl extends RustOpaque implements Telepathy {
           {required Contact contact,
           required String text,
           required List<(String, Uint8List)> attachments}) =>
-      RustLib.instance.api.crateInternalTelepathyBuildChat(
+      RustLib.instance.api.crateFlutterTelepathyBuildChat(
           that: this, contact: contact, text: text, attachments: attachments);
 
   /// Ends the current audio test, room, or call in that order
-  Future<void> endCall() => RustLib.instance.api.crateInternalTelepathyEndCall(
+  Future<void> endCall() => RustLib.instance.api.crateFlutterTelepathyEndCall(
         that: this,
       );
 
   /// The only entry point into participating in a room
   Future<void> joinRoom({required List<String> memberStrings}) => RustLib
       .instance.api
-      .crateInternalTelepathyJoinRoom(that: this, memberStrings: memberStrings);
+      .crateFlutterTelepathyJoinRoom(that: this, memberStrings: memberStrings);
 
   /// Lists the input and output devices
   Future<(List<AudioDevice>, List<AudioDevice>)> listDevices() =>
-      RustLib.instance.api.crateInternalTelepathyListDevices(
+      RustLib.instance.api.crateFlutterTelepathyListDevices(
         that: this,
       );
 
   void pauseStatistics() =>
-      RustLib.instance.api.crateInternalTelepathyPauseStatistics(
+      RustLib.instance.api.crateFlutterTelepathyPauseStatistics(
         that: this,
       );
 
   /// Restarts the session manager
   Future<void> restartManager() =>
-      RustLib.instance.api.crateInternalTelepathyRestartManager(
+      RustLib.instance.api.crateFlutterTelepathyRestartManager(
         that: this,
       );
 
   void resumeStatistics() =>
-      RustLib.instance.api.crateInternalTelepathyResumeStatistics(
+      RustLib.instance.api.crateFlutterTelepathyResumeStatistics(
         that: this,
       );
 
   /// Sends a chat message
   Future<void> sendChat({required ChatMessage message}) => RustLib.instance.api
-      .crateInternalTelepathySendChat(that: this, message: message);
+      .crateFlutterTelepathySendChat(that: this, message: message);
 
   void setDeafened({required bool deafened}) => RustLib.instance.api
-      .crateInternalTelepathySetDeafened(that: this, deafened: deafened);
+      .crateFlutterTelepathySetDeafened(that: this, deafened: deafened);
 
   /// Changing the denoise flag will not affect the current call
   void setDenoise({required bool denoise}) => RustLib.instance.api
-      .crateInternalTelepathySetDenoise(that: this, denoise: denoise);
+      .crateFlutterTelepathySetDenoise(that: this, denoise: denoise);
 
   void setEfficiencyMode({required bool enabled}) => RustLib.instance.api
-      .crateInternalTelepathySetEfficiencyMode(that: this, enabled: enabled);
+      .crateFlutterTelepathySetEfficiencyMode(that: this, enabled: enabled);
 
   /// Sets the signing key (called when the profile changes)
   Future<void> setIdentity({required List<int> key}) => RustLib.instance.api
-      .crateInternalTelepathySetIdentity(that: this, key: key);
+      .crateFlutterTelepathySetIdentity(that: this, key: key);
 
   Future<void> setInputDevice({String? deviceId}) => RustLib.instance.api
-      .crateInternalTelepathySetInputDevice(that: this, deviceId: deviceId);
+      .crateFlutterTelepathySetInputDevice(that: this, deviceId: deviceId);
 
   void setInputVolume({required double decibel}) => RustLib.instance.api
-      .crateInternalTelepathySetInputVolume(that: this, decibel: decibel);
+      .crateFlutterTelepathySetInputVolume(that: this, decibel: decibel);
 
   Future<void> setModel({Uint8List? model}) => RustLib.instance.api
-      .crateInternalTelepathySetModel(that: this, model: model);
+      .crateFlutterTelepathySetModel(that: this, model: model);
 
   void setMuted({required bool muted}) => RustLib.instance.api
-      .crateInternalTelepathySetMuted(that: this, muted: muted);
+      .crateFlutterTelepathySetMuted(that: this, muted: muted);
 
   Future<void> setOutputDevice({String? deviceId}) => RustLib.instance.api
-      .crateInternalTelepathySetOutputDevice(that: this, deviceId: deviceId);
+      .crateFlutterTelepathySetOutputDevice(that: this, deviceId: deviceId);
 
   void setOutputVolume({required double decibel}) => RustLib.instance.api
-      .crateInternalTelepathySetOutputVolume(that: this, decibel: decibel);
+      .crateFlutterTelepathySetOutputVolume(that: this, decibel: decibel);
 
   void setPlayCustomRingtones({required bool play}) => RustLib.instance.api
-      .crateInternalTelepathySetPlayCustomRingtones(that: this, play: play);
+      .crateFlutterTelepathySetPlayCustomRingtones(that: this, play: play);
 
   void setRmsThreshold({required double decimal}) => RustLib.instance.api
-      .crateInternalTelepathySetRmsThreshold(that: this, decimal: decimal);
+      .crateFlutterTelepathySetRmsThreshold(that: this, decimal: decimal);
 
   void setSendCustomRingtone({required bool send}) => RustLib.instance.api
-      .crateInternalTelepathySetSendCustomRingtone(that: this, send: send);
+      .crateFlutterTelepathySetSendCustomRingtone(that: this, send: send);
 
   /// shuts down the entire rust backend
-  Future<void> shutdown() =>
-      RustLib.instance.api.crateInternalTelepathyShutdown(
+  Future<void> shutdown() => RustLib.instance.api.crateFlutterTelepathyShutdown(
         that: this,
       );
 
   /// Attempts to start a call through an existing session
   Future<void> startCall({required Contact contact}) => RustLib.instance.api
-      .crateInternalTelepathyStartCall(that: this, contact: contact);
+      .crateFlutterTelepathyStartCall(that: this, contact: contact);
 
   Future<void> startManager() =>
-      RustLib.instance.api.crateInternalTelepathyStartManager(
+      RustLib.instance.api.crateFlutterTelepathyStartManager(
         that: this,
       );
 
   Future<void> startScreenshare({required Contact contact}) =>
       RustLib.instance.api
-          .crateInternalTelepathyStartScreenshare(that: this, contact: contact);
+          .crateFlutterTelepathyStartScreenshare(that: this, contact: contact);
 
   /// Tries to start a session for a contact
   Future<void> startSession({required Contact contact}) => RustLib.instance.api
-      .crateInternalTelepathyStartSession(that: this, contact: contact);
+      .crateFlutterTelepathyStartSession(that: this, contact: contact);
 
   /// Stops a specific session (called when a contact is deleted)
   Future<void> stopSession({required Contact contact}) => RustLib.instance.api
-      .crateInternalTelepathyStopSession(that: this, contact: contact);
+      .crateFlutterTelepathyStopSession(that: this, contact: contact);
 }

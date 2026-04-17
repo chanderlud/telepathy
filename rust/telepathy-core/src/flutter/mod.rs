@@ -1,11 +1,13 @@
 /// flutter_rust_bridge:ignore
 pub(crate) mod callbacks;
 
+use crate::AudioDevice;
 use crate::error::{DartError, Error, ErrorKind};
 use crate::frb_generated::StreamSink;
 use crate::internal::messages::Attachment;
 use crate::internal::screenshare::{Decoder, Encoder};
-use crate::internal::{ConnectionState, screenshare};
+use crate::internal::{ConnectionState, TelepathyHandle, screenshare};
+use crate::overlay::overlay::Overlay;
 use atomic_float::AtomicF32;
 use chrono::{DateTime, Local};
 #[cfg(not(target_family = "wasm"))]
@@ -49,6 +51,184 @@ pub(crate) type AcceptCallArgs = (String, Option<Vec<u8>>, DartNotify);
 pub(crate) type SessionStatusArgs = (String, SessionStatus);
 pub(crate) type ScreenshareStartedArgs = (DartNotify, bool);
 pub(crate) type ManagerActiveArgs = (bool, bool);
+
+/// Rust API for FRB frontend.
+///
+/// Every public method here forwards to a same-named method on `TelepathyHandle`.
+/// Keep this `impl` in sync with `impl NativeTelepathy` and `impl TelepathyHandle`.
+#[frb(opaque)]
+pub struct Telepathy {
+    handle: TelepathyHandle<FlutterCallbacks, FlutterStatisticsCallback>,
+}
+
+impl Telepathy {
+    #[frb(sync)]
+    pub fn new(
+        host: Arc<Host>,
+        network_config: &NetworkConfig,
+        screenshare_config: &ScreenshareConfig,
+        overlay: &Overlay,
+        codec_config: &CodecConfig,
+        callbacks: FlutterCallbacks,
+    ) -> Telepathy {
+        Self {
+            handle: TelepathyHandle::new(
+                host,
+                network_config,
+                screenshare_config,
+                overlay,
+                codec_config,
+                callbacks,
+            ),
+        }
+    }
+
+    pub async fn start_manager(&mut self) {
+        self.handle.start_manager().await;
+    }
+
+    /// Tries to start a session for a contact
+    pub async fn start_session(&self, contact: &Contact) {
+        self.handle.start_session(contact).await;
+    }
+
+    /// Attempts to start a call through an existing session
+    pub async fn start_call(&self, contact: &Contact) -> std::result::Result<(), DartError> {
+        self.handle.start_call(contact).await
+    }
+
+    /// Ends the current audio test, room, or call in that order
+    pub async fn end_call(&self) {
+        self.handle.end_call().await;
+    }
+
+    /// The only entry point into participating in a room
+    pub async fn join_room(
+        &self,
+        member_strings: Vec<String>,
+    ) -> std::result::Result<(), DartError> {
+        self.handle.join_room(member_strings).await
+    }
+
+    /// Restarts the session manager
+    pub async fn restart_manager(&self) -> std::result::Result<(), DartError> {
+        self.handle.restart_manager().await
+    }
+
+    /// shuts down the entire rust backend
+    pub async fn shutdown(&self) {
+        self.handle.shutdown().await;
+    }
+
+    /// Sets the signing key (called when the profile changes)
+    pub async fn set_identity(&self, key: Vec<u8>) -> std::result::Result<(), DartError> {
+        self.handle.set_identity(key).await
+    }
+
+    /// Stops a specific session (called when a contact is deleted)
+    pub async fn stop_session(&self, contact: &Contact) {
+        self.handle.stop_session(contact).await
+    }
+
+    /// Blocks while an audio test is running
+    pub async fn audio_test(&self) -> std::result::Result<(), DartError> {
+        self.handle.audio_test().await
+    }
+
+    #[frb(sync)]
+    pub fn build_chat(
+        &self,
+        contact: &Contact,
+        text: String,
+        attachments: Vec<(String, Vec<u8>)>,
+    ) -> ChatMessage {
+        self.handle.build_chat(contact, text, attachments)
+    }
+
+    /// Sends a chat message
+    pub async fn send_chat(&self, message: &mut ChatMessage) -> std::result::Result<(), DartError> {
+        self.handle.send_chat(message).await
+    }
+
+    pub async fn start_screenshare(&self, contact: &Contact) {
+        self.handle.start_screenshare(contact).await
+    }
+
+    #[frb(sync)]
+    pub fn set_rms_threshold(&self, decimal: f32) {
+        self.handle.set_rms_threshold(decimal)
+    }
+
+    #[frb(sync)]
+    pub fn set_input_volume(&self, decibel: f32) {
+        self.handle.set_input_volume(decibel)
+    }
+
+    #[frb(sync)]
+    pub fn set_output_volume(&self, decibel: f32) {
+        self.handle.set_output_volume(decibel)
+    }
+
+    #[frb(sync)]
+    pub fn set_deafened(&self, deafened: bool) {
+        self.handle.set_deafened(deafened)
+    }
+
+    #[frb(sync)]
+    pub fn set_muted(&self, muted: bool) {
+        self.handle.set_muted(muted)
+    }
+
+    /// Changing the denoise flag will not affect the current call
+    #[frb(sync)]
+    pub fn set_denoise(&self, denoise: bool) {
+        self.handle.set_denoise(denoise)
+    }
+
+    #[frb(sync)]
+    pub fn set_play_custom_ringtones(&self, play: bool) {
+        self.handle.set_play_custom_ringtones(play)
+    }
+
+    #[frb(sync)]
+    pub fn set_send_custom_ringtone(&self, send: bool) {
+        self.handle.set_send_custom_ringtone(send)
+    }
+
+    #[frb(sync)]
+    pub fn set_efficiency_mode(&self, enabled: bool) {
+        self.handle.set_efficiency_mode(enabled)
+    }
+
+    #[frb(sync)]
+    pub fn pause_statistics(&self) {
+        self.handle.pause_statistics()
+    }
+
+    #[frb(sync)]
+    pub fn resume_statistics(&self) {
+        self.handle.resume_statistics()
+    }
+
+    pub async fn set_input_device(&self, device_id: Option<String>) {
+        self.handle.set_input_device(device_id).await
+    }
+
+    pub async fn set_output_device(&self, device_id: Option<String>) {
+        self.handle.set_output_device(device_id).await
+    }
+
+    /// Lists the input and output devices
+    pub fn list_devices(
+        &self,
+    ) -> std::result::Result<(Vec<AudioDevice>, Vec<AudioDevice>), DartError> {
+        self.handle.list_devices()
+    }
+
+    pub async fn set_model(&self, model: Option<Vec<u8>>) -> std::result::Result<(), DartError> {
+        self.handle.set_model(model).await
+    }
+}
 
 #[frb(opaque)]
 pub struct FlutterCallbacks {

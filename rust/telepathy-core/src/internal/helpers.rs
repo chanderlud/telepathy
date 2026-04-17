@@ -1,7 +1,7 @@
 use crate::error::ErrorKind;
 use crate::flutter::DartNotify;
-use crate::flutter::callbacks::{FrbCallbacks, FrbStatisticsCallback};
 use crate::internal::audio_adapters::{KanalSink, KanalSource};
+use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::core::TelepathyCore;
 use crate::internal::messages::{AudioHeader, Message};
 #[cfg(not(target_family = "wasm"))]
@@ -39,8 +39,8 @@ use tokio::sync::Notify;
 
 impl<C, S> TelepathyCore<C, S>
 where
-    S: FrbStatisticsCallback + Send + Sync + 'static,
-    C: FrbCallbacks<S> + Send + Sync + 'static,
+    S: CoreStatisticsCallback + Send + Sync + 'static,
+    C: CoreCallbacks<S> + Send + Sync + 'static,
 {
     /// builds a p2p swarm & connects to the relay server
     pub(crate) async fn setup_swarm(&self) -> Result<(Swarm<Behaviour>, Multiaddr)> {

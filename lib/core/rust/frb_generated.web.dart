@@ -12,7 +12,7 @@ import 'dart:convert';
 import 'error.dart';
 import 'flutter.dart';
 import 'frb_generated.dart';
-import 'internal.dart';
+import 'lib.dart';
 import 'overlay/overlay.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated_web.dart';
 

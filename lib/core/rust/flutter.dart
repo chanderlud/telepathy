@@ -3,8 +3,11 @@
 
 // ignore_for_file: invalid_use_of_internal_member, unused_import, unnecessary_import
 
+import 'audio/player.dart';
 import 'error.dart';
 import 'frb_generated.dart';
+import 'lib.dart';
+import 'overlay/overlay.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'flutter.freezed.dart';
@@ -191,6 +194,95 @@ abstract class ScreenshareConfig implements RustOpaqueInterface {
       required int bitrate,
       required int framerate,
       int? height});
+}
+
+// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Telepathy>>
+abstract class Telepathy implements RustOpaqueInterface {
+  /// Blocks while an audio test is running
+  Future<void> audioTest();
+
+  ChatMessage buildChat(
+      {required Contact contact,
+      required String text,
+      required List<(String, Uint8List)> attachments});
+
+  /// Ends the current audio test, room, or call in that order
+  Future<void> endCall();
+
+  /// The only entry point into participating in a room
+  Future<void> joinRoom({required List<String> memberStrings});
+
+  /// Lists the input and output devices
+  Future<(List<AudioDevice>, List<AudioDevice>)> listDevices();
+
+  factory Telepathy(
+          {required ArcHost host,
+          required NetworkConfig networkConfig,
+          required ScreenshareConfig screenshareConfig,
+          required Overlay overlay,
+          required CodecConfig codecConfig,
+          required FlutterCallbacks callbacks}) =>
+      RustLib.instance.api.crateFlutterTelepathyNew(
+          host: host,
+          networkConfig: networkConfig,
+          screenshareConfig: screenshareConfig,
+          overlay: overlay,
+          codecConfig: codecConfig,
+          callbacks: callbacks);
+
+  void pauseStatistics();
+
+  /// Restarts the session manager
+  Future<void> restartManager();
+
+  void resumeStatistics();
+
+  /// Sends a chat message
+  Future<void> sendChat({required ChatMessage message});
+
+  void setDeafened({required bool deafened});
+
+  /// Changing the denoise flag will not affect the current call
+  void setDenoise({required bool denoise});
+
+  void setEfficiencyMode({required bool enabled});
+
+  /// Sets the signing key (called when the profile changes)
+  Future<void> setIdentity({required List<int> key});
+
+  Future<void> setInputDevice({String? deviceId});
+
+  void setInputVolume({required double decibel});
+
+  Future<void> setModel({Uint8List? model});
+
+  void setMuted({required bool muted});
+
+  Future<void> setOutputDevice({String? deviceId});
+
+  void setOutputVolume({required double decibel});
+
+  void setPlayCustomRingtones({required bool play});
+
+  void setRmsThreshold({required double decimal});
+
+  void setSendCustomRingtone({required bool send});
+
+  /// shuts down the entire rust backend
+  Future<void> shutdown();
+
+  /// Attempts to start a call through an existing session
+  Future<void> startCall({required Contact contact});
+
+  Future<void> startManager();
+
+  Future<void> startScreenshare({required Contact contact});
+
+  /// Tries to start a session for a contact
+  Future<void> startSession({required Contact contact});
+
+  /// Stops a specific session (called when a contact is deleted)
+  Future<void> stopSession({required Contact contact});
 }
 
 @freezed

@@ -1,6 +1,9 @@
 /// channel adapters for telepathy-audio I/O traits
 /// flutter_rust_bridge:ignore
 mod audio_adapters;
+/// callback traits shared by FRB and native frontends
+/// flutter_rust_bridge:ignore
+pub(crate) mod callbacks;
 /// implementations for core telepathy functionality
 /// flutter_rust_bridge:ignore
 pub mod core;
@@ -18,9 +21,10 @@ mod sockets;
 pub(crate) mod tests;
 pub(crate) mod utils;
 
+use crate::AudioDevice;
 use crate::error::{DartError, Error, ErrorKind};
-use crate::flutter::callbacks::FrbCallbacks;
 use crate::flutter::*;
+use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::core::TelepathyCore;
 use crate::internal::helpers::OutputHelper;
 use crate::overlay::overlay::Overlay;
@@ -28,7 +32,7 @@ use atomic_float::AtomicF32;
 use chrono::Local;
 #[cfg(target_family = "wasm")]
 use flutter_rust_bridge::JoinHandle;
-use flutter_rust_bridge::{frb, spawn};
+use flutter_rust_bridge::spawn;
 use kanal::AsyncReceiver;
 use kanal::{AsyncSender, unbounded_async};
 use libp2p::core::ConnectedPoint;
@@ -45,7 +49,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::time::Duration;
-use telepathy_audio::devices::{AudioDeviceInfo, list_all_devices};
+use telepathy_audio::devices::list_all_devices;
 use telepathy_audio::internal::utils::db_to_multiplier;
 use telepathy_audio::{Host, RnnModel};
 use tokio::select;
@@ -74,25 +78,31 @@ const SESSION_MAX_FRAME_LENGTH: usize = 1024 * 1024 * 1024;
 /// How long to attempt direct connection upgrade before falling back to a relayed option
 const DCUTR_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// the public API for flutter
-#[frb(opaque)]
-pub struct Telepathy {
-    inner: TelepathyCore<FlutterCallbacks, FlutterStatisticsCallback>,
+pub(crate) struct TelepathyHandle<C, S>
+where
+    C: CoreCallbacks<S> + Send + Sync + 'static,
+    S: CoreStatisticsCallback + Send + Sync + 'static,
+{
+    inner: TelepathyCore<C, S>,
 
     /// contains handles to the manager thread & room managers
     handles: Arc<Mutex<Vec<JoinHandle<()>>>>,
 }
 
-impl Telepathy {
-    #[frb(sync)]
-    pub fn new(
+impl<C, S> TelepathyHandle<C, S>
+where
+    C: CoreCallbacks<S> + Send + Sync + 'static,
+    S: CoreStatisticsCallback + Send + Sync + 'static,
+{
+    /// Builds a new handle around a fresh `TelepathyCore`.
+    pub(crate) fn new(
         host: Arc<Host>,
         network_config: &NetworkConfig,
         screenshare_config: &ScreenshareConfig,
         overlay: &Overlay,
         codec_config: &CodecConfig,
-        callbacks: FlutterCallbacks,
-    ) -> Telepathy {
+        callbacks: C,
+    ) -> Self {
         Self {
             inner: TelepathyCore::new(
                 host.into(),
@@ -112,7 +122,6 @@ impl Telepathy {
         }
     }
 
-    /// Tries to start a session for a contact
     pub async fn start_session(&self, contact: &Contact) {
         debug!("start_session called for {}", contact.peer_id);
 
@@ -123,7 +132,6 @@ impl Telepathy {
         }
     }
 
-    /// Attempts to start a call through an existing session
     pub async fn start_call(&self, contact: &Contact) -> std::result::Result<(), DartError> {
         if self.inner.is_call_active().await {
             return Err("Cannot start call while a call is already active"
@@ -145,7 +153,6 @@ impl Telepathy {
         }
     }
 
-    /// Ends the current audio test, room, or call in that order
     pub async fn end_call(&self) {
         if let Some(end_audio_test) = self.inner.core_state.end_audio_test.lock().await.as_ref() {
             debug!("ending audio test");
@@ -168,7 +175,6 @@ impl Telepathy {
         }
     }
 
-    /// The only entry point into participating in a room
     pub async fn join_room(
         &self,
         member_strings: Vec<String>,
@@ -237,7 +243,6 @@ impl Telepathy {
         Ok(())
     }
 
-    /// Restarts the session manager
     pub async fn restart_manager(&self) -> std::result::Result<(), DartError> {
         if self.inner.is_call_active().await {
             Err("Cannot restart manager while call is active"
@@ -258,25 +263,20 @@ impl Telepathy {
         }
     }
 
-    /// shuts down the entire rust backend
     pub async fn shutdown(&self) {
-        // stops sessions & manager
         self.inner.shutdown().await;
-        // wait for manager & any room controllers to join
         for handle in self.handles.lock().await.drain(..) {
             handle.await.unwrap();
         }
         info!("shutdown complete");
     }
 
-    /// Sets the signing key (called when the profile changes)
     pub async fn set_identity(&self, key: Vec<u8>) -> std::result::Result<(), DartError> {
         *self.inner.core_state.identity.write().await =
             Some(Keypair::from_protobuf_encoding(&key).map_err(Error::from)?);
         Ok(())
     }
 
-    /// Stops a specific session (called when a contact is deleted)
     pub async fn stop_session(&self, contact: &Contact) {
         if let Some(state) = self
             .inner
@@ -289,7 +289,6 @@ impl Telepathy {
         }
     }
 
-    /// Blocks while an audio test is running
     pub async fn audio_test(&self) -> std::result::Result<(), DartError> {
         if self.inner.is_call_active().await {
             return Err("Cannot start test while call is active".to_string().into());
@@ -328,7 +327,6 @@ impl Telepathy {
         result
     }
 
-    #[frb(sync)]
     pub fn build_chat(
         &self,
         contact: &Contact,
@@ -346,7 +344,6 @@ impl Telepathy {
         }
     }
 
-    /// Sends a chat message
     pub async fn send_chat(&self, message: &mut ChatMessage) -> std::result::Result<(), DartError> {
         if message
             .attachments
@@ -402,7 +399,6 @@ impl Telepathy {
             .await;
     }
 
-    #[frb(sync)]
     pub fn set_rms_threshold(&self, decimal: f32) {
         let threshold = db_to_multiplier(decimal);
         self.inner
@@ -411,7 +407,6 @@ impl Telepathy {
             .store(threshold, Relaxed);
     }
 
-    #[frb(sync)]
     pub fn set_input_volume(&self, decibel: f32) {
         let multiplier = db_to_multiplier(decibel);
         self.inner
@@ -420,7 +415,6 @@ impl Telepathy {
             .store(multiplier, Relaxed);
     }
 
-    #[frb(sync)]
     pub fn set_output_volume(&self, decibel: f32) {
         let multiplier = db_to_multiplier(decibel);
         self.inner
@@ -429,23 +423,19 @@ impl Telepathy {
             .store(multiplier, Relaxed);
     }
 
-    #[frb(sync)]
     pub fn set_deafened(&self, deafened: bool) {
         self.inner.core_state.deafened.store(deafened, Relaxed);
     }
 
-    #[frb(sync)]
     pub fn set_muted(&self, muted: bool) {
         self.inner.core_state.muted.store(muted, Relaxed);
     }
 
     /// Changing the denoise flag will not affect the current call
-    #[frb(sync)]
     pub fn set_denoise(&self, denoise: bool) {
         self.inner.core_state.denoise.store(denoise, Relaxed);
     }
 
-    #[frb(sync)]
     pub fn set_play_custom_ringtones(&self, play: bool) {
         self.inner
             .core_state
@@ -453,7 +443,6 @@ impl Telepathy {
             .store(play, Relaxed);
     }
 
-    #[frb(sync)]
     pub fn set_send_custom_ringtone(&self, send: bool) {
         self.inner
             .core_state
@@ -461,7 +450,6 @@ impl Telepathy {
             .store(send, Relaxed);
     }
 
-    #[frb(sync)]
     pub fn set_efficiency_mode(&self, enabled: bool) {
         self.inner
             .core_state
@@ -469,12 +457,10 @@ impl Telepathy {
             .store(enabled, Relaxed);
     }
 
-    #[frb(sync)]
     pub fn pause_statistics(&self) {
         self.inner.core_state.statistics_paused.store(true, Relaxed);
     }
 
-    #[frb(sync)]
     pub fn resume_statistics(&self) {
         self.inner
             .core_state
@@ -490,7 +476,6 @@ impl Telepathy {
         *self.inner.core_state.output_device.lock().await = device_id;
     }
 
-    /// Lists the input and output devices
     pub fn list_devices(
         &self,
     ) -> std::result::Result<(Vec<AudioDevice>, Vec<AudioDevice>), DartError> {
@@ -518,20 +503,6 @@ impl Telepathy {
 
         *self.inner.core_state.denoise_model.write().await = model;
         Ok(())
-    }
-}
-
-pub struct AudioDevice {
-    pub name: String,
-    pub id: String,
-}
-
-impl From<AudioDeviceInfo> for AudioDevice {
-    fn from(value: AudioDeviceInfo) -> Self {
-        Self {
-            name: value.name,
-            id: value.id,
-        }
     }
 }
 
