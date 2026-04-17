@@ -6,11 +6,14 @@
 use std::sync::{Arc, Mutex};
 
 use telepathy_core::native::NativeCallbacks;
+use telepathy_core::types::Contact;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 
 use crate::events::CoreEvent;
 use crate::state::{AppState, IncomingPromptState};
+use crate::storage::{SecretStore, StorageError};
+use crate::storage::config::ContactMeta;
 
 /// Build the `telepathy-core` callback surface backed by the provided channel
 /// and shared application state.
@@ -21,6 +24,7 @@ pub fn build_callbacks(
     sender: mpsc::Sender<CoreEvent>,
     state: Arc<Mutex<AppState>>,
     handle: Handle,
+    secret_store: SecretStore,
 ) -> NativeCallbacks {
     let accept_call = {
         let sender = sender.clone();
@@ -82,9 +86,21 @@ pub fn build_callbacks(
     };
 
     let get_contact = {
-        move |_id: Vec<u8>| -> std::pin::Pin<
-            Box<dyn std::future::Future<Output = Option<telepathy_core::types::Contact>> + Send>,
-        > { Box::pin(async move { None }) }
+        let state = state.clone();
+        let secret_store = secret_store.clone();
+        move |id: Vec<u8>| -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<Contact>> + Send>> {
+            let state = state.clone();
+            let secret_store = secret_store.clone();
+            Box::pin(async move {
+                let (profile_id, contacts) = active_profile_contacts(&state);
+                if profile_id.is_empty() {
+                    return None;
+                }
+
+                let contacts = resolve_contacts(profile_id, contacts, secret_store).await;
+                contacts.into_iter().find(|contact| contact.id_eq(id.clone()))
+            })
+        }
     };
 
     let call_state = {
@@ -116,9 +132,20 @@ pub fn build_callbacks(
     };
 
     let get_contacts = {
-        move |_: ()| -> std::pin::Pin<
-            Box<dyn std::future::Future<Output = Vec<telepathy_core::types::Contact>> + Send>,
-        > { Box::pin(async move { Vec::new() }) }
+        let state = state.clone();
+        let secret_store = secret_store.clone();
+        move |_: ()| -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<Contact>> + Send>> {
+            let state = state.clone();
+            let secret_store = secret_store.clone();
+            Box::pin(async move {
+                let (profile_id, contacts) = active_profile_contacts(&state);
+                if profile_id.is_empty() {
+                    return Vec::new();
+                }
+
+                resolve_contacts(profile_id, contacts, secret_store).await
+            })
+        }
     };
 
     let statistics = {
@@ -186,4 +213,49 @@ pub fn build_callbacks(
 /// Returns the chat peer id used to route incoming messages in the TUI model.
 fn format_peer(message: &telepathy_core::types::ChatMessage) -> String {
     message.receiver.to_string()
+}
+
+fn active_profile_contacts(state: &Arc<Mutex<AppState>>) -> (String, Vec<ContactMeta>) {
+    let guard = state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    (guard.active_profile.id.clone(), guard.contacts.clone())
+}
+
+async fn resolve_contacts(
+    profile_id: String,
+    contacts: Vec<ContactMeta>,
+    secret_store: SecretStore,
+) -> Vec<Contact> {
+    let mut resolved = Vec::with_capacity(contacts.len());
+
+    for meta in contacts {
+        let peer_id = match secret_store.load_contact_peer_id(&profile_id, &meta.id).await {
+            Ok(peer_id) => peer_id,
+            Err(StorageError::SecretNotFound) => {
+                log::debug!(
+                    "no peer id stored for contact {} in profile {}",
+                    meta.id,
+                    profile_id
+                );
+                continue;
+            }
+            Err(error) => {
+                log::warn!(
+                    "failed to load peer id for contact {} in profile {}: {error}",
+                    meta.id,
+                    profile_id
+                );
+                continue;
+            }
+        };
+
+        match Contact::from_parts(meta.id, meta.nickname, peer_id) {
+            Ok(contact) => resolved.push(contact),
+            Err(error) => {
+                log::warn!("invalid contact metadata while resolving callback contact: {error:?}");
+            }
+        }
+    }
+
+    resolved
 }

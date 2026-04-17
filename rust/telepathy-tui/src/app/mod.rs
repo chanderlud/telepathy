@@ -57,7 +57,7 @@ pub async fn run() -> Result<(), AppError> {
     let (tx, rx) = mpsc::channel::<CoreEvent>(256);
 
     let handle = Handle::current();
-    let callbacks = build_callbacks(tx, state.clone(), handle.clone());
+    let callbacks = build_callbacks(tx, state.clone(), handle.clone(), secret_store.clone());
     let core = init_core_client(&config, &secret_store, &active_profile, callbacks).await?;
 
     let core_event_port = CoreEventPort::new(rx);
