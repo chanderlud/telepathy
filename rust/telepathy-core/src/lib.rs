@@ -13,12 +13,12 @@ pub use internal::{AudioDevice, Telepathy};
 // https://github.com/RustAudio/cpal/issues/720#issuecomment-1311813294
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
-extern "C" fn JNI_OnLoad(vm: jni::JavaVM, res: *mut std::os::raw::c_void) -> jni::sys::jint {
-    use std::ffi::c_void;
-
-    let vm = vm.get_raw() as *mut c_void;
+extern "system" fn JNI_OnLoad(
+    vm: *mut jni::sys::JavaVM,
+    reserved: *mut std::os::raw::c_void,
+) -> jni::sys::jint {
     unsafe {
-        ndk_context::initialize_android_context(vm, res);
+        ndk_context::initialize_android_context(vm.cast(), reserved);
     }
     jni::JNIVersion::V9.into()
 }
