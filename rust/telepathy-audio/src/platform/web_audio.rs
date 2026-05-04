@@ -52,7 +52,7 @@
 
 use crate::Error;
 use crate::internal::traits::{CHANNEL_SIZE, RingBufferInput};
-use log::error;
+use log::{error, warn};
 use rtrb::RingBuffer;
 use std::sync::Arc;
 use wasm_bindgen::{JsCast, JsValue, prelude::Closure};
@@ -133,8 +133,21 @@ impl WebAudioWrapper {
     /// - AudioContext starts in suspended state in some browsers
     /// - Call [`resume`](Self::resume) after user interaction if needed
     pub async fn new() -> Result<Self, Error> {
-        let audio_ctx = web_sys::AudioContext::new()?;
-        let sample_rate = audio_ctx.sample_rate();
+        let context_options = web_sys::AudioContextOptions::new();
+        context_options.set_sample_rate(48_000_f32);
+        let mut used_fallback_audio_context = false;
+        let mut audio_ctx = match web_sys::AudioContext::new_with_context_options(&context_options)
+        {
+            Ok(audio_ctx) => audio_ctx,
+            Err(error) => {
+                warn!(
+                    "failed to create 48 kHz AudioContext, falling back to browser default sample rate: {:?}",
+                    error
+                );
+                used_fallback_audio_context = true;
+                web_sys::AudioContext::new()?
+            }
+        };
 
         let media_devices = web_sys::window()
             .ok_or(JsValue::from_str("unable to get window"))?
@@ -142,12 +155,29 @@ impl WebAudioWrapper {
             .media_devices()?;
 
         let constraints = web_sys::MediaStreamConstraints::new();
-        constraints.set_audio(&JsValue::TRUE);
+        let track_constraints = web_sys::MediaTrackConstraints::new();
+        track_constraints.set_echo_cancellation(&JsValue::FALSE);
+        track_constraints.set_noise_suppression(&JsValue::FALSE);
+        track_constraints.set_auto_gain_control(&JsValue::FALSE);
+        constraints.set_audio(&track_constraints.unchecked_into::<JsValue>());
 
         let stream_promise = media_devices.get_user_media_with_constraints(&constraints)?;
         let stream_value = JsFuture::from(stream_promise).await?;
         let stream = stream_value.dyn_into::<web_sys::MediaStream>()?;
-        let source = audio_ctx.create_media_stream_source(&stream)?;
+        let source = match audio_ctx.create_media_stream_source(&stream) {
+            Ok(source) => source,
+            Err(error) if !used_fallback_audio_context => {
+                warn!(
+                    "failed to attach media stream to 48 kHz AudioContext, retrying with browser default sample rate: {:?}",
+                    error
+                );
+                let _ = audio_ctx.close();
+                audio_ctx = web_sys::AudioContext::new()?;
+                audio_ctx.create_media_stream_source(&stream)?
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let sample_rate = audio_ctx.sample_rate();
 
         // Return about Float32Array
         // return first input's first channel's samples
@@ -157,7 +187,8 @@ impl WebAudioWrapper {
                 process(inputs, outputs, parameters) {
                     const frame = inputs[0][0];
                     if (frame != undefined) {
-                        this.port.postMessage(Float32Array.from(frame));
+                        const buf = frame.buffer.slice(frame.byteOffset, frame.byteOffset + frame.byteLength);
+                        this.port.postMessage(buf, [buf]);
                     }
                     return true;
                 }
@@ -190,23 +221,42 @@ impl WebAudioWrapper {
         let notify = Arc::new(Condvar::new());
         let notify_clone = notify.clone();
 
-        // Float32Array
+        // Transferable ArrayBuffer
         let js_closure = Closure::wrap(Box::new(move |msg: JsValue| {
-            let data_result: Result<Result<Vec<f32>, _>, _> = msg
-                .dyn_into::<web_sys::MessageEvent>()
-                .map(|msg| serde_wasm_bindgen::from_value(msg.data()));
-
-            match data_result {
-                Ok(Ok(data)) => {
-                    let Ok(chunk) = input_producer.write_chunk_uninit(data.len()) else {
-                        return;
-                    };
-                    chunk.fill_from_iter(data.into_iter());
-                    notify_clone.notify_one();
+            let message_event = match msg.dyn_into::<web_sys::MessageEvent>() {
+                Ok(message_event) => message_event,
+                Err(error) => {
+                    error!("failed to handle worker message event: {:?}", error);
+                    return;
                 }
-                Err(error) => error!("failed to handle worker message: {:?}", error),
-                Ok(Err(error)) => error!("failed to handle worker message: {:?}", error),
+            };
+            let array_buffer = match message_event.data().dyn_into::<js_sys::ArrayBuffer>() {
+                Ok(array_buffer) => array_buffer,
+                Err(error) => {
+                    error!("failed to decode worker message data: {:?}", error);
+                    return;
+                }
+            };
+            let float32_array = js_sys::Float32Array::new(&array_buffer);
+            let sample_len = float32_array.length() as usize;
+            if sample_len == 0 {
+                return;
             }
+            if sample_len > 128 {
+                error!(
+                    "received oversized audio frame from worklet: {} samples",
+                    sample_len
+                );
+                return;
+            }
+            let mut scratch = [0.0_f32; 128];
+            float32_array.copy_to(&mut scratch[..sample_len]);
+
+            let Ok(chunk) = input_producer.write_chunk_uninit(sample_len) else {
+                return;
+            };
+            chunk.fill_from_iter(scratch.into_iter().take(sample_len));
+            notify_clone.notify_one();
         }) as Box<dyn FnMut(JsValue)>);
 
         let js_func = js_closure.as_ref().unchecked_ref();

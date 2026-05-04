@@ -29,8 +29,10 @@ rtrb = "0.3"
 wasm_thread = { version = "0.3", default-features = false  }
 web-sys = { version = "=0.3.85", features = [
     "AudioContext",
+    "AudioContextOptions",
     "MediaDevices",
     "MediaStreamConstraints",
+    "MediaTrackConstraints",
     "MediaStream",
     "MediaStreamAudioSourceNode",
     "MediaStreamTrack",
