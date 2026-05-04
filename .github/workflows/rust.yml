@@ -285,6 +285,7 @@ jobs:
 
   build_cross:
     runs-on: ubuntu-22.04
+    if: startsWith(github.ref, 'refs/tags/')
     name: Build on ${{ matrix.distro }} ${{ matrix.arch }}
 
     strategy:
@@ -341,6 +342,17 @@ jobs:
               ubuntu*)
                 apt-get update -q -y
                 apt-get install -q -y protobuf-compiler clang cmake git ninja-build pkg-config libgtk-3-dev liblzma-dev ${{ matrix.distro == 'ubuntu20.04' && 'libstdc++-10-dev' || 'libstdc++-12-dev' }} libasound2-dev libsecret-1-dev rpm patchelf dpkg-cross curl unzip
+                case "${{ matrix.distro }}" in
+                  ubuntu20.04)
+                    apt-get install -q -y lld-10
+                    ;;
+                  ubuntu22.04)
+                    apt-get install -q -y lld-14
+                    ;;
+                  ubuntu24.04)
+                    apt-get install -q -y lld-18
+                    ;;
+                esac
                 
                 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
                 git clone --depth 1 --branch stable https://github.com/flutter/flutter.git /flutter
@@ -371,6 +383,7 @@ jobs:
             esac
 
           run: |
+            export PATH="$PATH:$HOME/.cargo/bin"
             export PATH="$PATH:/flutter/bin"
             export PATH="$PATH":"$HOME/.pub-cache/bin"
             export PATH=/flutter/bin/cache/dart-sdk/bin:$PATH
