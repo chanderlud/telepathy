@@ -1,6 +1,6 @@
 use crate::BehaviourEvent;
-use crate::internal::error::ErrorKind;
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
+use crate::internal::error::ErrorKind;
 #[cfg(target_os = "ios")]
 use crate::internal::helpers::{configure_audio_session, deactivate_audio_session};
 use crate::internal::messages::Message;

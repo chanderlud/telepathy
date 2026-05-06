@@ -1,10 +1,10 @@
-pub(crate) mod error;
 /// channel adapters for telepathy-audio I/O traits
 mod audio_adapters;
 /// callback traits shared by FRB and native frontends
 pub(crate) mod callbacks;
 /// implementations for core telepathy functionality
 pub(crate) mod core;
+pub(crate) mod error;
 /// helper methods used by telepathy core
 mod helpers;
 pub(crate) mod messages;
@@ -18,14 +18,16 @@ pub(crate) mod tests;
 pub(crate) mod utils;
 
 use crate::AudioDevice;
-use crate::internal::error::{Error, ErrorKind};
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::core::TelepathyCore;
+use crate::internal::error::{Error, ErrorKind};
 use crate::internal::helpers::OutputHelper;
 use crate::internal::runtime::JoinHandle;
 use crate::internal::runtime::spawn_task;
 use crate::overlay::overlay::Overlay;
-use crate::types::{ChatMessage, CodecConfig, Contact, DartError, NetworkConfig, ScreenshareConfig};
+use crate::types::{
+    ChatMessage, CodecConfig, Contact, DartError, NetworkConfig, ScreenshareConfig,
+};
 use atomic_float::AtomicF32;
 use chrono::Local;
 use kanal::AsyncReceiver;

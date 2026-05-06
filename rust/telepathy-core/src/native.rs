@@ -1,8 +1,6 @@
-mod callbacks;
-
 use crate::audio::player::SoundPlayer;
-use crate::internal::error::DartError;
 use crate::internal::TelepathyHandle;
+use crate::internal::error::DartError;
 use crate::overlay::overlay::Overlay;
 use crate::types::{CallState, ChatMessage, Contact, FrontendNotify, SessionStatus, Statistics};
 use std::future::Future;

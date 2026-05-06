@@ -1,7 +1,7 @@
-use crate::internal::error::ErrorKind;
 use crate::internal::audio_adapters::{KanalSink, KanalSource};
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::core::TelepathyCore;
+use crate::internal::error::ErrorKind;
 use crate::internal::messages::{AudioHeader, Message};
 #[cfg(not(target_family = "wasm"))]
 use crate::internal::screenshare;

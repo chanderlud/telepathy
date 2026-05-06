@@ -1,5 +1,5 @@
-use crate::types::DartError;
 use crate::flutter::PeerId;
+use crate::types::DartError;
 use flutter_rust_bridge::frb;
 use libp2p::identity::Keypair;
 use std::hash::{DefaultHasher, Hash, Hasher};
