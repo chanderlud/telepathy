@@ -1,7 +1,6 @@
 use crate::error::ErrorKind;
-use crate::flutter::DartNotify;
-use crate::flutter::callbacks::{FrbCallbacks, FrbStatisticsCallback};
 use crate::internal::audio_adapters::{KanalSink, KanalSource};
+use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::core::TelepathyCore;
 use crate::internal::messages::{AudioHeader, Message};
 #[cfg(not(target_family = "wasm"))]
@@ -9,6 +8,7 @@ use crate::internal::screenshare;
 use crate::internal::{
     CHAT_PROTOCOL, EarlyCallState, Result, StartScreenshare, StatisticsCollectorState,
 };
+use crate::types::FrontendNotify;
 use crate::{Behaviour, BehaviourEvent};
 use bytes::Bytes;
 use libp2p::futures::StreamExt;
@@ -39,8 +39,8 @@ use tracing::{error, info, instrument, warn};
 
 impl<C, S> TelepathyCore<C, S>
 where
-    S: FrbStatisticsCallback + Send + Sync + 'static,
-    C: FrbCallbacks<S> + Send + Sync + 'static,
+    S: CoreStatisticsCallback + Send + Sync + 'static,
+    C: CoreCallbacks<S> + Send + Sync + 'static,
 {
     /// builds a p2p swarm & connects to the relay server
     #[instrument(name = "manager.swarm_setup", skip_all)]
@@ -231,7 +231,7 @@ where
 
         let stop = Arc::new(Notify::new());
         *state.stop_screenshare.lock().await = Some(stop.clone());
-        let dart_stop = DartNotify {
+        let dart_stop = FrontendNotify {
             inner: stop.clone(),
         };
 

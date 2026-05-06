@@ -6,7 +6,8 @@ import 'package:telepathy/controllers/index.dart';
 import 'package:telepathy/core/utils/index.dart';
 import 'package:telepathy/core/rust/audio/player.dart';
 import 'package:telepathy/core/rust/error.dart';
-import 'package:telepathy/core/rust/internal.dart';
+import 'package:telepathy/core/rust/lib.dart';
+import 'package:telepathy/core/rust/flutter.dart';
 import 'package:telepathy/widgets/common/index.dart';
 
 class AudioSettings extends StatefulWidget {

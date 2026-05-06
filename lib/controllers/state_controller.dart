@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:telepathy/core/utils/index.dart';
-import 'package:telepathy/core/rust/flutter.dart';
+import 'package:telepathy/core/rust/types.dart';
 import 'package:telepathy/models/index.dart';
 
 /// A controller which helps bridge the gap between the UI and backend.
@@ -23,8 +23,8 @@ class StateController extends ChangeNotifier {
   /// active, restartable
   (bool, bool) _sessionManager = (false, false);
 
-  DartNotify? _stopSendingScreenshare;
-  DartNotify? _stopReceivingScreenshare;
+  FrontendNotify? _stopSendingScreenshare;
+  FrontendNotify? _stopReceivingScreenshare;
   bool isSendingScreenshare = false;
   bool isReceivingScreenshare = false;
 
@@ -137,7 +137,7 @@ class StateController extends ChangeNotifier {
     });
   }
 
-  void screenshareStarted((DartNotify stop, bool sending) record) {
+  void screenshareStarted((FrontendNotify stop, bool sending) record) {
     if (record.$2) {
       DebugConsole.log('Sending screenshare started');
       _stopSendingScreenshare = record.$1;

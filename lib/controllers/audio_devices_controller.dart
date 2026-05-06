@@ -3,7 +3,8 @@ import 'dart:async';
 import 'package:collection/collection.dart';
 import 'package:flutter/foundation.dart';
 import 'package:telepathy/core/utils/console.dart';
-import 'package:telepathy/core/rust/internal.dart';
+import 'package:telepathy/core/rust/lib.dart';
+import 'package:telepathy/core/rust/flutter.dart';
 
 class AudioDevices extends ChangeNotifier {
   final Telepathy telepathy;

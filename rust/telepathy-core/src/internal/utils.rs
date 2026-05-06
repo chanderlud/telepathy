@@ -1,14 +1,13 @@
 use crate::error::{Error, ErrorKind};
-use crate::flutter::Statistics;
-use crate::flutter::callbacks::FrbStatisticsCallback;
+use crate::internal::callbacks::CoreStatisticsCallback;
 use crate::internal::messages::Message;
 use crate::internal::sockets::{TIMESTAMP_BUFFER_CAPACITY, Transport, TransportStream};
 use crate::internal::{ConnectionState, StatisticsCollectorState};
 use crate::overlay::{CONNECTED, LATENCY, LOSS};
-use flutter_rust_bridge::for_generated::futures::{Sink, SinkExt};
+use crate::types::Statistics;
 use kanal::AsyncReceiver;
 use libp2p::bytes::Bytes;
-use libp2p::futures::StreamExt;
+use libp2p::futures::{Sink, SinkExt, StreamExt};
 use libp2p::swarm::ConnectionId;
 use speedy::{Readable, Writable};
 use std::collections::HashMap;
@@ -76,7 +75,7 @@ pub(crate) async fn read_message<R: AsyncRead + Unpin>(
 }
 
 /// Collects statistics from throughout the application, processes them, and provides them to the frontend
-pub(crate) async fn statistics_collector<C: FrbStatisticsCallback>(
+pub(crate) async fn statistics_collector<C: CoreStatisticsCallback>(
     state: StatisticsCollectorState,
     callback: C,
     cancel: CancellationToken,

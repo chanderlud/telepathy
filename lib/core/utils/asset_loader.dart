@@ -1,5 +1,5 @@
 import 'package:flutter/services.dart';
-import 'package:telepathy/core/rust/internal.dart';
+import 'package:telepathy/core/rust/flutter.dart';
 
 /// Reads the bytes of a sea file from the assets.
 Future<List<int>> readSeaBytes(String assetName) {

@@ -7,7 +7,8 @@ import 'package:telepathy/controllers/index.dart';
 import 'package:telepathy/core/utils/index.dart';
 import 'package:telepathy/models/index.dart';
 import 'package:telepathy/core/rust/error.dart';
-import 'package:telepathy/core/rust/flutter.dart';
+import 'package:telepathy/core/rust/types.dart';
+import 'package:telepathy/core/rust/internal/screenshare.dart';
 import 'package:telepathy/widgets/common/index.dart';
 
 class ScreenshareSettings extends StatefulWidget {

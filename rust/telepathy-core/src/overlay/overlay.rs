@@ -12,9 +12,10 @@ use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32};
 use std::time::Duration;
 
 #[cfg(windows)]
+use crate::internal::runtime::spawn_task;
+#[cfg(windows)]
 use crate::overlay::windows;
 use crate::overlay::{BACKGROUND_COLOR, FONT_COLOR, FONT_HEIGHT};
-use flutter_rust_bridge::frb;
 #[cfg(windows)]
 use kanal::Sender;
 #[cfg(windows)]
@@ -36,7 +37,7 @@ use tokio::time::interval;
 #[cfg(windows)]
 use tracing::error;
 
-#[frb(opaque)]
+#[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(opaque))]
 #[derive(Clone, Default)]
 pub struct Overlay {
     /// the HWND of the overlay window
@@ -120,7 +121,7 @@ impl Overlay {
         };
 
         let other_this = this.clone();
-        flutter_rust_bridge::spawn(async move {
+        spawn_task(async move {
             other_this.controller().await;
         });
 
@@ -224,7 +225,7 @@ impl Overlay {
     }
 
     /// show the overlay on windows
-    #[frb(ignore)]
+    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(ignore))]
     #[cfg(windows)]
     fn _show(&self) {
         let hwnd = HWND(self._window.load(Relaxed) as *mut _);
@@ -235,7 +236,7 @@ impl Overlay {
     }
 
     /// non-windows platforms don't have an overlay
-    #[frb(ignore)]
+    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(ignore))]
     #[cfg(not(windows))]
     fn _show(&self) {}
 
@@ -251,7 +252,7 @@ impl Overlay {
     }
 
     /// hide the overlay on windows
-    #[frb(ignore)]
+    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(ignore))]
     #[cfg(windows)]
     fn _hide(&self) {
         let hwnd = HWND(self._window.load(Relaxed) as *mut _);
@@ -262,7 +263,7 @@ impl Overlay {
     }
 
     /// non-windows platforms don't have an overlay
-    #[frb(ignore)]
+    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(ignore))]
     #[cfg(not(windows))]
     fn _hide(&self) {}
 
@@ -403,7 +404,7 @@ impl Overlay {
 
     /// access the screen resolution for overlay positioning in the front end
     #[cfg(windows)]
-    #[frb(sync)]
+    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
     pub fn screen_resolution(&self) -> (i32, i32) {
         let hwnd = HWND(self._window.load(Relaxed) as *mut _);
 
@@ -424,7 +425,7 @@ impl Overlay {
 
     /// non-windows platforms don't have an overlay
     #[cfg(not(windows))]
-    #[frb(sync)]
+    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
     pub fn screen_resolution(&self) -> (i32, i32) {
         (0, 0)
     }

@@ -2,11 +2,10 @@ use crate::BehaviourEvent;
 #[cfg(target_os = "ios")]
 use crate::audio::ios::{configure_audio_session, deactivate_audio_session};
 use crate::error::ErrorKind;
-use crate::flutter::callbacks::{FrbCallbacks, FrbStatisticsCallback};
-use crate::flutter::{
-    CallState, ChatMessage, CodecConfig, Contact, NetworkConfig, ScreenshareConfig, SessionStatus,
-};
+use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::messages::Message;
+use crate::internal::runtime::JoinHandle;
+use crate::internal::runtime::spawn_task;
 use crate::internal::sockets::{
     ConstSocket, SendingSockets, SharedSockets, Transport, TransportStream, audio_input,
     audio_output,
@@ -23,13 +22,13 @@ use crate::internal::{
 use crate::internal::{ConnectionState, Result};
 use crate::overlay::CONNECTED;
 use crate::overlay::overlay::Overlay;
+use crate::types::{
+    CallState, ChatMessage, CodecConfig, Contact, NetworkConfig, ScreenshareConfig, SessionStatus,
+};
 use atomic_float::AtomicF32;
 use chrono::Local;
-#[cfg(target_family = "wasm")]
-use flutter_rust_bridge::JoinHandle;
-use flutter_rust_bridge::for_generated::futures::StreamExt;
-use flutter_rust_bridge::spawn;
 use libp2p::core::ConnectedPoint;
+use libp2p::futures::StreamExt;
 use libp2p::identity::Keypair;
 use libp2p::multiaddr::Protocol;
 use libp2p::swarm::{ConnectionId, SwarmEvent};
@@ -49,8 +48,6 @@ use tokio::select;
 use tokio::sync::mpsc::{Receiver as MReceiver, Sender as MSender, channel};
 use tokio::sync::{Mutex, Notify, RwLock};
 #[cfg(not(target_family = "wasm"))]
-use tokio::task::JoinHandle;
-#[cfg(not(target_family = "wasm"))]
 use tokio::time::{Instant, Interval, interval, sleep_until, timeout};
 use tokio_util::codec::LengthDelimitedCodec;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
@@ -64,8 +61,8 @@ use wasmtimer::tokio::{Interval, interval, sleep_until, timeout};
 
 pub(crate) struct TelepathyCore<C, S>
 where
-    S: FrbStatisticsCallback + Send + Sync + 'static,
-    C: FrbCallbacks<S> + Send + Sync + 'static,
+    S: CoreStatisticsCallback + Send + Sync + 'static,
+    C: CoreCallbacks<S> + Send + Sync + 'static,
 {
     /// The audio host
     pub(crate) host: AudioHost,
@@ -112,8 +109,8 @@ impl SessionTask {
 
 impl<C, S> TelepathyCore<C, S>
 where
-    S: FrbStatisticsCallback + Send + Sync + 'static,
-    C: FrbCallbacks<S> + Send + Sync + 'static,
+    S: CoreStatisticsCallback + Send + Sync + 'static,
+    C: CoreCallbacks<S> + Send + Sync + 'static,
 {
     pub(crate) fn new(
         host: AudioHost,
@@ -160,7 +157,7 @@ where
 
         // start the session manager
         let manager_clone = self.clone();
-        Some(spawn(
+        Some(spawn_task(
             async move {
                 let mut retries = 0;
                 // break when stop_manager==true
@@ -238,7 +235,7 @@ where
         let stop_handler = Arc::new(Notify::new());
         let stop_handler_clone = stop_handler.clone();
         let self_clone = self.clone();
-        let stream_handler_handle = spawn(
+        let stream_handler_handle = spawn_task(
             async move {
                 self_clone
                     .incoming_stream_handler(control, stop_handler_clone)
@@ -341,7 +338,7 @@ where
                         let control_option = message.header.is_some()
                             .then(|| swarm.behaviour().stream.new_control());
                         let self_clone = self.clone();
-                        spawn(async move {
+                        spawn_task(async move {
                             let result = self_clone.start_screenshare(message, control_option).await;
                             if let Err(error) = result {
                                 error!(event = "screenshare_start_failed", error = ?error);
@@ -858,7 +855,7 @@ where
         };
 
         let self_clone = self.clone();
-        SessionTask(spawn(
+        SessionTask(spawn_task(
             async move {
                 self_clone
                     .session_outer(peer, control, stream, state, contact, message_channel)
@@ -1307,7 +1304,7 @@ where
             )
             .await?;
 
-        let statistics_handle = spawn(statistics_collector(
+        let statistics_handle = spawn_task(statistics_collector(
             statistics_state,
             self.callbacks.statistics_callback(),
             stop_io.clone(),
@@ -1318,14 +1315,14 @@ where
         if let Some(o) = optional {
             let (write, read) = o.audio_transport.split();
 
-            let input_handle = spawn(audio_input(
+            let input_handle = spawn_task(audio_input(
                 input_helper.receiver(),
                 ConstSocket::new(write),
                 stop_io.clone(),
                 upload_bandwidth,
             ));
 
-            let output_handle = spawn(audio_output(
+            let output_handle = spawn_task(audio_output(
                 output_helper.sender(),
                 read,
                 stop_io.clone(),
@@ -1571,14 +1568,14 @@ where
             )
             .await?;
 
-        let input_handle = spawn(audio_input(
+        let input_handle = spawn_task(audio_input(
             input_helper.receiver(),
             SendingSockets::new(new_sockets.clone()),
             stop_io.clone(),
             statistics_state.upload_bandwidth.clone(),
         ));
 
-        let statistics_handle = spawn(statistics_collector(
+        let statistics_handle = spawn_task(statistics_collector(
             statistics_state.clone(),
             self.callbacks.statistics_callback(),
             stop_io.clone(),
@@ -1615,7 +1612,7 @@ where
                                 )
                                 .await?;
                             // begin sending
-                            let handle = spawn(audio_output(
+                            let handle = spawn_task(audio_output(
                                 helper.sender(),
                                 read,
                                 stop_io.clone(),
@@ -1682,8 +1679,8 @@ where
 
 impl<C, S> Clone for TelepathyCore<C, S>
 where
-    S: FrbStatisticsCallback + Send + Sync + 'static,
-    C: FrbCallbacks<S> + Send + Sync + 'static,
+    S: CoreStatisticsCallback + Send + Sync + 'static,
+    C: CoreCallbacks<S> + Send + Sync + 'static,
 {
     fn clone(&self) -> Self {
         Self {

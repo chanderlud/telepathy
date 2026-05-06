@@ -8,7 +8,7 @@ import 'package:telepathy/core/constants/overlay_constants.dart';
 import 'package:telepathy/core/utils/console.dart';
 import 'package:telepathy/models/index.dart';
 import 'package:telepathy/core/rust/error.dart';
-import 'package:telepathy/core/rust/flutter.dart';
+import 'package:telepathy/core/rust/types.dart';
 
 class NetworkSettingsController with ChangeNotifier {
   final SharedPreferencesAsync options;

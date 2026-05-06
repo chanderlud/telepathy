@@ -3,15 +3,17 @@
 
 // ignore_for_file: invalid_use_of_internal_member, unused_import, unnecessary_import
 
+import 'audio/player.dart';
 import 'error.dart';
 import 'frb_generated.dart';
+import 'lib.dart';
+import 'overlay/overlay.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
-import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
-part 'flutter.freezed.dart';
+import 'types.dart';
 
-// These functions are ignored because they are not marked as `pub`: `flush_lines`, `invoke`, `new`, `notify`, `send_line`
-// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `DartLogWrite`, `DartWriter`, `FlutterStatisticsCallback`, `ScreenshareConfigDisk`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `flush`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `make_writer`, `minimum_bytes_needed`, `minimum_bytes_needed`, `read_from`, `read_from`, `speedy_convert_slice_endianness`, `speedy_flip_endianness`, `speedy_is_primitive`, `speedy_is_primitive`, `speedy_slice_as_bytes`, `speedy_slice_from_bytes`, `write_to`, `write_to`, `write`
+// These functions are ignored because they are not marked as `pub`: `flush_lines`, `invoke`, `notify`, `send_line`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `DartLogWrite`, `DartWriter`, `FlutterStatisticsCallback`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `flush`, `make_writer`, `write`
 
 Stream<String> createLogStream() =>
     RustLib.instance.api.crateFlutterCreateLogStream();
@@ -30,91 +32,11 @@ bool validatePeerId({required String peerId}) =>
 Future<bool> screenshareAvailable() =>
     RustLib.instance.api.crateFlutterScreenshareAvailable();
 
-// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Capabilities>>
-abstract class Capabilities implements RustOpaqueInterface {
-  static Future<Capabilities> default_() =>
-      RustLib.instance.api.crateFlutterCapabilitiesDefault();
-
-  List<String> devices();
-
-  List<String> encoders();
-}
-
-// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<ChatMessage>>
-abstract class ChatMessage implements RustOpaqueInterface {
-  List<(String, Uint8List)> attachments();
-
-  String get text;
-
-  set text(String text);
-
-  void clearAttachments();
-
-  bool isSender({required String identity});
-
-  String time();
-}
-
-// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<CodecConfig>>
-abstract class CodecConfig implements RustOpaqueInterface {
-  static Future<CodecConfig> default_() =>
-      RustLib.instance.api.crateFlutterCodecConfigDefault();
-
-  factory CodecConfig(
-          {required bool enabled,
-          required bool vbr,
-          required double residualBits}) =>
-      RustLib.instance.api.crateFlutterCodecConfigNew(
-          enabled: enabled, vbr: vbr, residualBits: residualBits);
-
-  void setEnabled({required bool enabled});
-
-  void setResidualBits({required double residualBits});
-
-  void setVbr({required bool vbr});
-
-  (bool, bool, double) toValues();
-}
-
-// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Contact>>
-abstract class Contact implements RustOpaqueInterface {
-  static Contact fromParts(
-          {required String id,
-          required String nickname,
-          required String peerId}) =>
-      RustLib.instance.api.crateFlutterContactFromParts(
-          id: id, nickname: nickname, peerId: peerId);
-
-  String id();
-
-  bool idEq({required List<int> id});
-
-  factory Contact({required String nickname, required String peerId}) =>
-      RustLib.instance.api
-          .crateFlutterContactNew(nickname: nickname, peerId: peerId);
-
-  String nickname();
-
-  String peerId();
-
-  Contact pubClone();
-
-  void setNickname({required String nickname});
-}
-
-// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<DartNotify>>
-abstract class DartNotify implements RustOpaqueInterface {
-  /// public notified function for dart
-  Future<void> notified();
-
-  /// notifies one waiter
-  void notify();
-}
-
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<FlutterCallbacks>>
 abstract class FlutterCallbacks implements RustOpaqueInterface {
   factory FlutterCallbacks(
-          {required FutureOr<bool> Function((String, Uint8List?, DartNotify))
+          {required FutureOr<bool> Function(
+                  (String, Uint8List?, FrontendNotify))
               acceptCall,
           required FutureOr<Contact?> Function(Uint8List) getContact,
           required FutureOr<void> Function(CallState) callState,
@@ -124,7 +46,7 @@ abstract class FlutterCallbacks implements RustOpaqueInterface {
           required FutureOr<void> Function(Statistics) statistics,
           required FutureOr<void> Function(ChatMessage) messageReceived,
           required FutureOr<void> Function((bool, bool)) managerActive,
-          required FutureOr<void> Function((DartNotify, bool))
+          required FutureOr<void> Function((FrontendNotify, bool))
               screenshareStarted}) =>
       RustLib.instance.api.crateFlutterFlutterCallbacksNew(
           acceptCall: acceptCall,
@@ -138,142 +60,91 @@ abstract class FlutterCallbacks implements RustOpaqueInterface {
           screenshareStarted: screenshareStarted);
 }
 
-// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<NetworkConfig>>
-abstract class NetworkConfig implements RustOpaqueInterface {
-  static Future<NetworkConfig> default_() =>
-      RustLib.instance.api.crateFlutterNetworkConfigDefault();
+// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Telepathy>>
+abstract class Telepathy implements RustOpaqueInterface {
+  /// Blocks while an audio test is running
+  Future<void> audioTest();
 
-  Future<String> getRelayAddress();
+  ChatMessage buildChat(
+      {required Contact contact,
+      required String text,
+      required List<(String, Uint8List)> attachments});
 
-  Future<String> getRelayId();
+  /// Ends the current audio test, room, or call in that order
+  Future<void> endCall();
 
-  factory NetworkConfig(
-          {required String relayAddress, required String relayId}) =>
-      RustLib.instance.api.crateFlutterNetworkConfigNew(
-          relayAddress: relayAddress, relayId: relayId);
+  /// The only entry point into participating in a room
+  Future<void> joinRoom({required List<String> memberStrings});
 
-  Future<void> setRelayAddress({required String relayAddress});
+  /// Lists the input and output devices
+  Future<(List<AudioDevice>, List<AudioDevice>)> listDevices();
 
-  Future<void> setRelayId({required String relayId});
-}
+  factory Telepathy(
+          {required ArcHost host,
+          required NetworkConfig networkConfig,
+          required ScreenshareConfig screenshareConfig,
+          required Overlay overlay,
+          required CodecConfig codecConfig,
+          required FlutterCallbacks callbacks}) =>
+      RustLib.instance.api.crateFlutterTelepathyNew(
+          host: host,
+          networkConfig: networkConfig,
+          screenshareConfig: screenshareConfig,
+          overlay: overlay,
+          codecConfig: codecConfig,
+          callbacks: callbacks);
 
-// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<RecordingConfig>>
-abstract class RecordingConfig implements RustOpaqueInterface {
-  int bitrate();
+  void pauseStatistics();
 
-  String device();
+  /// Restarts the session manager
+  Future<void> restartManager();
 
-  String encoder();
+  void resumeStatistics();
 
-  int framerate();
+  /// Sends a chat message
+  Future<void> sendChat({required ChatMessage message});
 
-  int? height();
-}
+  void setDeafened({required bool deafened});
 
-// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<ScreenshareConfig>>
-abstract class ScreenshareConfig implements RustOpaqueInterface {
-  Future<Capabilities> capabilities();
+  /// Changing the denoise flag will not affect the current call
+  void setDenoise({required bool denoise});
 
-  static Future<ScreenshareConfig> default_() =>
-      RustLib.instance.api.crateFlutterScreenshareConfigDefault();
+  void setEfficiencyMode({required bool enabled});
 
-  // HINT: Make it `#[frb(sync)]` to let it become the default constructor of Dart class.
-  static Future<ScreenshareConfig> newInstance({required List<int> buffer}) =>
-      RustLib.instance.api.crateFlutterScreenshareConfigNew(buffer: buffer);
+  /// Sets the signing key (called when the profile changes)
+  Future<void> setIdentity({required List<int> key});
 
-  Future<RecordingConfig?> recordingConfig();
+  Future<void> setInputDevice({String? deviceId});
 
-  Uint8List toBytes();
+  void setInputVolume({required double decibel});
 
-  Future<void> updateRecordingConfig(
-      {required String encoder,
-      required String device,
-      required int bitrate,
-      required int framerate,
-      int? height});
-}
+  Future<void> setModel({Uint8List? model});
 
-@freezed
-sealed class CallState with _$CallState {
-  const CallState._();
+  void setMuted({required bool muted});
 
-  const factory CallState.connected() = CallState_Connected;
-  const factory CallState.waiting() = CallState_Waiting;
-  const factory CallState.roomJoin(
-    String field0,
-  ) = CallState_RoomJoin;
-  const factory CallState.roomLeave(
-    String field0,
-  ) = CallState_RoomLeave;
-  const factory CallState.callEnded(
-    String field0,
-    bool field1,
-  ) = CallState_CallEnded;
-}
+  Future<void> setOutputDevice({String? deviceId});
 
-@freezed
-sealed class SessionStatus with _$SessionStatus {
-  const SessionStatus._();
+  void setOutputVolume({required double decibel});
 
-  const factory SessionStatus.connecting() = SessionStatus_Connecting;
-  const factory SessionStatus.connected({
-    required bool relayed,
-    required String remoteAddress,
-  }) = SessionStatus_Connected;
-  const factory SessionStatus.inactive() = SessionStatus_Inactive;
-  const factory SessionStatus.unknown() = SessionStatus_Unknown;
-}
+  void setPlayCustomRingtones({required bool play});
 
-/// processed statistics for the frontend
-class Statistics {
-  /// a percentage of the max input volume in the window
-  final double inputLevel;
+  void setRmsThreshold({required double decimal});
 
-  /// a percentage of the max output volume in the window
-  final double outputLevel;
+  void setSendCustomRingtone({required bool send});
 
-  /// the current call latency
-  final BigInt latency;
+  /// shuts down the entire rust backend
+  Future<void> shutdown();
 
-  /// the approximate upload bandwidth used by the current call
-  final BigInt uploadBandwidth;
+  /// Attempts to start a call through an existing session
+  Future<void> startCall({required Contact contact});
 
-  /// the approximate download bandwidth used by the current call
-  final BigInt downloadBandwidth;
+  Future<void> startManager();
 
-  /// the number of output samples that were lost in the interval
-  final BigInt loss;
+  Future<void> startScreenshare({required Contact contact});
 
-  const Statistics({
-    required this.inputLevel,
-    required this.outputLevel,
-    required this.latency,
-    required this.uploadBandwidth,
-    required this.downloadBandwidth,
-    required this.loss,
-  });
+  /// Tries to start a session for a contact
+  Future<void> startSession({required Contact contact});
 
-  static Future<Statistics> default_() =>
-      RustLib.instance.api.crateFlutterStatisticsDefault();
-
-  @override
-  int get hashCode =>
-      inputLevel.hashCode ^
-      outputLevel.hashCode ^
-      latency.hashCode ^
-      uploadBandwidth.hashCode ^
-      downloadBandwidth.hashCode ^
-      loss.hashCode;
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is Statistics &&
-          runtimeType == other.runtimeType &&
-          inputLevel == other.inputLevel &&
-          outputLevel == other.outputLevel &&
-          latency == other.latency &&
-          uploadBandwidth == other.uploadBandwidth &&
-          downloadBandwidth == other.downloadBandwidth &&
-          loss == other.loss;
+  /// Stops a specific session (called when a contact is deleted)
+  Future<void> stopSession({required Contact contact});
 }
