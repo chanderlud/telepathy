@@ -1,4 +1,5 @@
 use crate::BehaviourEvent;
+use crate::internal::Result;
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::error::ErrorKind;
 #[cfg(target_os = "ios")]
@@ -10,43 +11,39 @@ use crate::internal::sockets::{
     ConstSocket, SendingSockets, SharedSockets, Transport, TransportStream, audio_input,
     audio_output,
 };
+use crate::internal::state::{ConnectionState, StatisticsCollectorState};
+use crate::internal::state::{CoreState, PeerState};
 use crate::internal::utils::{
     loopback, read_message, select_best_connection, statistics_collector,
     stream_to_audio_transport, write_message,
 };
 use crate::internal::{
     CHAT_PROTOCOL, DCUTR_TIMEOUT, EarlyCallState, HELLO_TIMEOUT, KEEP_ALIVE, OptionalCallArgs,
-    RoomConnection, RoomMessage, RoomState, SESSION_MAX_FRAME_LENGTH, SessionState, SharedDeviceId,
-    StartScreenshare, StatisticsCollectorState,
+    RoomConnection, RoomMessage, RoomState, SESSION_MAX_FRAME_LENGTH, SessionState,
+    StartScreenshare,
 };
-use crate::internal::{ConnectionState, Result};
 use crate::overlay::CONNECTED;
 use crate::overlay::overlay::Overlay;
 use crate::types::{
     CallState, ChatMessage, CodecConfig, Contact, NetworkConfig, ScreenshareConfig, SessionStatus,
 };
-use atomic_float::AtomicF32;
 use chrono::Local;
-use libp2p::core::ConnectedPoint;
 use libp2p::futures::StreamExt;
-use libp2p::identity::Keypair;
 use libp2p::multiaddr::Protocol;
-use libp2p::swarm::{ConnectionId, SwarmEvent};
+use libp2p::swarm::SwarmEvent;
 use libp2p::{PeerId, Stream, dcutr::Event as DcutrEvent, identify::Event as IdentifyEvent};
 use libp2p_stream::Control;
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::Duration;
-use telepathy_audio::RnnModel;
 #[cfg(target_family = "wasm")]
 use telepathy_audio::WebAudioWrapper;
 use telepathy_audio::devices::AudioHost;
 use tokio::select;
 use tokio::sync::mpsc::{Receiver as MReceiver, Sender as MSender, channel};
-use tokio::sync::{Mutex, Notify, RwLock};
+use tokio::sync::{Notify, RwLock};
 #[cfg(not(target_family = "wasm"))]
 use tokio::time::{Instant, Interval, interval, sleep_until, timeout};
 use tokio_util::codec::LengthDelimitedCodec;
@@ -96,15 +93,6 @@ where
     pub(crate) callbacks: Arc<C>,
 
     phantom: PhantomData<Arc<S>>,
-}
-
-pub(crate) struct SessionTask(JoinHandle<Result<()>>);
-
-impl SessionTask {
-    async fn join(self) -> Result<()> {
-        self.0.await??;
-        Ok(())
-    }
 }
 
 impl<C, S> TelepathyCore<C, S>
@@ -1700,121 +1688,12 @@ where
     }
 }
 
-#[derive(Clone, Default)]
-pub(crate) struct CoreState {
-    /// Controls the threshold for silence detection
-    pub(crate) rms_threshold: Arc<AtomicF32>,
+pub(crate) struct SessionTask(JoinHandle<Result<()>>);
 
-    /// The factor to adjust the input volume by
-    pub(crate) input_volume: Arc<AtomicF32>,
-
-    /// The factor to adjust the output volume by
-    pub(crate) output_volume: Arc<AtomicF32>,
-
-    /// Enables rnnoise denoising
-    pub(crate) denoise: Arc<AtomicBool>,
-
-    /// The rnnoise model
-    pub(crate) denoise_model: Arc<RwLock<RnnModel>>,
-
-    /// Manually set the input device
-    pub(crate) input_device: SharedDeviceId,
-
-    /// Manually set the output device
-    pub(crate) output_device: SharedDeviceId,
-
-    /// The current libp2p private key
-    pub(crate) identity: Arc<RwLock<Option<Keypair>>>,
-
-    /// Keeps track of whether the user is in a call
-    pub(crate) in_call: Arc<AtomicBool>,
-
-    /// used to end an audio test, if there is one
-    pub(crate) end_audio_test: Arc<Mutex<Option<Arc<Notify>>>>,
-
-    /// Disables the output stream
-    pub(crate) deafened: Arc<AtomicBool>,
-
-    /// Disables the input stream
-    pub(crate) muted: Arc<AtomicBool>,
-
-    /// Disables the playback of custom ringtones
-    pub(crate) play_custom_ringtones: Arc<AtomicBool>,
-
-    /// Enables sending your custom ringtone
-    pub(crate) send_custom_ringtone: Arc<AtomicBool>,
-
-    /// Decreases the statistics update rate
-    pub(crate) efficiency_mode: Arc<AtomicBool>,
-
-    /// Pauses statistics callbacks when window is minimized
-    pub(crate) statistics_paused: Arc<AtomicBool>,
-
-    /// set to true at shutdown to break manager loop
-    pub(crate) stop_manager: Arc<AtomicBool>,
-
-    /// notifies when a manager starts
-    pub(crate) manager_active: Arc<Notify>,
-
-    /// Network configuration for p2p connections
-    pub(crate) network_config: NetworkConfig,
-
-    /// Configuration for the screenshare functionality
-    #[allow(dead_code)]
-    pub(crate) screenshare_config: ScreenshareConfig,
-
-    /// configuration for audio codec, or lack thereof
-    pub(crate) codec_config: CodecConfig,
-}
-
-/// a state used for session negotiation
-#[derive(Debug)]
-struct PeerState {
-    /// set to true after dialing peer's identity addresses
-    dialed: bool,
-
-    /// when true the peer is the dialer
-    dialer: bool,
-
-    /// a map of connections and their latencies
-    connections: HashMap<ConnectionId, ConnectionState>,
-
-    /// a single connection has been selected to become a session
-    selected_connection: bool,
-
-    /// the instant the state was created
-    created: Instant,
-}
-
-impl PeerState {
-    fn dialer() -> Self {
-        Self {
-            dialed: false,
-            dialer: true,
-            connections: Default::default(),
-            selected_connection: false,
-            created: Instant::now(),
-        }
-    }
-
-    fn non_dialer(endpoint: ConnectedPoint, connection_id: ConnectionId) -> Self {
-        Self {
-            dialed: false,
-            dialer: false,
-            connections: HashMap::from([(connection_id, endpoint.into())]),
-            selected_connection: false,
-            created: Instant::now(),
-        }
-    }
-
-    fn relayed_only(&self) -> bool {
-        self.connections.iter().all(|(_, state)| state.relayed)
-    }
-
-    fn latencies_missing(&self) -> bool {
-        self.connections
-            .iter()
-            .any(|(_, state)| state.latency.is_none())
+impl SessionTask {
+    async fn join(self) -> Result<()> {
+        self.0.await??;
+        Ok(())
     }
 }
 

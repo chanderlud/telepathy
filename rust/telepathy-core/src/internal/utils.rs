@@ -2,7 +2,7 @@ use crate::internal::callbacks::CoreStatisticsCallback;
 use crate::internal::error::{Error, ErrorKind};
 use crate::internal::messages::Message;
 use crate::internal::sockets::{TIMESTAMP_BUFFER_CAPACITY, Transport, TransportStream};
-use crate::internal::{ConnectionState, StatisticsCollectorState};
+use crate::internal::state::{ConnectionState, StatisticsCollectorState};
 use crate::overlay::{CONNECTED, LATENCY, LOSS};
 use crate::types::Statistics;
 use kanal::AsyncReceiver;

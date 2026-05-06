@@ -12,6 +12,7 @@ pub(crate) mod runtime;
 pub(crate) mod screenshare;
 /// networking code for live audio streams
 mod sockets;
+mod state;
 #[cfg(test)]
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod tests;
@@ -20,43 +21,32 @@ pub(crate) mod utils;
 use crate::AudioDevice;
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::core::TelepathyCore;
-use crate::internal::error::{Error, ErrorKind};
+use crate::internal::error::Error;
 use crate::internal::helpers::OutputHelper;
 use crate::internal::runtime::JoinHandle;
 use crate::internal::runtime::spawn_task;
+use crate::internal::state::{EarlyCallState, RoomState, SessionState};
 use crate::overlay::overlay::Overlay;
 use crate::types::{
     ChatMessage, CodecConfig, Contact, DartError, NetworkConfig, ScreenshareConfig,
 };
-use atomic_float::AtomicF32;
 use chrono::Local;
-use kanal::AsyncReceiver;
-use kanal::{AsyncSender, unbounded_async};
-use libp2p::core::ConnectedPoint;
 use libp2p::identity::Keypair;
-use libp2p::multiaddr::Protocol;
-use libp2p::{PeerId, Stream, StreamProtocol};
-use libp2p_stream::Control;
-use messages::{Attachment, AudioHeader, Message};
+use libp2p::{PeerId, StreamProtocol};
+use messages::{Attachment, Message};
 use sockets::{Transport, TransportStream};
 use std::mem;
-use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
-use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::time::Duration;
 use telepathy_audio::devices::list_all_devices;
 use telepathy_audio::internal::utils::db_to_multiplier;
 use telepathy_audio::{Host, RnnModel};
-use tokio::select;
-use tokio::sync::mpsc::{Receiver as MReceiver, Sender as MSender, channel};
+use tokio::sync::mpsc::{Receiver as MReceiver, channel};
 use tokio::sync::{Mutex, Notify};
-#[cfg(not(target_family = "wasm"))]
-use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 use tracing::{debug, error, info, info_span, warn};
-use uuid::Uuid;
 #[cfg(target_family = "wasm")]
 use wasmtimer::tokio::timeout;
 
@@ -528,149 +518,6 @@ where
     }
 }
 
-/// state used early in the call before it starts
-#[derive(Clone)]
-pub(crate) struct EarlyCallState {
-    peer: PeerId,
-    local_configuration: AudioHeader,
-    remote_configuration: AudioHeader,
-}
-
-impl EarlyCallState {
-    fn codec_config(&self) -> (bool, bool, f32) {
-        let codec_enabled =
-            self.remote_configuration.codec_enabled || self.local_configuration.codec_enabled;
-        let vbr = self.remote_configuration.vbr || self.local_configuration.vbr;
-        let residual_bits = (self.remote_configuration.residual_bits as f32)
-            .min(self.local_configuration.residual_bits as f32);
-        (codec_enabled, vbr, residual_bits)
-    }
-}
-
-/// shared values for a single session
-#[derive(Debug)]
-pub(crate) struct SessionState {
-    /// identifies a unique session state
-    id: Uuid,
-
-    /// signals the session to initiate a call
-    start_call: Notify,
-
-    /// notifies during shutdown & manager restarts
-    stop_session: CancellationToken,
-
-    /// if the session is in a call
-    in_call: AtomicBool,
-
-    /// a reusable sender for messages while a call is active
-    message_sender: MSender<Message>,
-
-    /// forwards sub-streams to the session
-    stream_sender: AsyncSender<Stream>,
-
-    /// receives sub-streams for the session
-    stream_receiver: AsyncReceiver<Stream>,
-
-    /// a shared latency value for the session from libp2p ping
-    latency: Arc<AtomicUsize>,
-
-    /// a shared upload bandwidth value for the session
-    upload_bandwidth: Arc<AtomicUsize>,
-
-    /// a shared download bandwidth value for the session
-    download_bandwidth: Arc<AtomicUsize>,
-
-    /// whether the session wants a sub-stream
-    wants_stream: Arc<AtomicBool>,
-
-    end_call: Arc<Notify>,
-
-    stop_screenshare: Arc<Mutex<Option<Arc<Notify>>>>,
-}
-
-impl SessionState {
-    fn new(message_sender: &MSender<Message>) -> Self {
-        let stream_channel = unbounded_async();
-
-        Self {
-            id: Uuid::new_v4(),
-            start_call: Notify::new(),
-            stop_session: Default::default(),
-            in_call: AtomicBool::new(false),
-            message_sender: message_sender.clone(),
-            stream_sender: stream_channel.0,
-            stream_receiver: stream_channel.1,
-            latency: Default::default(),
-            upload_bandwidth: Default::default(),
-            download_bandwidth: Default::default(),
-            wants_stream: Default::default(),
-            end_call: Default::default(),
-            stop_screenshare: Default::default(),
-        }
-    }
-
-    async fn open_stream(
-        &self,
-        mut control: Option<&mut Control>,
-        call_state: &EarlyCallState,
-    ) -> Result<Stream> {
-        // change the session state to accept incoming audio streams
-        self.wants_stream.store(true, Relaxed);
-
-        let stream_future = async {
-            if let Some(control) = control.as_mut() {
-                // if dialer, open stream
-                control
-                    .open_stream(call_state.peer, CHAT_PROTOCOL)
-                    .await
-                    .map_err(Error::from)
-            } else {
-                // if listener, receive stream
-                self.stream_receiver.recv().await.map_err(Error::from)
-            }
-        };
-
-        let stream_result = select! {
-            _ = self.end_call.notified() => Ok(Err(ErrorKind::NoStream.into())),
-            _ = self.stop_session.cancelled() => Ok(Err(ErrorKind::NoStream.into())),
-            result = timeout(HELLO_TIMEOUT, stream_future) => result,
-        };
-
-        self.wants_stream.store(false, Relaxed);
-        stream_result?
-    }
-
-    async fn receive_stream(&self) -> Result<Stream> {
-        self.wants_stream.store(true, Relaxed);
-        let result = self.stream_receiver.recv().await.map_err(Into::into);
-        self.wants_stream.store(false, Relaxed);
-        result
-    }
-
-    async fn teardown(&self) {
-        // stops any call
-        self.end_call.notify_one();
-        // stops the session loop
-        self.stop_session.cancel();
-        // stops any active screenshare threads
-        if let Some(notify) = self.stop_screenshare.lock().await.take() {
-            notify.notify_waiters();
-        }
-    }
-}
-
-pub(crate) struct RoomState {
-    peers: Vec<PeerId>,
-
-    sender: MSender<RoomMessage>,
-
-    cancel: CancellationToken,
-
-    end_call: Arc<Notify>,
-
-    early_state: EarlyCallState,
-}
-
 pub(crate) enum RoomMessage {
     Join {
         /// established audio transport
@@ -694,74 +541,8 @@ pub(crate) struct OptionalCallArgs<'a> {
     state: &'a Arc<SessionState>,
 }
 
-#[derive(Clone)]
-pub(crate) struct StatisticsCollectorState {
-    input_rms: Arc<AtomicF32>,
-    output_rms: Arc<AtomicF32>,
-    latency: Arc<AtomicUsize>,
-    upload_bandwidth: Arc<AtomicUsize>,
-    download_bandwidth: Arc<AtomicUsize>,
-    loss: Arc<AtomicUsize>,
-}
-
-impl StatisticsCollectorState {
-    fn new(state: Option<&Arc<SessionState>>) -> Self {
-        Self {
-            input_rms: Arc::new(Default::default()),
-            output_rms: Arc::new(Default::default()),
-            latency: state.map(|s| s.latency.clone()).unwrap_or_default(),
-            upload_bandwidth: state
-                .map(|s| s.upload_bandwidth.clone())
-                .unwrap_or_default(),
-            download_bandwidth: state
-                .map(|s| s.download_bandwidth.clone())
-                .unwrap_or_default(),
-            loss: Arc::new(Default::default()),
-        }
-    }
-}
-
 #[derive(Debug)]
 pub(crate) struct StartScreenshare {
     peer: PeerId,
     header: Option<Message>,
-}
-
-/// the state of a single connection during session negotiation
-#[derive(Debug, Clone)]
-pub(crate) struct ConnectionState {
-    /// the latest latency, when available
-    latency: Option<Duration>,
-
-    /// whether the connection is relayed
-    pub(crate) relayed: bool,
-
-    /// an IP address for the underlying connection, if known
-    pub(crate) remote_address: Option<IpAddr>,
-
-    /// tracks failed open stream attempts
-    retries: Arc<AtomicUsize>,
-}
-
-impl From<ConnectedPoint> for ConnectionState {
-    fn from(endpoint: ConnectedPoint) -> Self {
-        Self {
-            latency: None,
-            relayed: endpoint.is_relayed(),
-            remote_address: Self::remote_address(&endpoint),
-            retries: Default::default(),
-        }
-    }
-}
-
-impl ConnectionState {
-    /// extract an IP address from the endpoint if possible
-    pub(crate) fn remote_address(endpoint: &ConnectedPoint) -> Option<IpAddr> {
-        let remote_address = endpoint.get_remote_address();
-        remote_address.iter().find_map(|p| match p {
-            Protocol::Ip4(ip) => Some(IpAddr::V4(ip)),
-            Protocol::Ip6(ip) => Some(IpAddr::V6(ip)),
-            _ => None,
-        })
-    }
 }

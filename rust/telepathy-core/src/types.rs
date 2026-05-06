@@ -1,4 +1,3 @@
-use crate::internal::ConnectionState;
 use crate::internal::error::{Error, ErrorKind};
 use crate::internal::messages::Attachment;
 use crate::internal::runtime::spawn_task;
@@ -105,18 +104,6 @@ pub enum SessionStatus {
     },
     Inactive,
     Unknown,
-}
-
-impl From<ConnectionState> for SessionStatus {
-    fn from(value: ConnectionState) -> Self {
-        Self::Connected {
-            relayed: value.relayed,
-            remote_address: value
-                .remote_address
-                .map(|a| a.to_string())
-                .unwrap_or_else(|| "unknown".to_string()),
-        }
-    }
 }
 
 pub struct ChatMessage {

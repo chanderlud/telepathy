@@ -5,9 +5,8 @@ use crate::internal::error::ErrorKind;
 use crate::internal::messages::{AudioHeader, Message};
 #[cfg(not(target_family = "wasm"))]
 use crate::internal::screenshare;
-use crate::internal::{
-    CHAT_PROTOCOL, EarlyCallState, Result, StartScreenshare, StatisticsCollectorState,
-};
+use crate::internal::state::StatisticsCollectorState;
+use crate::internal::{CHAT_PROTOCOL, EarlyCallState, Result, StartScreenshare};
 use crate::types::FrontendNotify;
 use crate::{Behaviour, BehaviourEvent};
 use bytes::Bytes;
