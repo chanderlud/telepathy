@@ -756,7 +756,7 @@ pub fn rust_set_up() {
 
         let dart_layer = tracing_subscriber::fmt::layer()
             .compact()
-            .set_ansi(false)
+            .with_ansi(false)
             .with_writer(DartWriter);
 
         #[cfg(not(target_family = "wasm"))]
