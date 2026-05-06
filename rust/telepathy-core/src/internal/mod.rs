@@ -36,7 +36,6 @@ use libp2p::identity::Keypair;
 use libp2p::multiaddr::Protocol;
 use libp2p::{PeerId, Stream, StreamProtocol};
 use libp2p_stream::Control;
-use log::{debug, error, info, warn};
 use messages::{Attachment, AudioHeader, Message};
 use sockets::{Transport, TransportStream};
 use std::mem;
@@ -56,6 +55,8 @@ use tokio::task::JoinHandle;
 #[cfg(not(target_family = "wasm"))]
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
+use tracing::{debug, error, info, info_span, warn};
 use uuid::Uuid;
 #[cfg(target_family = "wasm")]
 use wasmtimer::tokio::timeout;
@@ -223,16 +224,19 @@ impl Telepathy {
         }
         // spawn room controller
         let self_clone = self.inner.clone();
-        self.handles.lock().await.push(spawn(async move {
-            let stop_io = Default::default();
-            if let Err(error) = self_clone
-                .room_controller(receiver, cancel, &stop_io, end_call)
-                .await
-            {
-                error!("error in room controller: {:?}", error);
+        self.handles.lock().await.push(spawn(
+            async move {
+                let stop_io = Default::default();
+                if let Err(error) = self_clone
+                    .room_controller(receiver, cancel, &stop_io, end_call)
+                    .await
+                {
+                    error!("error in room controller: {:?}", error);
+                }
+                stop_io.cancel();
             }
-            stop_io.cancel();
-        }));
+            .in_current_span(),
+        ));
 
         Ok(())
     }
@@ -312,9 +316,17 @@ impl Telepathy {
             Ok(mut audio_config) => {
                 audio_config.remote_configuration = audio_config.local_configuration.clone();
                 let stop_io = CancellationToken::new();
+                let call_span = info_span!(
+                    "call.run",
+                    call.kind = "audio_test",
+                    peer.id = %audio_config.peer,
+                    codec.enabled = audio_config.codec_config().0,
+                    sample_rate = audio_config.remote_configuration.sample_rate
+                );
                 let result = self
                     .inner
                     .call(&stop_io, audio_config, &end_call, None)
+                    .instrument(call_span)
                     .await
                     .map_err(Into::into);
                 stop_io.cancel();
@@ -367,8 +379,9 @@ impl Telepathy {
             .cloned()
         else {
             warn!(
-                "send_chat called for peer with no session {}",
-                message.receiver
+                event = "edge_case",
+                case = "send_chat_without_session",
+                peer.id = %message.receiver
             );
             return Ok(());
         };
