@@ -2,8 +2,6 @@ use crate::BehaviourEvent;
 use crate::internal::Result;
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::error::ErrorKind;
-#[cfg(target_os = "ios")]
-use crate::internal::helpers::{configure_audio_session, deactivate_audio_session};
 use crate::internal::messages::Message;
 use crate::internal::runtime::JoinHandle;
 use crate::internal::runtime::spawn_task;
@@ -13,6 +11,8 @@ use crate::internal::sockets::{
 };
 use crate::internal::state::{ConnectionState, StatisticsCollectorState};
 use crate::internal::state::{CoreState, PeerState};
+#[cfg(target_os = "ios")]
+use crate::internal::utils::{configure_audio_session, deactivate_audio_session};
 use crate::internal::utils::{
     loopback, read_message, select_best_connection, statistics_collector,
     stream_to_audio_transport, write_message,
