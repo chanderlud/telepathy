@@ -2,7 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:telepathy/app.dart';
 import 'package:telepathy/core/utils/index.dart';
-import 'package:telepathy/core/rust/audio/player.dart';
+import 'package:telepathy/core/rust/player.dart';
 import 'package:telepathy/core/rust/types.dart';
 
 Future<Uint8List> _readFileBytes(String path) async {

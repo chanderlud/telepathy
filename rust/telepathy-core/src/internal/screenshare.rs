@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
 
-use crate::types::ScreenshareConfig;
+use crate::types::{Capabilities, RecordingConfig, ScreenshareConfig};
 #[cfg(not(target_family = "wasm"))]
 use libp2p::Stream;
 #[cfg(not(target_family = "wasm"))]
@@ -30,7 +30,7 @@ use tokio::sync::Notify;
 use tracing::{error, info, instrument};
 
 #[cfg(not(target_family = "wasm"))]
-use crate::error::{Error, ErrorKind};
+use crate::internal::error::{Error, ErrorKind};
 
 #[cfg(not(target_family = "wasm"))]
 type Result<T> = std::result::Result<T, Error>;
@@ -39,75 +39,6 @@ type Result<T> = std::result::Result<T, Error>;
 const BUFFER_SIZE: usize = 512;
 #[cfg(target_os = "windows")]
 const CREATION_FLAGS: u32 = 0x08000000;
-
-/// capabilities for ffmpeg and ffplay supported by this client
-#[derive(Default, Debug, Clone)]
-#[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(opaque))]
-pub struct Capabilities {
-    pub(crate) _available: bool,
-
-    pub(crate) encoders: Vec<Encoder>,
-
-    pub(crate) _decoders: Vec<Decoder>,
-
-    pub(crate) devices: Vec<Device>,
-}
-
-impl Capabilities {
-    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
-    pub fn encoders(&self) -> Vec<String> {
-        self.encoders.iter().map(|e| e.to_string()).collect()
-    }
-
-    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
-    pub fn devices(&self) -> Vec<String> {
-        self.devices.iter().map(|d| d.to_string()).collect()
-    }
-}
-
-/// recording config for screenshare
-#[derive(Debug, Clone, Readable, Writable)]
-#[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(opaque))]
-pub struct RecordingConfig {
-    pub(crate) encoder: Encoder,
-
-    pub(crate) device: Device,
-
-    pub(crate) bitrate: u32,
-
-    pub(crate) framerate: u32,
-
-    /// the height for the video output
-    pub(crate) height: Option<u32>,
-}
-
-impl RecordingConfig {
-    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
-    pub fn encoder(&self) -> String {
-        let encoder_str: &str = self.encoder.into();
-        encoder_str.to_string()
-    }
-
-    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
-    pub fn device(&self) -> String {
-        self.device.to_string()
-    }
-
-    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
-    pub fn bitrate(&self) -> u32 {
-        self.bitrate
-    }
-
-    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
-    pub fn framerate(&self) -> u32 {
-        self.framerate
-    }
-
-    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
-    pub fn height(&self) -> Option<u32> {
-        self.height
-    }
-}
 
 #[derive(Readable, Writable)]
 pub(crate) struct ScreenshareConfigDisk {

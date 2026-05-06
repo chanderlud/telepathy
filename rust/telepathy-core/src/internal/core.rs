@@ -1,8 +1,8 @@
 use crate::BehaviourEvent;
-#[cfg(target_os = "ios")]
-use crate::audio::ios::{configure_audio_session, deactivate_audio_session};
-use crate::error::ErrorKind;
+use crate::internal::error::ErrorKind;
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
+#[cfg(target_os = "ios")]
+use crate::internal::helpers::{configure_audio_session, deactivate_audio_session};
 use crate::internal::messages::Message;
 use crate::internal::runtime::JoinHandle;
 use crate::internal::runtime::spawn_task;

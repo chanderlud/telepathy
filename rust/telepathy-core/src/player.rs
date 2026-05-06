@@ -4,7 +4,7 @@
 //! wrapping the framework-agnostic `telepathy-audio::AudioPlayer` with
 //! Flutter Rust Bridge attributes for Dart interop.
 
-use crate::error::DartError;
+use crate::types::DartError;
 #[cfg(not(target_family = "wasm"))]
 use std::path::Path;
 use std::sync::Arc;

@@ -3,16 +3,23 @@
 
 // ignore_for_file: invalid_use_of_internal_member, unused_import, unnecessary_import
 
-import 'error.dart';
 import 'frb_generated.dart';
-import 'internal/screenshare.dart';
-import 'lib.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'types.freezed.dart';
 
 // These functions are ignored because they are not marked as `pub`: `new`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `from`, `from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `minimum_bytes_needed`, `read_from`, `write_to`
+
+// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Capabilities>>
+abstract class Capabilities implements RustOpaqueInterface {
+  static Future<Capabilities> default_() =>
+      RustLib.instance.api.crateTypesCapabilitiesDefault();
+
+  List<String> devices();
+
+  List<String> encoders();
+}
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<ChatMessage>>
 abstract class ChatMessage implements RustOpaqueInterface {
@@ -108,6 +115,22 @@ abstract class NetworkConfig implements RustOpaqueInterface {
   Future<void> setRelayId({required String relayId});
 }
 
+// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<PeerId>>
+abstract class PeerId implements RustOpaqueInterface {}
+
+// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<RecordingConfig>>
+abstract class RecordingConfig implements RustOpaqueInterface {
+  int bitrate();
+
+  String device();
+
+  String encoder();
+
+  int framerate();
+
+  int? height();
+}
+
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<ScreenshareConfig>>
 abstract class ScreenshareConfig implements RustOpaqueInterface {
   Future<Capabilities> capabilities();
@@ -147,6 +170,24 @@ sealed class CallState with _$CallState {
     String field0,
     bool field1,
   ) = CallState_CallEnded;
+}
+
+class DartError implements FrbException {
+  final String message;
+
+  const DartError({
+    required this.message,
+  });
+
+  @override
+  int get hashCode => message.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is DartError &&
+          runtimeType == other.runtimeType &&
+          message == other.message;
 }
 
 @freezed

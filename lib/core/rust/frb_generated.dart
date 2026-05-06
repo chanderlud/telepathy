@@ -3,18 +3,18 @@
 
 // ignore_for_file: unused_import, unused_element, unnecessary_import, duplicate_ignore, invalid_use_of_internal_member, annotate_overrides, non_constant_identifier_names, curly_braces_in_flow_control_structures, prefer_const_literals_to_create_immutables, unused_field
 
-import 'audio/player.dart';
 import 'dart:async';
 import 'dart:convert';
-import 'error.dart';
 import 'flutter.dart';
+import 'flutter/logging.dart';
+import 'flutter/utils.dart';
 import 'frb_generated.dart';
 import 'frb_generated.io.dart'
     if (dart.library.js_interop) 'frb_generated.web.dart';
-import 'internal/screenshare.dart';
 import 'lib.dart';
 import 'overlay/overlay.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
+import 'player.dart';
 import 'types.dart';
 
 /// Main entrypoint of the Rust API
@@ -74,7 +74,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => -1796276652;
+  int get rustContentHash => -1128882281;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -86,13 +86,11 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
 }
 
 abstract class RustLibApi extends BaseApi {
-  Future<Capabilities> crateInternalScreenshareCapabilitiesDefault();
+  Future<Capabilities> crateTypesCapabilitiesDefault();
 
-  List<String> crateInternalScreenshareCapabilitiesDevices(
-      {required Capabilities that});
+  List<String> crateTypesCapabilitiesDevices({required Capabilities that});
 
-  List<String> crateInternalScreenshareCapabilitiesEncoders(
-      {required Capabilities that});
+  List<String> crateTypesCapabilitiesEncoders({required Capabilities that});
 
   List<(String, Uint8List)> crateTypesChatMessageAttachments(
       {required ChatMessage that});
@@ -164,8 +162,7 @@ abstract class RustLibApi extends BaseApi {
       required FutureOr<void> Function((FrontendNotify, bool))
           screenshareStarted});
 
-  void crateAudioPlayerFlutterSoundHandleCancel(
-      {required FlutterSoundHandle that});
+  void cratePlayerFlutterSoundHandleCancel({required FlutterSoundHandle that});
 
   Future<void> crateTypesFrontendNotifyNotified({required FrontendNotify that});
 
@@ -227,20 +224,15 @@ abstract class RustLibApi extends BaseApi {
 
   Future<void> crateOverlayOverlayOverlayShow({required Overlay that});
 
-  int crateInternalScreenshareRecordingConfigBitrate(
-      {required RecordingConfig that});
+  int crateTypesRecordingConfigBitrate({required RecordingConfig that});
 
-  String crateInternalScreenshareRecordingConfigDevice(
-      {required RecordingConfig that});
+  String crateTypesRecordingConfigDevice({required RecordingConfig that});
 
-  String crateInternalScreenshareRecordingConfigEncoder(
-      {required RecordingConfig that});
+  String crateTypesRecordingConfigEncoder({required RecordingConfig that});
 
-  int crateInternalScreenshareRecordingConfigFramerate(
-      {required RecordingConfig that});
+  int crateTypesRecordingConfigFramerate({required RecordingConfig that});
 
-  int? crateInternalScreenshareRecordingConfigHeight(
-      {required RecordingConfig that});
+  int? crateTypesRecordingConfigHeight({required RecordingConfig that});
 
   Future<Capabilities> crateTypesScreenshareConfigCapabilities(
       {required ScreenshareConfig that});
@@ -264,17 +256,17 @@ abstract class RustLibApi extends BaseApi {
       required int framerate,
       int? height});
 
-  ArcHost crateAudioPlayerSoundPlayerHost({required SoundPlayer that});
+  ArcHost cratePlayerSoundPlayerHost({required SoundPlayer that});
 
-  SoundPlayer crateAudioPlayerSoundPlayerNew({required double outputVolume});
+  SoundPlayer cratePlayerSoundPlayerNew({required double outputVolume});
 
-  Future<FlutterSoundHandle> crateAudioPlayerSoundPlayerPlay(
+  Future<FlutterSoundHandle> cratePlayerSoundPlayerPlay(
       {required SoundPlayer that, required List<int> bytes});
 
-  Future<void> crateAudioPlayerSoundPlayerUpdateOutputDevice(
+  Future<void> cratePlayerSoundPlayerUpdateOutputDevice(
       {required SoundPlayer that, String? deviceId});
 
-  void crateAudioPlayerSoundPlayerUpdateOutputVolume(
+  void cratePlayerSoundPlayerUpdateOutputVolume(
       {required SoundPlayer that, required double volume});
 
   Future<void> crateFlutterTelepathyAudioTest({required Telepathy that});
@@ -365,21 +357,21 @@ abstract class RustLibApi extends BaseApi {
   Future<void> crateFlutterTelepathyStopSession(
       {required Telepathy that, required Contact contact});
 
-  Stream<String> crateFlutterCreateLogStream();
+  Stream<String> crateFlutterLoggingCreateLogStream();
 
-  (String, Uint8List) crateFlutterGenerateKeys();
+  (String, Uint8List) crateFlutterUtilsGenerateKeys();
 
-  Future<void> crateAudioPlayerLoadRingtone({required String path});
+  Future<void> cratePlayerLoadRingtone({required String path});
 
-  String crateFlutterRoomHash({required List<String> peers});
+  String crateFlutterUtilsRoomHash({required List<String> peers});
 
-  void crateFlutterRustSetUp();
+  void crateFlutterLoggingRustSetUp();
 
-  Future<bool> crateFlutterScreenshareAvailable();
+  Future<bool> crateFlutterUtilsScreenshareAvailable();
 
   Future<Statistics> crateTypesStatisticsDefault();
 
-  bool crateFlutterValidatePeerId({required String peerId});
+  bool crateFlutterUtilsValidatePeerId({required String peerId});
 
   RustArcIncrementStrongCountFnType get rust_arc_increment_strong_count_ArcHost;
 
@@ -509,7 +501,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   });
 
   @override
-  Future<Capabilities> crateInternalScreenshareCapabilitiesDefault() {
+  Future<Capabilities> crateTypesCapabilitiesDefault() {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -521,21 +513,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCapabilities,
         decodeErrorData: null,
       ),
-      constMeta: kCrateInternalScreenshareCapabilitiesDefaultConstMeta,
+      constMeta: kCrateTypesCapabilitiesDefaultConstMeta,
       argValues: [],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalScreenshareCapabilitiesDefaultConstMeta =>
+  TaskConstMeta get kCrateTypesCapabilitiesDefaultConstMeta =>
       const TaskConstMeta(
         debugName: 'Capabilities_default',
         argNames: [],
       );
 
   @override
-  List<String> crateInternalScreenshareCapabilitiesDevices(
-      {required Capabilities that}) {
+  List<String> crateTypesCapabilitiesDevices({required Capabilities that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -547,21 +538,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_list_String,
         decodeErrorData: null,
       ),
-      constMeta: kCrateInternalScreenshareCapabilitiesDevicesConstMeta,
+      constMeta: kCrateTypesCapabilitiesDevicesConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalScreenshareCapabilitiesDevicesConstMeta =>
+  TaskConstMeta get kCrateTypesCapabilitiesDevicesConstMeta =>
       const TaskConstMeta(
         debugName: 'Capabilities_devices',
         argNames: ['that'],
       );
 
   @override
-  List<String> crateInternalScreenshareCapabilitiesEncoders(
-      {required Capabilities that}) {
+  List<String> crateTypesCapabilitiesEncoders({required Capabilities that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -573,13 +563,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_list_String,
         decodeErrorData: null,
       ),
-      constMeta: kCrateInternalScreenshareCapabilitiesEncodersConstMeta,
+      constMeta: kCrateTypesCapabilitiesEncodersConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalScreenshareCapabilitiesEncodersConstMeta =>
+  TaskConstMeta get kCrateTypesCapabilitiesEncodersConstMeta =>
       const TaskConstMeta(
         debugName: 'Capabilities_encoders',
         argNames: ['that'],
@@ -1231,8 +1221,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  void crateAudioPlayerFlutterSoundHandleCancel(
-      {required FlutterSoundHandle that}) {
+  void cratePlayerFlutterSoundHandleCancel({required FlutterSoundHandle that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -1244,13 +1233,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateAudioPlayerFlutterSoundHandleCancelConstMeta,
+      constMeta: kCratePlayerFlutterSoundHandleCancelConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateAudioPlayerFlutterSoundHandleCancelConstMeta =>
+  TaskConstMeta get kCratePlayerFlutterSoundHandleCancelConstMeta =>
       const TaskConstMeta(
         debugName: 'FlutterSoundHandle_cancel',
         argNames: ['that'],
@@ -1803,8 +1792,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  int crateInternalScreenshareRecordingConfigBitrate(
-      {required RecordingConfig that}) {
+  int crateTypesRecordingConfigBitrate({required RecordingConfig that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -1816,21 +1804,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_u_32,
         decodeErrorData: null,
       ),
-      constMeta: kCrateInternalScreenshareRecordingConfigBitrateConstMeta,
+      constMeta: kCrateTypesRecordingConfigBitrateConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalScreenshareRecordingConfigBitrateConstMeta =>
+  TaskConstMeta get kCrateTypesRecordingConfigBitrateConstMeta =>
       const TaskConstMeta(
         debugName: 'RecordingConfig_bitrate',
         argNames: ['that'],
       );
 
   @override
-  String crateInternalScreenshareRecordingConfigDevice(
-      {required RecordingConfig that}) {
+  String crateTypesRecordingConfigDevice({required RecordingConfig that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -1842,21 +1829,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_String,
         decodeErrorData: null,
       ),
-      constMeta: kCrateInternalScreenshareRecordingConfigDeviceConstMeta,
+      constMeta: kCrateTypesRecordingConfigDeviceConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalScreenshareRecordingConfigDeviceConstMeta =>
+  TaskConstMeta get kCrateTypesRecordingConfigDeviceConstMeta =>
       const TaskConstMeta(
         debugName: 'RecordingConfig_device',
         argNames: ['that'],
       );
 
   @override
-  String crateInternalScreenshareRecordingConfigEncoder(
-      {required RecordingConfig that}) {
+  String crateTypesRecordingConfigEncoder({required RecordingConfig that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -1868,21 +1854,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_String,
         decodeErrorData: null,
       ),
-      constMeta: kCrateInternalScreenshareRecordingConfigEncoderConstMeta,
+      constMeta: kCrateTypesRecordingConfigEncoderConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalScreenshareRecordingConfigEncoderConstMeta =>
+  TaskConstMeta get kCrateTypesRecordingConfigEncoderConstMeta =>
       const TaskConstMeta(
         debugName: 'RecordingConfig_encoder',
         argNames: ['that'],
       );
 
   @override
-  int crateInternalScreenshareRecordingConfigFramerate(
-      {required RecordingConfig that}) {
+  int crateTypesRecordingConfigFramerate({required RecordingConfig that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -1894,22 +1879,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_u_32,
         decodeErrorData: null,
       ),
-      constMeta: kCrateInternalScreenshareRecordingConfigFramerateConstMeta,
+      constMeta: kCrateTypesRecordingConfigFramerateConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta
-      get kCrateInternalScreenshareRecordingConfigFramerateConstMeta =>
-          const TaskConstMeta(
-            debugName: 'RecordingConfig_framerate',
-            argNames: ['that'],
-          );
+  TaskConstMeta get kCrateTypesRecordingConfigFramerateConstMeta =>
+      const TaskConstMeta(
+        debugName: 'RecordingConfig_framerate',
+        argNames: ['that'],
+      );
 
   @override
-  int? crateInternalScreenshareRecordingConfigHeight(
-      {required RecordingConfig that}) {
+  int? crateTypesRecordingConfigHeight({required RecordingConfig that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -1921,13 +1904,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_opt_box_autoadd_u_32,
         decodeErrorData: null,
       ),
-      constMeta: kCrateInternalScreenshareRecordingConfigHeightConstMeta,
+      constMeta: kCrateTypesRecordingConfigHeightConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalScreenshareRecordingConfigHeightConstMeta =>
+  TaskConstMeta get kCrateTypesRecordingConfigHeightConstMeta =>
       const TaskConstMeta(
         debugName: 'RecordingConfig_height',
         argNames: ['that'],
@@ -2113,7 +2096,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           );
 
   @override
-  ArcHost crateAudioPlayerSoundPlayerHost({required SoundPlayer that}) {
+  ArcHost cratePlayerSoundPlayerHost({required SoundPlayer that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -2126,20 +2109,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerArcHost,
         decodeErrorData: null,
       ),
-      constMeta: kCrateAudioPlayerSoundPlayerHostConstMeta,
+      constMeta: kCratePlayerSoundPlayerHostConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateAudioPlayerSoundPlayerHostConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCratePlayerSoundPlayerHostConstMeta => const TaskConstMeta(
         debugName: 'SoundPlayer_host',
         argNames: ['that'],
       );
 
   @override
-  SoundPlayer crateAudioPlayerSoundPlayerNew({required double outputVolume}) {
+  SoundPlayer cratePlayerSoundPlayerNew({required double outputVolume}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -2151,20 +2133,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSoundPlayer,
         decodeErrorData: null,
       ),
-      constMeta: kCrateAudioPlayerSoundPlayerNewConstMeta,
+      constMeta: kCratePlayerSoundPlayerNewConstMeta,
       argValues: [outputVolume],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateAudioPlayerSoundPlayerNewConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCratePlayerSoundPlayerNewConstMeta => const TaskConstMeta(
         debugName: 'SoundPlayer_new',
         argNames: ['outputVolume'],
       );
 
   @override
-  Future<FlutterSoundHandle> crateAudioPlayerSoundPlayerPlay(
+  Future<FlutterSoundHandle> cratePlayerSoundPlayerPlay(
       {required SoundPlayer that, required List<int> bytes}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
@@ -2180,20 +2161,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFlutterSoundHandle,
         decodeErrorData: sse_decode_dart_error,
       ),
-      constMeta: kCrateAudioPlayerSoundPlayerPlayConstMeta,
+      constMeta: kCratePlayerSoundPlayerPlayConstMeta,
       argValues: [that, bytes],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateAudioPlayerSoundPlayerPlayConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCratePlayerSoundPlayerPlayConstMeta => const TaskConstMeta(
         debugName: 'SoundPlayer_play',
         argNames: ['that', 'bytes'],
       );
 
   @override
-  Future<void> crateAudioPlayerSoundPlayerUpdateOutputDevice(
+  Future<void> cratePlayerSoundPlayerUpdateOutputDevice(
       {required SoundPlayer that, String? deviceId}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
@@ -2208,20 +2188,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateAudioPlayerSoundPlayerUpdateOutputDeviceConstMeta,
+      constMeta: kCratePlayerSoundPlayerUpdateOutputDeviceConstMeta,
       argValues: [that, deviceId],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateAudioPlayerSoundPlayerUpdateOutputDeviceConstMeta =>
+  TaskConstMeta get kCratePlayerSoundPlayerUpdateOutputDeviceConstMeta =>
       const TaskConstMeta(
         debugName: 'SoundPlayer_update_output_device',
         argNames: ['that', 'deviceId'],
       );
 
   @override
-  void crateAudioPlayerSoundPlayerUpdateOutputVolume(
+  void cratePlayerSoundPlayerUpdateOutputVolume(
       {required SoundPlayer that, required double volume}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
@@ -2235,13 +2215,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateAudioPlayerSoundPlayerUpdateOutputVolumeConstMeta,
+      constMeta: kCratePlayerSoundPlayerUpdateOutputVolumeConstMeta,
       argValues: [that, volume],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateAudioPlayerSoundPlayerUpdateOutputVolumeConstMeta =>
+  TaskConstMeta get kCratePlayerSoundPlayerUpdateOutputVolumeConstMeta =>
       const TaskConstMeta(
         debugName: 'SoundPlayer_update_output_volume',
         argNames: ['that', 'volume'],
@@ -3074,7 +3054,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Stream<String> crateFlutterCreateLogStream() {
+  Stream<String> crateFlutterLoggingCreateLogStream() {
     final s = RustStreamSink<String>();
     handler.executeSync(SyncTask(
       callFfi: () {
@@ -3086,21 +3066,21 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateFlutterCreateLogStreamConstMeta,
+      constMeta: kCrateFlutterLoggingCreateLogStreamConstMeta,
       argValues: [s],
       apiImpl: this,
     ));
     return s.stream;
   }
 
-  TaskConstMeta get kCrateFlutterCreateLogStreamConstMeta =>
+  TaskConstMeta get kCrateFlutterLoggingCreateLogStreamConstMeta =>
       const TaskConstMeta(
         debugName: 'create_log_stream',
         argNames: ['s'],
       );
 
   @override
-  (String, Uint8List) crateFlutterGenerateKeys() {
+  (String, Uint8List) crateFlutterUtilsGenerateKeys() {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -3110,19 +3090,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_record_string_list_prim_u_8_strict,
         decodeErrorData: sse_decode_dart_error,
       ),
-      constMeta: kCrateFlutterGenerateKeysConstMeta,
+      constMeta: kCrateFlutterUtilsGenerateKeysConstMeta,
       argValues: [],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateFlutterGenerateKeysConstMeta => const TaskConstMeta(
+  TaskConstMeta get kCrateFlutterUtilsGenerateKeysConstMeta =>
+      const TaskConstMeta(
         debugName: 'generate_keys',
         argNames: [],
       );
 
   @override
-  Future<void> crateAudioPlayerLoadRingtone({required String path}) {
+  Future<void> cratePlayerLoadRingtone({required String path}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -3134,20 +3115,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: sse_decode_dart_error,
       ),
-      constMeta: kCrateAudioPlayerLoadRingtoneConstMeta,
+      constMeta: kCratePlayerLoadRingtoneConstMeta,
       argValues: [path],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateAudioPlayerLoadRingtoneConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCratePlayerLoadRingtoneConstMeta => const TaskConstMeta(
         debugName: 'load_ringtone',
         argNames: ['path'],
       );
 
   @override
-  String crateFlutterRoomHash({required List<String> peers}) {
+  String crateFlutterUtilsRoomHash({required List<String> peers}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -3158,19 +3138,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_String,
         decodeErrorData: sse_decode_dart_error,
       ),
-      constMeta: kCrateFlutterRoomHashConstMeta,
+      constMeta: kCrateFlutterUtilsRoomHashConstMeta,
       argValues: [peers],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateFlutterRoomHashConstMeta => const TaskConstMeta(
+  TaskConstMeta get kCrateFlutterUtilsRoomHashConstMeta => const TaskConstMeta(
         debugName: 'room_hash',
         argNames: ['peers'],
       );
 
   @override
-  void crateFlutterRustSetUp() {
+  void crateFlutterLoggingRustSetUp() {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -3180,19 +3160,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateFlutterRustSetUpConstMeta,
+      constMeta: kCrateFlutterLoggingRustSetUpConstMeta,
       argValues: [],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateFlutterRustSetUpConstMeta => const TaskConstMeta(
+  TaskConstMeta get kCrateFlutterLoggingRustSetUpConstMeta =>
+      const TaskConstMeta(
         debugName: 'rust_set_up',
         argNames: [],
       );
 
   @override
-  Future<bool> crateFlutterScreenshareAvailable() {
+  Future<bool> crateFlutterUtilsScreenshareAvailable() {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -3203,13 +3184,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_bool,
         decodeErrorData: null,
       ),
-      constMeta: kCrateFlutterScreenshareAvailableConstMeta,
+      constMeta: kCrateFlutterUtilsScreenshareAvailableConstMeta,
       argValues: [],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateFlutterScreenshareAvailableConstMeta =>
+  TaskConstMeta get kCrateFlutterUtilsScreenshareAvailableConstMeta =>
       const TaskConstMeta(
         debugName: 'screenshare_available',
         argNames: [],
@@ -3240,7 +3221,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  bool crateFlutterValidatePeerId({required String peerId}) {
+  bool crateFlutterUtilsValidatePeerId({required String peerId}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -3251,13 +3232,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_bool,
         decodeErrorData: null,
       ),
-      constMeta: kCrateFlutterValidatePeerIdConstMeta,
+      constMeta: kCrateFlutterUtilsValidatePeerIdConstMeta,
       argValues: [peerId],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateFlutterValidatePeerIdConstMeta => const TaskConstMeta(
+  TaskConstMeta get kCrateFlutterUtilsValidatePeerIdConstMeta =>
+      const TaskConstMeta(
         debugName: 'validate_peer_id',
         argNames: ['peerId'],
       );
@@ -6221,13 +6203,12 @@ class CapabilitiesImpl extends RustOpaque implements Capabilities {
         RustLib.instance.api.rust_arc_decrement_strong_count_CapabilitiesPtr,
   );
 
-  List<String> devices() =>
-      RustLib.instance.api.crateInternalScreenshareCapabilitiesDevices(
+  List<String> devices() => RustLib.instance.api.crateTypesCapabilitiesDevices(
         that: this,
       );
 
   List<String> encoders() =>
-      RustLib.instance.api.crateInternalScreenshareCapabilitiesEncoders(
+      RustLib.instance.api.crateTypesCapabilitiesEncoders(
         that: this,
       );
 }
@@ -6407,8 +6388,7 @@ class FlutterSoundHandleImpl extends RustOpaque implements FlutterSoundHandle {
   /// Cancels the sound playback.
   ///
   /// This triggers a graceful fade-out to prevent audio pops/clicks.
-  void cancel() =>
-      RustLib.instance.api.crateAudioPlayerFlutterSoundHandleCancel(
+  void cancel() => RustLib.instance.api.cratePlayerFlutterSoundHandleCancel(
         that: this,
       );
 }
@@ -6590,28 +6570,23 @@ class RecordingConfigImpl extends RustOpaque implements RecordingConfig {
         RustLib.instance.api.rust_arc_decrement_strong_count_RecordingConfigPtr,
   );
 
-  int bitrate() =>
-      RustLib.instance.api.crateInternalScreenshareRecordingConfigBitrate(
+  int bitrate() => RustLib.instance.api.crateTypesRecordingConfigBitrate(
         that: this,
       );
 
-  String device() =>
-      RustLib.instance.api.crateInternalScreenshareRecordingConfigDevice(
+  String device() => RustLib.instance.api.crateTypesRecordingConfigDevice(
         that: this,
       );
 
-  String encoder() =>
-      RustLib.instance.api.crateInternalScreenshareRecordingConfigEncoder(
+  String encoder() => RustLib.instance.api.crateTypesRecordingConfigEncoder(
         that: this,
       );
 
-  int framerate() =>
-      RustLib.instance.api.crateInternalScreenshareRecordingConfigFramerate(
+  int framerate() => RustLib.instance.api.crateTypesRecordingConfigFramerate(
         that: this,
       );
 
-  int? height() =>
-      RustLib.instance.api.crateInternalScreenshareRecordingConfigHeight(
+  int? height() => RustLib.instance.api.crateTypesRecordingConfigHeight(
         that: this,
       );
 }
@@ -6688,7 +6663,7 @@ class SoundPlayerImpl extends RustOpaque implements SoundPlayer {
   /// Returns a reference to the audio host.
   ///
   /// This can be used to enumerate devices or access other host functionality.
-  ArcHost host() => RustLib.instance.api.crateAudioPlayerSoundPlayerHost(
+  ArcHost host() => RustLib.instance.api.cratePlayerSoundPlayerHost(
         that: this,
       );
 
@@ -6713,26 +6688,23 @@ class SoundPlayerImpl extends RustOpaque implements SoundPlayer {
   /// - Stream configuration cannot be obtained
   /// - Stream creation fails
   Future<FlutterSoundHandle> play({required List<int> bytes}) =>
-      RustLib.instance.api
-          .crateAudioPlayerSoundPlayerPlay(that: this, bytes: bytes);
+      RustLib.instance.api.cratePlayerSoundPlayerPlay(that: this, bytes: bytes);
 
   /// Sets the output device.
   ///
   /// # Arguments
   ///
   /// * `device_id` - The device ID string to use, or `None` for the default device.
-  Future<void> updateOutputDevice({String? deviceId}) =>
-      RustLib.instance.api.crateAudioPlayerSoundPlayerUpdateOutputDevice(
-          that: this, deviceId: deviceId);
+  Future<void> updateOutputDevice({String? deviceId}) => RustLib.instance.api
+      .cratePlayerSoundPlayerUpdateOutputDevice(that: this, deviceId: deviceId);
 
   /// Updates the output volume.
   ///
   /// # Arguments
   ///
   /// * `volume` - New volume in decibels.
-  void updateOutputVolume({required double volume}) =>
-      RustLib.instance.api.crateAudioPlayerSoundPlayerUpdateOutputVolume(
-          that: this, volume: volume);
+  void updateOutputVolume({required double volume}) => RustLib.instance.api
+      .cratePlayerSoundPlayerUpdateOutputVolume(that: this, volume: volume);
 }
 
 @sealed

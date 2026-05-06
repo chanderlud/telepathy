@@ -1,4 +1,4 @@
-use crate::error::{Error, ErrorKind};
+use crate::internal::error::{Error, ErrorKind};
 use crate::internal::callbacks::CoreStatisticsCallback;
 use crate::internal::messages::Message;
 use crate::internal::sockets::{TIMESTAMP_BUFFER_CAPACITY, Transport, TransportStream};

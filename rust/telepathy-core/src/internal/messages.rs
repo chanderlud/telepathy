@@ -1,4 +1,4 @@
-use crate::error::Error;
+use crate::internal::error::Error;
 use speedy::{Readable, Writable};
 
 #[derive(Readable, Writable, Debug, Clone)]

@@ -1,22 +1,16 @@
+pub(crate) mod error;
 /// channel adapters for telepathy-audio I/O traits
-/// flutter_rust_bridge:ignore
 mod audio_adapters;
 /// callback traits shared by FRB and native frontends
-/// flutter_rust_bridge:ignore
 pub(crate) mod callbacks;
 /// implementations for core telepathy functionality
-/// flutter_rust_bridge:ignore
-pub mod core;
+pub(crate) mod core;
 /// helper methods used by telepathy core
-/// flutter_rust_bridge:ignore
 mod helpers;
-/// flutter_rust_bridge:ignore
 pub(crate) mod messages;
-/// flutter_rust_bridge:ignore
 pub(crate) mod runtime;
 pub(crate) mod screenshare;
 /// networking code for live audio streams
-/// flutter_rust_bridge:ignore
 mod sockets;
 #[cfg(test)]
 #[cfg(not(target_family = "wasm"))]
@@ -24,14 +18,14 @@ pub(crate) mod tests;
 pub(crate) mod utils;
 
 use crate::AudioDevice;
-use crate::error::{DartError, Error, ErrorKind};
+use crate::internal::error::{Error, ErrorKind};
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::core::TelepathyCore;
 use crate::internal::helpers::OutputHelper;
 use crate::internal::runtime::JoinHandle;
 use crate::internal::runtime::spawn_task;
 use crate::overlay::overlay::Overlay;
-use crate::types::{ChatMessage, CodecConfig, Contact, NetworkConfig, ScreenshareConfig};
+use crate::types::{ChatMessage, CodecConfig, Contact, DartError, NetworkConfig, ScreenshareConfig};
 use atomic_float::AtomicF32;
 use chrono::Local;
 use kanal::AsyncReceiver;
@@ -89,6 +83,7 @@ where
     handles: Arc<Mutex<Vec<JoinHandle<()>>>>,
 }
 
+// TODO refactor all methods returning DartError to return Error
 impl<C, S> TelepathyHandle<C, S>
 where
     C: CoreCallbacks<S> + Send + Sync + 'static,

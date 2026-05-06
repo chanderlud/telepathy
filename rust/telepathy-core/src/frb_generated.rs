@@ -26,14 +26,12 @@
 
 // Section: imports
 
-use crate::audio::player::*;
 use crate::flutter::*;
-use crate::internal::screenshare::*;
 use crate::overlay::overlay::*;
+use crate::player::*;
 use crate::types::*;
-use crate::*;
 use flutter_rust_bridge::for_generated::byteorder::{NativeEndian, ReadBytesExt, WriteBytesExt};
-use flutter_rust_bridge::for_generated::{Lifetimeable, Lockable, transform_result_dco};
+use flutter_rust_bridge::for_generated::{transform_result_dco, Lifetimeable, Lockable};
 use flutter_rust_bridge::{Handler, IntoIntoDart};
 
 // Section: boilerplate
@@ -44,7 +42,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1796276652;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1128882281;
 
 // Section: executor
 
@@ -52,7 +50,7 @@ flutter_rust_bridge::frb_generated_default_handler!();
 
 // Section: wire_funcs
 
-fn wire__crate__internal__screenshare__Capabilities_default_impl(
+fn wire__crate__types__Capabilities_default_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -77,15 +75,14 @@ fn wire__crate__internal__screenshare__Capabilities_default_impl(
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, ()>((move || {
-                    let output_ok =
-                        Result::<_, ()>::Ok(crate::internal::screenshare::Capabilities::default())?;
+                    let output_ok = Result::<_, ()>::Ok(crate::types::Capabilities::default())?;
                     Ok(output_ok)
                 })())
             }
         },
     )
 }
-fn wire__crate__internal__screenshare__Capabilities_devices_impl(
+fn wire__crate__types__Capabilities_devices_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -125,15 +122,14 @@ fn wire__crate__internal__screenshare__Capabilities_devices_impl(
                     }
                 }
                 let api_that_guard = api_that_guard.unwrap();
-                let output_ok = Result::<_, ()>::Ok(
-                    crate::internal::screenshare::Capabilities::devices(&*api_that_guard),
-                )?;
+                let output_ok =
+                    Result::<_, ()>::Ok(crate::types::Capabilities::devices(&*api_that_guard))?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__internal__screenshare__Capabilities_encoders_impl(
+fn wire__crate__types__Capabilities_encoders_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -173,9 +169,8 @@ fn wire__crate__internal__screenshare__Capabilities_encoders_impl(
                     }
                 }
                 let api_that_guard = api_that_guard.unwrap();
-                let output_ok = Result::<_, ()>::Ok(
-                    crate::internal::screenshare::Capabilities::encoders(&*api_that_guard),
-                )?;
+                let output_ok =
+                    Result::<_, ()>::Ok(crate::types::Capabilities::encoders(&*api_that_guard))?;
                 Ok(output_ok)
             })())
         },
@@ -857,7 +852,7 @@ fn wire__crate__types__Contact_from_parts_impl(
             let api_nickname = <String>::sse_decode(&mut deserializer);
             let api_peer_id = <String>::sse_decode(&mut deserializer);
             deserializer.end();
-            transform_result_sse::<_, crate::error::DartError>((move || {
+            transform_result_sse::<_, crate::types::DartError>((move || {
                 let output_ok =
                     crate::types::Contact::from_parts(api_id, api_nickname, api_peer_id)?;
                 Ok(output_ok)
@@ -983,7 +978,7 @@ fn wire__crate__types__Contact_new_impl(
             let api_nickname = <String>::sse_decode(&mut deserializer);
             let api_peer_id = <String>::sse_decode(&mut deserializer);
             deserializer.end();
-            transform_result_sse::<_, crate::error::DartError>((move || {
+            transform_result_sse::<_, crate::types::DartError>((move || {
                 let output_ok = crate::types::Contact::new(api_nickname, api_peer_id)?;
                 Ok(output_ok)
             })())
@@ -1201,7 +1196,7 @@ let api_screenshare_started = decode_DartFn_Inputs_record_auto_owned_rust_opaque
                      let output_ok = Result::<_,()>::Ok(crate::flutter::FlutterCallbacks::new(api_accept_call, api_get_contact, api_call_state, api_session_status, api_get_contacts, api_statistics, api_message_received, api_manager_active, api_screenshare_started))?;   Ok(output_ok)
                 })()) })
 }
-fn wire__crate__audio__player__FlutterSoundHandle_cancel_impl(
+fn wire__crate__player__FlutterSoundHandle_cancel_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -1242,7 +1237,7 @@ fn wire__crate__audio__player__FlutterSoundHandle_cancel_impl(
                 }
                 let api_that_guard = api_that_guard.unwrap();
                 let output_ok = Result::<_, ()>::Ok({
-                    crate::audio::player::FlutterSoundHandle::cancel(&*api_that_guard);
+                    crate::player::FlutterSoundHandle::cancel(&*api_that_guard);
                 })?;
                 Ok(output_ok)
             })())
@@ -1524,7 +1519,7 @@ fn wire__crate__types__NetworkConfig_new_impl(
             let api_relay_address = <String>::sse_decode(&mut deserializer);
             let api_relay_id = <String>::sse_decode(&mut deserializer);
             deserializer.end();
-            transform_result_sse::<_, crate::error::DartError>((move || {
+            transform_result_sse::<_, crate::types::DartError>((move || {
                 let output_ok = crate::types::NetworkConfig::new(api_relay_address, api_relay_id)?;
                 Ok(output_ok)
             })())
@@ -1559,7 +1554,7 @@ fn wire__crate__types__NetworkConfig_set_relay_address_impl(
             let api_relay_address = <String>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
-                transform_result_sse::<_, crate::error::DartError>(
+                transform_result_sse::<_, crate::types::DartError>(
                     (move || async move {
                         let mut api_that_guard = None;
                         let decode_indices_ =
@@ -1619,7 +1614,7 @@ fn wire__crate__types__NetworkConfig_set_relay_id_impl(
             let api_relay_id = <String>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
-                transform_result_sse::<_, crate::error::DartError>(
+                transform_result_sse::<_, crate::types::DartError>(
                     (move || async move {
                         let mut api_that_guard = None;
                         let decode_indices_ =
@@ -2223,7 +2218,7 @@ fn wire__crate__overlay__overlay__Overlay_show_impl(
         },
     )
 }
-fn wire__crate__internal__screenshare__RecordingConfig_bitrate_impl(
+fn wire__crate__types__RecordingConfig_bitrate_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -2263,15 +2258,14 @@ fn wire__crate__internal__screenshare__RecordingConfig_bitrate_impl(
                     }
                 }
                 let api_that_guard = api_that_guard.unwrap();
-                let output_ok = Result::<_, ()>::Ok(
-                    crate::internal::screenshare::RecordingConfig::bitrate(&*api_that_guard),
-                )?;
+                let output_ok =
+                    Result::<_, ()>::Ok(crate::types::RecordingConfig::bitrate(&*api_that_guard))?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__internal__screenshare__RecordingConfig_device_impl(
+fn wire__crate__types__RecordingConfig_device_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -2311,15 +2305,14 @@ fn wire__crate__internal__screenshare__RecordingConfig_device_impl(
                     }
                 }
                 let api_that_guard = api_that_guard.unwrap();
-                let output_ok = Result::<_, ()>::Ok(
-                    crate::internal::screenshare::RecordingConfig::device(&*api_that_guard),
-                )?;
+                let output_ok =
+                    Result::<_, ()>::Ok(crate::types::RecordingConfig::device(&*api_that_guard))?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__internal__screenshare__RecordingConfig_encoder_impl(
+fn wire__crate__types__RecordingConfig_encoder_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -2359,15 +2352,14 @@ fn wire__crate__internal__screenshare__RecordingConfig_encoder_impl(
                     }
                 }
                 let api_that_guard = api_that_guard.unwrap();
-                let output_ok = Result::<_, ()>::Ok(
-                    crate::internal::screenshare::RecordingConfig::encoder(&*api_that_guard),
-                )?;
+                let output_ok =
+                    Result::<_, ()>::Ok(crate::types::RecordingConfig::encoder(&*api_that_guard))?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__internal__screenshare__RecordingConfig_framerate_impl(
+fn wire__crate__types__RecordingConfig_framerate_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -2407,15 +2399,15 @@ fn wire__crate__internal__screenshare__RecordingConfig_framerate_impl(
                     }
                 }
                 let api_that_guard = api_that_guard.unwrap();
-                let output_ok = Result::<_, ()>::Ok(
-                    crate::internal::screenshare::RecordingConfig::framerate(&*api_that_guard),
-                )?;
+                let output_ok = Result::<_, ()>::Ok(crate::types::RecordingConfig::framerate(
+                    &*api_that_guard,
+                ))?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__internal__screenshare__RecordingConfig_height_impl(
+fn wire__crate__types__RecordingConfig_height_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -2455,9 +2447,8 @@ fn wire__crate__internal__screenshare__RecordingConfig_height_impl(
                     }
                 }
                 let api_that_guard = api_that_guard.unwrap();
-                let output_ok = Result::<_, ()>::Ok(
-                    crate::internal::screenshare::RecordingConfig::height(&*api_that_guard),
-                )?;
+                let output_ok =
+                    Result::<_, ()>::Ok(crate::types::RecordingConfig::height(&*api_that_guard))?;
                 Ok(output_ok)
             })())
         },
@@ -2674,7 +2665,7 @@ fn wire__crate__types__ScreenshareConfig_to_bytes_impl(
                 flutter_rust_bridge::for_generated::RustAutoOpaqueInner<ScreenshareConfig>,
             >>::sse_decode(&mut deserializer);
             deserializer.end();
-            transform_result_sse::<_, crate::error::DartError>((move || {
+            transform_result_sse::<_, crate::types::DartError>((move || {
                 let mut api_that_guard = None;
                 let decode_indices_ =
                     flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
@@ -2727,7 +2718,7 @@ fn wire__crate__types__ScreenshareConfig_update_recording_config_impl(
             let api_height = <Option<u32>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
-                transform_result_sse::<_, crate::error::DartError>(
+                transform_result_sse::<_, crate::types::DartError>(
                     (move || async move {
                         let mut api_that_guard = None;
                         let decode_indices_ =
@@ -2763,7 +2754,7 @@ fn wire__crate__types__ScreenshareConfig_update_recording_config_impl(
         },
     )
 }
-fn wire__crate__audio__player__SoundPlayer_host_impl(
+fn wire__crate__player__SoundPlayer_host_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -2804,13 +2795,13 @@ fn wire__crate__audio__player__SoundPlayer_host_impl(
                 }
                 let api_that_guard = api_that_guard.unwrap();
                 let output_ok =
-                    Result::<_, ()>::Ok(crate::audio::player::SoundPlayer::host(&*api_that_guard))?;
+                    Result::<_, ()>::Ok(crate::player::SoundPlayer::host(&*api_that_guard))?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__audio__player__SoundPlayer_new_impl(
+fn wire__crate__player__SoundPlayer_new_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -2835,13 +2826,13 @@ fn wire__crate__audio__player__SoundPlayer_new_impl(
             deserializer.end();
             transform_result_sse::<_, ()>((move || {
                 let output_ok =
-                    Result::<_, ()>::Ok(crate::audio::player::SoundPlayer::new(api_output_volume))?;
+                    Result::<_, ()>::Ok(crate::player::SoundPlayer::new(api_output_volume))?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__audio__player__SoundPlayer_play_impl(
+fn wire__crate__player__SoundPlayer_play_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -2869,7 +2860,7 @@ fn wire__crate__audio__player__SoundPlayer_play_impl(
             let api_bytes = <Vec<u8>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
-                transform_result_sse::<_, crate::error::DartError>(
+                transform_result_sse::<_, crate::types::DartError>(
                     (move || async move {
                         let mut api_that_guard = None;
                         let decode_indices_ =
@@ -2889,8 +2880,7 @@ fn wire__crate__audio__player__SoundPlayer_play_impl(
                         }
                         let api_that_guard = api_that_guard.unwrap();
                         let output_ok =
-                            crate::audio::player::SoundPlayer::play(&*api_that_guard, api_bytes)
-                                .await?;
+                            crate::player::SoundPlayer::play(&*api_that_guard, api_bytes).await?;
                         Ok(output_ok)
                     })()
                     .await,
@@ -2899,7 +2889,7 @@ fn wire__crate__audio__player__SoundPlayer_play_impl(
         },
     )
 }
-fn wire__crate__audio__player__SoundPlayer_update_output_device_impl(
+fn wire__crate__player__SoundPlayer_update_output_device_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -2947,7 +2937,7 @@ fn wire__crate__audio__player__SoundPlayer_update_output_device_impl(
                         }
                         let api_that_guard = api_that_guard.unwrap();
                         let output_ok = Result::<_, ()>::Ok({
-                            crate::audio::player::SoundPlayer::update_output_device(
+                            crate::player::SoundPlayer::update_output_device(
                                 &*api_that_guard,
                                 api_device_id,
                             )
@@ -2961,7 +2951,7 @@ fn wire__crate__audio__player__SoundPlayer_update_output_device_impl(
         },
     )
 }
-fn wire__crate__audio__player__SoundPlayer_update_output_volume_impl(
+fn wire__crate__player__SoundPlayer_update_output_volume_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -3003,10 +2993,7 @@ fn wire__crate__audio__player__SoundPlayer_update_output_volume_impl(
                 }
                 let api_that_guard = api_that_guard.unwrap();
                 let output_ok = Result::<_, ()>::Ok({
-                    crate::audio::player::SoundPlayer::update_output_volume(
-                        &*api_that_guard,
-                        api_volume,
-                    );
+                    crate::player::SoundPlayer::update_output_volume(&*api_that_guard, api_volume);
                 })?;
                 Ok(output_ok)
             })())
@@ -3040,7 +3027,7 @@ fn wire__crate__flutter__Telepathy_audio_test_impl(
             >>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
-                transform_result_sse::<_, crate::error::DartError>(
+                transform_result_sse::<_, crate::types::DartError>(
                     (move || async move {
                         let mut api_that_guard = None;
                         let decode_indices_ =
@@ -3218,7 +3205,7 @@ fn wire__crate__flutter__Telepathy_join_room_impl(
             let api_member_strings = <Vec<String>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
-                transform_result_sse::<_, crate::error::DartError>(
+                transform_result_sse::<_, crate::types::DartError>(
                     (move || async move {
                         let mut api_that_guard = None;
                         let decode_indices_ =
@@ -3277,7 +3264,7 @@ fn wire__crate__flutter__Telepathy_list_devices_impl(
             >>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
-                transform_result_sse::<_, crate::error::DartError>((move || {
+                transform_result_sse::<_, crate::types::DartError>((move || {
                     let mut api_that_guard = None;
                     let decode_indices_ =
                         flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
@@ -3473,7 +3460,7 @@ fn wire__crate__flutter__Telepathy_restart_manager_impl(
             >>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
-                transform_result_sse::<_, crate::error::DartError>(
+                transform_result_sse::<_, crate::types::DartError>(
                     (move || async move {
                         let mut api_that_guard = None;
                         let decode_indices_ =
@@ -3580,7 +3567,7 @@ fn wire__crate__flutter__Telepathy_send_chat_impl(
             >>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
-                transform_result_sse::<_, crate::error::DartError>(
+                transform_result_sse::<_, crate::types::DartError>(
                     (move || async move {
                         let mut api_that_guard = None;
                         let mut api_message_guard = None;
@@ -3800,7 +3787,7 @@ fn wire__crate__flutter__Telepathy_set_identity_impl(
             let api_key = <Vec<u8>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
-                transform_result_sse::<_, crate::error::DartError>(
+                transform_result_sse::<_, crate::types::DartError>(
                     (move || async move {
                         let mut api_that_guard = None;
                         let decode_indices_ =
@@ -3969,7 +3956,7 @@ fn wire__crate__flutter__Telepathy_set_model_impl(
             let api_model = <Option<Vec<u8>>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
-                transform_result_sse::<_, crate::error::DartError>(
+                transform_result_sse::<_, crate::types::DartError>(
                     (move || async move {
                         let mut api_that_guard = None;
                         let decode_indices_ =
@@ -4396,7 +4383,7 @@ fn wire__crate__flutter__Telepathy_start_call_impl(
             >>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
-                transform_result_sse::<_, crate::error::DartError>(
+                transform_result_sse::<_, crate::types::DartError>(
                     (move || async move {
                         let mut api_that_guard = None;
                         let mut api_contact_guard = None;
@@ -4729,7 +4716,7 @@ fn wire__crate__flutter__Telepathy_stop_session_impl(
         },
     )
 }
-fn wire__crate__flutter__create_log_stream_impl(
+fn wire__crate__flutter__logging__create_log_stream_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -4757,14 +4744,14 @@ fn wire__crate__flutter__create_log_stream_impl(
             deserializer.end();
             transform_result_sse::<_, ()>((move || {
                 let output_ok = Result::<_, ()>::Ok({
-                    crate::flutter::create_log_stream(api_s);
+                    crate::flutter::logging::create_log_stream(api_s);
                 })?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__flutter__generate_keys_impl(
+fn wire__crate__flutter__utils__generate_keys_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -4786,14 +4773,14 @@ fn wire__crate__flutter__generate_keys_impl(
             let mut deserializer =
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             deserializer.end();
-            transform_result_sse::<_, crate::error::DartError>((move || {
-                let output_ok = crate::flutter::generate_keys()?;
+            transform_result_sse::<_, crate::types::DartError>((move || {
+                let output_ok = crate::flutter::utils::generate_keys()?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__audio__player__load_ringtone_impl(
+fn wire__crate__player__load_ringtone_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -4818,9 +4805,9 @@ fn wire__crate__audio__player__load_ringtone_impl(
             let api_path = <String>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
-                transform_result_sse::<_, crate::error::DartError>(
+                transform_result_sse::<_, crate::types::DartError>(
                     (move || async move {
-                        let output_ok = crate::audio::player::load_ringtone(api_path).await?;
+                        let output_ok = crate::player::load_ringtone(api_path).await?;
                         Ok(output_ok)
                     })()
                     .await,
@@ -4829,7 +4816,7 @@ fn wire__crate__audio__player__load_ringtone_impl(
         },
     )
 }
-fn wire__crate__flutter__room_hash_impl(
+fn wire__crate__flutter__utils__room_hash_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -4852,14 +4839,14 @@ fn wire__crate__flutter__room_hash_impl(
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_peers = <Vec<String>>::sse_decode(&mut deserializer);
             deserializer.end();
-            transform_result_sse::<_, crate::error::DartError>((move || {
-                let output_ok = crate::flutter::room_hash(api_peers)?;
+            transform_result_sse::<_, crate::types::DartError>((move || {
+                let output_ok = crate::flutter::utils::room_hash(api_peers)?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__flutter__rust_set_up_impl(
+fn wire__crate__flutter__logging__rust_set_up_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -4883,14 +4870,14 @@ fn wire__crate__flutter__rust_set_up_impl(
             deserializer.end();
             transform_result_sse::<_, ()>((move || {
                 let output_ok = Result::<_, ()>::Ok({
-                    crate::flutter::rust_set_up();
+                    crate::flutter::logging::rust_set_up();
                 })?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__flutter__screenshare_available_impl(
+fn wire__crate__flutter__utils__screenshare_available_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -4916,8 +4903,9 @@ fn wire__crate__flutter__screenshare_available_impl(
             move |context| async move {
                 transform_result_sse::<_, ()>(
                     (move || async move {
-                        let output_ok =
-                            Result::<_, ()>::Ok(crate::flutter::screenshare_available().await)?;
+                        let output_ok = Result::<_, ()>::Ok(
+                            crate::flutter::utils::screenshare_available().await,
+                        )?;
                         Ok(output_ok)
                     })()
                     .await,
@@ -4958,7 +4946,7 @@ fn wire__crate__types__statistics_default_impl(
         },
     )
 }
-fn wire__crate__flutter__validate_peer_id_impl(
+fn wire__crate__flutter__utils__validate_peer_id_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -4982,7 +4970,8 @@ fn wire__crate__flutter__validate_peer_id_impl(
             let api_peer_id = <String>::sse_decode(&mut deserializer);
             deserializer.end();
             transform_result_sse::<_, ()>((move || {
-                let output_ok = Result::<_, ()>::Ok(crate::flutter::validate_peer_id(api_peer_id))?;
+                let output_ok =
+                    Result::<_, ()>::Ok(crate::flutter::utils::validate_peer_id(api_peer_id))?;
                 Ok(output_ok)
             })())
         },
@@ -5718,11 +5707,11 @@ impl SseDecode for crate::types::CallState {
     }
 }
 
-impl SseDecode for crate::error::DartError {
+impl SseDecode for crate::types::DartError {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_message = <String>::sse_decode(deserializer);
-        return crate::error::DartError {
+        return crate::types::DartError {
             message: var_message,
         };
     }
@@ -6022,12 +6011,7 @@ fn pde_ffi_dispatcher_primary_impl(
 ) {
     // Codec=Pde (Serialization + dispatch), see doc to use other codecs
     match func_id {
-        1 => wire__crate__internal__screenshare__Capabilities_default_impl(
-            port,
-            ptr,
-            rust_vec_len,
-            data_len,
-        ),
+        1 => wire__crate__types__Capabilities_default_impl(port, ptr, rust_vec_len, data_len),
         12 => wire__crate__types__CodecConfig_default_impl(port, ptr, rust_vec_len, data_len),
         28 => wire__crate__types__FrontendNotify_notified_impl(port, ptr, rust_vec_len, data_len),
         30 => wire__crate__types__NetworkConfig_default_impl(port, ptr, rust_vec_len, data_len),
@@ -6103,8 +6087,8 @@ fn pde_ffi_dispatcher_primary_impl(
             rust_vec_len,
             data_len,
         ),
-        60 => wire__crate__audio__player__SoundPlayer_play_impl(port, ptr, rust_vec_len, data_len),
-        61 => wire__crate__audio__player__SoundPlayer_update_output_device_impl(
+        60 => wire__crate__player__SoundPlayer_play_impl(port, ptr, rust_vec_len, data_len),
+        61 => wire__crate__player__SoundPlayer_update_output_device_impl(
             port,
             ptr,
             rust_vec_len,
@@ -6140,8 +6124,13 @@ fn pde_ffi_dispatcher_primary_impl(
         ),
         90 => wire__crate__flutter__Telepathy_start_session_impl(port, ptr, rust_vec_len, data_len),
         91 => wire__crate__flutter__Telepathy_stop_session_impl(port, ptr, rust_vec_len, data_len),
-        94 => wire__crate__audio__player__load_ringtone_impl(port, ptr, rust_vec_len, data_len),
-        97 => wire__crate__flutter__screenshare_available_impl(port, ptr, rust_vec_len, data_len),
+        94 => wire__crate__player__load_ringtone_impl(port, ptr, rust_vec_len, data_len),
+        97 => wire__crate__flutter__utils__screenshare_available_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
         98 => wire__crate__types__statistics_default_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
@@ -6155,16 +6144,8 @@ fn pde_ffi_dispatcher_sync_impl(
 ) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
     // Codec=Pde (Serialization + dispatch), see doc to use other codecs
     match func_id {
-        2 => wire__crate__internal__screenshare__Capabilities_devices_impl(
-            ptr,
-            rust_vec_len,
-            data_len,
-        ),
-        3 => wire__crate__internal__screenshare__Capabilities_encoders_impl(
-            ptr,
-            rust_vec_len,
-            data_len,
-        ),
+        2 => wire__crate__types__Capabilities_devices_impl(ptr, rust_vec_len, data_len),
+        3 => wire__crate__types__Capabilities_encoders_impl(ptr, rust_vec_len, data_len),
         4 => wire__crate__types__ChatMessage_attachments_impl(ptr, rust_vec_len, data_len),
         5 => wire__crate__types__ChatMessage_auto_accessor_get_receiver_impl(
             ptr,
@@ -6199,9 +6180,7 @@ fn pde_ffi_dispatcher_sync_impl(
         24 => wire__crate__types__Contact_pub_clone_impl(ptr, rust_vec_len, data_len),
         25 => wire__crate__types__Contact_set_nickname_impl(ptr, rust_vec_len, data_len),
         26 => wire__crate__flutter__FlutterCallbacks_new_impl(ptr, rust_vec_len, data_len),
-        27 => {
-            wire__crate__audio__player__FlutterSoundHandle_cancel_impl(ptr, rust_vec_len, data_len)
-        }
+        27 => wire__crate__player__FlutterSoundHandle_cancel_impl(ptr, rust_vec_len, data_len),
         29 => wire__crate__types__FrontendNotify_notify_impl(ptr, rust_vec_len, data_len),
         33 => wire__crate__types__NetworkConfig_new_impl(ptr, rust_vec_len, data_len),
         42 => wire__crate__overlay__overlay__Overlay_screen_resolution_impl(
@@ -6209,39 +6188,17 @@ fn pde_ffi_dispatcher_sync_impl(
             rust_vec_len,
             data_len,
         ),
-        47 => wire__crate__internal__screenshare__RecordingConfig_bitrate_impl(
-            ptr,
-            rust_vec_len,
-            data_len,
-        ),
-        48 => wire__crate__internal__screenshare__RecordingConfig_device_impl(
-            ptr,
-            rust_vec_len,
-            data_len,
-        ),
-        49 => wire__crate__internal__screenshare__RecordingConfig_encoder_impl(
-            ptr,
-            rust_vec_len,
-            data_len,
-        ),
-        50 => wire__crate__internal__screenshare__RecordingConfig_framerate_impl(
-            ptr,
-            rust_vec_len,
-            data_len,
-        ),
-        51 => wire__crate__internal__screenshare__RecordingConfig_height_impl(
-            ptr,
-            rust_vec_len,
-            data_len,
-        ),
+        47 => wire__crate__types__RecordingConfig_bitrate_impl(ptr, rust_vec_len, data_len),
+        48 => wire__crate__types__RecordingConfig_device_impl(ptr, rust_vec_len, data_len),
+        49 => wire__crate__types__RecordingConfig_encoder_impl(ptr, rust_vec_len, data_len),
+        50 => wire__crate__types__RecordingConfig_framerate_impl(ptr, rust_vec_len, data_len),
+        51 => wire__crate__types__RecordingConfig_height_impl(ptr, rust_vec_len, data_len),
         56 => wire__crate__types__ScreenshareConfig_to_bytes_impl(ptr, rust_vec_len, data_len),
-        58 => wire__crate__audio__player__SoundPlayer_host_impl(ptr, rust_vec_len, data_len),
-        59 => wire__crate__audio__player__SoundPlayer_new_impl(ptr, rust_vec_len, data_len),
-        62 => wire__crate__audio__player__SoundPlayer_update_output_volume_impl(
-            ptr,
-            rust_vec_len,
-            data_len,
-        ),
+        58 => wire__crate__player__SoundPlayer_host_impl(ptr, rust_vec_len, data_len),
+        59 => wire__crate__player__SoundPlayer_new_impl(ptr, rust_vec_len, data_len),
+        62 => {
+            wire__crate__player__SoundPlayer_update_output_volume_impl(ptr, rust_vec_len, data_len)
+        }
         64 => wire__crate__flutter__Telepathy_build_chat_impl(ptr, rust_vec_len, data_len),
         68 => wire__crate__flutter__Telepathy_new_impl(ptr, rust_vec_len, data_len),
         69 => wire__crate__flutter__Telepathy_pause_statistics_impl(ptr, rust_vec_len, data_len),
@@ -6263,11 +6220,11 @@ fn pde_ffi_dispatcher_sync_impl(
             rust_vec_len,
             data_len,
         ),
-        92 => wire__crate__flutter__create_log_stream_impl(ptr, rust_vec_len, data_len),
-        93 => wire__crate__flutter__generate_keys_impl(ptr, rust_vec_len, data_len),
-        95 => wire__crate__flutter__room_hash_impl(ptr, rust_vec_len, data_len),
-        96 => wire__crate__flutter__rust_set_up_impl(ptr, rust_vec_len, data_len),
-        99 => wire__crate__flutter__validate_peer_id_impl(ptr, rust_vec_len, data_len),
+        92 => wire__crate__flutter__logging__create_log_stream_impl(ptr, rust_vec_len, data_len),
+        93 => wire__crate__flutter__utils__generate_keys_impl(ptr, rust_vec_len, data_len),
+        95 => wire__crate__flutter__utils__room_hash_impl(ptr, rust_vec_len, data_len),
+        96 => wire__crate__flutter__logging__rust_set_up_impl(ptr, rust_vec_len, data_len),
+        99 => wire__crate__flutter__utils__validate_peer_id_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -6549,14 +6506,14 @@ impl flutter_rust_bridge::IntoIntoDart<crate::types::CallState> for crate::types
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
-impl flutter_rust_bridge::IntoDart for crate::error::DartError {
+impl flutter_rust_bridge::IntoDart for crate::types::DartError {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [self.message.into_into_dart().into_dart()].into_dart()
     }
 }
-impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::error::DartError {}
-impl flutter_rust_bridge::IntoIntoDart<crate::error::DartError> for crate::error::DartError {
-    fn into_into_dart(self) -> crate::error::DartError {
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::types::DartError {}
+impl flutter_rust_bridge::IntoIntoDart<crate::types::DartError> for crate::types::DartError {
+    fn into_into_dart(self) -> crate::types::DartError {
         self
     }
 }
@@ -6948,7 +6905,7 @@ impl SseEncode for crate::types::CallState {
     }
 }
 
-impl SseEncode for crate::error::DartError {
+impl SseEncode for crate::types::DartError {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <String>::sse_encode(self.message, serializer);
@@ -7222,16 +7179,14 @@ mod io {
     // Section: imports
 
     use super::*;
-    use crate::audio::player::*;
     use crate::flutter::*;
-    use crate::internal::screenshare::*;
     use crate::overlay::overlay::*;
+    use crate::player::*;
     use crate::types::*;
-    use crate::*;
     use flutter_rust_bridge::for_generated::byteorder::{
         NativeEndian, ReadBytesExt, WriteBytesExt,
     };
-    use flutter_rust_bridge::for_generated::{Lifetimeable, Lockable, transform_result_dco};
+    use flutter_rust_bridge::for_generated::{transform_result_dco, Lifetimeable, Lockable};
     use flutter_rust_bridge::{Handler, IntoIntoDart};
 
     // Section: boilerplate
@@ -7460,18 +7415,16 @@ mod web {
     // Section: imports
 
     use super::*;
-    use crate::audio::player::*;
     use crate::flutter::*;
-    use crate::internal::screenshare::*;
     use crate::overlay::overlay::*;
+    use crate::player::*;
     use crate::types::*;
-    use crate::*;
     use flutter_rust_bridge::for_generated::byteorder::{
         NativeEndian, ReadBytesExt, WriteBytesExt,
     };
     use flutter_rust_bridge::for_generated::wasm_bindgen;
     use flutter_rust_bridge::for_generated::wasm_bindgen::prelude::*;
-    use flutter_rust_bridge::for_generated::{Lifetimeable, Lockable, transform_result_dco};
+    use flutter_rust_bridge::for_generated::{transform_result_dco, Lifetimeable, Lockable};
     use flutter_rust_bridge::{Handler, IntoIntoDart};
 
     // Section: boilerplate

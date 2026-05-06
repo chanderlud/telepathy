@@ -3,9 +3,9 @@
 
 // ignore_for_file: invalid_use_of_internal_member, unused_import, unnecessary_import
 
-import '../error.dart';
-import '../frb_generated.dart';
+import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
+import 'types.dart';
 
 /// Loads a ringtone from a WAV file and converts it to SEA format.
 ///
@@ -21,7 +21,7 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 /// - **Native**: Performs the file I/O and encoding.
 /// - **WASM**: No-op (returns Ok immediately).
 Future<void> loadRingtone({required String path}) =>
-    RustLib.instance.api.crateAudioPlayerLoadRingtone(path: path);
+    RustLib.instance.api.cratePlayerLoadRingtone(path: path);
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Arc < Host >>>
 abstract class ArcHost implements RustOpaqueInterface {}
@@ -48,7 +48,7 @@ abstract class SoundPlayer implements RustOpaqueInterface {
   /// * `output_volume` - Output volume in decibels. 0 dB is unity gain,
   ///   negative values attenuate, positive values amplify.
   factory SoundPlayer({required double outputVolume}) => RustLib.instance.api
-      .crateAudioPlayerSoundPlayerNew(outputVolume: outputVolume);
+      .cratePlayerSoundPlayerNew(outputVolume: outputVolume);
 
   /// Plays audio from the provided bytes.
   ///

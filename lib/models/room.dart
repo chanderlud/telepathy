@@ -1,4 +1,4 @@
-import 'package:telepathy/core/rust/flutter.dart';
+import 'package:telepathy/core/rust/flutter/utils.dart';
 import 'package:telepathy/core/utils/room_format_utils.dart';
 
 class Room {

@@ -281,30 +281,3 @@ impl Error {
         matches!(self.kind, ErrorKind::DeviceError(_))
     }
 }
-
-#[derive(Debug)]
-pub struct DartError {
-    pub message: String,
-}
-
-impl From<Error> for DartError {
-    fn from(err: Error) -> Self {
-        Self {
-            message: err.to_string(),
-        }
-    }
-}
-
-impl From<ErrorKind> for DartError {
-    fn from(kind: ErrorKind) -> Self {
-        Self {
-            message: Error { kind }.to_string(),
-        }
-    }
-}
-
-impl From<String> for DartError {
-    fn from(message: String) -> Self {
-        Self { message }
-    }
-}

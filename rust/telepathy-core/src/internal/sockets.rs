@@ -1,4 +1,4 @@
-use crate::error::Error;
+use crate::internal::error::Error;
 use crate::internal::KEEP_ALIVE;
 use kanal::{AsyncReceiver, Sender};
 use libp2p::Stream;

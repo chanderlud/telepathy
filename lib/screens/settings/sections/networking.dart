@@ -3,7 +3,7 @@ import 'package:flutter/material.dart' hide Overlay;
 import 'package:provider/provider.dart';
 import 'package:telepathy/controllers/index.dart';
 import 'package:telepathy/core/rust/flutter.dart';
-import 'package:telepathy/core/rust/error.dart';
+import 'package:telepathy/core/rust/types.dart';
 import 'package:telepathy/widgets/common/index.dart';
 
 class NetworkSettings extends StatefulWidget {

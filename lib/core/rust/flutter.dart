@@ -3,34 +3,15 @@
 
 // ignore_for_file: invalid_use_of_internal_member, unused_import, unnecessary_import
 
-import 'audio/player.dart';
-import 'error.dart';
 import 'frb_generated.dart';
 import 'lib.dart';
 import 'overlay/overlay.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
+import 'player.dart';
 import 'types.dart';
 
-// These functions are ignored because they are not marked as `pub`: `flush_lines`, `invoke`, `notify`, `send_line`
-// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `DartLogWrite`, `DartWriter`, `FlutterStatisticsCallback`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `flush`, `make_writer`, `write`
-
-Stream<String> createLogStream() =>
-    RustLib.instance.api.crateFlutterCreateLogStream();
-
-void rustSetUp() => RustLib.instance.api.crateFlutterRustSetUp();
-
-(String, Uint8List) generateKeys() =>
-    RustLib.instance.api.crateFlutterGenerateKeys();
-
-String roomHash({required List<String> peers}) =>
-    RustLib.instance.api.crateFlutterRoomHash(peers: peers);
-
-bool validatePeerId({required String peerId}) =>
-    RustLib.instance.api.crateFlutterValidatePeerId(peerId: peerId);
-
-Future<bool> screenshareAvailable() =>
-    RustLib.instance.api.crateFlutterScreenshareAvailable();
+// These functions are ignored because they are not marked as `pub`: `invoke`, `notify`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `FlutterStatisticsCallback`
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<FlutterCallbacks>>
 abstract class FlutterCallbacks implements RustOpaqueInterface {

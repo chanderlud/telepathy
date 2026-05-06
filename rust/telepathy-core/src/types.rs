@@ -1,9 +1,8 @@
-use crate::error::{DartError, Error, ErrorKind};
+use crate::internal::error::{Error, ErrorKind};
 use crate::internal::ConnectionState;
 use crate::internal::messages::Attachment;
 use crate::internal::runtime::spawn_task;
-pub use crate::internal::screenshare::{Capabilities, RecordingConfig};
-use crate::internal::screenshare::{Device, ScreenshareConfigDisk, encoder_from_str};
+use crate::internal::screenshare::{Device, ScreenshareConfigDisk, encoder_from_str, Encoder, Decoder};
 use atomic_float::AtomicF32;
 use chrono::{DateTime, Local};
 pub use libp2p::PeerId;
@@ -461,5 +460,101 @@ impl CodecConfig {
             self.vbr.load(Relaxed),
             self.residual_bits.load(Relaxed),
         )
+    }
+}
+
+/// capabilities for ffmpeg and ffplay supported by this client
+#[derive(Default, Debug, Clone)]
+#[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(opaque))]
+pub struct Capabilities {
+    pub(crate) _available: bool,
+
+    pub(crate) encoders: Vec<Encoder>,
+
+    pub(crate) _decoders: Vec<Decoder>,
+
+    pub(crate) devices: Vec<Device>,
+}
+
+impl Capabilities {
+    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
+    pub fn encoders(&self) -> Vec<String> {
+        self.encoders.iter().map(|e| e.to_string()).collect()
+    }
+
+    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
+    pub fn devices(&self) -> Vec<String> {
+        self.devices.iter().map(|d| d.to_string()).collect()
+    }
+}
+
+/// recording config for screenshare
+#[derive(Debug, Clone, Readable, Writable)]
+#[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(opaque))]
+pub struct RecordingConfig {
+    pub(crate) encoder: Encoder,
+
+    pub(crate) device: Device,
+
+    pub(crate) bitrate: u32,
+
+    pub(crate) framerate: u32,
+
+    /// the height for the video output
+    pub(crate) height: Option<u32>,
+}
+
+impl RecordingConfig {
+    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
+    pub fn encoder(&self) -> String {
+        let encoder_str: &str = self.encoder.into();
+        encoder_str.to_string()
+    }
+
+    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
+    pub fn device(&self) -> String {
+        self.device.to_string()
+    }
+
+    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
+    pub fn bitrate(&self) -> u32 {
+        self.bitrate
+    }
+
+    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
+    pub fn framerate(&self) -> u32 {
+        self.framerate
+    }
+
+    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
+    pub fn height(&self) -> Option<u32> {
+        self.height
+    }
+}
+
+#[derive(Debug)]
+pub struct DartError {
+    pub message: String,
+}
+
+impl From<Error> for DartError {
+    fn from(err: Error) -> Self {
+        Self {
+            message: err.to_string(),
+        }
+    }
+}
+
+impl From<ErrorKind> for DartError {
+    fn from(kind: ErrorKind) -> Self {
+        Self {
+            message: Error { kind }.to_string(),
+        }
+    }
+}
+
+impl From<String> for DartError {
+    fn from(message: String) -> Self {
+        Self { message }
     }
 }

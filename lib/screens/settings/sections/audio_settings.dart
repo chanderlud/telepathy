@@ -4,8 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:telepathy/controllers/index.dart';
 import 'package:telepathy/core/utils/index.dart';
-import 'package:telepathy/core/rust/audio/player.dart';
-import 'package:telepathy/core/rust/error.dart';
+import 'package:telepathy/core/rust/player.dart';
+import 'package:telepathy/core/rust/types.dart';
 import 'package:telepathy/core/rust/lib.dart';
 import 'package:telepathy/core/rust/flutter.dart';
 import 'package:telepathy/widgets/common/index.dart';
@@ -270,8 +270,7 @@ class _AudioSettingsState extends State<AudioSettings> {
                   final preferencesController =
                       context.read<PreferencesController>();
 
-                  FilePickerResult? result =
-                      await FilePicker.pickFiles(
+                  FilePickerResult? result = await FilePicker.pickFiles(
                     type: FileType.custom,
                     allowedExtensions: ['wav'],
                   );

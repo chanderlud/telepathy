@@ -2,16 +2,16 @@ use libp2p::swarm::NetworkBehaviour;
 use libp2p::{autonat, dcutr, identify, ping, relay};
 use telepathy_audio::devices::AudioDeviceInfo;
 
-pub mod audio;
-pub mod error;
 #[cfg(feature = "flutter")]
 pub mod flutter;
 #[cfg(feature = "flutter")]
 mod frb_generated;
+/// flutter_rust_bridge:ignore
 mod internal;
 #[cfg(feature = "native")]
 pub mod native;
 pub mod overlay;
+pub mod player;
 pub mod types;
 
 pub struct AudioDevice {

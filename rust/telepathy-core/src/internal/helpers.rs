@@ -1,4 +1,4 @@
-use crate::error::ErrorKind;
+use crate::internal::error::ErrorKind;
 use crate::internal::audio_adapters::{KanalSink, KanalSource};
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::core::TelepathyCore;
@@ -549,5 +549,58 @@ impl InputHelper {
 
     pub(crate) fn receiver(&mut self) -> kanal::AsyncReceiver<PooledBuffer> {
         self.receiver.take().expect("receiver already taken")
+    }
+}
+
+#[cfg(target_os = "ios")]
+pub(crate) fn configure_audio_session() {
+    use objc2::runtime::{AnyObject, Bool};
+    use objc2::{class, msg_send};
+    use objc2_foundation::ns_string;
+
+    unsafe {
+        let av_audio_session: *mut AnyObject = msg_send![class!(AVAudioSession), sharedInstance];
+
+        // set category to `AVAudioSessionCategoryPlayAndRecord`
+        let category = ns_string!("AVAudioSessionCategoryPlayAndRecord");
+        let mode = ns_string!("AVAudioSessionModeDefault");
+        let error: *mut AnyObject = std::ptr::null_mut();
+
+        let success: Bool = msg_send![av_audio_session, setCategory: category,
+            mode: mode,
+            options: 0_u64,
+            error: &error];
+
+        if success == Bool::NO {
+            error!("Failed to set AVAudioSession category.");
+        }
+
+        let override_output: *mut AnyObject = msg_send![class!(AVAudioSession), sharedInstance];
+        let _: Bool = msg_send![override_output, overrideOutputAudioPort: 1_u64, error: &error];
+
+        // Activate the audio session
+        let success: Bool = msg_send![av_audio_session, setActive: Bool::YES, error: &error];
+
+        if success == Bool::NO {
+            error!("Failed to activate AVAudioSession.");
+        }
+    }
+}
+
+#[cfg(target_os = "ios")]
+pub(crate) fn deactivate_audio_session() {
+    use objc2::runtime::{AnyObject, Bool};
+    use objc2::{class, msg_send};
+    use objc2_foundation::ns_string;
+
+    unsafe {
+        let av_audio_session: *mut AnyObject = msg_send![class!(AVAudioSession), sharedInstance];
+
+        let error: *mut AnyObject = std::ptr::null_mut();
+        let success: Bool = msg_send![av_audio_session, setActive: Bool::NO, error: &error];
+
+        if success == Bool::NO {
+            error!("Failed to deactivate AVAudioSession.");
+        }
     }
 }
