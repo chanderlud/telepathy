@@ -11,7 +11,6 @@ use chrono::{DateTime, Local};
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 use flutter_rust_bridge::spawn;
 use flutter_rust_bridge::{DartFnFuture, frb};
-use lazy_static::lazy_static;
 use libp2p::PeerId;
 use libp2p::identity::Keypair;
 use speedy::{Readable, Writable};
@@ -39,11 +38,7 @@ use uuid::Uuid;
 static INIT_LOGGER_ONCE: Once = Once::new();
 #[cfg(not(target_family = "wasm"))]
 static TRACING_GUARD: OnceLock<tracing_appender::non_blocking::WorkerGuard> = OnceLock::new();
-
-lazy_static! {
-    static ref SEND_TO_DART_LOGGER_STREAM_SINK: std::sync::RwLock<Option<StreamSink<String>>> =
-        std::sync::RwLock::new(None);
-}
+static SEND_TO_DART_LOG_STREAM: OnceLock<StreamSink<String>> = OnceLock::new();
 
 pub(crate) type DartVoid<A> = Arc<Mutex<dyn Fn(A) -> DartFnFuture<()> + Send>>;
 pub(crate) type DartMethod<A, R> = Arc<Mutex<dyn Fn(A) -> DartFnFuture<R> + Send>>;
@@ -656,29 +651,6 @@ pub struct Statistics {
     pub loss: usize,
 }
 
-// The following is a modified version of the code found at
-// https://github.com/fzyzcjy/flutter_rust_bridge/issues/486
-
-pub struct SendToDartLogger {}
-
-impl SendToDartLogger {
-    pub fn set_stream_sink(stream_sink: StreamSink<String>) {
-        let mut guard = SEND_TO_DART_LOGGER_STREAM_SINK.write().unwrap();
-        let overriding = guard.is_some();
-
-        *guard = Some(stream_sink);
-
-        drop(guard);
-
-        if overriding {
-            warn!(
-                "SendToDartLogger::set_stream_sink but already exist a sink, thus overriding. \
-                (This may or may not be a problem. It will happen normally if hot-reload Flutter app.)"
-            );
-        }
-    }
-}
-
 #[derive(Clone, Copy)]
 struct DartWriter;
 
@@ -705,7 +677,7 @@ impl DartLogWrite {
         if line.is_empty() {
             return;
         }
-        if let Some(stream) = SEND_TO_DART_LOGGER_STREAM_SINK.read().unwrap().as_ref() {
+        if let Some(stream) = SEND_TO_DART_LOG_STREAM.get() {
             _ = stream.add(line.to_string());
         }
     }
@@ -734,7 +706,7 @@ impl Write for DartLogWrite {
 
 #[frb(sync)]
 pub fn create_log_stream(s: StreamSink<String>) {
-    SendToDartLogger::set_stream_sink(s);
+    SEND_TO_DART_LOG_STREAM.get_or_init(|| s);
 }
 
 #[frb(sync)]
@@ -746,50 +718,48 @@ pub fn rust_set_up() {
         } else {
             "telepathy_core=warn,libp2p=warn,telepathy_audio=warn"
         };
-        let env_filter =
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_level));
+        cfg_if::cfg_if! {
+            if #[cfg(target_family = "wasm")] {
+                let env_filter = EnvFilter::new(default_level);
+                let wasm_layer = tracing_wasm::WASMLayer::default();
+                // TODO dart_layer is not working correctly on WASM
+                let subscriber = tracing_subscriber::registry()
+                    .with(env_filter)
+                    .with(wasm_layer);
+                if let Err(error) = tracing::subscriber::set_global_default(subscriber) {
+                    warn!(
+                        "tracing subscriber already set, keeping existing subscriber (expected in hot reload / integration tests): {}",
+                        error
+                    );
+                }
+            } else {
+                let dart_layer = tracing_subscriber::fmt::layer()
+                    .compact()
+                    .with_ansi(false)
+                    .with_writer(DartWriter);
 
-        let dart_layer = tracing_subscriber::fmt::layer()
-            .compact()
-            .with_ansi(false)
-            .with_writer(DartWriter);
-
-        #[cfg(not(target_family = "wasm"))]
-        {
-            let rolling = tracing_appender::rolling::daily(".", "telepathy-trace.log");
-            let (non_blocking_writer, guard) = tracing_appender::non_blocking(rolling);
-            let _ = TRACING_GUARD.set(guard);
-            let json_layer = tracing_subscriber::fmt::layer()
-                .json()
-                .flatten_event(true)
-                .with_current_span(true)
-                .with_span_list(true)
-                .with_writer(non_blocking_writer);
-            let subscriber = tracing_subscriber::registry()
-                .with(env_filter)
-                .with(dart_layer)
-                .with(json_layer);
-            if let Err(error) = tracing::subscriber::set_global_default(subscriber) {
-                warn!(
-                    "tracing subscriber already set, keeping existing subscriber (expected in hot reload / integration tests): {}",
-                    error
-                );
-            }
-            std::panic::set_hook(Box::new(tracing_panic::panic_hook));
-        }
-
-        #[cfg(target_family = "wasm")]
-        {
-            let wasm_layer = tracing_wasm::WASMLayer::default();
-            let subscriber = tracing_subscriber::registry()
-                .with(env_filter)
-                .with(dart_layer)
-                .with(wasm_layer);
-            if let Err(error) = tracing::subscriber::set_global_default(subscriber) {
-                warn!(
-                    "tracing subscriber already set, keeping existing subscriber (expected in hot reload / integration tests): {}",
-                    error
-                );
+                let env_filter =
+                    EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_level));
+                let rolling = tracing_appender::rolling::daily(".", "telepathy-trace.log");
+                let (non_blocking_writer, guard) = tracing_appender::non_blocking(rolling);
+                let _ = TRACING_GUARD.set(guard);
+                let json_layer = tracing_subscriber::fmt::layer()
+                    .json()
+                    .flatten_event(true)
+                    .with_current_span(true)
+                    .with_span_list(true)
+                    .with_writer(non_blocking_writer);
+                let subscriber = tracing_subscriber::registry()
+                    .with(env_filter)
+                    .with(dart_layer)
+                    .with(json_layer);
+                if let Err(error) = tracing::subscriber::set_global_default(subscriber) {
+                    warn!(
+                        "tracing subscriber already set, keeping existing subscriber (expected in hot reload / integration tests): {}",
+                        error
+                    );
+                }
+                std::panic::set_hook(Box::new(tracing_panic::panic_hook));
             }
         }
 
