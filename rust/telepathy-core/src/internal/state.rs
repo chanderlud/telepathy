@@ -1,7 +1,7 @@
 use crate::flutter::{CodecConfig, NetworkConfig, PeerId, ScreenshareConfig, SessionStatus};
 use crate::internal::error::{Error, ErrorKind};
-use crate::internal::messages::{AudioHeader, Message};
-use crate::internal::{CHAT_PROTOCOL, HELLO_TIMEOUT, RoomMessage, SharedDeviceId};
+use crate::internal::messages::{AudioHeader, ProtocolMessage, RoomMessage};
+use crate::internal::{CHAT_PROTOCOL, HELLO_TIMEOUT, SharedDeviceId};
 use atomic_float::AtomicF32;
 use kanal::{AsyncReceiver, AsyncSender, unbounded_async};
 use libp2p::Stream;
@@ -267,7 +267,7 @@ pub(crate) struct SessionState {
     pub(crate) in_call: AtomicBool,
 
     /// a reusable sender for messages while a call is active
-    pub(crate) message_sender: Sender<Message>,
+    pub(crate) message_sender: Sender<ProtocolMessage>,
 
     /// forwards sub-streams to the session
     pub(crate) stream_sender: AsyncSender<Stream>,
@@ -293,7 +293,7 @@ pub(crate) struct SessionState {
 }
 
 impl SessionState {
-    pub(crate) fn new(message_sender: &Sender<Message>) -> Self {
+    pub(crate) fn new(message_sender: &Sender<ProtocolMessage>) -> Self {
         let stream_channel = unbounded_async();
 
         Self {

@@ -1,4 +1,4 @@
-use crate::internal::runtime::JoinHandle;
+use crate::internal::utils::JoinHandle;
 use crate::types::{CallState, ChatMessage, Contact, FrontendNotify, SessionStatus, Statistics};
 #[cfg(test)]
 use async_trait::async_trait;

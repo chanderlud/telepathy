@@ -3,8 +3,7 @@ use crate::flutter::{
     SessionStatus, Statistics, invoke, notify,
 };
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
-use crate::internal::runtime::JoinHandle;
-use crate::internal::runtime::spawn_task;
+use crate::internal::{JoinHandle, spawn_task};
 use libp2p::PeerId;
 use std::sync::Arc;
 use tokio::sync::Notify;

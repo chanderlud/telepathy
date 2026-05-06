@@ -2,11 +2,11 @@ use crate::internal::audio_adapters::{KanalSink, KanalSource};
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::core::TelepathyCore;
 use crate::internal::error::ErrorKind;
-use crate::internal::messages::{AudioHeader, Message};
+use crate::internal::messages::{AudioHeader, ProtocolMessage, StartScreenshare};
 #[cfg(not(target_family = "wasm"))]
 use crate::internal::screenshare;
-use crate::internal::state::StatisticsCollectorState;
-use crate::internal::{CHAT_PROTOCOL, EarlyCallState, Result, StartScreenshare};
+use crate::internal::state::{EarlyCallState, StatisticsCollectorState};
+use crate::internal::{CHAT_PROTOCOL, Result};
 use crate::types::FrontendNotify;
 use crate::{Behaviour, BehaviourEvent};
 use bytes::Bytes;
@@ -234,7 +234,7 @@ where
             inner: stop.clone(),
         };
 
-        if let Some(Message::ScreenshareHeader { encoder_name }) = message.header
+        if let Some(ProtocolMessage::ScreenshareHeader { encoder_name }) = message.header
             && let Some(mut control) = control_option
         {
             // the other peer is waiting for a stream
@@ -271,7 +271,7 @@ where
             // the peer will open a stream after receiving it
             let result = state
                 .message_sender
-                .send(Message::ScreenshareHeader {
+                .send(ProtocolMessage::ScreenshareHeader {
                     encoder_name: config.encoder.to_string(),
                 })
                 .await;
@@ -479,7 +479,11 @@ where
             || self.core_state.end_audio_test.lock().await.is_some()
     }
 
-    pub(crate) async fn send_start_screenshare(&self, peer: PeerId, header: Option<Message>) {
+    pub(crate) async fn send_start_screenshare(
+        &self,
+        peer: PeerId,
+        header: Option<ProtocolMessage>,
+    ) {
         if let Some(ref sender) = self.start_screenshare {
             _ = sender.send(StartScreenshare { peer, header }).await;
         }

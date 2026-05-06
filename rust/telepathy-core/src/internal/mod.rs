@@ -3,29 +3,27 @@ mod audio_adapters;
 /// callback traits shared by FRB and native frontends
 pub(crate) mod callbacks;
 /// implementations for core telepathy functionality
-pub(crate) mod core;
+mod core;
 pub(crate) mod error;
 /// helper methods used by telepathy core
 mod helpers;
 pub(crate) mod messages;
-pub(crate) mod runtime;
 pub(crate) mod screenshare;
 /// networking code for live audio streams
 mod sockets;
 mod state;
 #[cfg(test)]
 #[cfg(not(target_family = "wasm"))]
-pub(crate) mod tests;
-pub(crate) mod utils;
+mod tests;
+mod utils;
 
 use crate::AudioDevice;
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::core::TelepathyCore;
 use crate::internal::error::Error;
-use crate::internal::helpers::OutputHelper;
-use crate::internal::runtime::JoinHandle;
-use crate::internal::runtime::spawn_task;
+use crate::internal::messages::{Attachment, ProtocolMessage};
 use crate::internal::state::{EarlyCallState, RoomState, SessionState};
+pub(crate) use crate::internal::utils::{JoinHandle, spawn_task};
 use crate::overlay::overlay::Overlay;
 use crate::types::{
     ChatMessage, CodecConfig, Contact, DartError, NetworkConfig, ScreenshareConfig,
@@ -33,8 +31,6 @@ use crate::types::{
 use chrono::Local;
 use libp2p::identity::Keypair;
 use libp2p::{PeerId, StreamProtocol};
-use messages::{Attachment, Message};
-use sockets::{Transport, TransportStream};
 use std::mem;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
@@ -42,7 +38,7 @@ use std::time::Duration;
 use telepathy_audio::devices::list_all_devices;
 use telepathy_audio::internal::utils::db_to_multiplier;
 use telepathy_audio::{Host, RnnModel};
-use tokio::sync::mpsc::{Receiver as MReceiver, channel};
+use tokio::sync::mpsc::channel;
 use tokio::sync::{Mutex, Notify};
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
@@ -391,7 +387,7 @@ where
             })
             .collect();
 
-        let message = Message::Chat {
+        let message = ProtocolMessage::Chat {
             text: message.text.clone(),
             attachments,
         };
@@ -516,33 +512,4 @@ where
         *self.inner.core_state.denoise_model.write().await = model;
         Ok(())
     }
-}
-
-pub(crate) enum RoomMessage {
-    Join {
-        /// established audio transport
-        audio_transport: Box<Transport<TransportStream>>,
-
-        /// established early call state
-        state: EarlyCallState,
-    },
-    Leave(PeerId),
-}
-
-struct RoomConnection {
-    _output: OutputHelper,
-    handle: JoinHandle<Result<()>>,
-}
-
-pub(crate) struct OptionalCallArgs<'a> {
-    audio_transport: Transport<TransportStream>,
-    control_transport: &'a mut Transport<TransportStream>,
-    message_receiver: &'a mut MReceiver<Message>,
-    state: &'a Arc<SessionState>,
-}
-
-#[derive(Debug)]
-pub(crate) struct StartScreenshare {
-    peer: PeerId,
-    header: Option<Message>,
 }

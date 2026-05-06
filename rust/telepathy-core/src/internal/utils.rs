@@ -1,16 +1,19 @@
 use crate::internal::callbacks::CoreStatisticsCallback;
 use crate::internal::error::{Error, ErrorKind};
-use crate::internal::messages::Message;
+use crate::internal::messages::ProtocolMessage;
 use crate::internal::sockets::{TIMESTAMP_BUFFER_CAPACITY, Transport, TransportStream};
 use crate::internal::state::{ConnectionState, StatisticsCollectorState};
 use crate::overlay::{CONNECTED, LATENCY, LOSS};
 use crate::types::Statistics;
+#[cfg(feature = "flutter")]
+pub use flutter_rust_bridge::JoinHandle;
 use kanal::AsyncReceiver;
 use libp2p::bytes::Bytes;
 use libp2p::futures::{Sink, SinkExt, StreamExt};
 use libp2p::swarm::ConnectionId;
 use speedy::{Readable, Writable};
 use std::collections::HashMap;
+use std::future::Future;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
@@ -19,12 +22,14 @@ use telepathy_audio::internal::buffer_pool::PooledBuffer;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::select;
 use tokio::sync::Notify;
+#[cfg(all(feature = "native", not(feature = "flutter")))]
+pub use tokio::task::JoinHandle;
 #[cfg(not(target_family = "wasm"))]
 use tokio::time::interval;
 use tokio_util::codec::LengthDelimitedCodec;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error};
+use tracing::debug;
 #[cfg(target_family = "wasm")]
 use wasmtimer::tokio::interval;
 
@@ -50,7 +55,10 @@ pub(crate) fn level_from_window(local_max: f32, max: &mut f32) -> f32 {
 }
 
 /// Writes a message to the stream
-pub(crate) async fn write_message<W>(transport: &mut Transport<W>, message: &Message) -> Result<()>
+pub(crate) async fn write_message<W>(
+    transport: &mut Transport<W>,
+    message: &ProtocolMessage,
+) -> Result<()>
 where
     W: AsyncWrite + Unpin,
     Transport<W>: Sink<Bytes> + Unpin,
@@ -65,9 +73,9 @@ where
 /// Reads a message from the stream
 pub(crate) async fn read_message<R: AsyncRead + Unpin>(
     transport: &mut Transport<R>,
-) -> Result<Message> {
+) -> Result<ProtocolMessage> {
     if let Some(Ok(buffer)) = transport.next().await {
-        let message = Message::read_from_buffer(&buffer[..])?;
+        let message = ProtocolMessage::read_from_buffer(&buffer[..])?;
         Ok(message)
     } else {
         Err(ErrorKind::TransportRecv.into())
@@ -218,6 +226,22 @@ pub(crate) fn select_best_connection(
             )
         })
         .map(|(id, s)| (*id, s))
+}
+
+pub(crate) fn spawn_task<F, T>(future: F) -> JoinHandle<T>
+where
+    F: Future<Output = T> + Send + 'static,
+    T: Send + 'static,
+{
+    #[cfg(feature = "flutter")]
+    {
+        flutter_rust_bridge::spawn(future)
+    }
+
+    #[cfg(all(feature = "native", not(feature = "flutter")))]
+    {
+        tokio::spawn(future)
+    }
 }
 
 #[cfg(target_os = "ios")]

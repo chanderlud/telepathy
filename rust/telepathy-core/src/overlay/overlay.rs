@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32};
 use std::time::Duration;
 
 #[cfg(windows)]
-use crate::internal::runtime::spawn_task;
+use crate::internal::spawn_task;
 #[cfg(windows)]
 use crate::overlay::windows;
 use crate::overlay::{BACKGROUND_COLOR, FONT_COLOR, FONT_HEIGHT};
