@@ -243,7 +243,7 @@ class _CallControlsState extends State<CallControls> {
                                                       BoxConstraints
                                                           constraints) {
                                             return Title(
-                                              title: 'Telepathy | Settings',
+                                              title: 'Telepathy - Settings',
                                               color: const Color(0xFF000000),
                                               child: SettingsPage(
                                                 constraints: constraints,

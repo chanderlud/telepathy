@@ -2,16 +2,18 @@ use super::*;
 use crate::flutter::callbacks::{
     FrbStatisticsCallback, MockFrbCallbacks, MockFrbStatisticsCallback,
 };
-use fast_log::Config;
-use log::{LevelFilter, info};
 use relay_server::{RelayInfo, spawn_relay};
 use std::net::{IpAddr, Ipv4Addr};
 use std::process::Command;
+use std::sync::Once;
 use telepathy_audio::AudioHost;
 use tokio::sync::OnceCell;
 use tokio::time::interval;
+use tracing::info;
+use tracing_subscriber::EnvFilter;
 
 static RELAY: OnceCell<RelayInfo> = OnceCell::const_new();
+static TEST_TRACING_INIT: Once = Once::new();
 static PROFILES: &[NetProfile] = &[
     NetProfile {
         name: "clean",
@@ -162,12 +164,15 @@ async fn mock_callbacks() {
 }
 
 async fn run_test() {
-    fast_log::init(
-        Config::new()
-            .file("mock_callbacks.log")
-            .level(LevelFilter::Debug),
-    )
-    .unwrap();
+    TEST_TRACING_INIT.call_once(|| {
+        let _ = tracing_subscriber::fmt()
+            .with_test_writer()
+            .with_env_filter(
+                EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| EnvFilter::new("telepathy_core=debug,libp2p=warn")),
+            )
+            .try_init();
+    });
 
     // get local relay
     let relay: &RelayInfo = relay().await;

@@ -18,7 +18,6 @@ use libp2p::swarm::SwarmEvent;
 use libp2p::tcp;
 use libp2p::{Multiaddr, PeerId, Swarm, autonat, dcutr, identify, noise, ping, yamux};
 use libp2p_stream::Control;
-use log::{error, info, warn};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -36,6 +35,7 @@ use tokio::fs::File;
 #[cfg(not(target_family = "wasm"))]
 use tokio::io::AsyncReadExt;
 use tokio::sync::Notify;
+use tracing::{error, info, instrument, warn};
 
 impl<C, S> TelepathyCore<C, S>
 where
@@ -43,6 +43,7 @@ where
     C: FrbCallbacks<S> + Send + Sync + 'static,
 {
     /// builds a p2p swarm & connects to the relay server
+    #[instrument(name = "manager.swarm_setup", skip_all)]
     pub(crate) async fn setup_swarm(&self) -> Result<(Swarm<Behaviour>, Multiaddr)> {
         let identity = if let Some(keypair) = self.core_state.identity.read().await.as_ref() {
             keypair.clone()
@@ -205,6 +206,14 @@ where
     }
 
     #[cfg(not(target_family = "wasm"))]
+    #[instrument(
+        name = "screenshare",
+        skip_all,
+        fields(
+            peer.id = %message.peer,
+            role = if message.header.is_some() { "receiver" } else { "sender" }
+        )
+    )]
     pub(crate) async fn start_screenshare(
         &self,
         message: StartScreenshare,
@@ -455,19 +464,14 @@ where
             .unwrap_or(false)
     }
 
-    pub(crate) async fn room_hash(&self) -> Option<Vec<u8>> {
-        self.room_state
-            .read()
-            .await
-            .as_ref()
-            .map(|state| {
-                state.peers.iter().fold(0u64, |acc, peer| {
-                    let mut hasher = DefaultHasher::new();
-                    peer.hash(&mut hasher);
-                    acc ^ hasher.finish()
-                })
+    pub(crate) async fn room_hash(&self) -> Option<u64> {
+        self.room_state.read().await.as_ref().map(|state| {
+            state.peers.iter().fold(0u64, |acc, peer| {
+                let mut hasher = DefaultHasher::new();
+                peer.hash(&mut hasher);
+                acc ^ hasher.finish()
             })
-            .map(|hash| hash.to_le_bytes().to_vec())
+        })
     }
 
     pub(crate) async fn is_call_active(&self) -> bool {

@@ -8,24 +8,19 @@ use crate::internal::screenshare::{Decoder, Encoder};
 use crate::internal::{ConnectionState, screenshare};
 use atomic_float::AtomicF32;
 use chrono::{DateTime, Local};
-#[cfg(not(target_family = "wasm"))]
-use fast_log::Config;
-#[cfg(not(target_family = "wasm"))]
-use fast_log::appender::{FastLogRecord, LogAppender};
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 use flutter_rust_bridge::spawn;
 use flutter_rust_bridge::{DartFnFuture, frb};
-use lazy_static::lazy_static;
 use libp2p::PeerId;
 use libp2p::identity::Keypair;
-use log::{LevelFilter, error, info, warn};
 use speedy::{Readable, Writable};
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::io::{self, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4};
 use std::str::FromStr;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32};
-use std::sync::{Arc, Once};
+use std::sync::{Arc, Once, OnceLock};
 pub use telepathy_audio::Host;
 #[cfg(not(target_family = "wasm"))]
 use tokio::net::lookup_host;
@@ -34,14 +29,16 @@ use tokio::process::Command;
 use tokio::sync::{Mutex, Notify, RwLock};
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 use tokio::time::Instant;
+use tracing::{error, info, warn};
+use tracing_subscriber::EnvFilter;
+use tracing_subscriber::fmt::MakeWriter;
+use tracing_subscriber::prelude::*;
 use uuid::Uuid;
 
 static INIT_LOGGER_ONCE: Once = Once::new();
-
-lazy_static! {
-    static ref SEND_TO_DART_LOGGER_STREAM_SINK: std::sync::RwLock<Option<StreamSink<String>>> =
-        std::sync::RwLock::new(None);
-}
+#[cfg(not(target_family = "wasm"))]
+static TRACING_GUARD: OnceLock<tracing_appender::non_blocking::WorkerGuard> = OnceLock::new();
+static SEND_TO_DART_LOG_STREAM: OnceLock<StreamSink<String>> = OnceLock::new();
 
 pub(crate) type DartVoid<A> = Arc<Mutex<dyn Fn(A) -> DartFnFuture<()> + Send>>;
 pub(crate) type DartMethod<A, R> = Arc<Mutex<dyn Fn(A) -> DartFnFuture<R> + Send>>;
@@ -348,7 +345,10 @@ impl ScreenshareConfig {
             let now = Instant::now();
             let c = Capabilities::new().await;
             *capabilities_clone.write().await = c;
-            info!("Capabilities loaded in {:?}", now.elapsed());
+            info!(
+                elapsed_ms = now.elapsed().as_millis() as u64,
+                "capabilities_loaded"
+            );
         });
 
         config
@@ -651,77 +651,119 @@ pub struct Statistics {
     pub loss: usize,
 }
 
-// The following is a modified version of the code found at
-// https://github.com/fzyzcjy/flutter_rust_bridge/issues/486
+#[derive(Clone, Copy)]
+struct DartWriter;
 
-pub struct SendToDartLogger {}
+struct DartLogWrite {
+    buffer: Vec<u8>,
+}
 
-impl SendToDartLogger {
-    pub fn set_stream_sink(stream_sink: StreamSink<String>) {
-        let mut guard = SEND_TO_DART_LOGGER_STREAM_SINK.write().unwrap();
-        let overriding = guard.is_some();
+impl DartLogWrite {
+    fn flush_lines(&mut self, force_tail: bool) {
+        while let Some(idx) = self.buffer.iter().position(|b| *b == b'\n') {
+            let line = self.buffer.drain(..=idx).collect::<Vec<u8>>();
+            let text = String::from_utf8_lossy(&line);
+            self.send_line(text.trim_end_matches('\n'));
+        }
 
-        *guard = Some(stream_sink);
+        if force_tail && !self.buffer.is_empty() {
+            let tail = std::mem::take(&mut self.buffer);
+            let text = String::from_utf8_lossy(&tail);
+            self.send_line(text.trim_end_matches('\n'));
+        }
+    }
 
-        drop(guard);
-
-        if overriding {
-            warn!(
-                "SendToDartLogger::set_stream_sink but already exist a sink, thus overriding. \
-                (This may or may not be a problem. It will happen normally if hot-reload Flutter app.)"
-            );
+    fn send_line(&self, line: &str) {
+        if line.is_empty() {
+            return;
+        }
+        if let Some(stream) = SEND_TO_DART_LOG_STREAM.get() {
+            _ = stream.add(line.to_string());
         }
     }
 }
 
-#[cfg(not(target_family = "wasm"))]
-impl LogAppender for SendToDartLogger {
-    fn do_logs(&mut self, records: &[FastLogRecord]) {
-        if let Some(stream) = SEND_TO_DART_LOGGER_STREAM_SINK.read().unwrap().as_ref() {
-            for record in records {
-                _ = stream.add(record.formated.clone());
-            }
-        }
+impl<'a> MakeWriter<'a> for DartWriter {
+    type Writer = DartLogWrite;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        DartLogWrite { buffer: Vec::new() }
+    }
+}
+
+impl Write for DartLogWrite {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.buffer.extend_from_slice(buf);
+        self.flush_lines(false);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.flush_lines(true);
+        Ok(())
     }
 }
 
 #[frb(sync)]
 pub fn create_log_stream(s: StreamSink<String>) {
-    SendToDartLogger::set_stream_sink(s);
+    SEND_TO_DART_LOG_STREAM.get_or_init(|| s);
 }
 
 #[frb(sync)]
 pub fn rust_set_up() {
     // https://stackoverflow.com/questions/30177845/how-to-initialize-the-logger-for-integration-tests
     INIT_LOGGER_ONCE.call_once(|| {
-        let level = if cfg!(debug_assertions) {
-            LevelFilter::Debug
+        let default_level = if cfg!(debug_assertions) {
+            "telepathy_core=debug,libp2p=info,telepathy_audio=info"
         } else {
-            LevelFilter::Warn
+            "telepathy_core=warn,libp2p=warn,telepathy_audio=warn"
         };
+        cfg_if::cfg_if! {
+            if #[cfg(target_family = "wasm")] {
+                let env_filter = EnvFilter::new(default_level);
+                let wasm_layer = tracing_wasm::WASMLayer::default();
+                // TODO dart_layer is not working correctly on WASM
+                let subscriber = tracing_subscriber::registry()
+                    .with(env_filter)
+                    .with(wasm_layer);
+                if let Err(error) = tracing::subscriber::set_global_default(subscriber) {
+                    warn!(
+                        "tracing subscriber already set, keeping existing subscriber (expected in hot reload / integration tests): {}",
+                        error
+                    );
+                }
+            } else {
+                let dart_layer = tracing_subscriber::fmt::layer()
+                    .compact()
+                    .with_ansi(false)
+                    .with_writer(DartWriter);
 
-        assert!(
-            level <= log::STATIC_MAX_LEVEL,
-            "Should respect log::STATIC_MAX_LEVEL={:?}, which is done in compile time. level{:?}",
-            log::STATIC_MAX_LEVEL,
-            level
-        );
+                let env_filter =
+                    EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_level));
+                let rolling = tracing_appender::rolling::daily(".", "telepathy-trace.log");
+                let (non_blocking_writer, guard) = tracing_appender::non_blocking(rolling);
+                let _ = TRACING_GUARD.set(guard);
+                let json_layer = tracing_subscriber::fmt::layer()
+                    .json()
+                    .flatten_event(true)
+                    .with_current_span(true)
+                    .with_span_list(true)
+                    .with_writer(non_blocking_writer);
+                let subscriber = tracing_subscriber::registry()
+                    .with(env_filter)
+                    .with(dart_layer)
+                    .with(json_layer);
+                if let Err(error) = tracing::subscriber::set_global_default(subscriber) {
+                    warn!(
+                        "tracing subscriber already set, keeping existing subscriber (expected in hot reload / integration tests): {}",
+                        error
+                    );
+                }
+                std::panic::set_hook(Box::new(tracing_panic::panic_hook));
+            }
+        }
 
-        #[cfg(not(target_family = "wasm"))]
-        fast_log::init(
-            Config::new()
-                .file("telepathy.log")
-                .level(level)
-                .add_appender(SendToDartLogger {}),
-        )
-        .unwrap();
-
-        #[cfg(target_family = "wasm")]
-        wasm_logger::init(wasm_logger::Config::default());
-
-        log_panics::init();
-
-        info!("init_logger finished");
+        info!(event = "logger_initialized");
     });
 }
 

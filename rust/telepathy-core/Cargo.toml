@@ -12,7 +12,8 @@ crate-type = ["cdylib", "staticlib"]
 [dependencies]
 telepathy-audio = { path = "../telepathy-audio" }
 tokio-util = { version = "0.7", features = ["codec", "compat"] }
-log = "0.4"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "json", "env-filter", "registry", "std"] }
 kanal = "0.1.1"
 atomic_float = "1"
 flutter_rust_bridge = { version = "=2.12.0", default-features = false, features = ["rust-async", "thread-pool", "dart-opaque", "anyhow"] }
@@ -20,7 +21,6 @@ lazy_static = "1"
 libp2p-stream = { version = "0.4.0-alpha" }
 chrono = "*"
 regex = "1" # TODO consider removing regex dep
-log-panics = "2"
 speedy = "=0.8.7"
 cfg-if = "1"
 bytes = "1"
@@ -43,14 +43,15 @@ getrandom = { version = "0.3", features = ["wasm_js"] }
 tokio = { version = "1", features = ["time", "io-util", "macros", "rt"] }
 libp2p = { version = "0.56", features = ["quic", "ping", "dcutr", "identify", "macros", "noise", "yamux", "relay", "wasm-bindgen", "autonat"] }
 libp2p-webtransport-websys = "0.5"
-wasm-logger = "0.2"
+tracing-wasm = "0.2"
 wasmtimer = "0.4"
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 uuid = { version = "1", features = ["v4"] }
 tokio = { version = "1", features = ["time", "io-util", "macros", "process", "net", "rt-multi-thread", "fs"] }
 libp2p = { version = "0.56", features = ["tokio", "quic", "tcp", "ping", "dcutr", "identify", "macros", "noise", "yamux", "relay", "autonat"] }
-fast_log = "1"
+tracing-appender = "0.2"
+tracing-panic = "0.1"
 
 [dev-dependencies]
 mockall = "0.14"

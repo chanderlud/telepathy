@@ -9,9 +9,9 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'flutter.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `invoke`, `new`, `notify`
-// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `FlutterStatisticsCallback`, `SEND_TO_DART_LOGGER_STREAM_SINK`, `ScreenshareConfigDisk`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `deref`, `do_logs`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `initialize`, `minimum_bytes_needed`, `minimum_bytes_needed`, `read_from`, `read_from`, `speedy_convert_slice_endianness`, `speedy_flip_endianness`, `speedy_is_primitive`, `speedy_is_primitive`, `speedy_slice_as_bytes`, `speedy_slice_from_bytes`, `write_to`, `write_to`
+// These functions are ignored because they are not marked as `pub`: `flush_lines`, `invoke`, `new`, `notify`, `send_line`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `DartLogWrite`, `DartWriter`, `FlutterStatisticsCallback`, `ScreenshareConfigDisk`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `flush`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `make_writer`, `minimum_bytes_needed`, `minimum_bytes_needed`, `read_from`, `read_from`, `speedy_convert_slice_endianness`, `speedy_flip_endianness`, `speedy_is_primitive`, `speedy_is_primitive`, `speedy_slice_as_bytes`, `speedy_slice_from_bytes`, `write_to`, `write_to`, `write`
 
 Stream<String> createLogStream() =>
     RustLib.instance.api.crateFlutterCreateLogStream();
@@ -209,21 +209,6 @@ sealed class CallState with _$CallState {
     String field0,
     bool field1,
   ) = CallState_CallEnded;
-}
-
-class SendToDartLogger {
-  const SendToDartLogger();
-
-  static Stream<String> setStreamSink() =>
-      RustLib.instance.api.crateFlutterSendToDartLoggerSetStreamSink();
-
-  @override
-  int get hashCode => 0;
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is SendToDartLogger && runtimeType == other.runtimeType;
 }
 
 @freezed

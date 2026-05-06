@@ -72,7 +72,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => -1500580087;
+  int get rustContentHash => 269114382;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -361,8 +361,6 @@ abstract class RustLibApi extends BaseApi {
   void crateFlutterRustSetUp();
 
   Future<bool> crateFlutterScreenshareAvailable();
-
-  Stream<String> crateFlutterSendToDartLoggerSetStreamSink();
 
   Future<Statistics> crateFlutterStatisticsDefault();
 
@@ -3138,39 +3136,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Stream<String> crateFlutterSendToDartLoggerSetStreamSink() {
-    final streamSink = RustStreamSink<String>();
-    unawaited(handler.executeNormal(NormalTask(
-      callFfi: (port_) {
-        final serializer = SseSerializer(generalizedFrbRustBinding);
-        sse_encode_StreamSink_String_Sse(streamSink, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 96, port: port_);
-      },
-      codec: SseCodec(
-        decodeSuccessData: sse_decode_unit,
-        decodeErrorData: null,
-      ),
-      constMeta: kCrateFlutterSendToDartLoggerSetStreamSinkConstMeta,
-      argValues: [streamSink],
-      apiImpl: this,
-    )));
-    return streamSink.stream;
-  }
-
-  TaskConstMeta get kCrateFlutterSendToDartLoggerSetStreamSinkConstMeta =>
-      const TaskConstMeta(
-        debugName: 'send_to_dart_logger_set_stream_sink',
-        argNames: ['streamSink'],
-      );
-
-  @override
   Future<Statistics> crateFlutterStatisticsDefault() {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 97, port: port_);
+            funcId: 96, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_statistics,
@@ -3194,7 +3165,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_String(peerId, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 98)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 97)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_bool,
@@ -4369,15 +4340,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  SendToDartLogger dco_decode_send_to_dart_logger(dynamic raw) {
-    // Codec=Dco (DartCObject based), see doc to use other codecs
-    final arr = raw as List<dynamic>;
-    if (arr.isNotEmpty)
-      throw Exception('unexpected arr length: expect 0 but see ${arr.length}');
-    return const SendToDartLogger();
-  }
-
-  @protected
   SessionStatus dco_decode_session_status(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     switch (raw[0]) {
@@ -5150,13 +5112,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_field0 = sse_decode_String(deserializer);
     var var_field1 = sse_decode_session_status(deserializer);
     return (var_field0, var_field1);
-  }
-
-  @protected
-  SendToDartLogger sse_decode_send_to_dart_logger(
-      SseDeserializer deserializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    return const SendToDartLogger();
   }
 
   @protected
@@ -6030,12 +5985,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_send_to_dart_logger(
-      SendToDartLogger self, SseSerializer serializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-  }
-
-  @protected
   void sse_encode_session_status(SessionStatus self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     switch (self) {
@@ -6425,7 +6374,7 @@ class OverlayImpl extends RustOpaque implements Overlay {
       RustLib.instance.api.crateOverlayOverlayOverlayMoveOverlay(
           that: this, x: x, y: y, width: width, height: height);
 
-  /// non-windows platforms don't have an overlay
+  /// access the screen resolution for overlay positioning in the front end
   (int, int) screenResolution() =>
       RustLib.instance.api.crateOverlayOverlayOverlayScreenResolution(
         that: this,

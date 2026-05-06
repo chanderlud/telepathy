@@ -18,7 +18,7 @@ bytes = "1"
 crossbeam = "0.8"
 cfg-if = "1"
 cpal = { version = "0.17", features = ["wasm-bindgen"] }
-log = "0.4"
+tracing = "0.1"
 nnnoiseless = { git = "https://github.com/chanderlud/nnnoiseless", branch="wasm-optimization", default-features = false }
 rubato = "1"
 libm = "0.2"

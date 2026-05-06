@@ -455,9 +455,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   (String, SessionStatus) dco_decode_record_string_session_status(dynamic raw);
 
   @protected
-  SendToDartLogger dco_decode_send_to_dart_logger(dynamic raw);
-
-  @protected
   SessionStatus dco_decode_session_status(dynamic raw);
 
   @protected
@@ -814,9 +811,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   (String, SessionStatus) sse_decode_record_string_session_status(
       SseDeserializer deserializer);
-
-  @protected
-  SendToDartLogger sse_decode_send_to_dart_logger(SseDeserializer deserializer);
 
   @protected
   SessionStatus sse_decode_session_status(SseDeserializer deserializer);
@@ -1220,10 +1214,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_record_string_session_status(
       (String, SessionStatus) self, SseSerializer serializer);
-
-  @protected
-  void sse_encode_send_to_dart_logger(
-      SendToDartLogger self, SseSerializer serializer);
 
   @protected
   void sse_encode_session_status(SessionStatus self, SseSerializer serializer);

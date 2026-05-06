@@ -97,10 +97,10 @@ pub async fn spawn_relay(local: bool) -> Result<RelayInfo, Box<dyn Error>> {
                     }
                 }
                 Some(SwarmEvent::NewListenAddr { address, .. }) => {
-                    println!("Listening on {address:?}");
+                    tracing::info!(address = ?address, event = "relay_listening");
                 }
                 Some(event) => {
-                    println!("{:?}", event);
+                    tracing::debug!(swarm_event = ?event);
                 }
                 None => break,
             }

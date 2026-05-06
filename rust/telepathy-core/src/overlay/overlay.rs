@@ -18,8 +18,6 @@ use flutter_rust_bridge::frb;
 #[cfg(windows)]
 use kanal::Sender;
 #[cfg(windows)]
-use log::error;
-#[cfg(windows)]
 use other_windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 #[cfg(windows)]
 use other_windows::Win32::Graphics::Gdi::{
@@ -35,6 +33,8 @@ use tokio::select;
 use tokio::sync::Notify;
 #[cfg(windows)]
 use tokio::time::interval;
+#[cfg(windows)]
+use tracing::error;
 
 #[frb(opaque)]
 #[derive(Clone, Default)]
