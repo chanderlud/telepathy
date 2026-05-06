@@ -10,7 +10,6 @@ use kanal::AsyncReceiver;
 use libp2p::bytes::Bytes;
 use libp2p::futures::StreamExt;
 use libp2p::swarm::ConnectionId;
-use log::debug;
 use speedy::{Readable, Writable};
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -26,6 +25,7 @@ use tokio::time::interval;
 use tokio_util::codec::LengthDelimitedCodec;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tokio_util::sync::CancellationToken;
+use tracing::debug;
 #[cfg(target_family = "wasm")]
 use wasmtimer::tokio::interval;
 

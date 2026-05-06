@@ -1,7 +1,7 @@
-use log::error;
 use objc2::runtime::{AnyObject, Bool};
 use objc2::{class, msg_send};
 use objc2_foundation::ns_string;
+use tracing::error;
 
 pub(crate) fn configure_audio_session() {
     unsafe {

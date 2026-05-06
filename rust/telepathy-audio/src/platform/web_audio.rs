@@ -52,9 +52,9 @@
 
 use crate::Error;
 use crate::internal::traits::{CHANNEL_SIZE, RingBufferInput};
-use log::{error, warn};
 use rtrb::RingBuffer;
 use std::sync::Arc;
+use tracing::{error, warn};
 use wasm_bindgen::{JsCast, JsValue, prelude::Closure};
 use wasm_bindgen_futures::JsFuture;
 use wasm_sync::Condvar;

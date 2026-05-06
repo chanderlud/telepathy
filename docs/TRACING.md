@@ -1,18 +1,25 @@
-# Telepathy Core Tracing Policy
+# Telepathy Tracing Policy
 
-`core.rs` uses `tracing::` macros and `#[instrument]` spans for structured correlation across async state machines.
+All modules across `telepathy-core`, `telepathy-audio`, and `relay-server` now use `tracing::` macros exclusively. The `LogTracer` bridge has been removed.
 
-All other modules in this workspace continue using `log::` macros. `tracing_log::LogTracer` bridges those records into the same subscriber pipeline, so both styles end up in the same outputs:
+Tracing outputs include:
 
-- `telepathy-trace.log` (native): newline-delimited JSON for agent analysis.
-- Dart log stream: compact human-readable lines for the existing Flutter logs UI.
-- wasm console layer: browser-compatible tracing output.
+- `telepathy-trace.log` (native in `telepathy-core`): newline-delimited JSON for agent analysis.
+- Dart log stream (`telepathy-core`): compact human-readable lines for the Flutter logs UI.
+- wasm console layer (`telepathy-core`): browser-compatible tracing output.
+- Standard formatter output (`relay-server`): terminal logs controlled by `EnvFilter`.
+
+## Subscriber Setup By Crate
+
+- `telepathy-core`: initialized in `rust_set_up()` via `tracing_subscriber::registry()` with JSON file layer, Dart stream layer, and WASM console layer.
+- `relay-server`: initialized in `main()` via `tracing_subscriber::fmt` with `EnvFilter`.
+- `telepathy-audio`: library crate, no subscriber initialization; relies on the host application subscriber.
 
 ## Structured Vocabulary
 
 | Field | Type | Where used |
 |---|---|---|
-| `peer.id` | `PeerId` Display | manager, session, call, room, screenshare |
+| `peer.id` | `PeerId` Display | manager, session, call, room, screenshare, relay-server startup |
 | `peer.nickname` | `&str` | session, call |
 | `session.id` | `Uuid` | session lifecycle |
 | `session.role` | `"dialer" \| "listener"` | `session.run` |
@@ -25,6 +32,9 @@ All other modules in this workspace continue using `log::` macros. `tracing_log:
 | `case` | short id | only with `event = "edge_case"` |
 | `retries` | `usize` | manager retry, open session retry |
 | `error` | `%Display` of `Error` | error events |
+| `device.id` | `&str` | `telepathy-audio` device fallback warnings |
+| `address` | `Multiaddr` Display | relay-server listen events |
+| `elapsed_ms` | `u64` | capabilities load timing |
 
 ## Agent Query Examples
 
@@ -37,5 +47,5 @@ jq 'select(.fields.event=="edge_case")' telepathy-trace.log
 ```
 
 ```sh
-RUST_LOG=telepathy_core=debug,libp2p=info,wgpu=warn
+RUST_LOG=telepathy_core=debug,telepathy_audio=info,relay_server=info,libp2p=warn
 ```

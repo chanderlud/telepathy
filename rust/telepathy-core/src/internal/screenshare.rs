@@ -18,8 +18,6 @@ use crate::flutter::RecordingConfig;
 use libp2p::Stream;
 #[cfg(not(target_family = "wasm"))]
 use libp2p::futures::{AsyncReadExt as ReadExt, AsyncWriteExt as WriteExt};
-#[cfg(not(target_family = "wasm"))]
-use log::{error, info, warn};
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 use regex::Regex;
 use speedy::{Readable, Writable};
@@ -31,6 +29,8 @@ use tokio::process::Command;
 use tokio::select;
 #[cfg(not(target_family = "wasm"))]
 use tokio::sync::Notify;
+#[cfg(not(target_family = "wasm"))]
+use tracing::{error, info, instrument};
 
 #[cfg(not(target_family = "wasm"))]
 use crate::error::{Error, ErrorKind};
@@ -401,13 +401,14 @@ impl PlaybackConfig {
 }
 
 #[cfg(not(target_family = "wasm"))]
+#[instrument(name = "screenshare.record", skip_all)]
 pub(crate) async fn record(
     mut stream: Stream,
     stop: Arc<Notify>,
     bandwidth: Arc<AtomicUsize>,
     config: RecordingConfig,
 ) -> Result<()> {
-    warn!("Starting screen recording with config: {:?}", config);
+    info!(event = "screenshare_record_start", ?config);
 
     let mut command = config.make_command(false);
 
@@ -453,6 +454,7 @@ pub(crate) async fn record(
 }
 
 #[cfg(not(target_family = "wasm"))]
+#[instrument(name = "screenshare.playback", skip_all)]
 pub(crate) async fn playback(
     mut stream: Stream,
     stop: Arc<Notify>,
@@ -545,7 +547,7 @@ fn parse_codecs(output: Output, regex: &Regex) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use log::debug;
+    use tracing::debug;
 
     #[tokio::test]
     #[ignore]

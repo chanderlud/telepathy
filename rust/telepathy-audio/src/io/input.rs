@@ -81,7 +81,6 @@ use cpal::Sample;
 use cpal::SampleFormat;
 #[cfg(not(target_family = "wasm"))]
 use cpal::traits::{DeviceTrait, StreamTrait};
-use log::{debug, error};
 use nnnoiseless::{DenoiseState, RnnModel};
 #[cfg(not(target_family = "wasm"))]
 use rtrb::RingBuffer;
@@ -90,6 +89,7 @@ use std::sync::Arc;
 use std::sync::Condvar;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use tokio::sync::Notify;
+use tracing::{debug, error};
 
 /// Configuration for audio input processing.
 ///
@@ -885,7 +885,7 @@ where
             );
         },
         move |err| {
-            log::error!("Input stream error: {}", err);
+            error!(error = %err, "input_stream_error");
             if let Some(ref notify) = error_notify {
                 notify.notify_one();
             }
@@ -928,7 +928,7 @@ where
             );
         },
         move |err| {
-            log::error!("Input stream error: {}", err);
+            error!(error = %err, "input_stream_error");
             if let Some(ref notify) = error_notify {
                 notify.notify_one();
             }

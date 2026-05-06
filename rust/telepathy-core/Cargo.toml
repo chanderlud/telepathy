@@ -12,10 +12,8 @@ crate-type = ["cdylib", "staticlib"]
 [dependencies]
 telepathy-audio = { path = "../telepathy-audio" }
 tokio-util = { version = "0.7", features = ["codec", "compat"] }
-log = "0.4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "json", "env-filter", "registry", "std"] }
-tracing-log = "0.2"
 kanal = "0.1.1"
 atomic_float = "1"
 flutter_rust_bridge = { version = "=2.12.0", default-features = false, features = ["rust-async", "thread-pool", "dart-opaque", "anyhow"] }

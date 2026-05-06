@@ -4,7 +4,7 @@ use std::sync::atomic::Ordering::Relaxed;
 
 use crate::overlay::color::{BAD_COLOR, percent_to_color};
 use crate::overlay::{BACKGROUND_COLOR, CONNECTED, FONT_COLOR, FONT_HEIGHT, LATENCY, LOSS, Result};
-use log::{error, info};
+use tracing::{error, info};
 use widestring::U16CString;
 use windows::Win32::Foundation::{
     COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM,
@@ -45,7 +45,7 @@ pub(crate) unsafe fn build_window(width: i32, height: i32, x: i32, y: i32) -> Re
 
         let mut token = 0;
         let status = GdiplusStartup(&mut token, &input, null_mut());
-        info!("GdiplusStartup status: {:?}", status);
+        info!(status = ?status, "GdiplusStartup");
 
         let class_name = U16CString::from_str(CLASS_NAME)?;
         let window_name = U16CString::from_str("Overlay")?;

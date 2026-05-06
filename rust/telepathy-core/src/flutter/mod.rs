@@ -350,7 +350,10 @@ impl ScreenshareConfig {
             let now = Instant::now();
             let c = Capabilities::new().await;
             *capabilities_clone.write().await = c;
-            info!("Capabilities loaded in {:?}", now.elapsed());
+            info!(
+                elapsed_ms = now.elapsed().as_millis() as u64,
+                "capabilities_loaded"
+            );
         });
 
         config
@@ -739,20 +742,12 @@ pub fn rust_set_up() {
     // https://stackoverflow.com/questions/30177845/how-to-initialize-the-logger-for-integration-tests
     INIT_LOGGER_ONCE.call_once(|| {
         let default_level = if cfg!(debug_assertions) {
-            "telepathy_core=debug,libp2p=info"
+            "telepathy_core=debug,libp2p=info,telepathy_audio=info"
         } else {
-            "telepathy_core=warn,libp2p=warn"
+            "telepathy_core=warn,libp2p=warn,telepathy_audio=warn"
         };
         let env_filter =
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_level));
-
-        let log_tracer_result = tracing_log::LogTracer::init_with_filter(log::LevelFilter::Trace);
-        if let Err(error) = log_tracer_result {
-            warn!(
-                "LogTracer already initialized, keeping existing logger (expected in hot reload / integration tests): {}",
-                error
-            );
-        }
 
         let dart_layer = tracing_subscriber::fmt::layer()
             .compact()
