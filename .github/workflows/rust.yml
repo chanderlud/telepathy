@@ -205,7 +205,7 @@ jobs:
           path: |
             ~/.cargo/bin/flutter_rust_bridge_codegen
             ~/.cargo/bin/wasm-pack
-          key: cargo-tools-${{ runner.os }}-${{ hashFiles('pubspec.lock') }}
+          key: cargo-tools-${{ runner.os }}-${{ hashFiles('pubspec.lock', '.github/workflows/rust.yml', 'web/build_web.sh') }}
 
       - name: Setup Flutter SDK
         uses: flutter-actions/setup-flutter@v4
@@ -263,7 +263,7 @@ jobs:
 
       - name: Install Web Tools
         if: matrix.info.target == 'web' && steps.cache-cargo-tools.outputs.cache-hit != 'true'
-        run: cargo install flutter_rust_bridge_codegen@2.11.1 wasm-pack@0.14.0
+        run: cargo install flutter_rust_bridge_codegen@2.12.0 wasm-pack
 
       - name: Setup Rust nightly for Web
         if: matrix.info.target == 'web'
