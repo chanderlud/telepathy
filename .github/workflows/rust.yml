@@ -137,7 +137,9 @@ jobs:
         run: bash system-tests/build.sh
 
       - name: Run system tests
-        run: sudo -E python -m pytest system-tests/tests --artifacts-dir system-tests/artifacts --save-artifacts failures
+        run: |
+          PYTHON_BIN="$(command -v python)"
+          sudo -E "$PYTHON_BIN" -m pytest system-tests/tests --artifacts-dir system-tests/artifacts --save-artifacts failures
 
       - name: Upload system-test artifacts
         if: always()
