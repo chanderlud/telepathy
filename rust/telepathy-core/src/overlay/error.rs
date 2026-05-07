@@ -1,5 +1,4 @@
 use std::fmt::Display;
-use widestring::error::ContainsNul;
 
 pub(crate) type Result<T> = std::result::Result<T, Error>;
 
@@ -12,6 +11,7 @@ pub(crate) struct Error {
 enum ErrorKind {
     #[cfg(windows)]
     Windows(windows::core::Error),
+    #[cfg(windows)]
     ContainsNul,
 }
 
@@ -20,13 +20,15 @@ impl Display for Error {
         match &self._kind {
             #[cfg(windows)]
             ErrorKind::Windows(error) => write!(f, "windows error: {:?}", error),
+            #[cfg(windows)]
             ErrorKind::ContainsNul => write!(f, "string contains nul byte"),
         }
     }
 }
 
-impl From<ContainsNul<u16>> for Error {
-    fn from(_: ContainsNul<u16>) -> Self {
+#[cfg(windows)]
+impl From<widestring::error::ContainsNul<u16>> for Error {
+    fn from(_: widestring::error::ContainsNul<u16>) -> Self {
         Error {
             _kind: ErrorKind::ContainsNul,
         }
