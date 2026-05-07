@@ -33,35 +33,26 @@ class ScenarioRunner:
 
         steps = scenario.get("steps", [])
         for step in steps:
+            if "concurrent" in step:
+                await self._run_concurrent_step(step["concurrent"], actors)
+                continue
+
+            if "restart_actor" in step:
+                await self._run_restart_actor_step(step["restart_actor"], actors)
+                continue
+
             actor_name = step.get("actor")
             if actor_name not in actors:
                 raise AssertionError(f"unknown actor '{actor_name}' in scenario")
             actor = actors[actor_name]
 
             if "send" in step:
-                command = self._resolve(step["send"])
-                send_timeout = float(
-                    step.get("send_timeout", self._DEFAULT_SEND_TIMEOUT_SECONDS)
+                await self._run_send_step(
+                    actor_name=actor_name,
+                    actor=actor,
+                    step=step,
+                    actors=actors,
                 )
-                try:
-                    response = await asyncio.wait_for(
-                        actor.send(command), timeout=send_timeout
-                    )
-                except asyncio.TimeoutError as exc:
-                    diagnostics = self._format_diagnostics(actors)
-                    raise AssertionError(
-                        f"send command timed out for actor '{actor_name}' after "
-                        f"{send_timeout:.1f}s.\n{diagnostics}"
-                    ) from exc
-                self._capture(actor_name, response)
-                expected = step.get("expect_ack", {})
-                try:
-                    self._assert_subset(expected, response, f"{actor_name} send response")
-                except Exception as exc:
-                    diagnostics = self._format_diagnostics(actors)
-                    raise AssertionError(
-                        f"send expectation failed for actor '{actor_name}': {exc}\n{diagnostics}"
-                    ) from exc
 
             if "expect_event" in step:
                 event_spec = self._resolve(step["expect_event"])
@@ -84,6 +75,108 @@ class ScenarioRunner:
 
                 self._capture(actor_name, event)
                 self._assert_subset(subset, event, f"{actor_name} event")
+
+    async def _run_send_step(
+        self,
+        actor_name: str,
+        actor: CliProcess,
+        step: dict[str, Any],
+        actors: dict[str, CliProcess],
+    ) -> dict[str, Any]:
+        command = self._resolve(step["send"])
+        send_timeout = float(step.get("send_timeout", self._DEFAULT_SEND_TIMEOUT_SECONDS))
+        try:
+            response = await asyncio.wait_for(actor.send(command), timeout=send_timeout)
+        except asyncio.TimeoutError as exc:
+            diagnostics = self._format_diagnostics(actors)
+            raise AssertionError(
+                f"send command timed out for actor '{actor_name}' after "
+                f"{send_timeout:.1f}s.\n{diagnostics}"
+            ) from exc
+        self._capture(actor_name, response)
+        expected = step.get("expect_ack", {})
+        try:
+            self._assert_subset(expected, response, f"{actor_name} send response")
+        except Exception as exc:
+            diagnostics = self._format_diagnostics(actors)
+            raise AssertionError(
+                f"send expectation failed for actor '{actor_name}': {exc}\n{diagnostics}"
+            ) from exc
+        return response
+
+    async def _run_concurrent_step(
+        self, concurrent_steps: list[dict[str, Any]], actors: dict[str, CliProcess]
+    ) -> None:
+        prepared_steps: list[tuple[str, CliProcess, dict[str, Any], float]] = []
+        for substep in concurrent_steps:
+            actor_name = substep.get("actor")
+            if actor_name not in actors:
+                raise AssertionError(f"unknown actor '{actor_name}' in scenario")
+            actor = actors[actor_name]
+            command = self._resolve(substep.get("send"))
+            send_timeout = float(
+                substep.get("send_timeout", self._DEFAULT_SEND_TIMEOUT_SECONDS)
+            )
+            prepared_steps.append((actor_name, actor, command, send_timeout))
+
+        send_tasks = [
+            asyncio.wait_for(actor.send(command), timeout=send_timeout)
+            for _, actor, command, send_timeout in prepared_steps
+        ]
+
+        try:
+            responses = await asyncio.gather(*send_tasks)
+        except asyncio.TimeoutError as exc:
+            diagnostics = self._format_diagnostics(actors)
+            raise AssertionError(
+                f"concurrent send command timed out.\n{diagnostics}"
+            ) from exc
+        except Exception as exc:
+            diagnostics = self._format_diagnostics(actors)
+            raise AssertionError(
+                f"concurrent send command failed: {exc}\n{diagnostics}"
+            ) from exc
+
+        for (actor_name, _, _, _), response, substep in zip(
+            prepared_steps, responses, concurrent_steps
+        ):
+            self._capture(actor_name, response)
+            expected = self._resolve(substep.get("expect_ack", {}))
+            try:
+                self._assert_subset(
+                    expected, response, f"{actor_name} concurrent send response"
+                )
+            except Exception as exc:
+                diagnostics = self._format_diagnostics(actors)
+                raise AssertionError(
+                    f"concurrent send expectation failed for actor '{actor_name}': "
+                    f"{exc}\n{diagnostics}"
+                ) from exc
+
+    async def _run_restart_actor_step(
+        self, actor_name: str, actors: dict[str, CliProcess]
+    ) -> None:
+        if actor_name not in actors:
+            raise AssertionError(f"unknown actor '{actor_name}' in scenario")
+
+        actor = actors[actor_name]
+        prior_peer_id = actor.identity_peer_id
+        await actor.restart()
+
+        identity_key = self._variables.get(f"{actor_name}.identity_key_b64")
+        if not isinstance(identity_key, str):
+            raise AssertionError(
+                f"missing scenario variable '{actor_name}.identity_key_b64' "
+                "for restart_actor"
+            )
+
+        response = await actor.send(
+            {"cmd": "set_identity", "args": {"key_b64": identity_key}}
+        )
+        self._assert_subset({"ok": True}, response, f"{actor_name} restart set_identity")
+        actor.identity_peer_id = prior_peer_id
+        if isinstance(prior_peer_id, str):
+            self._variables[f"{actor_name}.peer_id"] = prior_peer_id
 
     def _capture(self, actor_name: str, payload: dict[str, Any]) -> None:
         for key, value in payload.items():
@@ -155,6 +248,9 @@ class ScenarioRunner:
             if isinstance(actual, str):
                 return any(str(item) in actual for item in expected)
             return actual in expected
+
+        if isinstance(expected, str) and isinstance(actual, dict):
+            return expected in actual
 
         return expected == actual
 

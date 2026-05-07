@@ -148,14 +148,20 @@ def record_test_artifacts(request: pytest.FixtureRequest) -> Any:
         },
     }
 
-    if "profile" in request.fixturenames:
-        payload["profile"] = _serialize_profile(request.getfixturevalue("profile"))
-    if "topology" in request.fixturenames:
-        payload["topology"] = _serialize_topology(request.getfixturevalue("topology"))
-    if "relay" in request.fixturenames:
-        payload["relay"] = _serialize_relay(request.getfixturevalue("relay"))
-    if "cli_pair" in request.fixturenames:
-        payload["cli_pair"] = _serialize_cli_pair(request.getfixturevalue("cli_pair"))
+    funcargs = getattr(request.node, "funcargs", {})
+    profile = funcargs.get("profile")
+    topology = funcargs.get("topology")
+    relay = funcargs.get("relay")
+    cli_pair = funcargs.get("cli_pair")
+
+    if profile is not None:
+        payload["profile"] = _serialize_profile(profile)
+    if topology is not None:
+        payload["topology"] = _serialize_topology(topology)
+    if relay is not None:
+        payload["relay"] = _serialize_relay(relay)
+    if cli_pair is not None:
+        payload["cli_pair"] = _serialize_cli_pair(cli_pair)
 
     payload_path = test_dir / "debug.json"
     payload_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")

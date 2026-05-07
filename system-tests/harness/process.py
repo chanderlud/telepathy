@@ -337,6 +337,21 @@ class CliProcess:
             with suppress(asyncio.CancelledError):
                 await self._stderr_task
 
+    async def restart(self) -> None:
+        await self.terminate()
+
+        self._stdout_log.clear()
+        self._stderr_log.clear()
+        self._pending.clear()
+        while True:
+            try:
+                self._events.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+        self.identity_peer_id = None
+
+        await self.start()
+
 
 def _normalize_command_payload(command: dict) -> dict:
     request = dict(command)
