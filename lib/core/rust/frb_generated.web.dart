@@ -13,7 +13,7 @@ import 'flutter/logging.dart';
 import 'flutter/utils.dart';
 import 'frb_generated.dart';
 import 'lib.dart';
-import 'overlay/overlay.dart';
+import 'overlay.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated_web.dart';
 import 'player.dart';
 import 'types.dart';

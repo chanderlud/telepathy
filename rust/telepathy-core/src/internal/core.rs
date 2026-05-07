@@ -22,7 +22,7 @@ use crate::internal::{
     SESSION_MAX_FRAME_LENGTH, SessionState,
 };
 use crate::overlay::CONNECTED;
-use crate::overlay::overlay::Overlay;
+use crate::overlay::Overlay;
 use crate::types::{
     CallState, ChatMessage, CodecConfig, Contact, NetworkConfig, ScreenshareConfig, SessionStatus,
 };

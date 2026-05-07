@@ -1,5 +1,3 @@
-/// channel adapters for telepathy-audio I/O traits
-mod audio_adapters;
 /// callback traits shared by FRB and native frontends
 pub(crate) mod callbacks;
 /// implementations for core telepathy functionality
@@ -24,7 +22,7 @@ use crate::internal::error::Error;
 use crate::internal::messages::{Attachment, ProtocolMessage};
 use crate::internal::state::{EarlyCallState, RoomState, SessionState};
 pub(crate) use crate::internal::utils::{JoinHandle, spawn_task};
-use crate::overlay::overlay::Overlay;
+use crate::overlay::Overlay;
 use crate::types::{
     ChatMessage, CodecConfig, Contact, DartError, NetworkConfig, ScreenshareConfig,
 };
@@ -47,12 +45,11 @@ use tracing::{debug, error, info, info_span, warn};
 use wasmtimer::tokio::timeout;
 
 type Result<T> = std::result::Result<T, Error>;
-pub(crate) type SharedDeviceId = Arc<Mutex<Option<String>>>;
 
 /// A timeout used when initializing the call
 const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 /// How often to keep-alive libp2p streams
-pub(crate) const KEEP_ALIVE: Duration = Duration::from_secs(10);
+const KEEP_ALIVE: Duration = Duration::from_secs(10);
 /// the protocol identifier for Telepathy
 const CHAT_PROTOCOL: StreamProtocol = StreamProtocol::new("/telepathy/0.0.1");
 /// Maximum allowed size for a single length-delimited control/message frame on the session stream.

@@ -1,4 +1,3 @@
-use crate::internal::audio_adapters::{KanalSink, KanalSource};
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::core::TelepathyCore;
 use crate::internal::error::ErrorKind;
@@ -6,6 +5,7 @@ use crate::internal::messages::{AudioHeader, ProtocolMessage, StartScreenshare};
 #[cfg(not(target_family = "wasm"))]
 use crate::internal::screenshare;
 use crate::internal::state::{EarlyCallState, StatisticsCollectorState};
+use crate::internal::utils::{KanalSink, KanalSource};
 use crate::internal::{CHAT_PROTOCOL, Result};
 use crate::types::FrontendNotify;
 use crate::{Behaviour, BehaviourEvent};

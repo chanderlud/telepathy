@@ -1,7 +1,7 @@
 use crate::flutter::{CodecConfig, NetworkConfig, PeerId, ScreenshareConfig, SessionStatus};
 use crate::internal::error::{Error, ErrorKind};
 use crate::internal::messages::{AudioHeader, ProtocolMessage, RoomMessage};
-use crate::internal::{CHAT_PROTOCOL, HELLO_TIMEOUT, SharedDeviceId};
+use crate::internal::{CHAT_PROTOCOL, HELLO_TIMEOUT};
 use atomic_float::AtomicF32;
 use kanal::{AsyncReceiver, AsyncSender, unbounded_async};
 use libp2p::Stream;
@@ -23,6 +23,8 @@ use tokio::sync::{Mutex, Notify, RwLock};
 use tokio::time::{Instant, timeout};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
+
+type SharedDeviceId = Arc<Mutex<Option<String>>>;
 
 #[derive(Clone, Default)]
 pub(crate) struct CoreState {

@@ -5,7 +5,7 @@ pub mod utils;
 
 use crate::AudioDevice;
 use crate::internal::TelepathyHandle;
-use crate::overlay::overlay::Overlay;
+use crate::overlay::Overlay;
 pub use crate::types::*;
 use flutter_rust_bridge::{DartFnFuture, frb};
 use std::sync::Arc;

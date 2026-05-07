@@ -3,21 +3,15 @@ extern crate windows as other_windows;
 
 #[cfg(windows)]
 use std::mem;
-use std::sync::Arc;
-#[cfg(windows)]
-use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32};
 #[cfg(windows)]
 use std::time::Duration;
 
 #[cfg(windows)]
 use crate::internal::spawn_task;
 #[cfg(windows)]
-use crate::overlay::windows;
-use crate::overlay::{BACKGROUND_COLOR, FONT_COLOR, FONT_HEIGHT};
-#[cfg(windows)]
 use kanal::Sender;
+use lazy_static::lazy_static;
 #[cfg(windows)]
 use other_windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 #[cfg(windows)]
@@ -29,6 +23,8 @@ use other_windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, GetMessageW, MoveWindow, SW_HIDE, SW_SHOW, SendMessageA, ShowWindow,
     TranslateMessage, WM_CLOSE,
 };
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicUsize};
 #[cfg(windows)]
 use tokio::select;
 use tokio::sync::Notify;
@@ -36,6 +32,24 @@ use tokio::sync::Notify;
 use tokio::time::interval;
 #[cfg(windows)]
 use tracing::error;
+
+/// flutter_rust_bridge:ignore
+#[cfg(windows)]
+mod color;
+/// flutter_rust_bridge:ignore
+mod error;
+/// flutter_rust_bridge:ignore
+#[cfg(windows)]
+mod windows;
+
+lazy_static! {
+    pub(crate) static ref LATENCY: Arc<AtomicUsize> = Default::default();
+    pub(crate) static ref LOSS: Arc<AtomicUsize> = Default::default();
+    pub(crate) static ref CONNECTED: Arc<AtomicBool> = Default::default();
+    static ref FONT_HEIGHT: Arc<AtomicI32> = Default::default();
+    static ref BACKGROUND_COLOR: Arc<AtomicU32> = Default::default();
+    static ref FONT_COLOR: Arc<AtomicU32> = Default::default();
+}
 
 #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(opaque))]
 #[derive(Clone, Default)]

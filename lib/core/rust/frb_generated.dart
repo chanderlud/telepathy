@@ -12,7 +12,7 @@ import 'frb_generated.dart';
 import 'frb_generated.io.dart'
     if (dart.library.js_interop) 'frb_generated.web.dart';
 import 'lib.dart';
-import 'overlay/overlay.dart';
+import 'overlay.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'player.dart';
 import 'types.dart';
@@ -74,7 +74,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => -1128882281;
+  int get rustContentHash => 1872176494;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -185,22 +185,22 @@ abstract class RustLibApi extends BaseApi {
   Future<void> crateTypesNetworkConfigSetRelayId(
       {required NetworkConfig that, required String relayId});
 
-  Future<Overlay> crateOverlayOverlayOverlayDefault();
+  Future<Overlay> crateOverlayOverlayDefault();
 
-  Future<void> crateOverlayOverlayOverlayDisable({required Overlay that});
+  Future<void> crateOverlayOverlayDisable({required Overlay that});
 
-  Future<void> crateOverlayOverlayOverlayEnable({required Overlay that});
+  Future<void> crateOverlayOverlayEnable({required Overlay that});
 
-  Future<void> crateOverlayOverlayOverlayHide({required Overlay that});
+  Future<void> crateOverlayOverlayHide({required Overlay that});
 
-  Future<void> crateOverlayOverlayOverlayMoveOverlay(
+  Future<void> crateOverlayOverlayMoveOverlay(
       {required Overlay that,
       required int x,
       required int y,
       required int width,
       required int height});
 
-  Future<Overlay> crateOverlayOverlayOverlayNew(
+  Future<Overlay> crateOverlayOverlayNew(
       {required bool enabled,
       required int x,
       required int y,
@@ -210,19 +210,18 @@ abstract class RustLibApi extends BaseApi {
       required int backgroundColor,
       required int fontColor});
 
-  (int, int) crateOverlayOverlayOverlayScreenResolution(
-      {required Overlay that});
+  (int, int) crateOverlayOverlayScreenResolution({required Overlay that});
 
-  Future<void> crateOverlayOverlayOverlaySetBackgroundColor(
+  Future<void> crateOverlayOverlaySetBackgroundColor(
       {required Overlay that, required int backgroundColor});
 
-  Future<void> crateOverlayOverlayOverlaySetFontColor(
+  Future<void> crateOverlayOverlaySetFontColor(
       {required Overlay that, required int fontColor});
 
-  Future<void> crateOverlayOverlayOverlaySetFontHeight(
+  Future<void> crateOverlayOverlaySetFontHeight(
       {required Overlay that, required int height});
 
-  Future<void> crateOverlayOverlayOverlayShow({required Overlay that});
+  Future<void> crateOverlayOverlayShow({required Overlay that});
 
   int crateTypesRecordingConfigBitrate({required RecordingConfig that});
 
@@ -1459,7 +1458,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<Overlay> crateOverlayOverlayOverlayDefault() {
+  Future<Overlay> crateOverlayOverlayDefault() {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -1471,20 +1470,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerOverlay,
         decodeErrorData: null,
       ),
-      constMeta: kCrateOverlayOverlayOverlayDefaultConstMeta,
+      constMeta: kCrateOverlayOverlayDefaultConstMeta,
       argValues: [],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateOverlayOverlayOverlayDefaultConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCrateOverlayOverlayDefaultConstMeta => const TaskConstMeta(
         debugName: 'Overlay_default',
         argNames: [],
       );
 
   @override
-  Future<void> crateOverlayOverlayOverlayDisable({required Overlay that}) {
+  Future<void> crateOverlayOverlayDisable({required Overlay that}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -1497,20 +1495,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateOverlayOverlayOverlayDisableConstMeta,
+      constMeta: kCrateOverlayOverlayDisableConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateOverlayOverlayOverlayDisableConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCrateOverlayOverlayDisableConstMeta => const TaskConstMeta(
         debugName: 'Overlay_disable',
         argNames: ['that'],
       );
 
   @override
-  Future<void> crateOverlayOverlayOverlayEnable({required Overlay that}) {
+  Future<void> crateOverlayOverlayEnable({required Overlay that}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -1523,20 +1520,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateOverlayOverlayOverlayEnableConstMeta,
+      constMeta: kCrateOverlayOverlayEnableConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateOverlayOverlayOverlayEnableConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCrateOverlayOverlayEnableConstMeta => const TaskConstMeta(
         debugName: 'Overlay_enable',
         argNames: ['that'],
       );
 
   @override
-  Future<void> crateOverlayOverlayOverlayHide({required Overlay that}) {
+  Future<void> crateOverlayOverlayHide({required Overlay that}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -1549,20 +1545,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateOverlayOverlayOverlayHideConstMeta,
+      constMeta: kCrateOverlayOverlayHideConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateOverlayOverlayOverlayHideConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCrateOverlayOverlayHideConstMeta => const TaskConstMeta(
         debugName: 'Overlay_hide',
         argNames: ['that'],
       );
 
   @override
-  Future<void> crateOverlayOverlayOverlayMoveOverlay(
+  Future<void> crateOverlayOverlayMoveOverlay(
       {required Overlay that,
       required int x,
       required int y,
@@ -1584,20 +1579,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateOverlayOverlayOverlayMoveOverlayConstMeta,
+      constMeta: kCrateOverlayOverlayMoveOverlayConstMeta,
       argValues: [that, x, y, width, height],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateOverlayOverlayOverlayMoveOverlayConstMeta =>
+  TaskConstMeta get kCrateOverlayOverlayMoveOverlayConstMeta =>
       const TaskConstMeta(
         debugName: 'Overlay_move_overlay',
         argNames: ['that', 'x', 'y', 'width', 'height'],
       );
 
   @override
-  Future<Overlay> crateOverlayOverlayOverlayNew(
+  Future<Overlay> crateOverlayOverlayNew(
       {required bool enabled,
       required int x,
       required int y,
@@ -1625,7 +1620,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerOverlay,
         decodeErrorData: null,
       ),
-      constMeta: kCrateOverlayOverlayOverlayNewConstMeta,
+      constMeta: kCrateOverlayOverlayNewConstMeta,
       argValues: [
         enabled,
         x,
@@ -1640,8 +1635,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     ));
   }
 
-  TaskConstMeta get kCrateOverlayOverlayOverlayNewConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCrateOverlayOverlayNewConstMeta => const TaskConstMeta(
         debugName: 'Overlay_new',
         argNames: [
           'enabled',
@@ -1656,8 +1650,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  (int, int) crateOverlayOverlayOverlayScreenResolution(
-      {required Overlay that}) {
+  (int, int) crateOverlayOverlayScreenResolution({required Overlay that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -1669,20 +1662,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_record_i_32_i_32,
         decodeErrorData: null,
       ),
-      constMeta: kCrateOverlayOverlayOverlayScreenResolutionConstMeta,
+      constMeta: kCrateOverlayOverlayScreenResolutionConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateOverlayOverlayOverlayScreenResolutionConstMeta =>
+  TaskConstMeta get kCrateOverlayOverlayScreenResolutionConstMeta =>
       const TaskConstMeta(
         debugName: 'Overlay_screen_resolution',
         argNames: ['that'],
       );
 
   @override
-  Future<void> crateOverlayOverlayOverlaySetBackgroundColor(
+  Future<void> crateOverlayOverlaySetBackgroundColor(
       {required Overlay that, required int backgroundColor}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
@@ -1697,20 +1690,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateOverlayOverlayOverlaySetBackgroundColorConstMeta,
+      constMeta: kCrateOverlayOverlaySetBackgroundColorConstMeta,
       argValues: [that, backgroundColor],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateOverlayOverlayOverlaySetBackgroundColorConstMeta =>
+  TaskConstMeta get kCrateOverlayOverlaySetBackgroundColorConstMeta =>
       const TaskConstMeta(
         debugName: 'Overlay_set_background_color',
         argNames: ['that', 'backgroundColor'],
       );
 
   @override
-  Future<void> crateOverlayOverlayOverlaySetFontColor(
+  Future<void> crateOverlayOverlaySetFontColor(
       {required Overlay that, required int fontColor}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
@@ -1725,20 +1718,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateOverlayOverlayOverlaySetFontColorConstMeta,
+      constMeta: kCrateOverlayOverlaySetFontColorConstMeta,
       argValues: [that, fontColor],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateOverlayOverlayOverlaySetFontColorConstMeta =>
+  TaskConstMeta get kCrateOverlayOverlaySetFontColorConstMeta =>
       const TaskConstMeta(
         debugName: 'Overlay_set_font_color',
         argNames: ['that', 'fontColor'],
       );
 
   @override
-  Future<void> crateOverlayOverlayOverlaySetFontHeight(
+  Future<void> crateOverlayOverlaySetFontHeight(
       {required Overlay that, required int height}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
@@ -1753,20 +1746,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateOverlayOverlayOverlaySetFontHeightConstMeta,
+      constMeta: kCrateOverlayOverlaySetFontHeightConstMeta,
       argValues: [that, height],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateOverlayOverlayOverlaySetFontHeightConstMeta =>
+  TaskConstMeta get kCrateOverlayOverlaySetFontHeightConstMeta =>
       const TaskConstMeta(
         debugName: 'Overlay_set_font_height',
         argNames: ['that', 'height'],
       );
 
   @override
-  Future<void> crateOverlayOverlayOverlayShow({required Overlay that}) {
+  Future<void> crateOverlayOverlayShow({required Overlay that}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -1779,14 +1772,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateOverlayOverlayOverlayShowConstMeta,
+      constMeta: kCrateOverlayOverlayShowConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateOverlayOverlayOverlayShowConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCrateOverlayOverlayShowConstMeta => const TaskConstMeta(
         debugName: 'Overlay_show',
         argNames: ['that'],
       );
@@ -6481,19 +6473,17 @@ class OverlayImpl extends RustOpaque implements Overlay {
   );
 
   /// disable the overlay
-  Future<void> disable() =>
-      RustLib.instance.api.crateOverlayOverlayOverlayDisable(
+  Future<void> disable() => RustLib.instance.api.crateOverlayOverlayDisable(
         that: this,
       );
 
   /// enable the overlay
-  Future<void> enable() =>
-      RustLib.instance.api.crateOverlayOverlayOverlayEnable(
+  Future<void> enable() => RustLib.instance.api.crateOverlayOverlayEnable(
         that: this,
       );
 
   /// hide the overlay window irrespective of platform
-  Future<void> hide_() => RustLib.instance.api.crateOverlayOverlayOverlayHide(
+  Future<void> hide_() => RustLib.instance.api.crateOverlayOverlayHide(
         that: this,
       );
 
@@ -6503,30 +6493,30 @@ class OverlayImpl extends RustOpaque implements Overlay {
           required int y,
           required int width,
           required int height}) =>
-      RustLib.instance.api.crateOverlayOverlayOverlayMoveOverlay(
+      RustLib.instance.api.crateOverlayOverlayMoveOverlay(
           that: this, x: x, y: y, width: width, height: height);
 
   /// access the screen resolution for overlay positioning in the front end
   (int, int) screenResolution() =>
-      RustLib.instance.api.crateOverlayOverlayOverlayScreenResolution(
+      RustLib.instance.api.crateOverlayOverlayScreenResolution(
         that: this,
       );
 
   /// change the background color of the overlay
   Future<void> setBackgroundColor({required int backgroundColor}) =>
-      RustLib.instance.api.crateOverlayOverlayOverlaySetBackgroundColor(
+      RustLib.instance.api.crateOverlayOverlaySetBackgroundColor(
           that: this, backgroundColor: backgroundColor);
 
   /// change the font color of the overlay
   Future<void> setFontColor({required int fontColor}) => RustLib.instance.api
-      .crateOverlayOverlayOverlaySetFontColor(that: this, fontColor: fontColor);
+      .crateOverlayOverlaySetFontColor(that: this, fontColor: fontColor);
 
   /// change the font height (size) of the overlay
   Future<void> setFontHeight({required int height}) => RustLib.instance.api
-      .crateOverlayOverlayOverlaySetFontHeight(that: this, height: height);
+      .crateOverlayOverlaySetFontHeight(that: this, height: height);
 
   /// show the overlay window irrespective of platform
-  Future<void> show_() => RustLib.instance.api.crateOverlayOverlayOverlayShow(
+  Future<void> show_() => RustLib.instance.api.crateOverlayOverlayShow(
         that: this,
       );
 }

@@ -27,7 +27,7 @@
 // Section: imports
 
 use crate::flutter::*;
-use crate::overlay::overlay::*;
+use crate::overlay::*;
 use crate::player::*;
 use crate::types::*;
 use flutter_rust_bridge::for_generated::byteorder::{NativeEndian, ReadBytesExt, WriteBytesExt};
@@ -42,7 +42,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1128882281;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1872176494;
 
 // Section: executor
 
@@ -1646,7 +1646,7 @@ fn wire__crate__types__NetworkConfig_set_relay_id_impl(
         },
     )
 }
-fn wire__crate__overlay__overlay__Overlay_default_impl(
+fn wire__crate__overlay__Overlay_default_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -1671,15 +1671,14 @@ fn wire__crate__overlay__overlay__Overlay_default_impl(
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, ()>((move || {
-                    let output_ok =
-                        Result::<_, ()>::Ok(crate::overlay::overlay::Overlay::default())?;
+                    let output_ok = Result::<_, ()>::Ok(crate::overlay::Overlay::default())?;
                     Ok(output_ok)
                 })())
             }
         },
     )
 }
-fn wire__crate__overlay__overlay__Overlay_disable_impl(
+fn wire__crate__overlay__Overlay_disable_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -1722,7 +1721,7 @@ fn wire__crate__overlay__overlay__Overlay_disable_impl(
                     }
                     let api_that_guard = api_that_guard.unwrap();
                     let output_ok = Result::<_, ()>::Ok({
-                        crate::overlay::overlay::Overlay::disable(&*api_that_guard);
+                        crate::overlay::Overlay::disable(&*api_that_guard);
                     })?;
                     Ok(output_ok)
                 })())
@@ -1730,7 +1729,7 @@ fn wire__crate__overlay__overlay__Overlay_disable_impl(
         },
     )
 }
-fn wire__crate__overlay__overlay__Overlay_enable_impl(
+fn wire__crate__overlay__Overlay_enable_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -1777,7 +1776,7 @@ fn wire__crate__overlay__overlay__Overlay_enable_impl(
                         }
                         let api_that_guard = api_that_guard.unwrap();
                         let output_ok = Result::<_, ()>::Ok({
-                            crate::overlay::overlay::Overlay::enable(&*api_that_guard).await;
+                            crate::overlay::Overlay::enable(&*api_that_guard).await;
                         })?;
                         Ok(output_ok)
                     })()
@@ -1787,7 +1786,7 @@ fn wire__crate__overlay__overlay__Overlay_enable_impl(
         },
     )
 }
-fn wire__crate__overlay__overlay__Overlay_hide_impl(
+fn wire__crate__overlay__Overlay_hide_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -1830,7 +1829,7 @@ fn wire__crate__overlay__overlay__Overlay_hide_impl(
                     }
                     let api_that_guard = api_that_guard.unwrap();
                     let output_ok = Result::<_, ()>::Ok({
-                        crate::overlay::overlay::Overlay::hide(&*api_that_guard);
+                        crate::overlay::Overlay::hide(&*api_that_guard);
                     })?;
                     Ok(output_ok)
                 })())
@@ -1838,7 +1837,7 @@ fn wire__crate__overlay__overlay__Overlay_hide_impl(
         },
     )
 }
-fn wire__crate__overlay__overlay__Overlay_move_overlay_impl(
+fn wire__crate__overlay__Overlay_move_overlay_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -1885,7 +1884,7 @@ fn wire__crate__overlay__overlay__Overlay_move_overlay_impl(
                     }
                     let api_that_guard = api_that_guard.unwrap();
                     let output_ok = Result::<_, ()>::Ok({
-                        crate::overlay::overlay::Overlay::move_overlay(
+                        crate::overlay::Overlay::move_overlay(
                             &*api_that_guard,
                             api_x,
                             api_y,
@@ -1899,7 +1898,7 @@ fn wire__crate__overlay__overlay__Overlay_move_overlay_impl(
         },
     )
 }
-fn wire__crate__overlay__overlay__Overlay_new_impl(
+fn wire__crate__overlay__Overlay_new_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -1934,7 +1933,7 @@ fn wire__crate__overlay__overlay__Overlay_new_impl(
                 transform_result_sse::<_, ()>(
                     (move || async move {
                         let output_ok = Result::<_, ()>::Ok(
-                            crate::overlay::overlay::Overlay::new(
+                            crate::overlay::Overlay::new(
                                 api_enabled,
                                 api_x,
                                 api_y,
@@ -1954,7 +1953,7 @@ fn wire__crate__overlay__overlay__Overlay_new_impl(
         },
     )
 }
-fn wire__crate__overlay__overlay__Overlay_screen_resolution_impl(
+fn wire__crate__overlay__Overlay_screen_resolution_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
@@ -1994,15 +1993,15 @@ fn wire__crate__overlay__overlay__Overlay_screen_resolution_impl(
                     }
                 }
                 let api_that_guard = api_that_guard.unwrap();
-                let output_ok = Result::<_, ()>::Ok(
-                    crate::overlay::overlay::Overlay::screen_resolution(&*api_that_guard),
-                )?;
+                let output_ok = Result::<_, ()>::Ok(crate::overlay::Overlay::screen_resolution(
+                    &*api_that_guard,
+                ))?;
                 Ok(output_ok)
             })())
         },
     )
 }
-fn wire__crate__overlay__overlay__Overlay_set_background_color_impl(
+fn wire__crate__overlay__Overlay_set_background_color_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -2046,7 +2045,7 @@ fn wire__crate__overlay__overlay__Overlay_set_background_color_impl(
                     }
                     let api_that_guard = api_that_guard.unwrap();
                     let output_ok = Result::<_, ()>::Ok({
-                        crate::overlay::overlay::Overlay::set_background_color(
+                        crate::overlay::Overlay::set_background_color(
                             &*api_that_guard,
                             api_background_color,
                         );
@@ -2057,7 +2056,7 @@ fn wire__crate__overlay__overlay__Overlay_set_background_color_impl(
         },
     )
 }
-fn wire__crate__overlay__overlay__Overlay_set_font_color_impl(
+fn wire__crate__overlay__Overlay_set_font_color_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -2101,10 +2100,7 @@ fn wire__crate__overlay__overlay__Overlay_set_font_color_impl(
                     }
                     let api_that_guard = api_that_guard.unwrap();
                     let output_ok = Result::<_, ()>::Ok({
-                        crate::overlay::overlay::Overlay::set_font_color(
-                            &*api_that_guard,
-                            api_font_color,
-                        );
+                        crate::overlay::Overlay::set_font_color(&*api_that_guard, api_font_color);
                     })?;
                     Ok(output_ok)
                 })())
@@ -2112,7 +2108,7 @@ fn wire__crate__overlay__overlay__Overlay_set_font_color_impl(
         },
     )
 }
-fn wire__crate__overlay__overlay__Overlay_set_font_height_impl(
+fn wire__crate__overlay__Overlay_set_font_height_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -2156,10 +2152,7 @@ fn wire__crate__overlay__overlay__Overlay_set_font_height_impl(
                     }
                     let api_that_guard = api_that_guard.unwrap();
                     let output_ok = Result::<_, ()>::Ok({
-                        crate::overlay::overlay::Overlay::set_font_height(
-                            &*api_that_guard,
-                            api_height,
-                        );
+                        crate::overlay::Overlay::set_font_height(&*api_that_guard, api_height);
                     })?;
                     Ok(output_ok)
                 })())
@@ -2167,7 +2160,7 @@ fn wire__crate__overlay__overlay__Overlay_set_font_height_impl(
         },
     )
 }
-fn wire__crate__overlay__overlay__Overlay_show_impl(
+fn wire__crate__overlay__Overlay_show_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -2210,7 +2203,7 @@ fn wire__crate__overlay__overlay__Overlay_show_impl(
                     }
                     let api_that_guard = api_that_guard.unwrap();
                     let output_ok = Result::<_, ()>::Ok({
-                        crate::overlay::overlay::Overlay::show(&*api_that_guard);
+                        crate::overlay::Overlay::show(&*api_that_guard);
                     })?;
                     Ok(output_ok)
                 })())
@@ -6033,40 +6026,21 @@ fn pde_ffi_dispatcher_primary_impl(
         35 => {
             wire__crate__types__NetworkConfig_set_relay_id_impl(port, ptr, rust_vec_len, data_len)
         }
-        36 => {
-            wire__crate__overlay__overlay__Overlay_default_impl(port, ptr, rust_vec_len, data_len)
-        }
-        37 => {
-            wire__crate__overlay__overlay__Overlay_disable_impl(port, ptr, rust_vec_len, data_len)
-        }
-        38 => wire__crate__overlay__overlay__Overlay_enable_impl(port, ptr, rust_vec_len, data_len),
-        39 => wire__crate__overlay__overlay__Overlay_hide_impl(port, ptr, rust_vec_len, data_len),
-        40 => wire__crate__overlay__overlay__Overlay_move_overlay_impl(
+        36 => wire__crate__overlay__Overlay_default_impl(port, ptr, rust_vec_len, data_len),
+        37 => wire__crate__overlay__Overlay_disable_impl(port, ptr, rust_vec_len, data_len),
+        38 => wire__crate__overlay__Overlay_enable_impl(port, ptr, rust_vec_len, data_len),
+        39 => wire__crate__overlay__Overlay_hide_impl(port, ptr, rust_vec_len, data_len),
+        40 => wire__crate__overlay__Overlay_move_overlay_impl(port, ptr, rust_vec_len, data_len),
+        41 => wire__crate__overlay__Overlay_new_impl(port, ptr, rust_vec_len, data_len),
+        43 => wire__crate__overlay__Overlay_set_background_color_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        41 => wire__crate__overlay__overlay__Overlay_new_impl(port, ptr, rust_vec_len, data_len),
-        43 => wire__crate__overlay__overlay__Overlay_set_background_color_impl(
-            port,
-            ptr,
-            rust_vec_len,
-            data_len,
-        ),
-        44 => wire__crate__overlay__overlay__Overlay_set_font_color_impl(
-            port,
-            ptr,
-            rust_vec_len,
-            data_len,
-        ),
-        45 => wire__crate__overlay__overlay__Overlay_set_font_height_impl(
-            port,
-            ptr,
-            rust_vec_len,
-            data_len,
-        ),
-        46 => wire__crate__overlay__overlay__Overlay_show_impl(port, ptr, rust_vec_len, data_len),
+        44 => wire__crate__overlay__Overlay_set_font_color_impl(port, ptr, rust_vec_len, data_len),
+        45 => wire__crate__overlay__Overlay_set_font_height_impl(port, ptr, rust_vec_len, data_len),
+        46 => wire__crate__overlay__Overlay_show_impl(port, ptr, rust_vec_len, data_len),
         52 => wire__crate__types__ScreenshareConfig_capabilities_impl(
             port,
             ptr,
@@ -6183,11 +6157,7 @@ fn pde_ffi_dispatcher_sync_impl(
         27 => wire__crate__player__FlutterSoundHandle_cancel_impl(ptr, rust_vec_len, data_len),
         29 => wire__crate__types__FrontendNotify_notify_impl(ptr, rust_vec_len, data_len),
         33 => wire__crate__types__NetworkConfig_new_impl(ptr, rust_vec_len, data_len),
-        42 => wire__crate__overlay__overlay__Overlay_screen_resolution_impl(
-            ptr,
-            rust_vec_len,
-            data_len,
-        ),
+        42 => wire__crate__overlay__Overlay_screen_resolution_impl(ptr, rust_vec_len, data_len),
         47 => wire__crate__types__RecordingConfig_bitrate_impl(ptr, rust_vec_len, data_len),
         48 => wire__crate__types__RecordingConfig_device_impl(ptr, rust_vec_len, data_len),
         49 => wire__crate__types__RecordingConfig_encoder_impl(ptr, rust_vec_len, data_len),
@@ -7180,7 +7150,7 @@ mod io {
 
     use super::*;
     use crate::flutter::*;
-    use crate::overlay::overlay::*;
+    use crate::overlay::*;
     use crate::player::*;
     use crate::types::*;
     use flutter_rust_bridge::for_generated::byteorder::{
@@ -7416,7 +7386,7 @@ mod web {
 
     use super::*;
     use crate::flutter::*;
-    use crate::overlay::overlay::*;
+    use crate::overlay::*;
     use crate::player::*;
     use crate::types::*;
     use flutter_rust_bridge::for_generated::byteorder::{

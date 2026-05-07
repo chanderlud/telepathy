@@ -19,6 +19,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::time::Duration;
 use telepathy_audio::internal::buffer_pool::PooledBuffer;
+use telepathy_audio::io::traits::ClosedOrFailed;
+use telepathy_audio::io::{AudioDataSink, AudioDataSource};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::select;
 use tokio::sync::Notify;
@@ -34,6 +36,46 @@ use tracing::debug;
 use wasmtimer::tokio::interval;
 
 type Result<T> = std::result::Result<T, Error>;
+
+/// An `AudioDataSink` backed by a `kanal` channel.
+pub(crate) struct KanalSink {
+    sender: kanal::Sender<PooledBuffer>,
+}
+
+impl KanalSink {
+    pub fn new(sender: kanal::AsyncSender<PooledBuffer>) -> Self {
+        Self {
+            sender: sender.to_sync(),
+        }
+    }
+}
+
+impl AudioDataSink for KanalSink {
+    fn send(&self, data: PooledBuffer) -> std::result::Result<(), ClosedOrFailed> {
+        self.sender.send(data).map_err(|_| ClosedOrFailed::Closed)
+    }
+}
+
+/// An `AudioDataSource` backed by a `kanal` channel.
+pub(crate) struct KanalSource {
+    receiver: kanal::Receiver<Bytes>,
+}
+
+impl KanalSource {
+    pub(crate) fn new(receiver: kanal::Receiver<Bytes>) -> Self {
+        Self { receiver }
+    }
+}
+
+impl AudioDataSource for KanalSource {
+    fn recv(&self) -> std::result::Result<Bytes, ClosedOrFailed> {
+        self.receiver.recv().map_err(|_| ClosedOrFailed::Closed)
+    }
+
+    fn try_recv(&self) -> std::result::Result<Option<Bytes>, ClosedOrFailed> {
+        self.receiver.try_recv().map_err(|_| ClosedOrFailed::Closed)
+    }
+}
 
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Debug)]
 enum Locality {

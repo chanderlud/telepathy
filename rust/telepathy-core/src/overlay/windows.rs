@@ -3,7 +3,8 @@ use std::ptr::null_mut;
 use std::sync::atomic::Ordering::Relaxed;
 
 use crate::overlay::color::{BAD_COLOR, percent_to_color};
-use crate::overlay::{BACKGROUND_COLOR, CONNECTED, FONT_COLOR, FONT_HEIGHT, LATENCY, LOSS, Result};
+use crate::overlay::error::Result;
+use crate::overlay::{BACKGROUND_COLOR, CONNECTED, FONT_COLOR, FONT_HEIGHT, LATENCY, LOSS};
 use tracing::{error, info};
 use widestring::U16CString;
 use windows::Win32::Foundation::{
