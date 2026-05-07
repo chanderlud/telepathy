@@ -286,6 +286,7 @@ impl FromStr for Encoder {
     }
 }
 
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 pub(crate) fn encoder_from_str(value: &str) -> std::result::Result<Encoder, ()> {
     Encoder::from_str(value)
 }

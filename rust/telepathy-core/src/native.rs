@@ -1,3 +1,4 @@
+use crate::AudioDevice;
 use crate::internal::TelepathyHandle;
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::{JoinHandle, spawn_task};
@@ -124,6 +125,10 @@ impl NativeTelepathy {
         self.handle.send_chat(message).await
     }
 
+    pub async fn start_screenshare(&self, contact: &Contact) {
+        self.handle.start_screenshare(contact).await;
+    }
+
     pub fn set_rms_threshold(&self, decimal: f32) {
         self.handle.set_rms_threshold(decimal);
     }
@@ -152,8 +157,20 @@ impl NativeTelepathy {
         self.handle.set_play_custom_ringtones(play);
     }
 
+    pub fn set_send_custom_ringtone(&self, send: bool) {
+        self.handle.set_send_custom_ringtone(send);
+    }
+
     pub fn set_efficiency_mode(&self, enabled: bool) {
         self.handle.set_efficiency_mode(enabled);
+    }
+
+    pub fn pause_statistics(&self) {
+        self.handle.pause_statistics();
+    }
+
+    pub fn resume_statistics(&self) {
+        self.handle.resume_statistics();
     }
 
     pub async fn set_input_device(&self, device_id: Option<String>) {
@@ -162,6 +179,12 @@ impl NativeTelepathy {
 
     pub async fn set_output_device(&self, device_id: Option<String>) {
         self.handle.set_output_device(device_id).await;
+    }
+
+    pub fn list_devices(
+        &self,
+    ) -> std::result::Result<(Vec<AudioDevice>, Vec<AudioDevice>), DartError> {
+        self.handle.list_devices()
     }
 
     pub async fn set_model(&self, model: Option<Vec<u8>>) -> std::result::Result<(), DartError> {

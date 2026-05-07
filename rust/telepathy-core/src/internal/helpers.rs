@@ -230,9 +230,7 @@ where
 
         let stop = Arc::new(Notify::new());
         *state.stop_screenshare.lock().await = Some(stop.clone());
-        let dart_stop = FrontendNotify {
-            inner: stop.clone(),
-        };
+        let dart_stop = FrontendNotify::new(&stop);
 
         if let Some(ProtocolMessage::ScreenshareHeader { encoder_name }) = message.header
             && let Some(mut control) = control_option
@@ -428,6 +426,9 @@ where
             if #[cfg(target_family = "wasm")] {
                 None
             } else {
+                if !self.core_state.send_custom_ringtone.load(Relaxed) {
+                    return None;
+                }
                 let path = PathBuf::from("ringtone.sea");
                 if !path.exists() {
                     None
