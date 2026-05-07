@@ -1,12 +1,16 @@
-use crate::audio::player::SoundPlayer;
 use crate::internal::TelepathyHandle;
-use crate::internal::error::DartError;
-use crate::overlay::overlay::Overlay;
-use crate::types::{CallState, ChatMessage, Contact, FrontendNotify, SessionStatus, Statistics};
+use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
+use crate::internal::{JoinHandle, spawn_task};
+use crate::overlay::Overlay;
+use crate::player::SoundPlayer;
+use crate::types::{
+    CallState, ChatMessage, Contact, DartError, FrontendNotify, SessionStatus, Statistics,
+};
+use libp2p::PeerId;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use tokio::sync::{oneshot, watch};
+use tokio::sync::{Notify, oneshot, watch};
 
 type NativeFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
 type NativeVoid<A> = Arc<dyn Fn(A) -> NativeFuture<()> + Send + Sync + 'static>;
@@ -180,8 +184,8 @@ impl CoreStatisticsCallback for NativeStatisticsCallback {
 /// Rust-native callback surface for `telepathy-core`.
 ///
 /// This mirrors `FlutterCallbacks` but replaces FRB function wrappers with plain
-/// Rust closures/futures so native consumers (like `telepathy-tui`) can depend on
-/// `telepathy-core` without FRB runtime semantics.
+/// Rust closures/futures so native consumers can depend on `telepathy-core` without
+/// FRB runtime semantics.
 pub struct NativeCallbacks {
     /// Prompts the user to accept a call.
     ///
