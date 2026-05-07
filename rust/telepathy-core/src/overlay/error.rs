@@ -22,6 +22,7 @@ impl Display for Error {
             ErrorKind::Windows(error) => write!(f, "windows error: {:?}", error),
             #[cfg(windows)]
             ErrorKind::ContainsNul => write!(f, "string contains nul byte"),
+            _ => write!(f, "unknown error"),
         }
     }
 }
