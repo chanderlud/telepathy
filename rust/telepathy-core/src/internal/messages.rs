@@ -1,4 +1,4 @@
-use crate::flutter::PeerId;
+use libp2p::PeerId;
 use crate::internal::error::Error;
 use crate::internal::sockets::{Transport, TransportStream};
 use crate::internal::state::EarlyCallState;
