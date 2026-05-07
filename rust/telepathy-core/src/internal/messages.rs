@@ -2,6 +2,7 @@ use crate::flutter::PeerId;
 use crate::internal::error::Error;
 use crate::internal::sockets::{Transport, TransportStream};
 use crate::internal::state::EarlyCallState;
+use serde::Serialize;
 use speedy::{Readable, Writable};
 
 #[derive(Readable, Writable, Debug, Clone)]
@@ -58,7 +59,7 @@ impl AudioHeader {
     }
 }
 
-#[derive(Readable, Writable, Debug, Clone)]
+#[derive(Readable, Writable, Debug, Clone, Serialize)]
 pub(crate) struct Attachment {
     pub(crate) name: String,
     pub(crate) data: Vec<u8>,

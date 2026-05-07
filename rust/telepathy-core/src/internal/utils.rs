@@ -306,7 +306,7 @@ pub(crate) fn configure_audio_session() {
             error: &error];
 
         if success == Bool::NO {
-            error!("Failed to set AVAudioSession category.");
+            tracing::error!("Failed to set AVAudioSession category.");
         }
 
         let override_output: *mut AnyObject = msg_send![class!(AVAudioSession), sharedInstance];
@@ -316,7 +316,7 @@ pub(crate) fn configure_audio_session() {
         let success: Bool = msg_send![av_audio_session, setActive: Bool::YES, error: &error];
 
         if success == Bool::NO {
-            error!("Failed to activate AVAudioSession.");
+            tracing::error!("Failed to activate AVAudioSession.");
         }
     }
 }
@@ -325,7 +325,6 @@ pub(crate) fn configure_audio_session() {
 pub(crate) fn deactivate_audio_session() {
     use objc2::runtime::{AnyObject, Bool};
     use objc2::{class, msg_send};
-    use objc2_foundation::ns_string;
 
     unsafe {
         let av_audio_session: *mut AnyObject = msg_send![class!(AVAudioSession), sharedInstance];
@@ -334,7 +333,7 @@ pub(crate) fn deactivate_audio_session() {
         let success: Bool = msg_send![av_audio_session, setActive: Bool::NO, error: &error];
 
         if success == Bool::NO {
-            error!("Failed to deactivate AVAudioSession.");
+            tracing::error!("Failed to deactivate AVAudioSession.");
         }
     }
 }

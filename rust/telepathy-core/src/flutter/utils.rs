@@ -4,6 +4,7 @@ use flutter_rust_bridge::frb;
 use libp2p::identity::Keypair;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::str::FromStr;
+#[cfg(not(target_family = "wasm"))]
 use tokio::process::Command;
 
 #[frb(sync)]

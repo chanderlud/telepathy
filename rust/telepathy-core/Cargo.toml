@@ -29,6 +29,7 @@ regex = "1" # TODO consider removing regex dep
 speedy = "=0.8.7"
 cfg-if = "1"
 bytes = "1"
+serde = { version = "1", features = ["derive"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.22"

@@ -1,12 +1,14 @@
 use crate::internal::error::{Error, ErrorKind};
 use crate::internal::messages::Attachment;
-use crate::internal::screenshare::{
-    Decoder, Device, Encoder, ScreenshareConfigDisk, encoder_from_str,
-};
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+use crate::internal::screenshare::encoder_from_str;
+use crate::internal::screenshare::{Decoder, Device, Encoder, ScreenshareConfigDisk};
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 use crate::internal::spawn_task;
 use atomic_float::AtomicF32;
-use chrono::{DateTime, Local};
+use chrono::{DateTime, Local, SecondsFormat, Utc};
 pub use libp2p::PeerId;
+use serde::{Serialize, Serializer};
 use speedy::{Readable, Writable};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4};
 use std::str::FromStr;
@@ -86,7 +88,7 @@ impl Contact {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Clone)]
 pub enum CallState {
     Connected,
     Waiting,
@@ -95,7 +97,7 @@ pub enum CallState {
     CallEnded(String, bool),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Clone)]
 pub enum SessionStatus {
     Connecting,
     Connected {
@@ -106,11 +108,14 @@ pub enum SessionStatus {
     Unknown,
 }
 
+#[derive(Serialize, Clone, Debug)]
 pub struct ChatMessage {
     pub text: String,
 
+    #[serde(serialize_with = "serialize_peer_id")]
     pub receiver: PeerId,
 
+    #[serde(rename = "time", serialize_with = "serialize_timestamp_rfc3339_utc")]
     pub(crate) timestamp: DateTime<Local>,
 
     pub(crate) attachments: Vec<Attachment>,
@@ -144,7 +149,7 @@ impl ChatMessage {
 }
 
 /// processed statistics for the frontend
-#[derive(Default)]
+#[derive(Default, Serialize)]
 pub struct Statistics {
     /// a percentage of the max input volume in the window
     pub input_level: f32,
@@ -546,4 +551,25 @@ impl From<String> for DartError {
     fn from(message: String) -> Self {
         Self { message }
     }
+}
+
+fn serialize_peer_id<S>(value: &PeerId, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    serializer.serialize_str(&value.to_string())
+}
+
+fn serialize_timestamp_rfc3339_utc<S>(
+    value: &DateTime<Local>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    serializer.serialize_str(
+        &value
+            .with_timezone(&Utc)
+            .to_rfc3339_opts(SecondsFormat::Millis, true),
+    )
 }

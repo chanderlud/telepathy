@@ -41,6 +41,8 @@ use std::time::Duration;
 use telepathy_audio::WebAudioWrapper;
 use telepathy_audio::devices::AudioHost;
 use tokio::select;
+#[cfg(target_family = "wasm")]
+use tokio::sync::Mutex;
 use tokio::sync::mpsc::{Receiver, Sender, channel};
 use tokio::sync::{Notify, RwLock};
 #[cfg(not(target_family = "wasm"))]
