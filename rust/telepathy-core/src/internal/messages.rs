@@ -1,7 +1,7 @@
-use libp2p::PeerId;
 use crate::internal::error::Error;
 use crate::internal::sockets::{Transport, TransportStream};
 use crate::internal::state::EarlyCallState;
+use libp2p::PeerId;
 use serde::Serialize;
 use speedy::{Readable, Writable};
 
