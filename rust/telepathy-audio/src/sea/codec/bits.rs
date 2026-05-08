@@ -28,8 +28,7 @@ impl BitUnpacker {
         self.bitlengths.push(bitlength);
         self.bitlengths_index = 0;
         self.output.clear();
-        self.output
-            .reserve(MAX_PACKED_BYTES.saturating_sub(self.output.capacity()));
+        self.output.reserve(MAX_PACKED_BYTES);
     }
 
     pub fn reset_var(&mut self, bitlengths: &[u8]) {
@@ -40,8 +39,7 @@ impl BitUnpacker {
         self.bitlengths_index = 0;
         self.output.clear();
         let expected_items = bitlengths.len().max(MAX_PACKED_BYTES);
-        self.output
-            .reserve(expected_items.saturating_sub(self.output.capacity()));
+        self.output.reserve(expected_items);
     }
 
     const MASKS: [u64; 9] = [0, 1, 3, 7, 15, 31, 63, 127, 255];
@@ -136,8 +134,7 @@ impl BitPacker {
         self.accum = 0;
         self.bits_stored = 0;
         self.output.clear();
-        self.output
-            .reserve(MAX_PACKED_BYTES.saturating_sub(self.output.capacity()));
+        self.output.reserve(MAX_PACKED_BYTES);
     }
 
     pub fn reset_writer(&mut self) {

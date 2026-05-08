@@ -92,7 +92,7 @@ impl SeaChunk {
             + packed_residual_bytes;
 
         output.clear();
-        output.reserve(expected_chunk_bytes.saturating_sub(output.capacity()));
+        output.reserve(expected_chunk_bytes);
         output.extend_from_slice(&[
             chunk_type as u8,
             (scale_factor_bits << 4) | residual_size as u8,
