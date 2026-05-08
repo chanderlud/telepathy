@@ -7,10 +7,10 @@
 //! # Example (Native)
 //!
 //! ```rust,no_run
-//! use telepathy_audio::devices::AudioHost;
+//! use telepathy_audio::devices::CpalAudioHost;
 //! use telepathy_audio::io::AudioInputBuilder;
 //!
-//! let host = AudioHost::new();
+//! let host = CpalAudioHost::new();
 //! let input = AudioInputBuilder::new()
 //!     .volume(1.0)
 //!     .callback(|data| {
@@ -24,13 +24,13 @@
 //! # Example (Custom Sink)
 //!
 //! ```rust,no_run
-//! use telepathy_audio::devices::AudioHost;
+//! use telepathy_audio::devices::CpalAudioHost;
 //! use telepathy_audio::io::AudioInputBuilder;
 //! use telepathy_audio::adapters::MpscSink;
 //! use telepathy_audio::internal::buffer_pool::PooledBuffer;
 //! use std::sync::mpsc;
 //!
-//! let host = AudioHost::new();
+//! let host = CpalAudioHost::new();
 //! let (tx, _rx) = mpsc::channel::<PooledBuffer>();
 //! let _input = AudioInputBuilder::new()
 //!     .sink(MpscSink::new(tx))
@@ -45,14 +45,14 @@
 //! [`build`](AudioInputBuilder::build):
 //!
 //! ```rust,ignore
-//! use telepathy_audio::devices::AudioHost;
+//! use telepathy_audio::devices::CpalAudioHost;
 //! use telepathy_audio::io::AudioInputBuilder;
 //! use telepathy_audio::platform::web_audio::WebAudioWrapper;
 //! use std::sync::Arc;
 //!
 //! // WebAudioWrapper::new() is async and must be called on the main thread
 //! let wrapper = WebAudioWrapper::new().await.unwrap();
-//! let host = AudioHost::new();
+//! let host = CpalAudioHost::new();
 //! let input = AudioInputBuilder::new()
 //!     .web_audio_wrapper(&wrapper)
 //!     .volume(1.0)
@@ -64,8 +64,6 @@
 //! ```
 
 use crate::devices::AudioHost;
-#[cfg(all(not(target_family = "wasm"), not(feature = "mock-audio")))]
-use crate::devices::get_input_device;
 use crate::error::Error;
 use crate::internal::buffer_pool::{DEFAULT_POOL_CAPACITY, PooledBuffer};
 use crate::internal::processor::input_processor;
@@ -378,12 +376,12 @@ where
     /// ```rust,no_run
     /// # #[cfg(target_family = "wasm")]
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// use telepathy_audio::devices::AudioHost;
+    /// use telepathy_audio::devices::CpalAudioHost;
     /// use telepathy_audio::io::AudioInputBuilder;
     /// use telepathy_audio::platform::web_audio::WebAudioWrapper;
     /// use std::sync::Arc;
     ///
-    /// let host = AudioHost::new();
+    /// let host = CpalAudioHost::new();
     /// let wrapper = WebAudioWrapper::new().await?;
     /// let input = AudioInputBuilder::new()
     ///     .web_audio_wrapper(&wrapper)
@@ -550,7 +548,7 @@ where
     /// - The stream cannot be created
     /// - The device uses an unsupported sample format
     #[cfg(all(not(target_family = "wasm"), not(feature = "mock-audio")))]
-    pub fn build(self, host: &AudioHost) -> Result<AudioInputHandle, Error> {
+    pub fn build(self, host: &impl AudioHost) -> Result<AudioInputHandle, Error> {
         if self.sink.is_none() {
             return Err(Error::Config(
                 "a data sink must be set via callback() or sink()".to_string(),
@@ -558,7 +556,7 @@ where
         }
 
         // Get the input device
-        let device_handle = get_input_device(host, self.config.device_id.as_deref())?;
+        let device_handle = host.get_input_device(self.config.device_id.as_deref())?;
 
         let device = device_handle.device();
         let config = device.default_input_config()?;
@@ -670,7 +668,7 @@ where
 
     /// Builds and starts the audio input stream using in-process mock audio.
     #[cfg(all(not(target_family = "wasm"), feature = "mock-audio"))]
-    pub fn build(self, _host: &AudioHost) -> Result<AudioInputHandle, Error> {
+    pub fn build(self, _host: &impl AudioHost) -> Result<AudioInputHandle, Error> {
         if self.sink.is_none() {
             return Err(Error::Config(
                 "a data sink must be set via callback() or sink()".to_string(),
@@ -707,12 +705,12 @@ where
     /// ```rust,no_run
     /// # #[cfg(target_family = "wasm")]
     /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// use telepathy_audio::devices::AudioHost;
+    /// use telepathy_audio::devices::CpalAudioHost;
     /// use telepathy_audio::io::AudioInputBuilder;
     /// use telepathy_audio::platform::web_audio::WebAudioWrapper;
     /// use std::sync::Arc;
     ///
-    /// let host = AudioHost::new();
+    /// let host = CpalAudioHost::new();
     /// // wrapper must be created ahead of time on the main thread
     /// let wrapper = WebAudioWrapper::new().await;
     /// let input = AudioInputBuilder::new()
@@ -723,7 +721,7 @@ where
     /// # }
     /// ```
     #[cfg(target_family = "wasm")]
-    pub fn build(mut self, _host: &AudioHost) -> Result<AudioInputHandle, Error> {
+    pub fn build(mut self, _host: &impl AudioHost) -> Result<AudioInputHandle, Error> {
         if self.sink.is_none() {
             return Err(Error::Config(
                 "a data sink must be set via callback() or sink()".to_string(),

@@ -24,7 +24,7 @@ use std::sync::atomic::Ordering::Relaxed;
 use std::time::Duration;
 #[cfg(target_family = "wasm")]
 use telepathy_audio::WebAudioWrapper;
-use telepathy_audio::devices::get_input_device;
+use telepathy_audio::devices::AudioHost;
 use telepathy_audio::internal::buffer_pool::PooledBuffer;
 use telepathy_audio::io::{
     AudioInputBuilder, AudioInputHandle, AudioOutputBuilder, AudioOutputHandle, CodecBitrateMode,
@@ -36,10 +36,11 @@ use tokio::io::AsyncReadExt;
 use tokio::sync::Notify;
 use tracing::{error, info, instrument, warn};
 
-impl<C, S> TelepathyCore<C, S>
+impl<C, S, H> TelepathyCore<C, S, H>
 where
     S: CoreStatisticsCallback + Send + Sync + 'static,
     C: CoreCallbacks<S> + Send + Sync + 'static,
+    H: AudioHost + Send + Sync + Clone + 'static,
 {
     /// builds a p2p swarm & connects to the relay server
     #[instrument(name = "manager.swarm_setup", skip_all)]
@@ -396,7 +397,7 @@ where
                         .sample_rate as u32
                 } else {
                     let device_id = self.core_state.input_device.lock().await;
-                    let device_handle = get_input_device(&self.host, device_id.as_deref())?;
+                    let device_handle = self.host.get_input_device(device_id.as_deref())?;
                     info!("input_device: {:?}", device_handle.name());
                     device_handle.sample_rate()?
                 }

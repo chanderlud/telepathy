@@ -6,13 +6,13 @@
 //! # Example
 //!
 //! ```rust,no_run
-//! use telepathy_audio::devices::AudioHost;
+//! use telepathy_audio::devices::CpalAudioHost;
 //! use telepathy_audio::io::AudioOutputBuilder;
 //! use telepathy_audio::adapters::MpscSource;
 //! use bytes::Bytes;
 //! use std::sync::mpsc;
 //!
-//! let host = AudioHost::new();
+//! let host = CpalAudioHost::new();
 //! let (tx, rx) = mpsc::channel::<Bytes>();
 //!
 //! let output = AudioOutputBuilder::new()
@@ -30,8 +30,6 @@
 #[cfg(not(feature = "mock-audio"))]
 use crate::constants::TRANSITION_LENGTH;
 use crate::devices::AudioHost;
-#[cfg(not(feature = "mock-audio"))]
-use crate::devices::get_output_device;
 use crate::error::Error;
 use crate::internal::NETWORK_FRAME;
 use crate::internal::processor::output_processor;
@@ -339,7 +337,7 @@ where
     /// - The stream cannot be created
     /// - The device uses an unsupported sample format
     #[cfg(not(feature = "mock-audio"))]
-    pub fn build(self, host: &AudioHost) -> Result<AudioOutputHandle, Error> {
+    pub fn build(self, host: &impl AudioHost) -> Result<AudioOutputHandle, Error> {
         use rtrb::RingBuffer;
         if self.source.is_none() {
             return Err(Error::Config(
@@ -348,7 +346,7 @@ where
         }
 
         // Get the output device
-        let device_handle = get_output_device(host, self.config.device_id.as_deref())?;
+        let device_handle = host.get_output_device(self.config.device_id.as_deref())?;
 
         let device = device_handle.device();
         let config = device.default_output_config()?;
@@ -452,7 +450,7 @@ where
     }
 
     #[cfg(feature = "mock-audio")]
-    pub fn build(self, _host: &AudioHost) -> Result<AudioOutputHandle, Error> {
+    pub fn build(self, _host: &impl AudioHost) -> Result<AudioOutputHandle, Error> {
         if self.source.is_none() {
             return Err(Error::Config(
                 "a data source must be set via source()".to_string(),

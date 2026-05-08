@@ -1,3 +1,4 @@
+use crate::devices::{AudioDeviceInfo, AudioDeviceList, AudioHost, DeviceError, DeviceHandle};
 use crate::error::Error;
 use crate::internal::traits::{AudioInput, AudioOutput};
 use std::thread;
@@ -45,5 +46,48 @@ impl AudioOutput for MockAudioOutput {
 
     fn write_samples(&mut self, _samples: &[f32]) -> Result<usize, Error> {
         Ok(0)
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct MockAudioHost;
+
+impl AudioHost for MockAudioHost {
+    fn new() -> Self
+    where
+        Self: Sized,
+    {
+        Self::default()
+    }
+
+    fn list_input_devices(&self) -> Result<Vec<AudioDeviceInfo>, DeviceError> {
+        Ok(vec![])
+    }
+
+    fn list_output_devices(&self) -> Result<Vec<AudioDeviceInfo>, DeviceError> {
+        Ok(vec![])
+    }
+
+    fn list_all_devices(&self) -> Result<AudioDeviceList, DeviceError> {
+        Ok(AudioDeviceList {
+            input_devices: vec![],
+            output_devices: vec![],
+        })
+    }
+
+    fn get_input_device(&self, _device_id: Option<&str>) -> Result<DeviceHandle, DeviceError> {
+        Err(DeviceError::NoDefaultDevice)
+    }
+
+    fn get_output_device(&self, _device_id: Option<&str>) -> Result<DeviceHandle, DeviceError> {
+        Err(DeviceError::NoDefaultDevice)
+    }
+
+    fn get_default_input_device(&self) -> Result<DeviceHandle, DeviceError> {
+        Err(DeviceError::NoDefaultDevice)
+    }
+
+    fn get_default_output_device(&self) -> Result<DeviceHandle, DeviceError> {
+        Err(DeviceError::NoDefaultDevice)
     }
 }

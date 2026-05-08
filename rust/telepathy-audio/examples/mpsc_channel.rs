@@ -1,12 +1,12 @@
 use bytes::Bytes;
 use std::sync::mpsc;
 use telepathy_audio::adapters::{MpscSink, MpscSource};
-use telepathy_audio::devices::AudioHost;
+use telepathy_audio::devices::CpalAudioHost;
 use telepathy_audio::internal::buffer_pool::PooledBuffer;
 use telepathy_audio::io::{AudioInputBuilder, AudioOutputBuilder};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let host = AudioHost::new();
+    let host = CpalAudioHost::new();
 
     // std::sync::mpsc is a simple, dependency-free option for native apps.
     // For higher throughput or advanced channel features, consider crossbeam/flume/etc.

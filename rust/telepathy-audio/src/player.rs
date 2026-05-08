@@ -27,7 +27,7 @@
 //! }
 //! ```
 
-use crate::devices::AudioHost;
+use crate::devices::CpalAudioHost;
 use crate::error::Error;
 use crate::internal::processing::wide_mul;
 #[cfg(target_family = "wasm")]
@@ -363,7 +363,7 @@ pub struct AudioPlayer {
     /// Selected output device ID (None uses default device).
     output_device: Arc<Mutex<Option<DeviceId>>>,
     /// The cpal audio host for device access.
-    host: AudioHost,
+    host: CpalAudioHost,
 }
 
 impl AudioPlayer {
@@ -386,7 +386,7 @@ impl AudioPlayer {
         Self {
             output_volume: Arc::new(AtomicF32::new(db_to_multiplier(output_volume_db))),
             output_device: Default::default(),
-            host: AudioHost::new(),
+            host: CpalAudioHost::new(),
         }
     }
 

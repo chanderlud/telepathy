@@ -41,7 +41,7 @@ pub async fn run(opts: RunOptions) -> Result<()> {
         }
     };
     let codec_config = CodecConfig::new(true, true, 5.0);
-    let mut telepathy = NativeTelepathy::new_default(&network_config, &codec_config, callbacks);
+    let mut telepathy = NativeTelepathy::new(&network_config, &codec_config, callbacks);
 
     send_event(
         &output_tx,

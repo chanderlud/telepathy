@@ -11,6 +11,7 @@ use flutter_rust_bridge::{DartFnFuture, frb};
 use std::sync::Arc;
 pub use telepathy_audio::Host;
 use tokio::sync::Mutex;
+use telepathy_audio::devices::CpalAudioHost;
 
 type DartVoid<A> = Arc<Mutex<dyn Fn(A) -> DartFnFuture<()> + Send>>;
 type DartMethod<A, R> = Arc<Mutex<dyn Fn(A) -> DartFnFuture<R> + Send>>;
@@ -25,7 +26,7 @@ type ManagerActiveArgs = (bool, bool);
 /// Keep this `impl` in sync with `impl NativeTelepathy` and `impl TelepathyHandle`.
 #[frb(opaque)]
 pub struct Telepathy {
-    handle: TelepathyHandle<FlutterCallbacks, FlutterStatisticsCallback>,
+    handle: TelepathyHandle<FlutterCallbacks, FlutterStatisticsCallback, CpalAudioHost>,
 }
 
 impl Telepathy {
@@ -40,7 +41,7 @@ impl Telepathy {
     ) -> Telepathy {
         Self {
             handle: TelepathyHandle::new(
-                host,
+                host.into(),
                 network_config,
                 screenshare_config,
                 overlay,

@@ -2,8 +2,6 @@ use crate::AudioDevice;
 use crate::internal::TelepathyHandle;
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::{JoinHandle, spawn_task};
-use crate::overlay::Overlay;
-use crate::player::SoundPlayer;
 use crate::types::{
     CallState, ChatMessage, Contact, DartError, FrontendNotify, SessionStatus, Statistics,
 };
@@ -12,6 +10,10 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::{Notify, oneshot, watch};
+#[cfg(not(feature = "mock-audio"))]
+use telepathy_audio::devices::CpalAudioHost;
+#[cfg(feature = "mock-audio")]
+use telepathy_audio::MockAudioHost;
 
 type NativeFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
 type NativeVoid<A> = Arc<dyn Fn(A) -> NativeFuture<()> + Send + Sync + 'static>;
@@ -20,53 +22,36 @@ type NativeAcceptCall = Arc<
     dyn Fn(String, Option<Vec<u8>>, oneshot::Sender<bool>, watch::Receiver<bool>) + Send + Sync,
 >;
 
+#[cfg(not(feature = "mock-audio"))]
+type NativeHandle = TelepathyHandle<NativeCallbacks, NativeStatisticsCallback, CpalAudioHost>;
+#[cfg(feature = "mock-audio")]
+type NativeHandle =  TelepathyHandle<NativeCallbacks, NativeStatisticsCallback, MockAudioHost>;
+
+
 /// Rust-native runtime client for `telepathy-core`.
 ///
 /// This mirrors the Flutter-facing API but accepts [`NativeCallbacks`] and does
 /// not depend on FRB runtime semantics.
 pub struct NativeTelepathy {
-    handle: TelepathyHandle<NativeCallbacks, NativeStatisticsCallback>,
+    handle: NativeHandle,
 }
 
 impl NativeTelepathy {
     pub fn new(
-        host: Arc<telepathy_audio::Host>,
         network_config: &crate::types::NetworkConfig,
-        screenshare_config: &crate::types::ScreenshareConfig,
-        overlay: &Overlay,
         codec_config: &crate::types::CodecConfig,
         callbacks: NativeCallbacks,
     ) -> Self {
         Self {
             handle: TelepathyHandle::new(
-                host,
+                Default::default(),
                 network_config,
-                screenshare_config,
-                overlay,
+                &Default::default(),
+                &Default::default(),
                 codec_config,
                 callbacks,
             ),
         }
-    }
-
-    /// Convenience constructor for native clients that do not provide a custom
-    /// host/screenshare/overlay setup.
-    pub fn new_default(
-        network_config: &crate::types::NetworkConfig,
-        codec_config: &crate::types::CodecConfig,
-        callbacks: NativeCallbacks,
-    ) -> Self {
-        let host = SoundPlayer::new(0.0).host();
-        let screenshare_config = crate::types::ScreenshareConfig::default();
-        let overlay = Overlay::default();
-        Self::new(
-            host,
-            network_config,
-            &screenshare_config,
-            &overlay,
-            codec_config,
-            callbacks,
-        )
     }
 
     pub async fn start_manager(&mut self) {

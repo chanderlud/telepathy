@@ -16,10 +16,10 @@ A standalone audio processing library for the Telepathy project, providing devic
 ### Device Enumeration
 
 ```rust
-use telepathy_audio::devices::{AudioHost, list_all_devices, get_default_input_device};
+use telepathy_audio::devices::{CpalAudioHost, list_all_devices, get_default_input_device};
 
 // Create an audio host
-let host = AudioHost::new();
+let host = CpalAudioHost::new();
 
 // List all available devices
 let devices = list_all_devices(&host).unwrap();
@@ -34,11 +34,11 @@ println!("Default input: {}", input_device.name().unwrap());
 ### Audio Input with Callback
 
 ```rust
-use telepathy_audio::devices::AudioHost;
+use telepathy_audio::devices::CpalAudioHost;
 use telepathy_audio::io::AudioInputBuilder;
 use telepathy_audio::RnnModel;
 
-let host = AudioHost::new();
+let host = CpalAudioHost::new();
 
 // Create an audio input with processing
 let input = AudioInputBuilder::new()
@@ -77,13 +77,13 @@ instead of writing a custom implementation.
 ### Audio Output
 
 ```rust
-use telepathy_audio::devices::AudioHost;
+use telepathy_audio::devices::CpalAudioHost;
 use telepathy_audio::io::AudioOutputBuilder;
 use telepathy_audio::adapters::MpscSource;
 use bytes::Bytes;
 use std::sync::mpsc;
 
-let host = AudioHost::new();
+let host = CpalAudioHost::new();
 
 // Provide a source of audio frames (Bytes)
 let (tx, rx) = mpsc::channel::<Bytes>();
@@ -111,13 +111,13 @@ output.undeafen(); // Resume output
 The library supports creating multiple independent output streams:
 
 ```rust
-use telepathy_audio::devices::AudioHost;
+use telepathy_audio::devices::CpalAudioHost;
 use telepathy_audio::io::AudioOutputBuilder;
 use telepathy_audio::adapters::MpscSource;
 use bytes::Bytes;
 use std::sync::mpsc;
 
-let host = AudioHost::new();
+let host = CpalAudioHost::new();
 
 // Create multiple outputs for different audio sources
 let (tx1, rx1) = mpsc::channel::<Bytes>();
@@ -140,13 +140,13 @@ let _ = (tx1, tx2, output1, output2);
 ### With Codec Support
 
 ```rust
-use telepathy_audio::devices::AudioHost;
+use telepathy_audio::devices::CpalAudioHost;
 use telepathy_audio::io::{AudioInputBuilder, AudioOutputBuilder, CodecBitrateMode};
 use telepathy_audio::adapters::MpscSource;
 use bytes::Bytes;
 use std::sync::mpsc;
 
-let host = AudioHost::new();
+let host = CpalAudioHost::new();
 
 // Input with codec encoding
 let input = AudioInputBuilder::new()
@@ -222,13 +222,13 @@ via `web_audio_wrapper()` before calling `build()`:
 #[cfg(target_family = "wasm")]
 fn setup_audio(wrapper: WebAudioWrapper) -> Result<(), AudioError> {
     use telepathy_audio::{
-        AudioError, AudioHost, AudioInputBuilder, AudioOutputBuilder,
+        AudioError, CpalAudioHost, AudioInputBuilder, AudioOutputBuilder,
     };
     use bytes::Bytes;
     use std::sync::mpsc;
     use telepathy_audio::adapters::MpscSource;
     
-    let host = AudioHost::new();
+    let host = CpalAudioHost::new();
     
     // Input requires a pre-initialized WebAudioWrapper on WASM
     let input = AudioInputBuilder::new()

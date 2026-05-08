@@ -57,13 +57,14 @@ use wasmtimer::std::Instant;
 #[cfg(target_family = "wasm")]
 use wasmtimer::tokio::{Interval, interval, sleep_until, timeout};
 
-pub(crate) struct TelepathyCore<C, S>
+pub(crate) struct TelepathyCore<C, S, H>
 where
     S: CoreStatisticsCallback + Send + Sync + 'static,
     C: CoreCallbacks<S> + Send + Sync + 'static,
+    H: AudioHost + Send + Sync + Clone + 'static,
 {
     /// The audio host
-    pub(crate) host: AudioHost,
+    pub(crate) host: H,
 
     /// Core state for telepathy
     pub(crate) core_state: CoreState,
@@ -96,19 +97,20 @@ where
     phantom: PhantomData<Arc<S>>,
 }
 
-impl<C, S> TelepathyCore<C, S>
+impl<C, S, H> TelepathyCore<C, S, H>
 where
     S: CoreStatisticsCallback + Send + Sync + 'static,
     C: CoreCallbacks<S> + Send + Sync + 'static,
+    H: AudioHost + Send + Sync + Clone + 'static,
 {
     pub(crate) fn new(
-        host: AudioHost,
+        host: H,
         network_config: &NetworkConfig,
         screenshare_config: &ScreenshareConfig,
         overlay: &Overlay,
         codec_config: &CodecConfig,
         callbacks: C,
-    ) -> TelepathyCore<C, S> {
+    ) -> TelepathyCore<C, S, H> {
         Self {
             host,
             core_state: CoreState {
@@ -1662,10 +1664,11 @@ where
     }
 }
 
-impl<C, S> Clone for TelepathyCore<C, S>
+impl<C, S, H> Clone for TelepathyCore<C, S, H>
 where
     S: CoreStatisticsCallback + Send + Sync + 'static,
     C: CoreCallbacks<S> + Send + Sync + 'static,
+    H: AudioHost + Send + Sync + Clone + 'static,
 {
     fn clone(&self) -> Self {
         Self {

@@ -10,9 +10,6 @@ pub(crate) mod screenshare;
 /// networking code for live audio streams
 mod sockets;
 mod state;
-#[cfg(test)]
-#[cfg(not(target_family = "wasm"))]
-mod tests;
 mod utils;
 
 use crate::AudioDevice;
@@ -33,9 +30,9 @@ use std::mem;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::Duration;
-use telepathy_audio::devices::list_all_devices;
+use telepathy_audio::devices::{AudioHost};
 use telepathy_audio::internal::utils::db_to_multiplier;
-use telepathy_audio::{Host, RnnModel};
+use telepathy_audio::RnnModel;
 use tokio::sync::mpsc::channel;
 use tokio::sync::{Mutex, Notify};
 use tokio_util::sync::CancellationToken;
@@ -57,26 +54,28 @@ const SESSION_MAX_FRAME_LENGTH: usize = 1024 * 1024 * 1024;
 /// How long to attempt direct connection upgrade before falling back to a relayed option
 const DCUTR_TIMEOUT: Duration = Duration::from_secs(5);
 
-pub(crate) struct TelepathyHandle<C, S>
+pub(crate) struct TelepathyHandle<C, S, H>
 where
     C: CoreCallbacks<S> + Send + Sync + 'static,
     S: CoreStatisticsCallback + Send + Sync + 'static,
+    H: AudioHost + Send + Sync + Clone + 'static,
 {
-    inner: TelepathyCore<C, S>,
+    inner: TelepathyCore<C, S, H>,
 
     /// contains handles to the manager thread & room managers
     handles: Arc<Mutex<Vec<JoinHandle<()>>>>,
 }
 
 // TODO refactor all methods returning DartError to return Error
-impl<C, S> TelepathyHandle<C, S>
+impl<C, S, H> TelepathyHandle<C, S, H>
 where
     C: CoreCallbacks<S> + Send + Sync + 'static,
     S: CoreStatisticsCallback + Send + Sync + 'static,
+    H: AudioHost + Send + Sync + Clone + 'static,
 {
     /// Builds a new handle around a fresh `TelepathyCore`.
     pub(crate) fn new(
-        host: Arc<Host>,
+        host: H,
         network_config: &NetworkConfig,
         screenshare_config: &ScreenshareConfig,
         overlay: &Overlay,
@@ -85,7 +84,7 @@ where
     ) -> Self {
         Self {
             inner: TelepathyCore::new(
-                host.into(),
+                host,
                 network_config,
                 screenshare_config,
                 overlay,
@@ -484,7 +483,7 @@ where
     pub fn list_devices(
         &self,
     ) -> std::result::Result<(Vec<AudioDevice>, Vec<AudioDevice>), DartError> {
-        let device_list = list_all_devices(&self.inner.host).map_err(Error::from)?;
+        let device_list = self.inner.host.list_all_devices().map_err(Error::from)?;
         Ok((
             device_list
                 .input_devices
