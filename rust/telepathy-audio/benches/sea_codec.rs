@@ -50,6 +50,11 @@ pub fn bench_sea_codec(c: &mut Criterion) {
         let settings = EncoderSettings::default();
         let mut encoder = SeaEncoder::new(1, SAMPLE_RATE, settings).unwrap();
         let mut buffer = BytesMut::with_capacity(4096);
+        encoder
+            .encode_frame(cbr_frame, &mut buffer)
+            .expect("cbr warm-up encode should succeed");
+        // Keep buffer at steady-state length so benchmark focuses on codec cost.
+        buffer.resize(encoder.chunk_size() as usize, 0);
         b.iter(|| {
             encoder
                 .encode_frame(black_box(cbr_frame), black_box(&mut buffer))
@@ -65,6 +70,11 @@ pub fn bench_sea_codec(c: &mut Criterion) {
         };
         let mut encoder = SeaEncoder::new(1, SAMPLE_RATE, settings).unwrap();
         let mut buffer = BytesMut::with_capacity(4096);
+        encoder
+            .encode_frame(vbr_frame, &mut buffer)
+            .expect("vbr warm-up encode should succeed");
+        // Keep buffer at steady-state length so benchmark focuses on codec cost.
+        buffer.resize(encoder.chunk_size() as usize, 0);
         b.iter(|| {
             encoder
                 .encode_frame(black_box(vbr_frame), black_box(&mut buffer))

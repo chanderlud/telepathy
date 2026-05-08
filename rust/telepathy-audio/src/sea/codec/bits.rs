@@ -1,3 +1,7 @@
+use nnnoiseless::FRAME_SIZE;
+
+pub const MAX_PACKED_BYTES: usize = FRAME_SIZE;
+
 pub struct BitUnpacker {
     bits_stored: u32,
     carry: u64,
@@ -8,12 +12,14 @@ pub struct BitUnpacker {
 
 impl BitUnpacker {
     pub fn new_const_bits(bitlength: u8) -> Self {
+        let mut output = Vec::new();
+        output.reserve(MAX_PACKED_BYTES);
         Self {
             bits_stored: 0,
             carry: 0,
             bitlengths: vec![bitlength; 1],
             bitlengths_index: 0,
-            output: Vec::new(),
+            output,
         }
     }
 
@@ -24,6 +30,8 @@ impl BitUnpacker {
         self.bitlengths.push(bitlength);
         self.bitlengths_index = 0;
         self.output.clear();
+        self.output
+            .reserve(MAX_PACKED_BYTES.saturating_sub(self.output.capacity()));
     }
 
     pub fn reset_var(&mut self, bitlengths: &[u8]) {
@@ -33,6 +41,9 @@ impl BitUnpacker {
         self.bitlengths.extend_from_slice(bitlengths);
         self.bitlengths_index = 0;
         self.output.clear();
+        let expected_items = bitlengths.len().max(MAX_PACKED_BYTES);
+        self.output
+            .reserve(expected_items.saturating_sub(self.output.capacity()));
     }
 
     const MASKS: [u64; 9] = [0, 1, 3, 7, 15, 31, 63, 127, 255];
@@ -97,13 +108,31 @@ impl BitUnpacker {
         self.bits_stored = 0;
         &self.output
     }
+
+    pub fn take_output(&mut self) -> &mut Vec<u8> {
+        self.bitlengths_index = 0;
+        self.carry = 0;
+        self.bits_stored = 0;
+        &mut self.output
+    }
 }
 
-#[derive(Default)]
 pub struct BitPacker {
     accum: u64,
     bits_stored: u32,
     output: Vec<u8>,
+}
+
+impl Default for BitPacker {
+    fn default() -> Self {
+        let mut output = Vec::new();
+        output.reserve(MAX_PACKED_BYTES);
+        Self {
+            accum: 0,
+            bits_stored: 0,
+            output,
+        }
+    }
 }
 
 impl BitPacker {
@@ -111,6 +140,8 @@ impl BitPacker {
         self.accum = 0;
         self.bits_stored = 0;
         self.output.clear();
+        self.output
+            .reserve(MAX_PACKED_BYTES.saturating_sub(self.output.capacity()));
     }
 
     pub fn push(&mut self, input: u32, bits: u8) {
@@ -147,5 +178,16 @@ impl BitPacker {
         self.bits_stored = 0;
 
         &self.output
+    }
+
+    pub fn drain_into(&mut self, output: &mut Vec<u8>) {
+        if self.bits_stored > 0 {
+            let byte = (self.accum << (8 - self.bits_stored)) as u8;
+            self.output.push(byte);
+        }
+        self.accum = 0;
+        self.bits_stored = 0;
+        output.append(&mut self.output);
+        self.output.reserve(MAX_PACKED_BYTES);
     }
 }

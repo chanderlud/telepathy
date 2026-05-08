@@ -91,6 +91,24 @@ impl ChunkSerializer {
     }
 }
 
+const DEFAULT_SCALE_FACTOR_FRAMES: usize = 20;
+
+fn scratch_capacities(
+    frames_per_chunk: usize,
+    channels: usize,
+    scale_factor_frames: usize,
+) -> (usize, usize, usize, usize) {
+    let safe_scale_factor_frames = scale_factor_frames.max(1);
+    let scale_factor_items = frames_per_chunk.div_ceil(safe_scale_factor_frames) * channels;
+    let residual_items = frames_per_chunk * channels;
+    (
+        scale_factor_items,
+        scale_factor_items,
+        residual_items,
+        residual_items,
+    )
+}
+
 pub struct SeaFile {
     pub header: SeaFileHeader,
 
@@ -124,34 +142,48 @@ impl SeaFile {
             Some(ActiveEncoder::Cbr(cbr_encoder))
         };
 
+        let channels = header.channels as usize;
+        let frames_per_chunk = header.frames_per_chunk as usize;
+        let (scale_factor_items, vbr_residual_sizes_items, residual_items, vbr_bitlength_items) =
+            scratch_capacities(
+                frames_per_chunk,
+                channels,
+                encoder_settings.scale_factor_frames as usize,
+            );
+
         Ok(SeaFile {
             header,
             decoder: None,
             encoder,
             encoder_settings: Some(encoder_settings.clone()),
             chunk_serializer: ChunkSerializer::new(),
-            scratch_lms: Vec::new(),
-            scratch_scale_factors: Vec::new(),
-            scratch_vbr_residual_sizes: Vec::new(),
-            scratch_residuals: Vec::new(),
-            scratch_vbr_bitlengths: Vec::new(),
-            lms_snapshot: Vec::new(),
+            scratch_lms: Vec::with_capacity(channels),
+            scratch_scale_factors: Vec::with_capacity(scale_factor_items),
+            scratch_vbr_residual_sizes: Vec::with_capacity(vbr_residual_sizes_items),
+            scratch_residuals: Vec::with_capacity(residual_items),
+            scratch_vbr_bitlengths: Vec::with_capacity(vbr_bitlength_items),
+            lms_snapshot: Vec::with_capacity(channels),
         })
     }
 
     pub fn new_for_decoding(header: SeaFileHeader) -> Self {
+        let channels = header.channels as usize;
+        let frames_per_chunk = header.frames_per_chunk as usize;
+        let (scale_factor_items, vbr_residual_sizes_items, residual_items, vbr_bitlength_items) =
+            scratch_capacities(frames_per_chunk, channels, DEFAULT_SCALE_FACTOR_FRAMES);
+
         SeaFile {
             header,
             decoder: None,
             encoder: None,
             encoder_settings: None,
             chunk_serializer: ChunkSerializer::new(),
-            scratch_lms: Vec::new(),
-            scratch_scale_factors: Vec::new(),
-            scratch_vbr_residual_sizes: Vec::new(),
-            scratch_residuals: Vec::new(),
-            scratch_vbr_bitlengths: Vec::new(),
-            lms_snapshot: Vec::new(),
+            scratch_lms: Vec::with_capacity(channels),
+            scratch_scale_factors: Vec::with_capacity(scale_factor_items),
+            scratch_vbr_residual_sizes: Vec::with_capacity(vbr_residual_sizes_items),
+            scratch_residuals: Vec::with_capacity(residual_items),
+            scratch_vbr_bitlengths: Vec::with_capacity(vbr_bitlength_items),
+            lms_snapshot: Vec::with_capacity(channels),
         }
     }
 

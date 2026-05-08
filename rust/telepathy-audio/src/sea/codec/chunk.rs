@@ -74,7 +74,7 @@ impl SeaChunk {
         for scale_factor in scale_factors.iter() {
             packer.push(*scale_factor as u32, scale_factor_bits);
         }
-        output.extend_from_slice(packer.finish());
+        packer.drain_into(output);
 
         // Serialize VBR residual sizes if VBR
         if matches!(chunk_type, SeaChunkType::Vbr) {
@@ -83,7 +83,7 @@ impl SeaChunk {
                 let relative_size = *vbr_residual_size as i32 - residual_size as i32 + 1;
                 packer.push(relative_size as u32, 2);
             }
-            output.extend_from_slice(packer.finish());
+            packer.drain_into(output);
         }
 
         // Serialize residuals using reusable packer
@@ -110,7 +110,7 @@ impl SeaChunk {
                 packer.push(*residual as u32, residual_size as u8);
             }
         }
-        output.extend_from_slice(packer.finish());
+        packer.drain_into(output);
 
         Ok(())
     }
@@ -189,8 +189,7 @@ impl SeaChunk {
 
             unpacker.reset_const(scale_factor_bits);
             unpacker.process_bytes(packed_scale_factors);
-            scale_factors.clear();
-            scale_factors.extend_from_slice(unpacker.finish());
+            std::mem::swap(scale_factors, unpacker.take_output());
             scale_factors.resize(scale_factor_items, 0);
         }
 
@@ -206,8 +205,7 @@ impl SeaChunk {
 
             unpacker.reset_const(2);
             unpacker.process_bytes(packed_vbr_residual_sizes);
-            vbr_residual_sizes.clear();
-            vbr_residual_sizes.extend_from_slice(unpacker.finish());
+            std::mem::swap(vbr_residual_sizes, unpacker.take_output());
             vbr_residual_sizes.resize(scale_factor_items, 0);
             for item in vbr_residual_sizes.iter_mut() {
                 *item += residual_size as u8 - 1;
@@ -268,8 +266,7 @@ impl SeaChunk {
             }
 
             unpacker.process_bytes(packed_residuals);
-            residuals.clear();
-            residuals.extend_from_slice(unpacker.finish());
+            std::mem::swap(residuals, unpacker.take_output());
             residuals.resize(frames_in_this_chunk * file_header.channels as usize, 0);
         }
 

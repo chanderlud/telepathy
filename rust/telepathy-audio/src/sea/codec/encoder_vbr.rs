@@ -32,21 +32,27 @@ impl VbrEncoder {
     }
 
     pub fn new(file_header: &SeaFileHeader, encoder_settings: &EncoderSettings) -> Self {
+        let channels = file_header.channels as usize;
+        let frames_per_chunk = file_header.frames_per_chunk as usize;
+        let scale_factor_frames = encoder_settings.scale_factor_frames as usize;
+        let scale_factor_items = (frames_per_chunk / scale_factor_frames) * channels;
+        let analyze_items = scale_factor_frames * channels;
+
         VbrEncoder {
-            channels: file_header.channels as usize,
+            channels,
             scale_factor_frames: encoder_settings.scale_factor_frames,
             base_encoder: EncoderBase::new(
                 file_header.channels as usize,
                 encoder_settings.scale_factor_bits as usize,
             ),
             vbr_target_bitrate: Self::get_normalized_vbr_bitrate(encoder_settings),
-            scratch_ranks: Vec::new(),
-            scratch_residual_sizes: Vec::new(),
-            scratch_errors: Vec::new(),
-            scratch_indices: Vec::new(),
-            scratch_lms_backup: Vec::new(),
-            scratch_analyze_scale_factors: Vec::new(),
-            scratch_analyze_residuals: Vec::new(),
+            scratch_ranks: Vec::with_capacity(channels),
+            scratch_residual_sizes: Vec::with_capacity(channels),
+            scratch_errors: Vec::with_capacity(scale_factor_items),
+            scratch_indices: Vec::with_capacity(scale_factor_items),
+            scratch_lms_backup: Vec::with_capacity(channels),
+            scratch_analyze_scale_factors: Vec::with_capacity(analyze_items),
+            scratch_analyze_residuals: Vec::with_capacity(analyze_items),
         }
     }
 

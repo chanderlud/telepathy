@@ -18,16 +18,17 @@ pub struct CbrEncoder {
 
 impl CbrEncoder {
     pub fn new(file_header: &SeaFileHeader, encoder_settings: &EncoderSettings) -> Self {
+        let channels = file_header.channels as usize;
         CbrEncoder {
-            channels: file_header.channels as usize,
+            channels,
             residual_size: SeaResidualSize::from(libm::floorf(encoder_settings.residual_bits) as u8),
             scale_factor_frames: encoder_settings.scale_factor_frames as usize,
             base_encoder: EncoderBase::new(
                 file_header.channels as usize,
                 encoder_settings.scale_factor_bits as usize,
             ),
-            scratch_ranks: Vec::new(),
-            scratch_residual_sizes: Vec::new(),
+            scratch_ranks: Vec::with_capacity(channels),
+            scratch_residual_sizes: Vec::with_capacity(channels),
         }
     }
 
