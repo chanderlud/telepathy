@@ -1,10 +1,10 @@
+use crate::sea::codec::file::is_valid_geometry;
 use crate::sea::codec::{
     common::SeaError,
     file::{SeaFile, SeaFileHeader},
 };
 use bytes::BytesMut;
 use nnnoiseless::FRAME_SIZE;
-use crate::sea::codec::file::is_valid_geometry;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct EncoderSettings {
@@ -34,6 +34,15 @@ impl EncoderSettings {
         }
 
         if self.scale_factor_frames == 0 {
+            return Err(SeaError::InvalidParameters);
+        }
+
+        if !self.residual_bits.is_finite() {
+            return Err(SeaError::InvalidParameters);
+        }
+
+        let residual_size = libm::floorf(self.residual_bits);
+        if !(1.0..=8.0).contains(&residual_size) {
             return Err(SeaError::InvalidParameters);
         }
 

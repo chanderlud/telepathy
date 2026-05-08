@@ -282,14 +282,38 @@ fn invalid_encoder_settings_are_rejected() {
         frames_per_chunk: 240,
         ..EncoderSettings::default()
     };
+    let invalid_residual_bits_below_range = EncoderSettings {
+        residual_bits: 0.9,
+        ..EncoderSettings::default()
+    };
+    let invalid_residual_bits_above_range = EncoderSettings {
+        residual_bits: 9.0,
+        ..EncoderSettings::default()
+    };
+    let invalid_residual_bits_nan = EncoderSettings {
+        residual_bits: f32::NAN,
+        ..EncoderSettings::default()
+    };
 
     let res_bits = SeaEncoder::new(1, SAMPLE_RATE, invalid_scale_factor_bits);
     let res_frames = SeaEncoder::new(1, SAMPLE_RATE, invalid_scale_factor_frames);
     let res_divisibility = SeaEncoder::new(1, SAMPLE_RATE, invalid_chunk_divisibility);
     let res_geometry = SeaEncoder::new(1, SAMPLE_RATE, invalid_geometry);
+    let res_residual_below = SeaEncoder::new(1, SAMPLE_RATE, invalid_residual_bits_below_range);
+    let res_residual_above = SeaEncoder::new(1, SAMPLE_RATE, invalid_residual_bits_above_range);
+    let res_residual_nan = SeaEncoder::new(1, SAMPLE_RATE, invalid_residual_bits_nan);
 
     assert!(matches!(res_bits, Err(SeaError::InvalidParameters)));
     assert!(matches!(res_frames, Err(SeaError::InvalidParameters)));
     assert!(matches!(res_divisibility, Err(SeaError::InvalidParameters)));
     assert!(matches!(res_geometry, Err(SeaError::InvalidParameters)));
+    assert!(matches!(
+        res_residual_below,
+        Err(SeaError::InvalidParameters)
+    ));
+    assert!(matches!(
+        res_residual_above,
+        Err(SeaError::InvalidParameters)
+    ));
+    assert!(matches!(res_residual_nan, Err(SeaError::InvalidParameters)));
 }

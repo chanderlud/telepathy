@@ -58,9 +58,9 @@ impl SeaChunk {
 
         let channels = file_header.channels as usize;
         let frames_per_chunk = file_header.frames_per_chunk as usize;
-        let scale_factor_items =
-            frames_per_chunk.div_ceil(scale_factor_frames as usize) * channels;
-        let packed_scale_factor_bytes = (scale_factor_items * scale_factor_bits as usize).div_ceil(8);
+        let scale_factor_items = frames_per_chunk.div_ceil(scale_factor_frames as usize) * channels;
+        let packed_scale_factor_bytes =
+            (scale_factor_items * scale_factor_bits as usize).div_ceil(8);
         let packed_vbr_residual_sizes_bytes = if is_vbr {
             (scale_factor_items * 2).div_ceil(8)
         } else {
@@ -72,7 +72,8 @@ impl SeaChunk {
             let mut frames_written_since_update = 0;
             for _ in residuals.chunks_exact(channels) {
                 for channel_index in 0..channels {
-                    residual_bits += vbr_residual_sizes[vbr_residual_index + channel_index] as usize;
+                    residual_bits +=
+                        vbr_residual_sizes[vbr_residual_index + channel_index] as usize;
                 }
                 frames_written_since_update += 1;
                 if frames_written_since_update == scale_factor_frames as usize {

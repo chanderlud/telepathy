@@ -1,8 +1,6 @@
 use bytes::BytesMut;
 #[cfg(not(target_family = "wasm"))]
-use criterion::{criterion_group, criterion_main, Criterion};
-#[cfg(target_family = "wasm")]
-use wasm_bindgen_test::{wasm_bindgen_bench, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use nnnoiseless::FRAME_SIZE;
 use std::hint::black_box;
 use telepathy_audio::sea::{
@@ -13,6 +11,8 @@ use telepathy_audio::sea::{
     decoder::SeaDecoder,
     encoder::{EncoderSettings, SeaEncoder},
 };
+#[cfg(target_family = "wasm")]
+use wasm_bindgen_test::{Criterion, wasm_bindgen_bench};
 
 const SAMPLE_RATE: u32 = 48_000;
 

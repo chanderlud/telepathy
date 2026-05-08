@@ -98,9 +98,7 @@ impl ChunkSerializer {
 const DEFAULT_SCALE_FACTOR_FRAMES: usize = 20;
 
 pub(crate) fn is_valid_geometry(channels: u8, frames_per_chunk: u16) -> bool {
-    (channels as usize)
-        .checked_mul(frames_per_chunk as usize)
-        == Some(FRAME_SIZE)
+    (channels as usize).checked_mul(frames_per_chunk as usize) == Some(FRAME_SIZE)
 }
 
 fn scratch_capacities(

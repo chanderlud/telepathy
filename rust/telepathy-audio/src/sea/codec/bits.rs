@@ -12,14 +12,12 @@ pub struct BitUnpacker {
 
 impl BitUnpacker {
     pub fn new_const_bits(bitlength: u8) -> Self {
-        let mut output = Vec::new();
-        output.reserve(MAX_PACKED_BYTES);
         Self {
             bits_stored: 0,
             carry: 0,
             bitlengths: vec![bitlength; 1],
             bitlengths_index: 0,
-            output,
+            output: Vec::with_capacity(MAX_PACKED_BYTES),
         }
     }
 
@@ -125,12 +123,10 @@ pub struct BitPacker {
 
 impl Default for BitPacker {
     fn default() -> Self {
-        let mut output = Vec::new();
-        output.reserve(MAX_PACKED_BYTES);
         Self {
             accum: 0,
             bits_stored: 0,
-            output,
+            output: Vec::with_capacity(MAX_PACKED_BYTES),
         }
     }
 }

@@ -72,7 +72,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut frame = [0_i16; FRAME_SIZE];
         frame[..(end - start)].copy_from_slice(&samples[start..end]);
 
-        encoder.encode_frame(frame, &mut encoded_frame).map_err(sea_to_io)?;
+        encoder
+            .encode_frame(frame, &mut encoded_frame)
+            .map_err(sea_to_io)?;
 
         if frame_index == 0 {
             let header = SeaFileHeader {
