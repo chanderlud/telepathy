@@ -144,6 +144,11 @@ impl BitPacker {
             .reserve(MAX_PACKED_BYTES.saturating_sub(self.output.capacity()));
     }
 
+    pub fn reset_writer(&mut self) {
+        self.accum = 0;
+        self.bits_stored = 0;
+    }
+
     pub fn push(&mut self, input: u32, bits: u8) {
         debug_assert!(bits <= 8);
         let mask: u32 = (1 << bits as u32) - 1;
@@ -169,6 +174,31 @@ impl BitPacker {
         }
     }
 
+    pub fn push_into(&mut self, input: u32, bits: u8, output: &mut Vec<u8>) {
+        debug_assert!(bits <= 8);
+        let mask: u32 = (1 << bits as u32) - 1;
+        let value = (input) & mask;
+        debug_assert!(
+            input == value,
+            "cannot pack value={} into {} bits",
+            input,
+            bits
+        );
+        self.accum = (self.accum << bits) | u64::from(value);
+        self.bits_stored += bits as u32;
+
+        while self.bits_stored >= 8 {
+            let packed_byte = self.accum >> (self.bits_stored - 8);
+            output.push(packed_byte as u8);
+            self.bits_stored -= 8;
+            self.accum = if self.bits_stored == 0 {
+                0
+            } else {
+                self.accum & ((1u64 << self.bits_stored) - 1)
+            };
+        }
+    }
+
     pub fn finish(&mut self) -> &[u8] {
         if self.bits_stored > 0 {
             let byte = (self.accum << (8 - self.bits_stored)) as u8;
@@ -178,6 +208,15 @@ impl BitPacker {
         self.bits_stored = 0;
 
         &self.output
+    }
+
+    pub fn finish_into(&mut self, output: &mut Vec<u8>) {
+        if self.bits_stored > 0 {
+            let byte = (self.accum << (8 - self.bits_stored)) as u8;
+            output.push(byte);
+        }
+        self.accum = 0;
+        self.bits_stored = 0;
     }
 
     pub fn drain_into(&mut self, output: &mut Vec<u8>) {

@@ -56,7 +56,42 @@ impl SeaChunk {
             return Err(SeaError::InvalidParameters);
         }
 
+        let channels = file_header.channels as usize;
+        let frames_per_chunk = file_header.frames_per_chunk as usize;
+        let scale_factor_items =
+            frames_per_chunk.div_ceil(scale_factor_frames as usize) * channels;
+        let packed_scale_factor_bytes = (scale_factor_items * scale_factor_bits as usize).div_ceil(8);
+        let packed_vbr_residual_sizes_bytes = if is_vbr {
+            (scale_factor_items * 2).div_ceil(8)
+        } else {
+            0
+        };
+        let packed_residual_bytes = if is_vbr {
+            let mut residual_bits = 0usize;
+            let mut vbr_residual_index = 0;
+            let mut frames_written_since_update = 0;
+            for _ in residuals.chunks_exact(channels) {
+                for channel_index in 0..channels {
+                    residual_bits += vbr_residual_sizes[vbr_residual_index + channel_index] as usize;
+                }
+                frames_written_since_update += 1;
+                if frames_written_since_update == scale_factor_frames as usize {
+                    vbr_residual_index += channels;
+                    frames_written_since_update = 0;
+                }
+            }
+            residual_bits.div_ceil(8)
+        } else {
+            (residuals.len() * residual_size as usize).div_ceil(8)
+        };
+        let expected_chunk_bytes = 4
+            + (channels * LMS_LEN * 4)
+            + packed_scale_factor_bytes
+            + packed_vbr_residual_sizes_bytes
+            + packed_residual_bytes;
+
         output.clear();
+        output.reserve(expected_chunk_bytes.saturating_sub(output.capacity()));
         output.extend_from_slice(&[
             chunk_type as u8,
             (scale_factor_bits << 4) | residual_size as u8,
@@ -70,33 +105,33 @@ impl SeaChunk {
         }
 
         // Serialize scale factors using reusable packer
-        packer.reset();
+        packer.reset_writer();
         for scale_factor in scale_factors.iter() {
-            packer.push(*scale_factor as u32, scale_factor_bits);
+            packer.push_into(*scale_factor as u32, scale_factor_bits, output);
         }
-        packer.drain_into(output);
+        packer.finish_into(output);
 
         // Serialize VBR residual sizes if VBR
         if matches!(chunk_type, SeaChunkType::Vbr) {
-            packer.reset();
+            packer.reset_writer();
             for vbr_residual_size in vbr_residual_sizes.iter() {
                 let relative_size = *vbr_residual_size as i32 - residual_size as i32 + 1;
-                packer.push(relative_size as u32, 2);
+                packer.push_into(relative_size as u32, 2, output);
             }
-            packer.drain_into(output);
+            packer.finish_into(output);
         }
 
         // Serialize residuals using reusable packer
-        packer.reset();
+        packer.reset_writer();
         if matches!(chunk_type, SeaChunkType::Vbr) {
-            let channels = file_header.channels as usize;
             let mut vbr_residual_index = 0;
             let mut frames_written_since_update = 0;
             for residual in residuals.chunks_exact(channels) {
                 for (channel_index, item) in residual.iter().enumerate().take(channels) {
-                    packer.push(
+                    packer.push_into(
                         *item as u32,
                         vbr_residual_sizes[vbr_residual_index + channel_index],
+                        output,
                     );
                 }
                 frames_written_since_update += 1;
@@ -107,10 +142,10 @@ impl SeaChunk {
             }
         } else {
             for residual in residuals.iter() {
-                packer.push(*residual as u32, residual_size as u8);
+                packer.push_into(*residual as u32, residual_size as u8, output);
             }
         }
-        packer.drain_into(output);
+        packer.finish_into(output);
 
         Ok(())
     }
