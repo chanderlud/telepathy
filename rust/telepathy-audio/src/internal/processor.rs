@@ -31,9 +31,9 @@ use crate::io::traits::{AudioDataSink, AudioDataSource, ClosedOrFailed};
 use crate::sea::decoder::SeaDecoder;
 use crate::sea::encoder::SeaEncoder;
 use audioadapter_buffers::direct::InterleavedSlice;
-use log::{debug, warn};
 use nnnoiseless::{DenoiseState, FRAME_SIZE};
 use rubato::{FixedSync, Resampler};
+use tracing::{debug, warn};
 
 /// Processes audio input and sends it to the output channel.
 ///
@@ -146,7 +146,7 @@ pub fn input_processor<I: AudioInput>(
         // TODO may no longer be needed
         // the first frame may be smaller than frame_size
         if len != FRAME_SIZE {
-            warn!("base_resampler: len != frame_size: {}", len);
+            warn!(len, "base_resampler_frame_size_mismatch");
             continue;
         }
 
@@ -287,7 +287,7 @@ pub fn output_processor<O: AudioOutput>(
             decoder.decode_frame(&buffer, &mut decoded_buf)?;
             &decoded_buf
         } else if buffer.len() != NETWORK_FRAME {
-            warn!("output frame != FRAME_SIZE: {}", buffer.len());
+            warn!(len = buffer.len(), "output_frame_size_mismatch");
             continue;
         } else {
             unsafe { std::slice::from_raw_parts(buffer.as_ptr() as *const i16, FRAME_SIZE) }

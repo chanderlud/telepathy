@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:telepathy/controllers/index.dart';
-import 'package:telepathy/src/rust/flutter.dart';
+import 'package:telepathy/core/rust/flutter.dart';
 import 'package:telepathy/widgets/contacts/contacts_list.dart';
 
 /// A contacts list wrapper that memoizes contact sorting.

@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:telepathy/src/rust/flutter.dart';
+import 'package:telepathy/core/rust/flutter.dart';
 import 'package:telepathy/widgets/common/index.dart';
 
 /// Shows an error modal.

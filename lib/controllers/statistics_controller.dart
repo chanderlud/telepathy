@@ -3,7 +3,7 @@ import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:telepathy/core/utils/format_utils.dart';
-import 'package:telepathy/src/rust/flutter.dart';
+import 'package:telepathy/core/rust/flutter.dart';
 
 /// A controller responsible for managing the statistics of the call.
 class StatisticsController extends ChangeNotifier {

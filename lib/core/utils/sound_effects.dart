@@ -1,4 +1,4 @@
-import 'package:telepathy/src/rust/audio/player.dart';
+import 'package:telepathy/core/rust/audio/player.dart';
 
 /// Shared sound handles used across bootstrap callbacks and UI widgets.
 ///

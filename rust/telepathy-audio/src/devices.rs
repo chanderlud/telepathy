@@ -325,7 +325,7 @@ pub fn get_input_device(
         }
 
         // Fall back to default device
-        log::warn!("Input device '{}' not found, falling back to default", id);
+        tracing::warn!(device.id = id, "input_device_not_found_fallback_to_default");
     }
 
     // Get default device
@@ -384,7 +384,10 @@ pub fn get_output_device(
         }
 
         // Fall back to default device
-        log::warn!("Output device '{}' not found, falling back to default", id);
+        tracing::warn!(
+            device.id = id,
+            "output_device_not_found_fallback_to_default"
+        );
     }
 
     // Get default device

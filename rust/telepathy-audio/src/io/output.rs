@@ -45,12 +45,12 @@ use atomic_float::AtomicF32;
 use cpal::Sample;
 use cpal::SampleFormat;
 use cpal::traits::{DeviceTrait, StreamTrait};
-use log::{debug, error};
 use nnnoiseless::FRAME_SIZE;
 use rtrb::chunks::ChunkError;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
 use tokio::sync::Notify;
+use tracing::{debug, error};
 
 /// Configuration for audio output processing.
 ///
@@ -626,7 +626,7 @@ where
             }
         },
         move |err| {
-            error!("Output stream error: {}", err);
+            error!(error = %err, "output_stream_error");
             if let Some(ref notify) = error_notify {
                 notify.notify_one();
             }

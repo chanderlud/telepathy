@@ -1,0 +1,61 @@
+[package]
+name = "telepathy_core"
+version = "2.6.3"
+edition = "2024"
+build = "build.rs"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+telepathy-audio = { path = "../telepathy-audio" }
+tokio-util = { version = "0.7", features = ["codec", "compat"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "json", "env-filter", "registry", "std"] }
+kanal = "0.1.1"
+atomic_float = "1"
+flutter_rust_bridge = { version = "=2.12.0", default-features = false, features = ["rust-async", "thread-pool", "dart-opaque", "anyhow"] }
+lazy_static = "1"
+libp2p-stream = { version = "0.4.0-alpha" }
+chrono = "*"
+regex = "1" # TODO consider removing regex dep
+speedy = "=0.8.7"
+cfg-if = "1"
+bytes = "1"
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.22"
+ndk-context = "0.1"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62", features = ["Win32_Graphics", "Win32_Graphics_GdiPlus", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi", "Win32_System_LibraryLoader"] }
+widestring = "1.1"
+
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2 = "*"
+objc2-foundation = "*"
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+uuid = { version = "1", features = ["v4", "js"] }
+getrandom = { version = "0.3", features = ["wasm_js"] }
+tokio = { version = "1", features = ["time", "io-util", "macros", "rt"] }
+libp2p = { version = "0.56", features = ["quic", "ping", "dcutr", "identify", "macros", "noise", "yamux", "relay", "wasm-bindgen", "autonat"] }
+libp2p-webtransport-websys = "0.5"
+tracing-wasm = "0.2"
+wasmtimer = "0.4"
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+uuid = { version = "1", features = ["v4"] }
+tokio = { version = "1", features = ["time", "io-util", "macros", "process", "net", "rt-multi-thread", "fs"] }
+libp2p = { version = "0.56", features = ["tokio", "quic", "tcp", "ping", "dcutr", "identify", "macros", "noise", "yamux", "relay", "autonat"] }
+tracing-appender = "0.2"
+tracing-panic = "0.1"
+
+[dev-dependencies]
+mockall = "0.14"
+async-trait = "0.1"
+
+[target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
+relay-server = { path = "../relay-server" }

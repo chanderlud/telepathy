@@ -1,7 +1,7 @@
 name: telepathy
 description: "A cross platform p2p chat application"
 publish_to: 'none'
-version: 2.6.1
+version: 2.6.3
 
 environment:
   sdk: '>=3.3.0 <4.0.0'
@@ -13,12 +13,12 @@ dependencies:
   rust_builder:
     path: rust_builder
 
-  flutter_rust_bridge: 2.11.1
+  flutter_rust_bridge: 2.12.0
   flutter_secure_storage: ^10.0.0
 
   shared_preferences: ^2.5.3
   mutex: ^3.1.0
-  file_picker: ^10.1.9
+  file_picker: ^11.0.2
   uuid: ^4.3.3
   permission_handler: ^12.0.0+1
   provider: ^6.1.2

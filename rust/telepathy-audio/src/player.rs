@@ -42,7 +42,6 @@ use audioadapter_buffers::direct::InterleavedSlice;
 use bytes::BytesMut;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{DeviceId, Host, SampleFormat};
-use log::{debug, error, info};
 use nnnoiseless::FRAME_SIZE;
 use rtrb::RingBuffer;
 use rubato::{FixedSync, Resampler};
@@ -59,6 +58,7 @@ use std::time::Instant;
 use tokio::select;
 use tokio::sync::oneshot;
 use tokio::sync::{Mutex, Notify};
+use tracing::{debug, error, info};
 #[cfg(target_family = "wasm")]
 use wasm_bindgen_futures::spawn_local;
 #[cfg(target_family = "wasm")]

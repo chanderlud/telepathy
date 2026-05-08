@@ -2,7 +2,7 @@
 ; SEE THE DOCUMENTATION FOR DETAILS ON CREATING INNO SETUP SCRIPT FILES!
 
 #define MyAppName "Telepathy"
-#define MyAppVersion "2.6.1"
+#define MyAppVersion "2.6.3"
 #define MyAppPublisher "CFLM Studios"
 #define MyAppURL "https://chanchan.dev/telepathy"
 #define MyAppExeName "telepathy.exe"
@@ -36,7 +36,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 Source: "..\build\windows\x64\runner\Release\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\build\windows\x64\runner\Release\telepathy.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\build\windows\x64\runner\Release\telepathy_core.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\build\windows\x64\runner\Release\flutter_secure_storage_windows_plugin.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\build\windows\x64\runner\Release\flutter_windows.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\build\windows\x64\runner\Release\irondash_engine_context_plugin.dll"; DestDir: "{app}"; Flags: ignoreversion
