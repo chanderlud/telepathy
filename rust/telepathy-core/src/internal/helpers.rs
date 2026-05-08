@@ -28,7 +28,7 @@ use telepathy_audio::WebAudioWrapper;
 use telepathy_audio::devices::get_input_device;
 use telepathy_audio::internal::buffer_pool::PooledBuffer;
 use telepathy_audio::io::{
-    AudioInputBuilder, AudioInputHandle, AudioOutputBuilder, AudioOutputHandle,
+    AudioInputBuilder, AudioInputHandle, AudioOutputBuilder, AudioOutputHandle, CodecBitrateMode,
 };
 #[cfg(not(target_family = "wasm"))]
 use tokio::fs::File;
@@ -315,16 +315,26 @@ where
         // Create a channel for receiving processed audio data
         let (sender, receiver) = kanal::unbounded_async();
 
-        let builder = AudioInputBuilder::new()
+        let mut builder = AudioInputBuilder::new()
             .device(device_id)
             .denoise(denoise, denoise_model)
             .input_volume_shared(&self.core_state.input_volume)
             .rms_threshold_shared(&self.core_state.rms_threshold)
             .muted_shared(&self.core_state.muted)
             .rms_shared(&statistics_state.input_rms)
-            .codec(codec_enabled, vbr, residual_bits)
             .on_error(end_call)
             .sink(KanalSink::new(sender));
+
+        if codec_enabled {
+            builder = builder.codec(
+                if vbr {
+                    CodecBitrateMode::Vbr
+                } else {
+                    CodecBitrateMode::Cbr
+                },
+                residual_bits,
+            )
+        }
 
         cfg_if::cfg_if! {
             if #[cfg(target_family = "wasm")] {

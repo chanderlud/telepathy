@@ -139,11 +139,8 @@ pub struct AudioInputConfig {
     /// When enabled, audio is encoded using the SEA codec before being
     /// passed to the callback.
     pub codec_enabled: bool,
-    /// Variable bit rate encoding.
-    ///
-    /// When `true`, the encoder uses variable bit rate for potentially
-    /// smaller output. When `false`, uses constant bit rate.
-    pub codec_vbr: bool,
+    /// Codec bit rate mode.
+    pub codec_mode: CodecBitrateMode,
     /// Residual bits for codec quality (typically 2.0-8.0).
     ///
     /// Higher values provide better quality but larger encoded size.
@@ -175,7 +172,7 @@ impl Default for AudioInputConfig {
             volume: 1.0,
             rms_threshold: 0.0,
             codec_enabled: false,
-            codec_vbr: false,
+            codec_mode: CodecBitrateMode::Cbr,
             codec_residual_bits: 5.0,
             error_notify: None,
             output_sample_rate: None,
@@ -331,12 +328,13 @@ where
     ///
     /// # Arguments
     ///
-    /// * `enabled` - Whether to enable codec encoding
-    /// * `vbr` - Whether to use variable bit rate
+    /// * `mode` - Whether to use constant bit rate (CBR) or variable bit rate (VBR)
     /// * `residual_bits` - Quality setting for residual encoding
-    pub fn codec(mut self, enabled: bool, vbr: bool, residual_bits: f32) -> Self {
-        self.config.codec_enabled = enabled;
-        self.config.codec_vbr = vbr;
+    ///
+    /// Calling this method always enables codec encoding.
+    pub fn codec(mut self, mode: CodecBitrateMode, residual_bits: f32) -> Self {
+        self.config.codec_enabled = true;
+        self.config.codec_mode = mode;
         self.config.codec_residual_bits = residual_bits;
         self
     }
@@ -523,7 +521,7 @@ where
                 output_rate,
                 EncoderSettings {
                     residual_bits: self.config.codec_residual_bits,
-                    vbr: self.config.codec_vbr,
+                    vbr: matches!(self.config.codec_mode, CodecBitrateMode::Vbr),
                     ..Default::default()
                 },
             )?)
@@ -829,6 +827,16 @@ impl AudioInputHandle {
     pub fn rms_threshold(&self) -> f32 {
         self.rms_threshold.load(Relaxed)
     }
+}
+
+/// Codec bit rate mode for input encoding.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum CodecBitrateMode {
+    /// Constant bit rate encoding.
+    #[default]
+    Cbr,
+    /// Variable bit rate encoding.
+    Vbr,
 }
 
 /// Lock free sender for native targets

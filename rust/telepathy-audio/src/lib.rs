@@ -162,14 +162,14 @@
 //! use bytes::Bytes;
 //! use std::sync::mpsc;
 //! use telepathy_audio::devices::AudioHost;
-//! use telepathy_audio::io::{AudioInputBuilder, AudioOutputBuilder};
+//! use telepathy_audio::io::{AudioInputBuilder, AudioOutputBuilder, CodecBitrateMode};
 //! use telepathy_audio::adapters::MpscSource;
 //!
 //! let host = AudioHost::new();
 //!
 //! // Input with codec encoding
 //! let input = AudioInputBuilder::new()
-//!     .codec(true, false, 5.0)  // enabled, VBR disabled, 5 residual bits
+//!     .codec(CodecBitrateMode::Cbr, 5.0)  // CBR mode, 5 residual bits
 //!     .callback(|encoded_data| {
 //!         // Send encoded data over network
 //!     })

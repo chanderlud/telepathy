@@ -140,7 +140,7 @@ let _ = (tx1, tx2, output1, output2);
 
 ```rust
 use telepathy_audio::devices::AudioHost;
-use telepathy_audio::io::{AudioInputBuilder, AudioOutputBuilder};
+use telepathy_audio::io::{AudioInputBuilder, AudioOutputBuilder, CodecBitrateMode};
 use telepathy_audio::adapters::MpscSource;
 use bytes::Bytes;
 use std::sync::mpsc;
@@ -150,9 +150,8 @@ let host = AudioHost::new();
 // Input with codec encoding
 let input = AudioInputBuilder::new()
     .codec(
-        true,   // enabled: enable SEA codec encoding
-        false,  // vbr: use constant bit rate (CBR) instead of variable bit rate
-        5.0     // residual_bits: quality setting (1.0-8.0, higher = better quality)
+        CodecBitrateMode::Cbr, // CBR mode (use Vbr for variable bit rate)
+        5.0                    // residual_bits: quality setting (1.0-8.0, higher = better quality)
     )
     .callback(|encoded_data| {
         // Send encoded data over network

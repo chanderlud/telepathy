@@ -44,7 +44,7 @@ pub mod output;
 pub mod traits;
 
 // Re-export main types for convenience
-pub use input::{AudioInputBuilder, AudioInputConfig, AudioInputHandle};
+pub use input::{AudioInputBuilder, AudioInputConfig, AudioInputHandle, CodecBitrateMode};
 pub use output::{AudioOutputBuilder, AudioOutputConfig, AudioOutputHandle};
 pub use traits::{AudioDataSink, AudioDataSource};
 
