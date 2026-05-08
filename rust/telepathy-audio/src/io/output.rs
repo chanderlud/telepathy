@@ -6,7 +6,8 @@
 //! # Example
 //!
 //! ```rust,no_run
-//! use telepathy_audio::{AudioHost, AudioOutputBuilder};
+//! use telepathy_audio::devices::AudioHost;
+//! use telepathy_audio::io::AudioOutputBuilder;
 //! use telepathy_audio::adapters::MpscSource;
 //! use bytes::Bytes;
 //! use std::sync::mpsc;

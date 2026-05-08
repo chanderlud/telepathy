@@ -16,7 +16,7 @@ A standalone audio processing library for the Telepathy project, providing devic
 ### Device Enumeration
 
 ```rust
-use telepathy_audio::{AudioHost, list_all_devices, get_default_input_device};
+use telepathy_audio::devices::{AudioHost, list_all_devices, get_default_input_device};
 
 // Create an audio host
 let host = AudioHost::new();
@@ -34,14 +34,16 @@ println!("Default input: {}", input_device.name().unwrap());
 ### Audio Input with Callback
 
 ```rust
-use telepathy_audio::{AudioHost, AudioInputBuilder};
+use telepathy_audio::devices::AudioHost;
+use telepathy_audio::io::AudioInputBuilder;
+use telepathy_audio::RnnModel;
 
 let host = AudioHost::new();
 
 // Create an audio input with processing
 let input = AudioInputBuilder::new()
     .volume(1.0)
-    .denoise(true, None)  // Enable noise suppression
+    .denoise(RnnModel::default()) // Enable noise suppression with default model
     .rms_threshold(0.01)  // Silence detection threshold
     .callback(|data| {
         // Process or transmit the audio data
@@ -75,7 +77,8 @@ instead of writing a custom implementation.
 ### Audio Output
 
 ```rust
-use telepathy_audio::{AudioHost, AudioOutputBuilder};
+use telepathy_audio::devices::AudioHost;
+use telepathy_audio::io::AudioOutputBuilder;
 use telepathy_audio::adapters::MpscSource;
 use bytes::Bytes;
 use std::sync::mpsc;
@@ -108,7 +111,8 @@ output.undeafen(); // Resume output
 The library supports creating multiple independent output streams:
 
 ```rust
-use telepathy_audio::{AudioHost, AudioOutputBuilder};
+use telepathy_audio::devices::AudioHost;
+use telepathy_audio::io::AudioOutputBuilder;
 use telepathy_audio::adapters::MpscSource;
 use bytes::Bytes;
 use std::sync::mpsc;
@@ -136,7 +140,8 @@ let _ = (tx1, tx2, output1, output2);
 ### With Codec Support
 
 ```rust
-use telepathy_audio::{AudioHost, AudioInputBuilder, AudioOutputBuilder};
+use telepathy_audio::devices::AudioHost;
+use telepathy_audio::io::{AudioInputBuilder, AudioOutputBuilder, CodecBitrateMode};
 use telepathy_audio::adapters::MpscSource;
 use bytes::Bytes;
 use std::sync::mpsc;
@@ -146,9 +151,8 @@ let host = AudioHost::new();
 // Input with codec encoding
 let input = AudioInputBuilder::new()
     .codec(
-        true,   // enabled: enable SEA codec encoding
-        false,  // vbr: use constant bit rate (CBR) instead of variable bit rate
-        5.0     // residual_bits: quality setting (1.0-8.0, higher = better quality)
+        CodecBitrateMode::Cbr, // CBR mode (use Vbr for variable bit rate)
+        5.0                    // residual_bits: quality setting (1.0-8.0, higher = better quality)
     )
     .callback(|encoded_data| {
         // Send encoded data over network
@@ -166,19 +170,16 @@ let output = AudioOutputBuilder::new()
 let _ = tx;
 ```
 
-> **Note on Sample Rates**: The processor's output sample rate depends on the configuration:
+> **Note on Sample Rates**: The *input* processor's *output* sample rate depends on the configuration:
 >
 > - **Denoise enabled**: Always outputs at 48kHz (required by RNNoise). Input is upsampled to 48kHz for noise suppression processing.
 > - **Denoise disabled with custom `output_sample_rate`**: Uses the specified rate. Useful for matching network requirements without denoising.
 > - **Denoise disabled without custom rate**: Uses the device's native sample rate (pass-through, no resampling).
 >
-> The encoder sample rate automatically matches the processor's output rate.
->
 > ```rust
 > // Example: Custom output sample rate without denoising
 > let input = AudioInputBuilder::new()
->     .denoise(false, None)      // Disable denoising
->     .output_sample_rate(48000) // Force 48kHz output for network compatibility
+>     .output_sample_rate(48000) // Force 48kHz output. Do not enable denoising.
 >     .callback(|data| { /* ... */ })
 >     .build(&host)
 >     .unwrap();
@@ -189,93 +190,18 @@ let _ = tx;
 ### Codec vs. No-Codec Paths
 
 The library supports two distinct processing paths:
-
-**With Codec Enabled:**
-```
-Input: Audio → Processor (with encoding) → Callback/Network
-Output: Network → Processor (with decoding) → Audio
-```
-
-**Without Codec (Raw Audio):**
-```
-Input: Audio → Processor → Callback/Network
-Output: Network → Processor → Audio
-```
-
-When codec is disabled, audio is transmitted as raw `Bytes` (i16 samples converted to bytes).
-When codec is enabled, audio is compressed using the SEA codec before transmission.
+- When codec is **disabled**, audio is transmitted as raw `Bytes` (i16 samples converted to bytes). 
+- Every network frame is 960 bytes when the codec is disabled.
+- When codec is **enabled**, audio is compressed using the SEA codec before transmission.
+- Every network frame is < 960 bytes when codec is enabled, different codec options will result in different size frames.
 
 ### Thread Architecture
 
-Each audio stream spawns dedicated threads:
-- **Input**: 1 processor thread (with optional encoding); the sink is called directly from this thread
-- **Output**: 1 processor thread (with optional decoding)
+Each audio stream spawns a dedicated thread:
+- **Input**: processor thread (with optional encoding); the sink is called directly from this thread
+- **Output**: processor thread (with optional decoding)
 
-Encoding/decoding happens within the processor threads for better performance and reduced context switching. Data delivery is trait-based (`AudioDataSink` / `AudioDataSource`) so consumers can choose any channel implementation or use callbacks.
-
-## Module Organization
-
-The library is organized into a hierarchical module structure:
-
-```
-telepathy_audio/
-├── devices       - Device enumeration and selection (public)
-├── io/           - Audio I/O module (public)
-│   ├── input     - Audio input capture
-│   └── output    - Audio output playback
-├── player        - Audio file playback (public)
-├── constants     - Public constants
-├── error         - Error types
-├── internal/     - Implementation details (private)
-│   ├── codec     - SEA codec encoding/decoding
-│   ├── processing- SIMD-optimized audio functions
-│   ├── processor - Core audio processors
-│   ├── state     - Processor state structs
-│   ├── traits    - AudioInput/AudioOutput traits
-│   └── utils     - Internal utilities
-└── platform/     - Platform-specific code (private)
-    └── web_audio - WASM audio implementation
-```
-
-**Public API**: `devices`, `io`, `player`, `constants`, `error`
-
-## API Reference
-
-### Types
-
-- `AudioHost` - Central audio host for device management
-- `AudioDeviceInfo` - Device name and ID information
-- `AudioDeviceList` - Collection of input/output devices
-- `DeviceHandle` - Handle to a selected device
-- `AudioInputBuilder` - Builder for audio input configuration
-- `AudioInputHandle` - Handle to running input stream
-- `AudioInputConfig` - Configuration struct for audio input
-- `AudioOutputBuilder` - Builder for audio output configuration
-- `AudioOutputHandle` - Handle to running output stream
-- `AudioOutputConfig` - Configuration struct for audio output
-- `InputProcessorState` - State management for input processing (advanced)
-- `OutputProcessorState` - State management for output processing (advanced)
-
-### Functions
-
-- `list_input_devices()` - List available input devices
-- `list_output_devices()` - List available output devices
-- `list_all_devices()` - List all devices
-- `get_input_device()` - Get input device by ID (with fallback)
-- `get_output_device()` - Get output device by ID (with fallback)
-- `get_default_input_device()` - Get default input device
-- `get_default_output_device()` - Get default output device
-
-### Advanced APIs
-
-These are re-exported for consumers that need lower-level access:
-
-- `input_processor` / `output_processor` - Core processing functions
-- `encoder` / `decoder` - Direct codec access
-- `wide_mul` - SIMD-optimized audio multiplication
-- `resampler_factory` - Create resamplers for sample rate conversion
-- `InputProcessorState` / `OutputProcessorState` - State management for processors
-- `FRAME_SIZE` - Standard frame size constant (480 samples)
+Data delivery is trait-based (`AudioDataSink` / `AudioDataSource`) so consumers can choose any channel implementation or use callbacks.
 
 ## Dependencies
 

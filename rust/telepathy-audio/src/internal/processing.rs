@@ -69,7 +69,7 @@ const PREFETCH_DISTANCE: usize = 128;
 /// # Example
 ///
 /// ```rust
-/// use telepathy_audio::wide_mul;
+/// use telepathy_audio::internal::processing::wide_mul;
 ///
 /// let mut samples = [0.5f32; 480];
 /// wide_mul(&mut samples, 0.8); // Apply 80% volume

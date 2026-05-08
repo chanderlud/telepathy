@@ -5,7 +5,7 @@ pub struct SeaDequantTab {
     scale_factor_bits: usize,
 
     cached_reciprocals: [Vec<i32>; 9],
-    cached_dqt: [Vec<Vec<i32>>; 9],
+    cached_dqt: [Vec<i32>; 9],
 }
 
 // scale_factors along with residuals should cover all potential values
@@ -96,36 +96,35 @@ impl SeaDequantTab {
         curve
     }
 
-    fn generate_dqt(scale_factor_bits: usize, residual_bits: usize) -> Vec<Vec<i32>> {
+    fn generate_dqt(scale_factor_bits: usize, residual_bits: usize) -> Vec<i32> {
         if residual_bits == 0 {
             return vec![];
         }
 
         let dqt = Self::gen_dqt_table(residual_bits);
-
         let scalefactor_items = 1 << scale_factor_bits;
-
-        let mut output: Vec<Vec<i32>> = Vec::new();
-
-        let dqt_items = 2usize.pow(residual_bits as u32 - 1);
+        let stride = 1usize << residual_bits as u32;
+        let dqt_items = stride / 2;
+        let mut output = Vec::with_capacity(scalefactor_items * stride);
 
         let scale_factors = Self::calculate_scale_factors(residual_bits, scale_factor_bits);
 
-        for s in 0..scalefactor_items {
-            output.push(Vec::with_capacity(dqt.len()));
-
+        for factor in scale_factors.iter().take(scalefactor_items) {
             // zig zag pattern decreases quantization error
             for item in dqt.iter().take(dqt_items) {
-                let val = libm::roundf(scale_factors[s] as f32 * item) as i32;
-                output[s].push(val);
-                output[s].push(-val);
+                let val = libm::roundf(*factor as f32 * item) as i32;
+                output.push(val);
+                output.push(-val);
             }
         }
 
         output
     }
 
-    pub fn get_dqt(&self, residual_bits: usize) -> &Vec<Vec<i32>> {
-        &self.cached_dqt[residual_bits]
+    pub fn get_dqt(&self, residual_bits: usize) -> (&[i32], usize) {
+        (
+            &self.cached_dqt[residual_bits],
+            1usize << residual_bits as u32,
+        )
     }
 }

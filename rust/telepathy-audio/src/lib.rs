@@ -61,7 +61,7 @@
 //! ### Device Enumeration
 //!
 //! ```rust,no_run
-//! use telepathy_audio::{AudioHost, list_all_devices, get_default_input_device};
+//! use telepathy_audio::devices::{AudioHost, list_all_devices, get_default_input_device};
 //!
 //! // Create an audio host
 //! let host = AudioHost::new();
@@ -78,14 +78,16 @@
 //! ### Audio Input
 //!
 //! ```rust,no_run
-//! use telepathy_audio::{AudioHost, AudioInputBuilder};
+//! use telepathy_audio::RnnModel;
+//! use telepathy_audio::devices::AudioHost;
+//! use telepathy_audio::io::AudioInputBuilder;
 //!
 //! let host = AudioHost::new();
 //!
 //! // Create an audio input with callback
 //! let input = AudioInputBuilder::new()
 //!     .volume(1.0)
-//!     .denoise(true, None)  // Enable noise suppression with default model
+//!     .denoise(RnnModel::default())  // Enable noise suppression with default model
 //!     .rms_threshold(0.01)  // Silence detection
 //!     .callback(|data| {
 //!         // Process or transmit the audio data
@@ -105,7 +107,8 @@
 //! ```rust,no_run
 //! use bytes::Bytes;
 //! use std::sync::mpsc;
-//! use telepathy_audio::{AudioHost, AudioOutputBuilder};
+//! use telepathy_audio::devices::AudioHost;
+//! use telepathy_audio::io::AudioOutputBuilder;
 //! use telepathy_audio::adapters::MpscSource;
 //!
 //! let host = AudioHost::new();
@@ -132,7 +135,8 @@
 //! ```rust,no_run
 //! use bytes::Bytes;
 //! use std::sync::mpsc;
-//! use telepathy_audio::{AudioHost, AudioOutputBuilder};
+//! use telepathy_audio::devices::AudioHost;
+//! use telepathy_audio::io::AudioOutputBuilder;
 //! use telepathy_audio::adapters::MpscSource;
 //!
 //! let host = AudioHost::new();
@@ -158,14 +162,15 @@
 //! ```rust,no_run
 //! use bytes::Bytes;
 //! use std::sync::mpsc;
-//! use telepathy_audio::{AudioHost, AudioInputBuilder, AudioOutputBuilder};
+//! use telepathy_audio::devices::AudioHost;
+//! use telepathy_audio::io::{AudioInputBuilder, AudioOutputBuilder, CodecBitrateMode};
 //! use telepathy_audio::adapters::MpscSource;
 //!
 //! let host = AudioHost::new();
 //!
 //! // Input with codec encoding
 //! let input = AudioInputBuilder::new()
-//!     .codec(true, false, 5.0)  // enabled, VBR disabled, 5 residual bits
+//!     .codec(CodecBitrateMode::Cbr, 5.0)  // CBR mode, 5 residual bits
 //!     .callback(|encoded_data| {
 //!         // Send encoded data over network
 //!     })
@@ -192,7 +197,8 @@
 //! use atomic_float::AtomicF32;
 //! use bytes::Bytes;
 //! use std::sync::mpsc;
-//! use telepathy_audio::{AudioHost, AudioInputBuilder, AudioOutputBuilder};
+//! use telepathy_audio::devices::AudioHost;
+//! use telepathy_audio::io::{AudioInputBuilder, AudioOutputBuilder};
 //! use telepathy_audio::adapters::MpscSource;
 //!
 //! // Core state that can be shared across components

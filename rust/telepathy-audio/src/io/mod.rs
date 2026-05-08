@@ -12,7 +12,8 @@
 //! ## Example
 //!
 //! ```rust,no_run
-//! use telepathy_audio::{AudioHost, AudioInputBuilder, AudioOutputBuilder};
+//! use telepathy_audio::devices::AudioHost;
+//! use telepathy_audio::io::{AudioInputBuilder, AudioOutputBuilder};
 //! use telepathy_audio::adapters::MpscSource;
 //! use bytes::Bytes;
 //! use std::sync::mpsc;
@@ -43,7 +44,7 @@ pub mod output;
 pub mod traits;
 
 // Re-export main types for convenience
-pub use input::{AudioInputBuilder, AudioInputConfig, AudioInputHandle};
+pub use input::{AudioInputBuilder, AudioInputConfig, AudioInputHandle, CodecBitrateMode};
 pub use output::{AudioOutputBuilder, AudioOutputConfig, AudioOutputHandle};
 pub use traits::{AudioDataSink, AudioDataSource};
 
