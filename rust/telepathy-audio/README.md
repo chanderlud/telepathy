@@ -36,13 +36,14 @@ println!("Default input: {}", input_device.name().unwrap());
 ```rust
 use telepathy_audio::devices::AudioHost;
 use telepathy_audio::io::AudioInputBuilder;
+use telepathy_audio::RnnModel;
 
 let host = AudioHost::new();
 
 // Create an audio input with processing
 let input = AudioInputBuilder::new()
     .volume(1.0)
-    .denoise(true, None)  // Enable noise suppression
+    .denoise(RnnModel::default()) // Enable noise suppression with default model
     .rms_threshold(0.01)  // Silence detection threshold
     .callback(|data| {
         // Process or transmit the audio data
@@ -178,8 +179,7 @@ let _ = tx;
 > ```rust
 > // Example: Custom output sample rate without denoising
 > let input = AudioInputBuilder::new()
->     .denoise(false, None)      // Disable denoising
->     .output_sample_rate(48000) // Force 48kHz output
+>     .output_sample_rate(48000) // Force 48kHz output. Do not enable denoising.
 >     .callback(|data| { /* ... */ })
 >     .build(&host)
 >     .unwrap();

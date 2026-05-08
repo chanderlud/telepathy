@@ -78,6 +78,7 @@
 //! ### Audio Input
 //!
 //! ```rust,no_run
+//! use telepathy_audio::RnnModel;
 //! use telepathy_audio::devices::AudioHost;
 //! use telepathy_audio::io::AudioInputBuilder;
 //!
@@ -86,7 +87,7 @@
 //! // Create an audio input with callback
 //! let input = AudioInputBuilder::new()
 //!     .volume(1.0)
-//!     .denoise(true, None)  // Enable noise suppression with default model
+//!     .denoise(RnnModel::default())  // Enable noise suppression with default model
 //!     .rms_threshold(0.01)  // Silence detection
 //!     .callback(|data| {
 //!         // Process or transmit the audio data

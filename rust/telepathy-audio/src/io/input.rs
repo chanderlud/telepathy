@@ -115,11 +115,6 @@ pub struct AudioInputConfig {
     /// When `Some(id)`, attempts to find the device with that ID,
     /// falling back to default if not found.
     pub device_id: Option<String>,
-    /// Whether noise suppression is enabled.
-    ///
-    /// When enabled, audio is upsampled to 48kHz for RNNoise processing.
-    /// This provides significant noise reduction but increases CPU usage.
-    pub denoise_enabled: bool,
     /// Custom noise suppression model bytes.
     ///
     /// When `None`, uses the default RNNoise model.
@@ -167,7 +162,6 @@ impl Default for AudioInputConfig {
     fn default() -> Self {
         Self {
             device_id: None,
-            denoise_enabled: false,
             denoise_model: None,
             volume: 1.0,
             rms_threshold: 0.0,
@@ -245,16 +239,14 @@ where
         self
     }
 
-    /// Configures noise suppression.
+    /// Enables denoising.
     ///
     /// # Arguments
     ///
-    /// * `enabled` - Whether to enable noise suppression
-    /// * `model` - Optional custom RNNoise model bytes (None for default model)
-    pub fn denoise(mut self, enabled: bool, model: Option<RnnModel>) -> Self {
+    /// * `model` - RnnModel::default() or custom model
+    pub fn denoise(mut self, model: RnnModel) -> Self {
         self.config.output_sample_rate = None;
-        self.config.denoise_enabled = enabled;
-        self.config.denoise_model = model;
+        self.config.denoise_model = Some(model);
         self
     }
 
@@ -364,11 +356,10 @@ where
     /// use telepathy_audio::io::AudioInputBuilder;
     ///
     /// let builder = AudioInputBuilder::new()
-    ///     .denoise(false, None)      // Disable denoising first
-    ///     .output_sample_rate(48000); // Then set custom output rate
+    ///     .output_sample_rate(48000); // Set custom output rate. Do not enable denoising.
     /// ```
     pub fn output_sample_rate(mut self, sample_rate: u32) -> Self {
-        if !self.config.denoise_enabled {
+        if self.config.denoise_model.is_none() {
             self.config.output_sample_rate = Some(sample_rate);
         }
         self
@@ -477,29 +468,20 @@ where
         // Create shared atomic state (use provided shared atomics or create new ones)
         let input_volume = self
             .shared_input_volume
-            .clone()
             .unwrap_or_else(|| Arc::new(AtomicF32::new(self.config.volume)));
         let rms_threshold = self
             .shared_rms_threshold
-            .clone()
             .unwrap_or_else(|| Arc::new(AtomicF32::new(self.config.rms_threshold)));
         let muted = self
             .shared_muted
-            .clone()
             .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
-        let rms_sender = self.shared_rms.clone().unwrap_or_default();
+        let rms_sender = self.shared_rms.unwrap_or_default();
         let sink = self.sink.ok_or_else(|| {
             Error::Config("a data sink must be set via callback() or sink()".to_string())
         })?;
 
         // create denoiser if needed
-        let denoiser = if self.config.denoise_enabled {
-            Some(DenoiseState::from_model(
-                self.config.denoise_model.clone().unwrap_or_default(),
-            ))
-        } else {
-            None
-        };
+        let denoiser = self.config.denoise_model.map(DenoiseState::from_model);
         // build input processor state
         let state = InputProcessorState::new(
             &input_volume,
@@ -509,7 +491,7 @@ where
             DEFAULT_POOL_CAPACITY,
         );
         // determine the output sample rate
-        let output_rate = if self.config.denoise_enabled {
+        let output_rate = if denoiser.is_some() {
             48_000
         } else {
             self.config.output_sample_rate.unwrap_or(input_rate)
