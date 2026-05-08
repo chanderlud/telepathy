@@ -10,8 +10,8 @@ pub use crate::types::*;
 use flutter_rust_bridge::{DartFnFuture, frb};
 use std::sync::Arc;
 pub use telepathy_audio::Host;
-use tokio::sync::Mutex;
 use telepathy_audio::devices::CpalAudioHost;
+use tokio::sync::Mutex;
 
 type DartVoid<A> = Arc<Mutex<dyn Fn(A) -> DartFnFuture<()> + Send>>;
 type DartMethod<A, R> = Arc<Mutex<dyn Fn(A) -> DartFnFuture<R> + Send>>;
@@ -62,7 +62,10 @@ impl Telepathy {
 
     /// Attempts to start a call through an existing session
     pub async fn start_call(&self, contact: &Contact) -> std::result::Result<(), DartError> {
-        self.handle.start_call(contact).await
+        self.handle
+            .start_call(contact)
+            .await
+            .map_err(DartError::from)
     }
 
     /// Ends the current audio test, room, or call in that order
@@ -75,12 +78,15 @@ impl Telepathy {
         &self,
         member_strings: Vec<String>,
     ) -> std::result::Result<(), DartError> {
-        self.handle.join_room(member_strings).await
+        self.handle
+            .join_room(member_strings)
+            .await
+            .map_err(DartError::from)
     }
 
     /// Restarts the session manager
     pub async fn restart_manager(&self) -> std::result::Result<(), DartError> {
-        self.handle.restart_manager().await
+        self.handle.restart_manager().await.map_err(DartError::from)
     }
 
     /// shuts down the entire rust backend
@@ -90,7 +96,7 @@ impl Telepathy {
 
     /// Sets the signing key (called when the profile changes)
     pub async fn set_identity(&self, key: Vec<u8>) -> std::result::Result<(), DartError> {
-        self.handle.set_identity(key).await
+        self.handle.set_identity(key).await.map_err(DartError::from)
     }
 
     /// Stops a specific session (called when a contact is deleted)
@@ -100,7 +106,7 @@ impl Telepathy {
 
     /// Blocks while an audio test is running
     pub async fn audio_test(&self) -> std::result::Result<(), DartError> {
-        self.handle.audio_test().await
+        self.handle.audio_test().await.map_err(DartError::from)
     }
 
     #[frb(sync)]
@@ -115,7 +121,10 @@ impl Telepathy {
 
     /// Sends a chat message
     pub async fn send_chat(&self, message: &mut ChatMessage) -> std::result::Result<(), DartError> {
-        self.handle.send_chat(message).await
+        self.handle
+            .send_chat(message)
+            .await
+            .map_err(DartError::from)
     }
 
     pub async fn start_screenshare(&self, contact: &Contact) {
@@ -190,11 +199,11 @@ impl Telepathy {
     pub fn list_devices(
         &self,
     ) -> std::result::Result<(Vec<AudioDevice>, Vec<AudioDevice>), DartError> {
-        self.handle.list_devices()
+        self.handle.list_devices().map_err(DartError::from)
     }
 
     pub async fn set_model(&self, model: Option<Vec<u8>>) -> std::result::Result<(), DartError> {
-        self.handle.set_model(model).await
+        self.handle.set_model(model).await.map_err(DartError::from)
     }
 }
 

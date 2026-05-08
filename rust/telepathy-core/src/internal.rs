@@ -15,14 +15,12 @@ mod utils;
 use crate::AudioDevice;
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::core::TelepathyCore;
-use crate::internal::error::Error;
+use crate::internal::error::{Error, ErrorKind};
 use crate::internal::messages::{Attachment, ProtocolMessage};
 use crate::internal::state::{EarlyCallState, RoomState, SessionState};
 pub(crate) use crate::internal::utils::{JoinHandle, spawn_task};
 use crate::overlay::Overlay;
-use crate::types::{
-    ChatMessage, CodecConfig, Contact, DartError, NetworkConfig, ScreenshareConfig,
-};
+use crate::types::{ChatMessage, CodecConfig, Contact, NetworkConfig, ScreenshareConfig};
 use chrono::Local;
 use libp2p::identity::Keypair;
 use libp2p::{PeerId, StreamProtocol};
@@ -30,9 +28,9 @@ use std::mem;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::Duration;
-use telepathy_audio::devices::{AudioHost};
-use telepathy_audio::internal::utils::db_to_multiplier;
 use telepathy_audio::RnnModel;
+use telepathy_audio::devices::AudioHost;
+use telepathy_audio::internal::utils::db_to_multiplier;
 use tokio::sync::mpsc::channel;
 use tokio::sync::{Mutex, Notify};
 use tokio_util::sync::CancellationToken;
@@ -66,7 +64,6 @@ where
     handles: Arc<Mutex<Vec<JoinHandle<()>>>>,
 }
 
-// TODO refactor all methods returning DartError to return Error
 impl<C, S, H> TelepathyHandle<C, S, H>
 where
     C: CoreCallbacks<S> + Send + Sync + 'static,
@@ -113,24 +110,19 @@ where
     }
 
     /// Attempts to start a call through an existing session
-    pub async fn start_call(&self, contact: &Contact) -> std::result::Result<(), DartError> {
+    pub async fn start_call(&self, contact: &Contact) -> Result<()> {
         if self.inner.is_call_active().await {
-            return Err("Cannot start call while a call is already active"
-                .to_string()
-                .into());
+            return Err(ErrorKind::CallAlreadyActive.into());
         }
 
         if let Some(state) = self.inner.session_states.read().await.get(&contact.peer_id) {
             #[cfg(target_family = "wasm")]
-            self.inner
-                .init_web_audio()
-                .await
-                .map_err::<Error, _>(Error::into)?;
+            self.inner.init_web_audio().await?;
 
             state.start_call.notify_one();
             Ok(())
         } else {
-            Err(String::from("No session found for contact").into())
+            Err(ErrorKind::NoSessionForContact.into())
         }
     }
 
@@ -158,21 +150,13 @@ where
     }
 
     /// The only entry point into participating in a room
-    pub async fn join_room(
-        &self,
-        member_strings: Vec<String>,
-    ) -> std::result::Result<(), DartError> {
+    pub async fn join_room(&self, member_strings: Vec<String>) -> Result<()> {
         if self.inner.is_call_active().await {
-            return Err("Cannot join room while a call is already active"
-                .to_string()
-                .into());
+            return Err(ErrorKind::CallAlreadyActive.into());
         }
 
         #[cfg(target_family = "wasm")]
-        self.inner
-            .init_web_audio()
-            .await
-            .map_err::<Error, _>(Error::into)?;
+        self.inner.init_web_audio().await?;
 
         // parse members
         let members: Vec<_> = member_strings
@@ -230,11 +214,9 @@ where
     }
 
     /// Restarts the session manager
-    pub async fn restart_manager(&self) -> std::result::Result<(), DartError> {
+    pub async fn restart_manager(&self) -> Result<()> {
         if self.inner.is_call_active().await {
-            Err("Cannot restart manager while call is active"
-                .to_string()
-                .into())
+            Err(ErrorKind::ManagerRestartDuringCall.into())
         } else {
             // reset sessions so manager can clean up
             self.inner.reset_sessions().await;
@@ -262,7 +244,7 @@ where
     }
 
     /// Sets the signing key (called when the profile changes)
-    pub async fn set_identity(&self, key: Vec<u8>) -> std::result::Result<(), DartError> {
+    pub async fn set_identity(&self, key: Vec<u8>) -> Result<()> {
         *self.inner.core_state.identity.write().await =
             Some(Keypair::from_protobuf_encoding(&key).map_err(Error::from)?);
         Ok(())
@@ -282,9 +264,9 @@ where
     }
 
     /// Blocks while an audio test is running
-    pub async fn audio_test(&self) -> std::result::Result<(), DartError> {
+    pub async fn audio_test(&self) -> Result<()> {
         if self.inner.is_call_active().await {
-            return Err("Cannot start test while call is active".to_string().into());
+            return Err(ErrorKind::CallAlreadyActive.into());
         }
 
         // update state right away to handle the test being ended quickly
@@ -297,7 +279,7 @@ where
             // clean up state before propagating error
             self.inner.core_state.end_audio_test.lock().await.take();
             self.inner.core_state.in_call.store(false, Relaxed);
-            return Err(Error::into(error));
+            return Err(error);
         }
 
         let result = match self.inner.setup_call(PeerId::random()).await {
@@ -315,12 +297,11 @@ where
                     .inner
                     .call(&stop_io, audio_config, &end_call, None)
                     .instrument(call_span)
-                    .await
-                    .map_err(Into::into);
+                    .await;
                 stop_io.cancel();
                 result
             }
-            Err(error) => Err(Error::into(error)),
+            Err(error) => Err(error),
         };
 
         self.inner.core_state.end_audio_test.lock().await.take();
@@ -346,7 +327,7 @@ where
     }
 
     /// Sends a chat message
-    pub async fn send_chat(&self, message: &mut ChatMessage) -> std::result::Result<(), DartError> {
+    pub async fn send_chat(&self, message: &mut ChatMessage) -> Result<()> {
         if message
             .attachments
             .iter()
@@ -354,7 +335,7 @@ where
             .sum::<usize>()
             > SESSION_MAX_FRAME_LENGTH
         {
-            return Err("attachments too large".to_string().into());
+            return Err(ErrorKind::AttachmentsTooLarge.into());
         }
 
         let Some(state) = self
@@ -392,7 +373,7 @@ where
             .message_sender
             .send(message)
             .await
-            .map_err(|_| "channel closed".to_string())?;
+            .map_err(|_| Error::from(ErrorKind::MpscSend))?;
         Ok(())
     }
 
@@ -480,9 +461,7 @@ where
     }
 
     /// Lists the input and output devices
-    pub fn list_devices(
-        &self,
-    ) -> std::result::Result<(Vec<AudioDevice>, Vec<AudioDevice>), DartError> {
+    pub fn list_devices(&self) -> Result<(Vec<AudioDevice>, Vec<AudioDevice>)> {
         let device_list = self.inner.host.list_all_devices().map_err(Error::from)?;
         Ok((
             device_list
@@ -498,9 +477,9 @@ where
         ))
     }
 
-    pub async fn set_model(&self, model: Option<Vec<u8>>) -> std::result::Result<(), DartError> {
+    pub async fn set_model(&self, model: Option<Vec<u8>>) -> Result<()> {
         let model = if let Some(mode_bytes) = model {
-            RnnModel::from_bytes(&mode_bytes).ok_or(String::from("invalid model"))?
+            RnnModel::from_bytes(&mode_bytes).ok_or_else(|| Error::from(ErrorKind::InvalidModel))?
         } else {
             RnnModel::default()
         };

@@ -57,7 +57,7 @@ impl AudioHost for MockAudioHost {
     where
         Self: Sized,
     {
-        Self::default()
+        Self
     }
 
     fn list_input_devices(&self) -> Result<Vec<AudioDeviceInfo>, DeviceError> {

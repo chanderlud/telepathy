@@ -153,7 +153,7 @@ async fn handle_command(
 
             match telepathy.set_identity(decoded).await {
                 Ok(()) => CommandOutcome::AckOk,
-                Err(err) => CommandOutcome::AckErr(err.message),
+                Err(err) => CommandOutcome::AckErr(err),
             }
         }
         Command::AddContact {
@@ -177,7 +177,7 @@ async fn handle_command(
         }
         Command::RestartManager => match telepathy.restart_manager().await {
             Ok(()) => CommandOutcome::AckOk,
-            Err(err) => CommandOutcome::AckErr(err.message),
+            Err(err) => CommandOutcome::AckErr(err),
         },
         Command::Shutdown => CommandOutcome::Shutdown,
         Command::StartSession { contact_id } => match contact_by_id(hub, &contact_id).await {
@@ -197,7 +197,7 @@ async fn handle_command(
         Command::StartCall { contact_id } => match contact_by_id(hub, &contact_id).await {
             Ok(contact) => match telepathy.start_call(&contact).await {
                 Ok(()) => CommandOutcome::AckOk,
-                Err(err) => CommandOutcome::AckErr(err.message),
+                Err(err) => CommandOutcome::AckErr(err),
             },
             Err(err) => CommandOutcome::AckErr(err),
         },
@@ -224,7 +224,7 @@ async fn handle_command(
         }
         Command::JoinRoom { members } => match telepathy.join_room(members).await {
             Ok(()) => CommandOutcome::AckOk,
-            Err(err) => CommandOutcome::AckErr(err.message),
+            Err(err) => CommandOutcome::AckErr(err),
         },
         Command::SendChat {
             contact_id,
@@ -247,14 +247,14 @@ async fn handle_command(
                 let mut message = telepathy.build_chat(&contact, text, decoded);
                 match telepathy.send_chat(&mut message).await {
                     Ok(()) => CommandOutcome::AckOk,
-                    Err(err) => CommandOutcome::AckErr(err.message),
+                    Err(err) => CommandOutcome::AckErr(err),
                 }
             }
             Err(err) => CommandOutcome::AckErr(err),
         },
         Command::AudioTest => match telepathy.audio_test().await {
             Ok(()) => CommandOutcome::AckOk,
-            Err(err) => CommandOutcome::AckErr(err.message),
+            Err(err) => CommandOutcome::AckErr(err),
         },
         Command::SetMuted { value } => {
             telepathy.set_muted(value);

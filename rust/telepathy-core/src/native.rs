@@ -2,18 +2,16 @@ use crate::AudioDevice;
 use crate::internal::TelepathyHandle;
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::{JoinHandle, spawn_task};
-use crate::types::{
-    CallState, ChatMessage, Contact, DartError, FrontendNotify, SessionStatus, Statistics,
-};
+use crate::types::{CallState, ChatMessage, Contact, FrontendNotify, SessionStatus, Statistics};
 use libp2p::PeerId;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use tokio::sync::{Notify, oneshot, watch};
-#[cfg(not(feature = "mock-audio"))]
-use telepathy_audio::devices::CpalAudioHost;
 #[cfg(feature = "mock-audio")]
 use telepathy_audio::MockAudioHost;
+#[cfg(not(feature = "mock-audio"))]
+use telepathy_audio::devices::CpalAudioHost;
+use tokio::sync::{Notify, oneshot, watch};
 
 type NativeFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
 type NativeVoid<A> = Arc<dyn Fn(A) -> NativeFuture<()> + Send + Sync + 'static>;
@@ -25,8 +23,7 @@ type NativeAcceptCall = Arc<
 #[cfg(not(feature = "mock-audio"))]
 type NativeHandle = TelepathyHandle<NativeCallbacks, NativeStatisticsCallback, CpalAudioHost>;
 #[cfg(feature = "mock-audio")]
-type NativeHandle =  TelepathyHandle<NativeCallbacks, NativeStatisticsCallback, MockAudioHost>;
-
+type NativeHandle = TelepathyHandle<NativeCallbacks, NativeStatisticsCallback, MockAudioHost>;
 
 /// Rust-native runtime client for `telepathy-core`.
 ///
@@ -62,39 +59,48 @@ impl NativeTelepathy {
         self.handle.start_session(contact).await;
     }
 
-    pub async fn start_call(&self, contact: &Contact) -> std::result::Result<(), DartError> {
-        self.handle.start_call(contact).await
+    pub async fn start_call(&self, contact: &Contact) -> Result<(), String> {
+        self.handle
+            .start_call(contact)
+            .await
+            .map_err(|e| e.to_string())
     }
 
     pub async fn end_call(&self) {
         self.handle.end_call().await;
     }
 
-    pub async fn join_room(
-        &self,
-        member_strings: Vec<String>,
-    ) -> std::result::Result<(), DartError> {
-        self.handle.join_room(member_strings).await
+    pub async fn join_room(&self, member_strings: Vec<String>) -> Result<(), String> {
+        self.handle
+            .join_room(member_strings)
+            .await
+            .map_err(|e| e.to_string())
     }
 
-    pub async fn restart_manager(&self) -> std::result::Result<(), DartError> {
-        self.handle.restart_manager().await
+    pub async fn restart_manager(&self) -> Result<(), String> {
+        self.handle
+            .restart_manager()
+            .await
+            .map_err(|e| e.to_string())
     }
 
     pub async fn shutdown(&self) {
         self.handle.shutdown().await;
     }
 
-    pub async fn set_identity(&self, key: Vec<u8>) -> std::result::Result<(), DartError> {
-        self.handle.set_identity(key).await
+    pub async fn set_identity(&self, key: Vec<u8>) -> Result<(), String> {
+        self.handle
+            .set_identity(key)
+            .await
+            .map_err(|e| e.to_string())
     }
 
     pub async fn stop_session(&self, contact: &Contact) {
         self.handle.stop_session(contact).await;
     }
 
-    pub async fn audio_test(&self) -> std::result::Result<(), DartError> {
-        self.handle.audio_test().await
+    pub async fn audio_test(&self) -> Result<(), String> {
+        self.handle.audio_test().await.map_err(|e| e.to_string())
     }
 
     pub fn build_chat(
@@ -106,8 +112,11 @@ impl NativeTelepathy {
         self.handle.build_chat(contact, text, attachments)
     }
 
-    pub async fn send_chat(&self, message: &mut ChatMessage) -> std::result::Result<(), DartError> {
-        self.handle.send_chat(message).await
+    pub async fn send_chat(&self, message: &mut ChatMessage) -> Result<(), String> {
+        self.handle
+            .send_chat(message)
+            .await
+            .map_err(|e| e.to_string())
     }
 
     pub async fn start_screenshare(&self, contact: &Contact) {
@@ -166,14 +175,15 @@ impl NativeTelepathy {
         self.handle.set_output_device(device_id).await;
     }
 
-    pub fn list_devices(
-        &self,
-    ) -> std::result::Result<(Vec<AudioDevice>, Vec<AudioDevice>), DartError> {
-        self.handle.list_devices()
+    pub fn list_devices(&self) -> Result<(Vec<AudioDevice>, Vec<AudioDevice>), String> {
+        self.handle.list_devices().map_err(|e| e.to_string())
     }
 
-    pub async fn set_model(&self, model: Option<Vec<u8>>) -> std::result::Result<(), DartError> {
-        self.handle.set_model(model).await
+    pub async fn set_model(&self, model: Option<Vec<u8>>) -> Result<(), String> {
+        self.handle
+            .set_model(model)
+            .await
+            .map_err(|e| e.to_string())
     }
 }
 
