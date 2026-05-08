@@ -278,12 +278,18 @@ fn invalid_encoder_settings_are_rejected() {
         scale_factor_frames: 21,
         ..EncoderSettings::default()
     };
+    let invalid_geometry = EncoderSettings {
+        frames_per_chunk: 240,
+        ..EncoderSettings::default()
+    };
 
     let res_bits = SeaEncoder::new(1, SAMPLE_RATE, invalid_scale_factor_bits);
     let res_frames = SeaEncoder::new(1, SAMPLE_RATE, invalid_scale_factor_frames);
     let res_divisibility = SeaEncoder::new(1, SAMPLE_RATE, invalid_chunk_divisibility);
+    let res_geometry = SeaEncoder::new(1, SAMPLE_RATE, invalid_geometry);
 
     assert!(matches!(res_bits, Err(SeaError::InvalidParameters)));
     assert!(matches!(res_frames, Err(SeaError::InvalidParameters)));
     assert!(matches!(res_divisibility, Err(SeaError::InvalidParameters)));
+    assert!(matches!(res_geometry, Err(SeaError::InvalidParameters)));
 }

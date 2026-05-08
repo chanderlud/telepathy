@@ -4,6 +4,7 @@ use crate::sea::codec::{
 };
 use bytes::BytesMut;
 use nnnoiseless::FRAME_SIZE;
+use crate::sea::codec::file::is_valid_geometry;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct EncoderSettings {
@@ -59,6 +60,10 @@ impl SeaEncoder {
         sample_rate: u32,
         settings: EncoderSettings,
     ) -> Result<Self, SeaError> {
+        if !is_valid_geometry(channels, settings.frames_per_chunk) {
+            return Err(SeaError::InvalidParameters);
+        }
+
         let header = SeaFileHeader {
             version: 1,
             channels,

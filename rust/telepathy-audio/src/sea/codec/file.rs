@@ -8,6 +8,7 @@ use super::{
     lms::SeaLMS,
 };
 use crate::sea::encoder::EncoderSettings;
+use nnnoiseless::FRAME_SIZE;
 
 #[derive(Debug, Clone)]
 pub struct SeaFileHeader {
@@ -28,6 +29,9 @@ impl SeaFileHeader {
             || self.frames_per_chunk == 0
             || self.sample_rate == 0
         {
+            return Err(SeaError::InvalidFile);
+        }
+        if !is_valid_geometry(self.channels, self.frames_per_chunk) {
             return Err(SeaError::InvalidFile);
         }
         Ok(())
@@ -93,6 +97,12 @@ impl ChunkSerializer {
 
 const DEFAULT_SCALE_FACTOR_FRAMES: usize = 20;
 
+pub(crate) fn is_valid_geometry(channels: u8, frames_per_chunk: u16) -> bool {
+    (channels as usize)
+        .checked_mul(frames_per_chunk as usize)
+        == Some(FRAME_SIZE)
+}
+
 fn scratch_capacities(
     frames_per_chunk: usize,
     channels: usize,
@@ -132,6 +142,9 @@ impl SeaFile {
         header: SeaFileHeader,
         encoder_settings: &EncoderSettings,
     ) -> Result<Self, SeaError> {
+        if !is_valid_geometry(header.channels, header.frames_per_chunk) {
+            return Err(SeaError::InvalidParameters);
+        }
         encoder_settings.validate()?;
 
         let encoder = if encoder_settings.vbr {
@@ -166,13 +179,14 @@ impl SeaFile {
         })
     }
 
-    pub fn new_for_decoding(header: SeaFileHeader) -> Self {
+    pub fn new_for_decoding(header: SeaFileHeader) -> Result<Self, SeaError> {
+        header.validate()?;
         let channels = header.channels as usize;
         let frames_per_chunk = header.frames_per_chunk as usize;
         let (scale_factor_items, vbr_residual_sizes_items, residual_items, vbr_bitlength_items) =
             scratch_capacities(frames_per_chunk, channels, DEFAULT_SCALE_FACTOR_FRAMES);
 
-        SeaFile {
+        Ok(SeaFile {
             header,
             decoder: None,
             encoder: None,
@@ -184,7 +198,7 @@ impl SeaFile {
             scratch_residuals: Vec::with_capacity(residual_items),
             scratch_vbr_bitlengths: Vec::with_capacity(vbr_bitlength_items),
             lms_snapshot: Vec::with_capacity(channels),
-        }
+        })
     }
 
     pub fn make_chunk(&mut self, samples: &[i16], output: &mut Vec<u8>) -> Result<(), SeaError> {
