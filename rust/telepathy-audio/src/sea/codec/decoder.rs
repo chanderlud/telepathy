@@ -1,4 +1,4 @@
-use super::{chunk::SeaChunk, common::clamp_i16, dqt::SeaDequantTab};
+use super::{chunk::ChunkInfo, common::clamp_i16, dqt::SeaDequantTab, lms::SeaLMS};
 
 pub struct Decoder {
     channels: usize,
@@ -17,71 +17,84 @@ impl Decoder {
         }
     }
 
-    pub fn decode_cbr(&self, chunk: &SeaChunk) -> Vec<i16> {
-        assert_eq!(chunk.scale_factor_bits as usize, self.scale_factor_bits);
+    fn decode_inner(
+        &mut self,
+        chunk_info: &ChunkInfo,
+        lms: &mut [SeaLMS],
+        scale_factors: &[u8],
+        residuals: &[u8],
+        vbr_residual_sizes: Option<&[u8]>,
+        output: &mut [i16],
+    ) {
+        assert_eq!(
+            chunk_info.scale_factor_bits as usize,
+            self.scale_factor_bits
+        );
 
-        let mut output: Vec<i16> = Vec::with_capacity(chunk.frames_per_chunk * self.channels);
+        let expected_len = chunk_info.frames_per_chunk * self.channels;
+        assert!(output.len() >= expected_len);
 
-        let mut lms = chunk.lms.clone();
+        let fixed_dqt = vbr_residual_sizes
+            .is_none()
+            .then(|| self.dequant_tab.get_dqt(chunk_info.residual_size as usize));
 
-        let dqts: &Vec<Vec<i32>> = self.dequant_tab.get_dqt(chunk.residual_size as usize);
-
-        for (scale_factor_index, subchunk_residuals) in chunk
-            .residuals
-            .chunks(self.channels * chunk.scale_factor_frames as usize)
+        let mut output_index = 0;
+        for (scale_factor_index, subchunk_residuals) in residuals
+            .chunks(self.channels * chunk_info.scale_factor_frames as usize)
             .enumerate()
         {
-            let scale_factors = &chunk.scale_factors[scale_factor_index * self.channels..];
+            let scale_factors_slice = &scale_factors[scale_factor_index * self.channels..];
+            let vbr_residuals =
+                vbr_residual_sizes.map(|sizes| &sizes[scale_factor_index * self.channels..]);
 
             for channel_residuals in subchunk_residuals.chunks(self.channels) {
                 for (channel_index, residual) in channel_residuals.iter().enumerate() {
-                    let scale_factor = scale_factors[channel_index];
+                    let scale_factor = scale_factors_slice[channel_index];
                     let predicted = lms[channel_index].predict();
-                    let quantized: usize = *residual as usize;
-                    let dequantized = dqts[scale_factor as usize][quantized];
+                    let quantized = *residual as usize;
+                    let (flat_dqt, stride) = match vbr_residuals {
+                        Some(vbr_residuals) => self
+                            .dequant_tab
+                            .get_dqt(vbr_residuals[channel_index] as usize),
+                        None => fixed_dqt.unwrap(),
+                    };
+                    let dequantized = flat_dqt[scale_factor as usize * stride + quantized];
                     let reconstructed = clamp_i16(predicted + dequantized);
-                    output.push(reconstructed);
+                    output[output_index] = reconstructed;
+                    output_index += 1;
                     lms[channel_index].update(reconstructed, dequantized);
                 }
             }
         }
-
-        output
     }
 
-    pub fn decode_vbr(&self, chunk: &SeaChunk) -> Vec<i16> {
-        assert_eq!(chunk.scale_factor_bits as usize, self.scale_factor_bits);
+    pub fn decode_cbr_into(
+        &mut self,
+        chunk_info: &ChunkInfo,
+        lms: &mut [SeaLMS],
+        scale_factors: &[u8],
+        residuals: &[u8],
+        output: &mut [i16],
+    ) {
+        self.decode_inner(chunk_info, lms, scale_factors, residuals, None, output);
+    }
 
-        let mut output: Vec<i16> = Vec::with_capacity(chunk.frames_per_chunk * self.channels);
-
-        let mut lms = chunk.lms.clone();
-
-        let dqts: &Vec<Vec<Vec<i32>>> = &(1..=8)
-            .map(|i| self.dequant_tab.get_dqt(i).clone())
-            .collect();
-
-        for (scale_factor_index, subchunk_residuals) in chunk
-            .residuals
-            .chunks(self.channels * chunk.scale_factor_frames as usize)
-            .enumerate()
-        {
-            let scale_factors = &chunk.scale_factors[scale_factor_index * self.channels..];
-            let vbr_residuals = &chunk.vbr_residual_sizes[scale_factor_index * self.channels..];
-
-            for channel_residuals in subchunk_residuals.chunks(self.channels) {
-                for (channel_index, residual) in channel_residuals.iter().enumerate() {
-                    let residual_size: usize = vbr_residuals[channel_index] as usize;
-                    let scale_factor = scale_factors[channel_index];
-                    let predicted = lms[channel_index].predict();
-                    let quantized: usize = *residual as usize;
-                    let dequantized = dqts[residual_size - 1][scale_factor as usize][quantized];
-                    let reconstructed = clamp_i16(predicted + dequantized);
-                    output.push(reconstructed);
-                    lms[channel_index].update(reconstructed, dequantized);
-                }
-            }
-        }
-
-        output
+    pub fn decode_vbr_into(
+        &mut self,
+        chunk_info: &ChunkInfo,
+        lms: &mut [SeaLMS],
+        scale_factors: &[u8],
+        vbr_residual_sizes: &[u8],
+        residuals: &[u8],
+        output: &mut [i16],
+    ) {
+        self.decode_inner(
+            chunk_info,
+            lms,
+            scale_factors,
+            residuals,
+            Some(vbr_residual_sizes),
+            output,
+        );
     }
 }

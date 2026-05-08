@@ -7,7 +7,8 @@
 //! # Example (Native)
 //!
 //! ```rust,no_run
-//! use telepathy_audio::{AudioHost, AudioInputBuilder};
+//! use telepathy_audio::devices::AudioHost;
+//! use telepathy_audio::io::AudioInputBuilder;
 //!
 //! let host = AudioHost::new();
 //! let input = AudioInputBuilder::new()
@@ -23,8 +24,10 @@
 //! # Example (Custom Sink)
 //!
 //! ```rust,no_run
-//! use telepathy_audio::{AudioHost, AudioInputBuilder, PooledBuffer};
+//! use telepathy_audio::devices::AudioHost;
+//! use telepathy_audio::io::AudioInputBuilder;
 //! use telepathy_audio::adapters::MpscSink;
+//! use telepathy_audio::internal::buffer_pool::PooledBuffer;
 //! use std::sync::mpsc;
 //!
 //! let host = AudioHost::new();
@@ -42,7 +45,8 @@
 //! [`build`](AudioInputBuilder::build):
 //!
 //! ```rust,ignore
-//! use telepathy_audio::{AudioHost, AudioInputBuilder};
+//! use telepathy_audio::devices::AudioHost;
+//! use telepathy_audio::io::AudioInputBuilder;
 //! use telepathy_audio::platform::web_audio::WebAudioWrapper;
 //! use std::sync::Arc;
 //!
@@ -111,11 +115,6 @@ pub struct AudioInputConfig {
     /// When `Some(id)`, attempts to find the device with that ID,
     /// falling back to default if not found.
     pub device_id: Option<String>,
-    /// Whether noise suppression is enabled.
-    ///
-    /// When enabled, audio is upsampled to 48kHz for RNNoise processing.
-    /// This provides significant noise reduction but increases CPU usage.
-    pub denoise_enabled: bool,
     /// Custom noise suppression model bytes.
     ///
     /// When `None`, uses the default RNNoise model.
@@ -135,11 +134,8 @@ pub struct AudioInputConfig {
     /// When enabled, audio is encoded using the SEA codec before being
     /// passed to the callback.
     pub codec_enabled: bool,
-    /// Variable bit rate encoding.
-    ///
-    /// When `true`, the encoder uses variable bit rate for potentially
-    /// smaller output. When `false`, uses constant bit rate.
-    pub codec_vbr: bool,
+    /// Codec bit rate mode.
+    pub codec_mode: CodecBitrateMode,
     /// Residual bits for codec quality (typically 2.0-8.0).
     ///
     /// Higher values provide better quality but larger encoded size.
@@ -166,12 +162,11 @@ impl Default for AudioInputConfig {
     fn default() -> Self {
         Self {
             device_id: None,
-            denoise_enabled: false,
             denoise_model: None,
             volume: 1.0,
             rms_threshold: 0.0,
             codec_enabled: false,
-            codec_vbr: false,
+            codec_mode: CodecBitrateMode::Cbr,
             codec_residual_bits: 5.0,
             error_notify: None,
             output_sample_rate: None,
@@ -244,16 +239,14 @@ where
         self
     }
 
-    /// Configures noise suppression.
+    /// Enables denoising.
     ///
     /// # Arguments
     ///
-    /// * `enabled` - Whether to enable noise suppression
-    /// * `model` - Optional custom RNNoise model bytes (None for default model)
-    pub fn denoise(mut self, enabled: bool, model: Option<RnnModel>) -> Self {
+    /// * `model` - RnnModel::default() or custom model
+    pub fn denoise(mut self, model: RnnModel) -> Self {
         self.config.output_sample_rate = None;
-        self.config.denoise_enabled = enabled;
-        self.config.denoise_model = model;
+        self.config.denoise_model = Some(model);
         self
     }
 
@@ -327,12 +320,13 @@ where
     ///
     /// # Arguments
     ///
-    /// * `enabled` - Whether to enable codec encoding
-    /// * `vbr` - Whether to use variable bit rate
+    /// * `mode` - Whether to use constant bit rate (CBR) or variable bit rate (VBR)
     /// * `residual_bits` - Quality setting for residual encoding
-    pub fn codec(mut self, enabled: bool, vbr: bool, residual_bits: f32) -> Self {
-        self.config.codec_enabled = enabled;
-        self.config.codec_vbr = vbr;
+    ///
+    /// Calling this method always enables codec encoding.
+    pub fn codec(mut self, mode: CodecBitrateMode, residual_bits: f32) -> Self {
+        self.config.codec_enabled = true;
+        self.config.codec_mode = mode;
         self.config.codec_residual_bits = residual_bits;
         self
     }
@@ -359,14 +353,13 @@ where
     /// # Example
     ///
     /// ```rust,no_run
-    /// use telepathy_audio::AudioInputBuilder;
+    /// use telepathy_audio::io::AudioInputBuilder;
     ///
     /// let builder = AudioInputBuilder::new()
-    ///     .denoise(false, None)      // Disable denoising first
-    ///     .output_sample_rate(48000); // Then set custom output rate
+    ///     .output_sample_rate(48000); // Set custom output rate. Do not enable denoising.
     /// ```
     pub fn output_sample_rate(mut self, sample_rate: u32) -> Self {
-        if !self.config.denoise_enabled {
+        if self.config.denoise_model.is_none() {
             self.config.output_sample_rate = Some(sample_rate);
         }
         self
@@ -383,7 +376,8 @@ where
     /// ```rust,no_run
     /// # #[cfg(target_family = "wasm")]
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// use telepathy_audio::{AudioHost, AudioInputBuilder};
+    /// use telepathy_audio::devices::AudioHost;
+    /// use telepathy_audio::io::AudioInputBuilder;
     /// use telepathy_audio::platform::web_audio::WebAudioWrapper;
     /// use std::sync::Arc;
     ///
@@ -474,29 +468,20 @@ where
         // Create shared atomic state (use provided shared atomics or create new ones)
         let input_volume = self
             .shared_input_volume
-            .clone()
             .unwrap_or_else(|| Arc::new(AtomicF32::new(self.config.volume)));
         let rms_threshold = self
             .shared_rms_threshold
-            .clone()
             .unwrap_or_else(|| Arc::new(AtomicF32::new(self.config.rms_threshold)));
         let muted = self
             .shared_muted
-            .clone()
             .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
-        let rms_sender = self.shared_rms.clone().unwrap_or_default();
+        let rms_sender = self.shared_rms.unwrap_or_default();
         let sink = self.sink.ok_or_else(|| {
             Error::Config("a data sink must be set via callback() or sink()".to_string())
         })?;
 
         // create denoiser if needed
-        let denoiser = if self.config.denoise_enabled {
-            Some(DenoiseState::from_model(
-                self.config.denoise_model.clone().unwrap_or_default(),
-            ))
-        } else {
-            None
-        };
+        let denoiser = self.config.denoise_model.map(DenoiseState::from_model);
         // build input processor state
         let state = InputProcessorState::new(
             &input_volume,
@@ -506,7 +491,7 @@ where
             DEFAULT_POOL_CAPACITY,
         );
         // determine the output sample rate
-        let output_rate = if self.config.denoise_enabled {
+        let output_rate = if denoiser.is_some() {
             48_000
         } else {
             self.config.output_sample_rate.unwrap_or(input_rate)
@@ -518,7 +503,7 @@ where
                 output_rate,
                 EncoderSettings {
                     residual_bits: self.config.codec_residual_bits,
-                    vbr: self.config.codec_vbr,
+                    vbr: matches!(self.config.codec_mode, CodecBitrateMode::Vbr),
                     ..Default::default()
                 },
             )?)
@@ -700,7 +685,8 @@ where
     /// ```rust,no_run
     /// # #[cfg(target_family = "wasm")]
     /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// use telepathy_audio::{AudioHost, AudioInputBuilder};
+    /// use telepathy_audio::devices::AudioHost;
+    /// use telepathy_audio::io::AudioInputBuilder;
     /// use telepathy_audio::platform::web_audio::WebAudioWrapper;
     /// use std::sync::Arc;
     ///
@@ -823,6 +809,16 @@ impl AudioInputHandle {
     pub fn rms_threshold(&self) -> f32 {
         self.rms_threshold.load(Relaxed)
     }
+}
+
+/// Codec bit rate mode for input encoding.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum CodecBitrateMode {
+    /// Constant bit rate encoding.
+    #[default]
+    Cbr,
+    /// Variable bit rate encoding.
+    Vbr,
 }
 
 /// Lock free sender for native targets

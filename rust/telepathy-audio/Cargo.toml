@@ -79,3 +79,7 @@ harness = false
 [[bench]]
 name = "wasm_operations"
 harness = false
+
+[[bench]]
+name = "sea_codec"
+harness = false

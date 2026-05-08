@@ -28,7 +28,7 @@ use telepathy_audio::WebAudioWrapper;
 use telepathy_audio::devices::get_input_device;
 use telepathy_audio::internal::buffer_pool::PooledBuffer;
 use telepathy_audio::io::{
-    AudioInputBuilder, AudioInputHandle, AudioOutputBuilder, AudioOutputHandle,
+    AudioInputBuilder, AudioInputHandle, AudioOutputBuilder, AudioOutputHandle, CodecBitrateMode,
 };
 #[cfg(not(target_family = "wasm"))]
 use tokio::fs::File;
@@ -300,51 +300,46 @@ where
         end_call: &Arc<Notify>,
     ) -> Result<InputHelper> {
         let (codec_enabled, vbr, residual_bits) = codec_options;
-        let denoise = self.core_state.denoise.load(Relaxed);
-
-        // Get denoise model bytes if using custom model
-        let denoise_model = if denoise {
-            Some(self.core_state.denoise_model.read().await.clone())
-        } else {
-            None
-        };
-
-        // Get device ID
-        let device_id = self.core_state.input_device.lock().await.clone();
-
-        // Create a channel for receiving processed audio data
+        // Channel for receiving processed audio data
         let (sender, receiver) = kanal::unbounded_async();
 
-        let builder = AudioInputBuilder::new()
-            .device(device_id)
-            .denoise(denoise, denoise_model)
+        let mut builder = AudioInputBuilder::new()
+            .device(self.core_state.input_device.lock().await.clone())
             .input_volume_shared(&self.core_state.input_volume)
             .rms_threshold_shared(&self.core_state.rms_threshold)
             .muted_shared(&self.core_state.muted)
             .rms_shared(&statistics_state.input_rms)
-            .codec(codec_enabled, vbr, residual_bits)
             .on_error(end_call)
             .sink(KanalSink::new(sender));
 
-        cfg_if::cfg_if! {
-            if #[cfg(target_family = "wasm")] {
-                let wrapper = self
-                    .web_input
-                    .lock()
-                    .await
-                    .take()
-                    .expect("web audio wrapper was not initialized");
-
-                let handle = builder
-                    .web_audio_wrapper(wrapper)
-                    .build(&self.host)?;
-            } else {
-                 let handle = builder
-                    .build(&self.host)?;
-            }
+        if codec_enabled {
+            builder = builder.codec(
+                if vbr {
+                    CodecBitrateMode::Vbr
+                } else {
+                    CodecBitrateMode::Cbr
+                },
+                residual_bits,
+            )
         }
 
-        Ok(InputHelper::new(handle, receiver))
+        if self.core_state.denoise.load(Relaxed) {
+            builder = builder.denoise(self.core_state.denoise_model.read().await.clone());
+        }
+
+        #[cfg(target_family = "wasm")]
+        {
+            let wrapper = self
+                .web_input
+                .lock()
+                .await
+                .take()
+                .expect("web audio wrapper was not initialized");
+
+            builder = builder.web_audio_wrapper(wrapper);
+        }
+
+        Ok(InputHelper::new(builder.build(&self.host)?, receiver))
     }
 
     /// helper method to set up audio output stack using the telepathy-audio library
