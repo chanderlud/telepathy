@@ -1166,6 +1166,34 @@ where
                                 },
                                 // keep alive messages are sometimes received here
                                 ProtocolMessage::KeepAlive => continue,
+                                ProtocolMessage::Hello { audio_header, .. } => {
+                                    if self.peer_id().await < contact.peer_id {
+                                        info!(event = "simultaneous_dial_detected_yielding");
+                                        if !audio_header.is_valid() {
+                                            warn!(event = "invalid_audio_header_rejected");
+                                            write_message(transport, &ProtocolMessage::Reject).await?;
+                                            None
+                                        } else {
+                                            call_state.remote_configuration = audio_header;
+                                            write_message(transport, &ProtocolMessage::HelloAck {
+                                                audio_header: call_state.local_configuration.clone()
+                                            }).await?;
+
+                                            if is_in_room {
+                                                self.room_handshake(transport, control, state, call_state).await?;
+                                            } else {
+                                                // normal call handshake
+                                                self.call_handshake(transport, control, &mut message_channel.1, state, call_state).await?;
+                                            }
+
+                                            keep_alive.reset(); // start sending normal keep alive messages
+                                            None
+                                        }
+                                    } else {
+                                        info!(event = "simultaneous_dial_detected_winning");
+                                        continue;
+                                    }
+                                }
                                 message => {
                                     // the front end needs to know that the call ended here
                                     warn!(event = "hello_ack_flow_unexpected_message", ?message);
