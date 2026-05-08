@@ -248,6 +248,8 @@ pub mod internal;
 pub mod sea;
 
 mod platform;
+#[cfg(feature = "mock-audio")]
+mod mock;
 
 pub use constants::FRAME_SIZE;
 pub use error::Error;

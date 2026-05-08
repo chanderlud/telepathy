@@ -12,6 +12,7 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 [features]
 flutter = ["dep:flutter_rust_bridge"]
 native = []
+mock-audio = ["telepathy-audio/mock-audio"]
 default = ["flutter"]
 
 [dependencies]

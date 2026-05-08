@@ -27,26 +27,38 @@
 //! let _ = tx;
 //! ```
 
+#[cfg(not(feature = "mock-audio"))]
 use crate::constants::TRANSITION_LENGTH;
-use crate::devices::{AudioHost, get_output_device};
+use crate::devices::AudioHost;
+#[cfg(not(feature = "mock-audio"))]
+use crate::devices::get_output_device;
 use crate::error::Error;
 use crate::internal::NETWORK_FRAME;
 use crate::internal::processor::output_processor;
 use crate::internal::state::OutputProcessorState;
 use crate::internal::thread::{self, JoinHandle};
 use crate::internal::traits::AudioOutput;
+#[cfg(not(feature = "mock-audio"))]
 use crate::internal::traits::CHANNEL_SIZE;
+#[cfg(not(feature = "mock-audio"))]
 use crate::internal::traits::RingBufferOutput;
+#[cfg(not(feature = "mock-audio"))]
 use crate::internal::utils::{hann_fade_in, hann_fade_out};
 use crate::io::SendStream;
 use crate::io::traits::AudioDataSource;
+#[cfg(feature = "mock-audio")]
+use crate::mock::MockAudioOutput;
 use crate::sea::codec::file::SeaFileHeader;
 use crate::sea::decoder::SeaDecoder;
 use atomic_float::AtomicF32;
+#[cfg(not(feature = "mock-audio"))]
 use cpal::Sample;
+#[cfg(not(feature = "mock-audio"))]
 use cpal::SampleFormat;
+#[cfg(not(feature = "mock-audio"))]
 use cpal::traits::{DeviceTrait, StreamTrait};
 use nnnoiseless::FRAME_SIZE;
+#[cfg(not(feature = "mock-audio"))]
 use rtrb::chunks::ChunkError;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
@@ -326,6 +338,7 @@ where
     /// - The device cannot be found
     /// - The stream cannot be created
     /// - The device uses an unsupported sample format
+    #[cfg(not(feature = "mock-audio"))]
     pub fn build(self, host: &AudioHost) -> Result<AudioOutputHandle, Error> {
         use rtrb::RingBuffer;
         if self.source.is_none() {
@@ -430,7 +443,26 @@ where
         stream.0.play()?;
 
         Ok(AudioOutputHandle {
-            _stream: stream,
+            _stream: Some(stream),
+            _processor_handle: Some(context.processor_handle),
+            output_volume: context.output_volume,
+            deafened: context.deafened,
+            loss_sender: context.loss_sender,
+        })
+    }
+
+    #[cfg(feature = "mock-audio")]
+    pub fn build(self, _host: &AudioHost) -> Result<AudioOutputHandle, Error> {
+        if self.source.is_none() {
+            return Err(Error::Config(
+                "a data source must be set via source()".to_string(),
+            ));
+        }
+
+        let context = self.build_common(MockAudioOutput, 48_000)?;
+
+        Ok(AudioOutputHandle {
+            _stream: None,
             _processor_handle: Some(context.processor_handle),
             output_volume: context.output_volume,
             deafened: context.deafened,
@@ -456,7 +488,7 @@ impl Default for AudioOutputBuilder<Box<dyn AudioDataSource>> {
 /// All control methods (`deafen`, `undeafen`, `set_volume`, etc.) are thread-safe
 /// and can be called from any thread. They use atomic operations internally.
 pub struct AudioOutputHandle {
-    _stream: SendStream,
+    _stream: Option<SendStream>,
     _processor_handle: Option<JoinHandle<()>>,
     output_volume: Arc<AtomicF32>,
     deafened: Arc<AtomicBool>,
@@ -517,6 +549,7 @@ impl AudioOutputHandle {
 /// * `output_consumer` - Ring buffer consumer for f32 samples from the processor
 /// * `output_channels` - Number of output channels
 /// * `error_notify` - Optional notify handle for stream errors
+#[cfg(not(feature = "mock-audio"))]
 fn build_output_stream_with_format<T>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,

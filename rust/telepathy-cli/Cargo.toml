@@ -12,8 +12,7 @@ anyhow = "1"
 base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-telepathy-audio = { path = "../telepathy-audio" }
-telepathy_core = { path = "../telepathy-core", default-features = false, features = ["native"] }
+telepathy_core = { path = "../telepathy-core", default-features = false, features = ["native", "mock-audio"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std", "io-util", "sync", "signal"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
