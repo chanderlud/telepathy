@@ -16,7 +16,7 @@ A standalone audio processing library for the Telepathy project, providing devic
 ### Device Enumeration
 
 ```rust
-use telepathy_audio::{AudioHost, list_all_devices, get_default_input_device};
+use telepathy_audio::devices::{AudioHost, list_all_devices, get_default_input_device};
 
 // Create an audio host
 let host = AudioHost::new();
@@ -34,7 +34,7 @@ println!("Default input: {}", input_device.name().unwrap());
 ### Audio Input with Callback
 
 ```rust
-use telepathy_audio::{AudioHost, AudioInputBuilder};
+use telepathy_audio::devices::{AudioHost, AudioInputBuilder};
 
 let host = AudioHost::new();
 
@@ -136,7 +136,7 @@ let _ = (tx1, tx2, output1, output2);
 ### With Codec Support
 
 ```rust
-use telepathy_audio::{AudioHost, AudioInputBuilder, AudioOutputBuilder};
+use telepathy_audio::devices::{AudioHost, AudioInputBuilder, AudioOutputBuilder};
 use telepathy_audio::adapters::MpscSource;
 use bytes::Bytes;
 use std::sync::mpsc;

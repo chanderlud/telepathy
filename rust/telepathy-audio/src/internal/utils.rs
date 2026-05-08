@@ -45,7 +45,7 @@ use rubato::{Fft, FixedSync};
 /// # Examples
 ///
 /// ```rust
-/// use telepathy_audio::db_to_multiplier;
+/// use telepathy_audio::internal::utils::db_to_multiplier;
 ///
 /// // 0 dB = unity gain (multiplier of 1.0)
 /// assert!((db_to_multiplier(0.0) - 1.0).abs() < 0.001);

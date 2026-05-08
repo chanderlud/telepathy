@@ -7,7 +7,8 @@
 //! # Example (Native)
 //!
 //! ```rust,no_run
-//! use telepathy_audio::{AudioHost, AudioInputBuilder};
+//! use telepathy_audio::devices::AudioHost;
+//! use telepathy_audio::io::AudioInputBuilder;
 //!
 //! let host = AudioHost::new();
 //! let input = AudioInputBuilder::new()
@@ -23,8 +24,10 @@
 //! # Example (Custom Sink)
 //!
 //! ```rust,no_run
-//! use telepathy_audio::{AudioHost, AudioInputBuilder, PooledBuffer};
+//! use telepathy_audio::devices::AudioHost;
+//! use telepathy_audio::io::AudioInputBuilder;
 //! use telepathy_audio::adapters::MpscSink;
+//! use telepathy_audio::internal::buffer_pool::PooledBuffer;
 //! use std::sync::mpsc;
 //!
 //! let host = AudioHost::new();
@@ -42,7 +45,8 @@
 //! [`build`](AudioInputBuilder::build):
 //!
 //! ```rust,ignore
-//! use telepathy_audio::{AudioHost, AudioInputBuilder};
+//! use telepathy_audio::devices::AudioHost;
+//! use telepathy_audio::io::AudioInputBuilder;
 //! use telepathy_audio::platform::web_audio::WebAudioWrapper;
 //! use std::sync::Arc;
 //!
@@ -359,7 +363,7 @@ where
     /// # Example
     ///
     /// ```rust,no_run
-    /// use telepathy_audio::AudioInputBuilder;
+    /// use telepathy_audio::io::AudioInputBuilder;
     ///
     /// let builder = AudioInputBuilder::new()
     ///     .denoise(false, None)      // Disable denoising first
@@ -383,7 +387,8 @@ where
     /// ```rust,no_run
     /// # #[cfg(target_family = "wasm")]
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// use telepathy_audio::{AudioHost, AudioInputBuilder};
+    /// use telepathy_audio::devices::AudioHost;
+    /// use telepathy_audio::io::AudioInputBuilder;
     /// use telepathy_audio::platform::web_audio::WebAudioWrapper;
     /// use std::sync::Arc;
     ///
@@ -700,7 +705,8 @@ where
     /// ```rust,no_run
     /// # #[cfg(target_family = "wasm")]
     /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// use telepathy_audio::{AudioHost, AudioInputBuilder};
+    /// use telepathy_audio::devices::AudioHost;
+    /// use telepathy_audio::io::AudioInputBuilder;
     /// use telepathy_audio::platform::web_audio::WebAudioWrapper;
     /// use std::sync::Arc;
     ///
