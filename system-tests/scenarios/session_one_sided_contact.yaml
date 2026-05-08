@@ -14,30 +14,6 @@ steps:
         version: "*"
   - actor: alice
     send:
-      cmd: start_manager
-      args: {}
-    expect_ack:
-      ok: true
-  - actor: bob
-    send:
-      cmd: start_manager
-      args: {}
-    expect_ack:
-      ok: true
-  - actor: alice
-    expect_event:
-      type: manager_active
-      timeout: 10.0
-      match:
-        active: true
-  - actor: bob
-    expect_event:
-      type: manager_active
-      timeout: 10.0
-      match:
-        active: true
-  - actor: alice
-    send:
       cmd: add_contact
       args:
         contact_id: bob

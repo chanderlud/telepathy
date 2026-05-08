@@ -1,5 +1,6 @@
-name: session_simultaneous_dial
+name: call_simultaneous_dial
 steps:
+  # --- bootstrap ---
   - actor: alice
     expect_event:
       type: ready
@@ -28,6 +29,8 @@ steps:
         peer_id: ${alice.peer_id}
     expect_ack:
       ok: true
+
+  # --- establish sessions (concurrent) ---
   - concurrent:
       - actor: alice
         send:
@@ -43,22 +46,8 @@ steps:
             contact_id: alice
         expect_ack:
           ok: true
-  - actor: alice
-    expect_event:
-      type: session_status
-      timeout: 20.0
-      match:
-        status:
-          - Connecting
-          - Connected
-  - actor: bob
-    expect_event:
-      type: session_status
-      timeout: 20.0
-      match:
-        status:
-          - Connecting
-          - Connected
+
+  # wait for both sessions to reach Connected
   - actor: alice
     expect_event:
       type: session_status
@@ -73,3 +62,36 @@ steps:
       match:
         status: Connected
         peer: ${alice.peer_id}
+
+  # --- simultaneous call (DESIRED: both get Connected, no prompts, no deadlock) ---
+  - concurrent:
+      - actor: alice
+        send:
+          cmd: start_call
+          args:
+            contact_id: bob
+        expect_ack:
+          ok: true
+      - actor: bob
+        send:
+          cmd: start_call
+          args:
+            contact_id: alice
+        expect_ack:
+          ok: true
+
+  # DESIRED: both actors receive call_state Connected without any accept_call_prompt.
+  # If a prompt were emitted, this expect_event would timeout waiting for call_state -> test fails.
+  # If the call failed, state would not be Connected -> test fails.
+  - actor: alice
+    expect_event:
+      type: call_state
+      timeout: 20.0
+      match:
+        state: Connected
+  - actor: bob
+    expect_event:
+      type: call_state
+      timeout: 20.0
+      match:
+        state: Connected

@@ -82,6 +82,25 @@ async def _set_identity_on_actor(actor: CliProcess, key_b64: str) -> str:
     return peer_id
 
 
+async def wait_for_relay_ready(actor: CliProcess, timeout: float = 30.0) -> dict:
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
+        for message in actor.stdout_lines():
+            if (
+                message.get("kind") == "event"
+                and message.get("type") == "manager_active"
+                and message.get("active") is True
+            ):
+                return message
+        await asyncio.sleep(0.05)
+
+    raise AssertionError(
+        "timed out waiting for manager_active relay readiness event; "
+        f"stdout transcript: {actor.stdout_lines()}"
+    )
+
+
 @pytest_asyncio.fixture
 async def topology(profile: NetworkProfile) -> TopologyManager:
     manager = TopologyManager()
@@ -132,6 +151,13 @@ async def cli_pair(
 
     await _set_identity_on_actor(alice, _TEST_IDENTITY_KEYS_B64[0])
     await _set_identity_on_actor(bob, _TEST_IDENTITY_KEYS_B64[1])
+    alice_manager_start, bob_manager_start = await asyncio.gather(
+        alice.send({"cmd": "start_manager", "args": {}}),
+        bob.send({"cmd": "start_manager", "args": {}}),
+    )
+    assert alice_manager_start.get("ok") is True
+    assert bob_manager_start.get("ok") is True
+    await asyncio.gather(wait_for_relay_ready(alice), wait_for_relay_ready(bob))
     try:
         yield {"alice": alice, "bob": bob}
     finally:
@@ -160,18 +186,6 @@ async def test_smoke_ready(
 ) -> None:
     _ = topology, relay, profile
     await _run_scenario("smoke_ready.yaml", cli_pair)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("profile", NETWORK_PROFILES, ids=lambda profile: profile.name)
-async def test_smoke_manager(
-    topology: TopologyManager,
-    relay: RelayProcess,
-    cli_pair: dict[str, CliProcess],
-    profile: NetworkProfile,
-) -> None:
-    _ = topology, relay, profile
-    await _run_scenario("smoke_manager.yaml", cli_pair)
 
 
 @pytest.mark.asyncio
@@ -208,6 +222,61 @@ async def test_session_simultaneous_dial(
 ) -> None:
     _ = topology, relay, profile
     await _run_scenario("session_simultaneous_dial.yaml", cli_pair)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("profile", NETWORK_PROFILES, ids=lambda profile: profile.name)
+async def test_call_simultaneous_dial(
+    topology: TopologyManager,
+    relay: RelayProcess,
+    cli_pair: dict[str, CliProcess],
+    profile: NetworkProfile,
+) -> None:
+    _ = topology, relay, profile
+    await _run_scenario("call_simultaneous_dial.yaml", cli_pair)
+
+    alice = cli_pair["alice"]
+    bob = cli_pair["bob"]
+
+    def _has_accept_call_prompt(messages: list[dict]) -> bool:
+        for message in messages:
+            if message.get("kind") != "event":
+                continue
+            if message.get("type") == "accept_call_prompt":
+                return True
+        return False
+
+    alice_lines = alice.stdout_lines()
+    bob_lines = bob.stdout_lines()
+    assert not _has_accept_call_prompt(
+        alice_lines
+    ), "alice emitted undesired accept_call_prompt during simultaneous dial"
+    assert not _has_accept_call_prompt(
+        bob_lines
+    ), "bob emitted undesired accept_call_prompt during simultaneous dial"
+
+    def _call_states(messages: list[dict]) -> list[str]:
+        states: list[str] = []
+        for message in messages:
+            if message.get("kind") != "event" or message.get("type") != "call_state":
+                continue
+            state = message.get("state")
+            if isinstance(state, str):
+                states.append(state)
+            elif isinstance(state, dict) and len(state) == 1:
+                only_key = next(iter(state.keys()))
+                if isinstance(only_key, str):
+                    states.append(only_key)
+        return states
+
+    alice_call_states = _call_states(alice_lines)
+    bob_call_states = _call_states(bob_lines)
+    assert (
+        "Connected" in alice_call_states
+    ), f"alice did not receive call_state Connected; observed {alice_call_states}"
+    assert (
+        "Connected" in bob_call_states
+    ), f"bob did not receive call_state Connected; observed {bob_call_states}"
 
 
 @pytest.mark.asyncio
@@ -248,24 +317,6 @@ async def test_session_client_disappears_and_reappears(
     )
     assert alice_ready.get("type") == "ready"
     assert bob_ready.get("type") == "ready"
-
-    alice_manager = await alice.send({"cmd": "start_manager", "args": {}})
-    bob_manager = await bob.send({"cmd": "start_manager", "args": {}})
-    assert alice_manager.get("ok") is True
-    assert bob_manager.get("ok") is True
-
-    alice_manager_active = await alice.expect_event(
-        lambda event: event.get("type") == "manager_active"
-        and event.get("active") is True,
-        timeout=15.0,
-    )
-    bob_manager_active = await bob.expect_event(
-        lambda event: event.get("type") == "manager_active"
-        and event.get("active") is True,
-        timeout=15.0,
-    )
-    assert alice_manager_active.get("active") is True
-    assert bob_manager_active.get("active") is True
 
     alice_add_contact = await alice.send(
         {

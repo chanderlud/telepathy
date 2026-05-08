@@ -14,18 +14,6 @@ steps:
         version: "*"
   - actor: alice
     send:
-      cmd: start_manager
-      args: {}
-    expect_ack:
-      ok: true
-  - actor: bob
-    send:
-      cmd: start_manager
-      args: {}
-    expect_ack:
-      ok: true
-  - actor: alice
-    send:
       cmd: add_contact
       args:
         contact_id: bob
