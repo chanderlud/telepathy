@@ -1,7 +1,8 @@
-#![cfg(not(target_family = "wasm"))]
-
 use bytes::BytesMut;
-use criterion::{Criterion, criterion_group, criterion_main};
+#[cfg(not(target_family = "wasm"))]
+use criterion::{criterion_group, criterion_main, Criterion};
+#[cfg(target_family = "wasm")]
+use wasm_bindgen_test::{wasm_bindgen_bench, Criterion};
 use nnnoiseless::FRAME_SIZE;
 use std::hint::black_box;
 use telepathy_audio::sea::{
@@ -39,14 +40,10 @@ fn header_from_encoder(
     }
 }
 
-pub fn bench_sea_codec(c: &mut Criterion) {
-    let mut group = c.benchmark_group("sea_codec");
-    group.sample_size(100);
-
+#[cfg_attr(target_family = "wasm", wasm_bindgen_bench)]
+pub fn bench_cbr_encode(c: &mut Criterion) {
     let cbr_frame = sine_frame(440.0);
-    let vbr_frame = sine_frame(660.0);
-
-    group.bench_function("bench_cbr_encode", |b| {
+    c.bench_function("bench_cbr_encode", |b| {
         let settings = EncoderSettings::default();
         let mut encoder = SeaEncoder::new(1, SAMPLE_RATE, settings).unwrap();
         let mut buffer = BytesMut::with_capacity(4096);
@@ -62,8 +59,12 @@ pub fn bench_sea_codec(c: &mut Criterion) {
             black_box(&buffer);
         });
     });
+}
 
-    group.bench_function("bench_vbr_encode", |b| {
+#[cfg_attr(target_family = "wasm", wasm_bindgen_bench)]
+pub fn bench_vbr_encode(c: &mut Criterion) {
+    let vbr_frame = sine_frame(660.0);
+    c.bench_function("bench_vbr_encode", |b| {
         let settings = EncoderSettings {
             vbr: true,
             ..EncoderSettings::default()
@@ -82,8 +83,12 @@ pub fn bench_sea_codec(c: &mut Criterion) {
             black_box(&buffer);
         });
     });
+}
 
-    group.bench_function("bench_cbr_decode", |b| {
+#[cfg_attr(target_family = "wasm", wasm_bindgen_bench)]
+pub fn bench_cbr_decode(c: &mut Criterion) {
+    let cbr_frame = sine_frame(440.0);
+    c.bench_function("bench_cbr_decode", |b| {
         let settings = EncoderSettings::default();
         let mut encoder = SeaEncoder::new(1, SAMPLE_RATE, settings.clone()).unwrap();
         let mut encoded = BytesMut::new();
@@ -104,8 +109,12 @@ pub fn bench_sea_codec(c: &mut Criterion) {
             black_box(&output);
         });
     });
+}
 
-    group.bench_function("bench_vbr_decode", |b| {
+#[cfg_attr(target_family = "wasm", wasm_bindgen_bench)]
+pub fn bench_vbr_decode(c: &mut Criterion) {
+    let vbr_frame = sine_frame(660.0);
+    c.bench_function("bench_vbr_decode", |b| {
         let settings = EncoderSettings {
             vbr: true,
             ..EncoderSettings::default()
@@ -129,8 +138,12 @@ pub fn bench_sea_codec(c: &mut Criterion) {
             black_box(&output);
         });
     });
+}
 
-    group.bench_function("bench_cbr_encode_decode_roundtrip", |b| {
+#[cfg_attr(target_family = "wasm", wasm_bindgen_bench)]
+pub fn bench_cbr_encode_decode_roundtrip(c: &mut Criterion) {
+    let cbr_frame = sine_frame(440.0);
+    c.bench_function("bench_cbr_encode_decode_roundtrip", |b| {
         let settings = EncoderSettings::default();
         let mut encoder = SeaEncoder::new(1, SAMPLE_RATE, settings.clone()).unwrap();
         let mut encoded = BytesMut::new();
@@ -155,8 +168,11 @@ pub fn bench_sea_codec(c: &mut Criterion) {
             black_box(&output);
         });
     });
+}
 
-    group.bench_function("bench_bitpacker_roundtrip", |b| {
+#[cfg_attr(target_family = "wasm", wasm_bindgen_bench)]
+pub fn bench_bitpacker_roundtrip(c: &mut Criterion) {
+    c.bench_function("bench_bitpacker_roundtrip", |b| {
         let residuals: Vec<u8> = (0..FRAME_SIZE).map(|i| (i % 8) as u8).collect();
         let mut packer = BitPacker::default();
         let mut unpacker = BitUnpacker::new_const_bits(3);
@@ -175,9 +191,21 @@ pub fn bench_sea_codec(c: &mut Criterion) {
             black_box(unpacked);
         });
     });
-
-    group.finish();
 }
 
-criterion_group!(benches, bench_sea_codec);
+#[cfg(not(target_family = "wasm"))]
+criterion_group!(
+    benches,
+    bench_cbr_encode,
+    bench_vbr_encode,
+    bench_cbr_decode,
+    bench_vbr_decode,
+    bench_cbr_encode_decode_roundtrip,
+    bench_bitpacker_roundtrip
+);
+
+#[cfg(not(target_family = "wasm"))]
 criterion_main!(benches);
+
+#[cfg(target_family = "wasm")]
+fn main() {}
