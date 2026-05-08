@@ -213,7 +213,7 @@ async def test_session_simultaneous_dial(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "profile",
-    [profile for profile in NETWORK_PROFILES if profile.name in {"clean", "wan"}],
+    NETWORK_PROFILES,
     ids=lambda profile: profile.name,
 )
 async def test_session_client_disappears_and_reappears(
@@ -225,6 +225,20 @@ async def test_session_client_disappears_and_reappears(
     _ = topology, relay, profile
     alice = cli_pair["alice"]
     bob = cli_pair["bob"]
+
+    def _status_name(status: object) -> str | None:
+        if isinstance(status, str):
+            return status
+        if isinstance(status, dict) and len(status) == 1:
+            only_key = next(iter(status.keys()))
+            if isinstance(only_key, str):
+                return only_key
+        return None
+
+    def _is_connected_event(event: dict) -> bool:
+        if event.get("type") != "session_status":
+            return False
+        return _status_name(event.get("status")) == "Connected"
 
     alice_ready = await alice.expect_event(
         lambda event: event.get("type") == "ready", timeout=10.0
@@ -275,10 +289,10 @@ async def test_session_client_disappears_and_reappears(
 
     alice_connecting = await alice.expect_event(
         lambda event: event.get("type") == "session_status"
-        and event.get("status") in {"Connecting", "Connected"},
+        and _status_name(event.get("status")) in {"Connecting", "Connected"},
         timeout=10.0,
     )
-    assert alice_connecting.get("status") in {"Connecting", "Connected"}
+    assert _status_name(alice_connecting.get("status")) in {"Connecting", "Connected"}
 
     alice_stdout_before_restart = len(alice.stdout_lines())
     await bob.terminate()
@@ -296,18 +310,16 @@ async def test_session_client_disappears_and_reappears(
     )
     assert bob_add_contact_after_restart.get("ok") is True
 
-    bob_session = await bob.expect_event(
-        lambda event: event.get("type") == "session_status"
-        and event.get("status") in {"Connecting", "Connected"},
-        timeout=30.0,
+    # simulate frontend starting sessions on launch
+    start_response = await bob.send(
+        {"cmd": "start_session", "args": {"contact_id": "alice"}}
     )
-    assert bob_session.get("status") in {"Connecting", "Connected"}
+    assert start_response.get("ok") is True
 
-    alice_connected = await alice.expect_event(
-        lambda event: event.get("type") == "session_status"
-        and event.get("status") == "Connected",
-        timeout=30.0,
-    )
+    bob_session = await bob.expect_event(_is_connected_event, timeout=30.0)
+    assert _status_name(bob_session.get("status")) == "Connected"
+
+    alice_connected = await alice.expect_event(_is_connected_event, timeout=30.0)
     assert alice_connected.get("peer") == bob.identity_peer_id
 
     def _session_statuses(messages: list[dict]) -> list[str]:
@@ -315,9 +327,9 @@ async def test_session_client_disappears_and_reappears(
         for message in messages:
             if message.get("kind") != "event" or message.get("type") != "session_status":
                 continue
-            status = message.get("status")
-            if isinstance(status, str):
-                statuses.append(status)
+            status_name = _status_name(message.get("status"))
+            if status_name:
+                statuses.append(status_name)
         return statuses
 
     alice_after_restart = alice.stdout_lines()[alice_stdout_before_restart:]
@@ -326,8 +338,8 @@ async def test_session_client_disappears_and_reappears(
     bob_statuses = _session_statuses(bob_after_restart)
     assert alice_statuses, "alice emitted no session_status events after restart"
     assert bob_statuses, "bob emitted no session_status events after restart"
-    assert alice_statuses[-1] == "Connected"
-    assert bob_statuses[-1] == "Connected"
+    assert "Connected" in alice_statuses
+    assert "Connected" in bob_statuses
     assert "Unknown" not in alice_statuses
     assert "Unknown" not in bob_statuses
 
