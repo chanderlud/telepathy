@@ -51,6 +51,7 @@ pub use traits::{AudioDataSink, AudioDataSource};
 /// cpal::Stream is not yet send and sync on WASM
 ///
 /// SendStream allows the Stream to be used in spawned tasks
+#[allow(unused)]
 struct SendStream(cpal::Stream);
 unsafe impl Send for SendStream {}
 unsafe impl Sync for SendStream {}

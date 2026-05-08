@@ -105,6 +105,7 @@ pub fn resampler_factory(
 }
 
 #[inline]
+#[cfg(not(feature = "mock-audio"))]
 pub(crate) fn hann_fade_in(i: usize, len: usize) -> f32 {
     // t in (0, 1]
     let t = (i + 1) as f32 / len as f32;
@@ -112,6 +113,7 @@ pub(crate) fn hann_fade_in(i: usize, len: usize) -> f32 {
 }
 
 #[inline]
+#[cfg(not(feature = "mock-audio"))]
 pub(crate) fn hann_fade_out(i: usize, len: usize) -> f32 {
     // t in (0, 1]
     let t = (i + 1) as f32 / len as f32;
