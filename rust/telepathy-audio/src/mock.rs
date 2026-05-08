@@ -1,10 +1,13 @@
-use crate::devices::{AudioDeviceInfo, AudioDeviceList, AudioHost, DeviceError, DeviceHandle};
+use crate::devices::{
+    AudioDeviceInfo, AudioDeviceList, AudioHost, DeviceError, DeviceHandle, DeviceType,
+};
 use crate::error::Error;
 use crate::internal::traits::{AudioInput, AudioOutput};
 use std::thread;
 use std::time::Duration;
 
 const DEFAULT_SAMPLE_RATE: u32 = 48_000;
+const MOCK_DEVICE_ID: &str = "mock";
 
 /// In-process audio input that emits silence at real-time pace.
 #[derive(Debug)]
@@ -61,33 +64,45 @@ impl AudioHost for MockAudioHost {
     }
 
     fn list_input_devices(&self) -> Result<Vec<AudioDeviceInfo>, DeviceError> {
-        Ok(vec![])
+        Ok(vec![AudioDeviceInfo {
+            name: "Mock Input".to_string(),
+            id: MOCK_DEVICE_ID.to_string(),
+        }])
     }
 
     fn list_output_devices(&self) -> Result<Vec<AudioDeviceInfo>, DeviceError> {
-        Ok(vec![])
+        Ok(vec![AudioDeviceInfo {
+            name: "Mock Output".to_string(),
+            id: MOCK_DEVICE_ID.to_string(),
+        }])
     }
 
     fn list_all_devices(&self) -> Result<AudioDeviceList, DeviceError> {
         Ok(AudioDeviceList {
-            input_devices: vec![],
-            output_devices: vec![],
+            input_devices: self.list_input_devices()?,
+            output_devices: self.list_output_devices()?,
         })
     }
 
     fn get_input_device(&self, _device_id: Option<&str>) -> Result<DeviceHandle, DeviceError> {
-        Err(DeviceError::NoDefaultDevice)
+        Ok(DeviceHandle::mock(
+            MOCK_DEVICE_ID.to_string(),
+            DeviceType::Input,
+        ))
     }
 
     fn get_output_device(&self, _device_id: Option<&str>) -> Result<DeviceHandle, DeviceError> {
-        Err(DeviceError::NoDefaultDevice)
+        Ok(DeviceHandle::mock(
+            MOCK_DEVICE_ID.to_string(),
+            DeviceType::Output,
+        ))
     }
 
     fn get_default_input_device(&self) -> Result<DeviceHandle, DeviceError> {
-        Err(DeviceError::NoDefaultDevice)
+        self.get_input_device(None)
     }
 
     fn get_default_output_device(&self) -> Result<DeviceHandle, DeviceError> {
-        Err(DeviceError::NoDefaultDevice)
+        self.get_output_device(None)
     }
 }

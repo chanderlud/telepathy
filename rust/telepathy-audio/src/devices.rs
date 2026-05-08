@@ -69,19 +69,34 @@ pub struct AudioDeviceList {
 
 /// Handle to an audio device for use by audio processing code.
 ///
-/// This struct wraps a `cpal::Device` and provides access to the underlying
-/// device while storing the device ID for comparison purposes.
+/// This struct wraps either a real `cpal::Device` or a mock variant and
+/// stores the device ID for comparison purposes.
 pub struct DeviceHandle {
-    device: cpal::Device,
+    inner: DeviceInner,
     device_id: String,
     device_type: DeviceType,
+}
+
+enum DeviceInner {
+    Real(cpal::Device),
+    #[cfg(feature = "mock-audio")]
+    Mock,
 }
 
 impl DeviceHandle {
     /// Creates a new device handle from a cpal device.
     fn new(device: cpal::Device, device_id: String, device_type: DeviceType) -> Self {
         Self {
-            device,
+            inner: DeviceInner::Real(device),
+            device_id,
+            device_type,
+        }
+    }
+
+    #[cfg(feature = "mock-audio")]
+    pub(crate) fn mock(device_id: String, device_type: DeviceType) -> Self {
+        Self {
+            inner: DeviceInner::Mock,
             device_id,
             device_type,
         }
@@ -92,7 +107,13 @@ impl DeviceHandle {
     /// This method provides access to the underlying cpal device for
     /// consumers that need to query device configuration.
     pub fn device(&self) -> &cpal::Device {
-        &self.device
+        match &self.inner {
+            DeviceInner::Real(device) => device,
+            #[cfg(feature = "mock-audio")]
+            DeviceInner::Mock => {
+                panic!("DeviceHandle::device() is unavailable for mock devices")
+            }
+        }
     }
 
     /// Returns the device ID string.
@@ -101,26 +122,39 @@ impl DeviceHandle {
     }
 
     pub fn sample_rate(&self) -> Result<u32, DeviceError> {
-        Ok(match self.device_type {
-            DeviceType::Input => self.device.default_input_config()?.sample_rate(),
-            DeviceType::Output => self.device.default_output_config()?.sample_rate(),
+        Ok(match &self.inner {
+            DeviceInner::Real(device) => match self.device_type {
+                DeviceType::Input => device.default_input_config()?.sample_rate(),
+                DeviceType::Output => device.default_output_config()?.sample_rate(),
+            },
+            #[cfg(feature = "mock-audio")]
+            DeviceInner::Mock => 48_000,
         })
     }
 
     /// Returns the device name.
     pub fn name(&self) -> Result<String, DeviceError> {
-        self.device
-            .description()
-            .map(|desc| desc.name().to_string())
-            .map_err(|e| DeviceError::EnumerationFailed(e.to_string()))
+        match &self.inner {
+            DeviceInner::Real(device) => device
+                .description()
+                .map(|desc| desc.name().to_string())
+                .map_err(|e| DeviceError::EnumerationFailed(e.to_string())),
+            #[cfg(feature = "mock-audio")]
+            DeviceInner::Mock => Ok("mock".to_string()),
+        }
     }
 }
 
 impl fmt::Debug for DeviceHandle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let description = match &self.inner {
+            DeviceInner::Real(device) => format!("{:?}", device.description()),
+            #[cfg(feature = "mock-audio")]
+            DeviceInner::Mock => "MockDevice".to_string(),
+        };
         f.debug_struct("DeviceHandle")
             .field("device_id", &self.device_id)
-            .field("description", &self.device.description())
+            .field("description", &description)
             .finish()
     }
 }
