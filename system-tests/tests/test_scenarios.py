@@ -95,9 +95,10 @@ async def wait_for_relay_ready(actor: CliProcess, timeout: float = 30.0) -> dict
                 return message
         await asyncio.sleep(0.05)
 
+    transcript = "\n".join(str(message) for message in actor.stdout_lines())
     raise AssertionError(
-        "timed out waiting for manager_active relay readiness event; "
-        f"stdout transcript: {actor.stdout_lines()}"
+        "manager_active event not observed within timeout.\n"
+        f"Captured stdout transcript:\n{transcript}"
     )
 
 
@@ -158,6 +159,7 @@ async def cli_pair(
     assert alice_manager_start.get("ok") is True
     assert bob_manager_start.get("ok") is True
     await asyncio.gather(wait_for_relay_ready(alice), wait_for_relay_ready(bob))
+    await asyncio.sleep(1) # TODO implement a better way to wait for peers to connect to relay
     try:
         yield {"alice": alice, "bob": bob}
     finally:
