@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 import subprocess
 import sys
 from datetime import datetime
@@ -16,16 +18,15 @@ from harness.topology import TopologyManager
 SYSTEM_TEST_ROOT = Path(__file__).resolve().parent
 REPO_ROOT = SYSTEM_TEST_ROOT.parent
 BUILD_SCRIPT = SYSTEM_TEST_ROOT / "build.sh"
-RUST_TARGET_DEBUG = REPO_ROOT / "rust" / "target" / "debug"
+RUST_TARGET = REPO_ROOT / "rust" / "target" / "debug"
 
 if str(SYSTEM_TEST_ROOT) not in sys.path:
     sys.path.insert(0, str(SYSTEM_TEST_ROOT))
 
 BINARY_PATHS = {
-    "relay": str(RUST_TARGET_DEBUG / "relay-server"),
-    "cli": str(RUST_TARGET_DEBUG / "telepathy-cli"),
+    "relay": str(RUST_TARGET / "relay-server"),
+    "cli": str(RUST_TARGET / "telepathy-cli"),
 }
-
 
 def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption(
@@ -40,6 +41,13 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         choices=("failures", "all", "none"),
         default="failures",
         help="Save system-test artifacts for failures, all tests, or none.",
+    )
+    parser.addoption(
+        "--test-iterations",
+        action="store",
+        type=int,
+        default=4,
+        help="Run each collected test this many times.",
     )
 
 
@@ -63,6 +71,18 @@ def pytest_configure(config: pytest.Config) -> None:
     config._system_test_artifacts_dir = Path(config.getoption("artifacts_dir")).resolve()
     config._system_test_save_artifacts = str(config.getoption("save_artifacts"))
     config._system_test_artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+
+def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
+    if "iteration_id" not in metafunc.fixturenames:
+        return
+
+    iterations = int(metafunc.config.getoption("test_iterations") or 1)
+    if iterations < 1:
+        raise pytest.UsageError("--test-iterations must be >= 1")
+
+    ids = [f"iter-{index}" for index in range(iterations)]
+    metafunc.parametrize("iteration_id", [str(index) for index in range(iterations)], ids=ids)
 
 
 @pytest.hookimpl(hookwrapper=True)
@@ -165,6 +185,29 @@ def record_test_artifacts(request: pytest.FixtureRequest) -> Any:
 
     payload_path = test_dir / "debug.json"
     payload_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+@pytest.fixture
+def worker_tag() -> str:
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "0")
+    if worker in {"", "master"}:
+        return "0"
+
+    match = re.search(r"(\d+)$", worker)
+    if not match:
+        return "0"
+    return match.group(1)
+
+
+@pytest.fixture
+def iteration_id(request: pytest.FixtureRequest) -> str:
+    param = getattr(request, "param", "0")
+    return str(param)
+
+
+@pytest.fixture(autouse=True)
+def _attach_iteration_id(iteration_id: str) -> None:
+    _ = iteration_id
 
 
 @pytest.fixture(scope="session")

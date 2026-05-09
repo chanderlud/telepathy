@@ -103,8 +103,11 @@ async def wait_for_relay_ready(actor: CliProcess, timeout: float = 30.0) -> dict
 
 
 @pytest_asyncio.fixture
-async def topology(profile: NetworkProfile) -> TopologyManager:
-    manager = TopologyManager()
+async def topology(
+    profile: NetworkProfile,
+    worker_tag: str,
+) -> TopologyManager:
+    manager = TopologyManager(worker_id=worker_tag)
     try:
         await manager.setup(num_clients=2, profile=profile)
         yield manager
@@ -117,7 +120,7 @@ async def relay(topology: TopologyManager, binaries: dict[str, str]) -> RelayPro
     proc = RelayProcess(
         binary_path=binaries["relay"],
         namespace=topology.relay_namespace,
-        listen_addr="0.0.0.0:40142",
+        listen_addr=f"0.0.0.0:{topology.listen_port}",
     )
     await proc.start()
     try:
@@ -135,16 +138,19 @@ async def cli_pair(
     if not relay.peer_id:
         raise AssertionError("relay peer id missing")
 
+    alice_namespace = topology.client_namespaces[0]
+    bob_namespace = topology.client_namespaces[1]
+
     alice = CliProcess(
         binary_path=binaries["cli"],
-        namespace="ns-cli-0",
-        relay_addr=topology.relay_addr("ns-cli-0"),
+        namespace=alice_namespace,
+        relay_addr=topology.relay_addr(alice_namespace),
         relay_peer=relay.peer_id,
     )
     bob = CliProcess(
         binary_path=binaries["cli"],
-        namespace="ns-cli-1",
-        relay_addr=topology.relay_addr("ns-cli-1"),
+        namespace=bob_namespace,
+        relay_addr=topology.relay_addr(bob_namespace),
         relay_peer=relay.peer_id,
     )
     await alice.start()

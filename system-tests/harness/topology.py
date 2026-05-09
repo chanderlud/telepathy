@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from dataclasses import dataclass
 
 
@@ -15,12 +16,26 @@ class NetworkProfile:
 
 
 class TopologyManager:
-    def __init__(self) -> None:
-        self.relay_namespace = "ns-relay"
+    def __init__(self, worker_id: str = "0") -> None:
+        self.worker_id = worker_id
+        self._worker_index = self._parse_worker_index(worker_id)
+        # relay-server currently binds a fixed port (40142)
+        self.listen_port = 40142
+        self.relay_namespace = f"ns-{worker_id}-relay"
         self.client_namespaces: list[str] = []
         self._created_namespaces: list[str] = []
         self._relay_ips: dict[str, str] = {}
         self._client_ifaces: dict[str, str] = {}
+
+    @staticmethod
+    def _parse_worker_index(worker_id: str) -> int:
+        if worker_id == "master":
+            return 0
+
+        match = re.search(r"(\d+)$", worker_id)
+        if not match:
+            return 0
+        return int(match.group(1))
 
     async def _run(self, *args: str) -> None:
         proc = await asyncio.create_subprocess_exec(
@@ -36,9 +51,23 @@ class TopologyManager:
                 f"stderr: {stderr.decode(errors='replace')}"
             )
 
-    async def setup(self, num_clients: int, profile: NetworkProfile) -> None:
-        self.client_namespaces = [f"ns-cli-{index}" for index in range(num_clients)]
-        all_namespaces = [self.relay_namespace, *self.client_namespaces]
+    async def setup(
+        self,
+        num_clients: int,
+        profile: NetworkProfile,
+        relay_namespace: str | None = None,
+    ) -> None:
+        self.client_namespaces = [
+            f"ns-{self.worker_id}-cli-{index}" for index in range(num_clients)
+        ]
+        relay_namespace_owned = relay_namespace is None
+        if relay_namespace is not None:
+            self.relay_namespace = relay_namespace
+            self.listen_port = 40142
+
+        all_namespaces = [*self.client_namespaces]
+        if relay_namespace_owned:
+            all_namespaces.insert(0, self.relay_namespace)
         self._created_namespaces.clear()
         self._relay_ips.clear()
         self._client_ifaces.clear()
@@ -61,8 +90,8 @@ class TopologyManager:
                 )
 
             for index, client_ns in enumerate(self.client_namespaces):
-                relay_iface = f"veth-r{index}"
-                client_iface = f"veth-c{index}"
+                relay_iface = f"vr{self._worker_index}_{index}"
+                client_iface = f"vc{self._worker_index}_{index}"
                 subnet_octet = 10 + index
                 relay_ip = f"10.0.{subnet_octet}.1"
                 client_ip = f"10.0.{subnet_octet}.2"
@@ -70,6 +99,12 @@ class TopologyManager:
                 self._relay_ips[client_ns] = relay_ip
                 self._client_ifaces[client_ns] = client_iface
 
+                await self._delete_link_in_namespace_if_exists(
+                    self.relay_namespace,
+                    relay_iface,
+                )
+                await self._delete_link_if_exists(relay_iface)
+                await self._delete_link_if_exists(client_iface)
                 await self._run(
                     "ip",
                     "link",
@@ -192,6 +227,32 @@ class TopologyManager:
         )
         await proc.wait()
 
+    async def _delete_link_if_exists(self, iface: str) -> None:
+        proc = await asyncio.create_subprocess_exec(
+            "ip",
+            "link",
+            "del",
+            iface,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await proc.wait()
+
+    async def _delete_link_in_namespace_if_exists(self, namespace: str, iface: str) -> None:
+        proc = await asyncio.create_subprocess_exec(
+            "ip",
+            "netns",
+            "exec",
+            namespace,
+            "ip",
+            "link",
+            "del",
+            iface,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await proc.wait()
+
     async def teardown(self) -> None:
         for namespace in reversed(self._created_namespaces):
             proc = await asyncio.create_subprocess_exec(
@@ -211,4 +272,4 @@ class TopologyManager:
 
     def relay_addr(self, namespace: str) -> str:
         relay_ip = self._relay_ips.get(namespace, "127.0.0.1")
-        return f"{relay_ip}:40142"
+        return f"{relay_ip}:{self.listen_port}"
