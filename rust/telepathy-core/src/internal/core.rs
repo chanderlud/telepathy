@@ -989,11 +989,10 @@ where
                 Ok(false)
             },
             result = read_message(transport) => {
+                info!(event = "session_message_received", ?result);
                 let mut other_ringtone = None;
                 let remote_audio_header;
                 let room_hash_option;
-
-                info!(event = "session_message_received", ?result);
 
                 match result? {
                     ProtocolMessage::Hello { ringtone, audio_header, room_hash } => {
@@ -1040,9 +1039,19 @@ where
 
                 state.in_call.store(true, Relaxed); // blocks the session from being restarted
 
+                let cancel_prompt_clone = cancel_prompt.clone();
                 let accept_future = async {
                     if let Some(accept_handle) = accept_handle {
-                        accept_handle.await
+                        select! {
+                            result = accept_handle => result,
+                            _ = state.start_call.notified() => {
+                                info!(event = "call_started_while_prompting");
+                                if let Some(cancel) = cancel_prompt_clone {
+                                    cancel.notify_one();
+                                }
+                                Ok(true)
+                            },
+                        }
                     } else {
                         Ok(true)
                     }
