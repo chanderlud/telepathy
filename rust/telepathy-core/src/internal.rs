@@ -1,102 +1,89 @@
-/// channel adapters for telepathy-audio I/O traits
-/// flutter_rust_bridge:ignore
-mod audio_adapters;
+/// callback traits shared by FRB and native frontends
+pub(crate) mod callbacks;
 /// implementations for core telepathy functionality
-/// flutter_rust_bridge:ignore
-pub mod core;
+mod core;
+pub(crate) mod error;
 /// helper methods used by telepathy core
-/// flutter_rust_bridge:ignore
 mod helpers;
-/// flutter_rust_bridge:ignore
 pub(crate) mod messages;
 pub(crate) mod screenshare;
 /// networking code for live audio streams
-/// flutter_rust_bridge:ignore
 mod sockets;
-#[cfg(test)]
-#[cfg(not(target_family = "wasm"))]
-pub(crate) mod tests;
-pub(crate) mod utils;
+mod state;
+mod utils;
 
-use crate::error::{DartError, Error, ErrorKind};
-use crate::flutter::callbacks::FrbCallbacks;
-use crate::flutter::*;
+use crate::AudioDevice;
+use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::core::TelepathyCore;
-use crate::internal::helpers::OutputHelper;
-use crate::overlay::overlay::Overlay;
-use atomic_float::AtomicF32;
+use crate::internal::error::{Error, ErrorKind};
+use crate::internal::messages::{Attachment, ProtocolMessage};
+use crate::internal::state::{EarlyCallState, RoomState, SessionState};
+pub(crate) use crate::internal::utils::{JoinHandle, spawn_task};
+use crate::overlay::Overlay;
+use crate::types::{ChatMessage, CodecConfig, Contact, NetworkConfig, ScreenshareConfig};
 use chrono::Local;
-#[cfg(target_family = "wasm")]
-use flutter_rust_bridge::JoinHandle;
-use flutter_rust_bridge::{frb, spawn};
-use kanal::AsyncReceiver;
-use kanal::{AsyncSender, unbounded_async};
-use libp2p::core::ConnectedPoint;
 use libp2p::identity::Keypair;
-use libp2p::multiaddr::Protocol;
-use libp2p::{PeerId, Stream, StreamProtocol};
-use libp2p_stream::Control;
-use messages::{Attachment, AudioHeader, Message};
-use sockets::{Transport, TransportStream};
+use libp2p::{PeerId, StreamProtocol};
 use std::mem;
-use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
-use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::time::Duration;
-use telepathy_audio::devices::{AudioDeviceInfo, list_all_devices};
+use telepathy_audio::RnnModel;
+use telepathy_audio::devices::AudioHost;
 use telepathy_audio::internal::utils::db_to_multiplier;
-use telepathy_audio::{Host, RnnModel};
-use tokio::select;
-use tokio::sync::mpsc::{Receiver as MReceiver, Sender as MSender, channel};
+use tokio::sync::mpsc::channel;
 use tokio::sync::{Mutex, Notify};
-#[cfg(not(target_family = "wasm"))]
-use tokio::task::JoinHandle;
-#[cfg(not(target_family = "wasm"))]
-use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 use tracing::{debug, error, info, info_span, warn};
-use uuid::Uuid;
 #[cfg(target_family = "wasm")]
 use wasmtimer::tokio::timeout;
 
 type Result<T> = std::result::Result<T, Error>;
-pub(crate) type SharedDeviceId = Arc<Mutex<Option<String>>>;
 
 /// A timeout used when initializing the call
 const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 /// How often to keep-alive libp2p streams
-pub(crate) const KEEP_ALIVE: Duration = Duration::from_secs(10);
-/// the protocol identifier for Telepathy
-const CHAT_PROTOCOL: StreamProtocol = StreamProtocol::new("/telepathy/0.0.1");
+const KEEP_ALIVE: Duration = Duration::from_secs(10);
+/// the protocol identifier for Telepathy sessions
+const SESSION_PROTOCOL: StreamProtocol = StreamProtocol::new("/telepathy-session/0.0.1");
+/// the protocol identifier for Telepathy data streams (calls or screen shares)
+const STREAM_PROTOCOL: StreamProtocol = StreamProtocol::new("/telepathy-stream/0.0.1");
 /// Maximum allowed size for a single length-delimited control/message frame on the session stream.
 const SESSION_MAX_FRAME_LENGTH: usize = 1024 * 1024 * 1024;
 /// How long to attempt direct connection upgrade before falling back to a relayed option
 const DCUTR_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// the public API for flutter
-#[frb(opaque)]
-pub struct Telepathy {
-    inner: TelepathyCore<FlutterCallbacks, FlutterStatisticsCallback>,
+pub(crate) struct TelepathyHandle<C, S, H>
+where
+    C: CoreCallbacks<S> + Send + Sync + 'static,
+    S: CoreStatisticsCallback + Send + Sync + 'static,
+    H: AudioHost + Send + Sync + Clone + 'static,
+{
+    inner: TelepathyCore<C, S, H>,
 
     /// contains handles to the manager thread & room managers
     handles: Arc<Mutex<Vec<JoinHandle<()>>>>,
 }
 
-impl Telepathy {
-    #[frb(sync)]
-    pub fn new(
-        host: Arc<Host>,
+impl<C, S, H> TelepathyHandle<C, S, H>
+where
+    C: CoreCallbacks<S> + Send + Sync + 'static,
+    S: CoreStatisticsCallback + Send + Sync + 'static,
+    H: AudioHost + Send + Sync + Clone + 'static,
+{
+    /// Builds a new handle around a fresh `TelepathyCore`.
+    pub(crate) fn new(
+        host: H,
         network_config: &NetworkConfig,
         screenshare_config: &ScreenshareConfig,
         overlay: &Overlay,
         codec_config: &CodecConfig,
-        callbacks: FlutterCallbacks,
-    ) -> Telepathy {
+        callbacks: C,
+    ) -> Self {
         Self {
             inner: TelepathyCore::new(
-                host.into(),
+                host,
                 network_config,
                 screenshare_config,
                 overlay,
@@ -125,24 +112,19 @@ impl Telepathy {
     }
 
     /// Attempts to start a call through an existing session
-    pub async fn start_call(&self, contact: &Contact) -> std::result::Result<(), DartError> {
+    pub async fn start_call(&self, contact: &Contact) -> Result<()> {
         if self.inner.is_call_active().await {
-            return Err("Cannot start call while a call is already active"
-                .to_string()
-                .into());
+            return Err(ErrorKind::CallAlreadyActive.into());
         }
 
         if let Some(state) = self.inner.session_states.read().await.get(&contact.peer_id) {
             #[cfg(target_family = "wasm")]
-            self.inner
-                .init_web_audio()
-                .await
-                .map_err::<Error, _>(Error::into)?;
+            self.inner.init_web_audio().await?;
 
             state.start_call.notify_one();
             Ok(())
         } else {
-            Err(String::from("No session found for contact").into())
+            Err(ErrorKind::NoSessionForContact.into())
         }
     }
 
@@ -170,21 +152,13 @@ impl Telepathy {
     }
 
     /// The only entry point into participating in a room
-    pub async fn join_room(
-        &self,
-        member_strings: Vec<String>,
-    ) -> std::result::Result<(), DartError> {
+    pub async fn join_room(&self, member_strings: Vec<String>) -> Result<()> {
         if self.inner.is_call_active().await {
-            return Err("Cannot join room while a call is already active"
-                .to_string()
-                .into());
+            return Err(ErrorKind::CallAlreadyActive.into());
         }
 
         #[cfg(target_family = "wasm")]
-        self.inner
-            .init_web_audio()
-            .await
-            .map_err::<Error, _>(Error::into)?;
+        self.inner.init_web_audio().await?;
 
         // parse members
         let members: Vec<_> = member_strings
@@ -224,7 +198,7 @@ impl Telepathy {
         }
         // spawn room controller
         let self_clone = self.inner.clone();
-        self.handles.lock().await.push(spawn(
+        self.handles.lock().await.push(spawn_task(
             async move {
                 let stop_io = Default::default();
                 if let Err(error) = self_clone
@@ -242,11 +216,9 @@ impl Telepathy {
     }
 
     /// Restarts the session manager
-    pub async fn restart_manager(&self) -> std::result::Result<(), DartError> {
+    pub async fn restart_manager(&self) -> Result<()> {
         if self.inner.is_call_active().await {
-            Err("Cannot restart manager while call is active"
-                .to_string()
-                .into())
+            Err(ErrorKind::ManagerRestartDuringCall.into())
         } else {
             // reset sessions so manager can clean up
             self.inner.reset_sessions().await;
@@ -274,7 +246,7 @@ impl Telepathy {
     }
 
     /// Sets the signing key (called when the profile changes)
-    pub async fn set_identity(&self, key: Vec<u8>) -> std::result::Result<(), DartError> {
+    pub async fn set_identity(&self, key: Vec<u8>) -> Result<()> {
         *self.inner.core_state.identity.write().await =
             Some(Keypair::from_protobuf_encoding(&key).map_err(Error::from)?);
         Ok(())
@@ -294,9 +266,9 @@ impl Telepathy {
     }
 
     /// Blocks while an audio test is running
-    pub async fn audio_test(&self) -> std::result::Result<(), DartError> {
+    pub async fn audio_test(&self) -> Result<()> {
         if self.inner.is_call_active().await {
-            return Err("Cannot start test while call is active".to_string().into());
+            return Err(ErrorKind::CallAlreadyActive.into());
         }
 
         // update state right away to handle the test being ended quickly
@@ -309,7 +281,7 @@ impl Telepathy {
             // clean up state before propagating error
             self.inner.core_state.end_audio_test.lock().await.take();
             self.inner.core_state.in_call.store(false, Relaxed);
-            return Err(Error::into(error));
+            return Err(error);
         }
 
         let result = match self.inner.setup_call(PeerId::random()).await {
@@ -327,12 +299,11 @@ impl Telepathy {
                     .inner
                     .call(&stop_io, audio_config, &end_call, None)
                     .instrument(call_span)
-                    .await
-                    .map_err(Into::into);
+                    .await;
                 stop_io.cancel();
                 result
             }
-            Err(error) => Err(Error::into(error)),
+            Err(error) => Err(error),
         };
 
         self.inner.core_state.end_audio_test.lock().await.take();
@@ -340,7 +311,6 @@ impl Telepathy {
         result
     }
 
-    #[frb(sync)]
     pub fn build_chat(
         &self,
         contact: &Contact,
@@ -359,7 +329,7 @@ impl Telepathy {
     }
 
     /// Sends a chat message
-    pub async fn send_chat(&self, message: &mut ChatMessage) -> std::result::Result<(), DartError> {
+    pub async fn send_chat(&self, message: &mut ChatMessage) -> Result<()> {
         if message
             .attachments
             .iter()
@@ -367,7 +337,7 @@ impl Telepathy {
             .sum::<usize>()
             > SESSION_MAX_FRAME_LENGTH
         {
-            return Err("attachments too large".to_string().into());
+            return Err(ErrorKind::AttachmentsTooLarge.into());
         }
 
         let Some(state) = self
@@ -396,7 +366,7 @@ impl Telepathy {
             })
             .collect();
 
-        let message = Message::Chat {
+        let message = ProtocolMessage::Chat {
             text: message.text.clone(),
             attachments,
         };
@@ -405,7 +375,7 @@ impl Telepathy {
             .message_sender
             .send(message)
             .await
-            .map_err(|_| "channel closed".to_string())?;
+            .map_err(|_| Error::from(ErrorKind::MpscSend))?;
         Ok(())
     }
 
@@ -415,7 +385,6 @@ impl Telepathy {
             .await;
     }
 
-    #[frb(sync)]
     pub fn set_rms_threshold(&self, decimal: f32) {
         let threshold = db_to_multiplier(decimal);
         self.inner
@@ -424,7 +393,6 @@ impl Telepathy {
             .store(threshold, Relaxed);
     }
 
-    #[frb(sync)]
     pub fn set_input_volume(&self, decibel: f32) {
         let multiplier = db_to_multiplier(decibel);
         self.inner
@@ -433,7 +401,6 @@ impl Telepathy {
             .store(multiplier, Relaxed);
     }
 
-    #[frb(sync)]
     pub fn set_output_volume(&self, decibel: f32) {
         let multiplier = db_to_multiplier(decibel);
         self.inner
@@ -442,23 +409,19 @@ impl Telepathy {
             .store(multiplier, Relaxed);
     }
 
-    #[frb(sync)]
     pub fn set_deafened(&self, deafened: bool) {
         self.inner.core_state.deafened.store(deafened, Relaxed);
     }
 
-    #[frb(sync)]
     pub fn set_muted(&self, muted: bool) {
         self.inner.core_state.muted.store(muted, Relaxed);
     }
 
     /// Changing the denoise flag will not affect the current call
-    #[frb(sync)]
     pub fn set_denoise(&self, denoise: bool) {
         self.inner.core_state.denoise.store(denoise, Relaxed);
     }
 
-    #[frb(sync)]
     pub fn set_play_custom_ringtones(&self, play: bool) {
         self.inner
             .core_state
@@ -466,7 +429,6 @@ impl Telepathy {
             .store(play, Relaxed);
     }
 
-    #[frb(sync)]
     pub fn set_send_custom_ringtone(&self, send: bool) {
         self.inner
             .core_state
@@ -474,7 +436,6 @@ impl Telepathy {
             .store(send, Relaxed);
     }
 
-    #[frb(sync)]
     pub fn set_efficiency_mode(&self, enabled: bool) {
         self.inner
             .core_state
@@ -482,12 +443,10 @@ impl Telepathy {
             .store(enabled, Relaxed);
     }
 
-    #[frb(sync)]
     pub fn pause_statistics(&self) {
         self.inner.core_state.statistics_paused.store(true, Relaxed);
     }
 
-    #[frb(sync)]
     pub fn resume_statistics(&self) {
         self.inner
             .core_state
@@ -504,10 +463,8 @@ impl Telepathy {
     }
 
     /// Lists the input and output devices
-    pub fn list_devices(
-        &self,
-    ) -> std::result::Result<(Vec<AudioDevice>, Vec<AudioDevice>), DartError> {
-        let device_list = list_all_devices(&self.inner.host).map_err(Error::from)?;
+    pub fn list_devices(&self) -> Result<(Vec<AudioDevice>, Vec<AudioDevice>)> {
+        let device_list = self.inner.host.list_all_devices().map_err(Error::from)?;
         Ok((
             device_list
                 .input_devices
@@ -522,266 +479,14 @@ impl Telepathy {
         ))
     }
 
-    pub async fn set_model(&self, model: Option<Vec<u8>>) -> std::result::Result<(), DartError> {
+    pub async fn set_model(&self, model: Option<Vec<u8>>) -> Result<()> {
         let model = if let Some(mode_bytes) = model {
-            RnnModel::from_bytes(&mode_bytes).ok_or(String::from("invalid model"))?
+            RnnModel::from_bytes(&mode_bytes).ok_or_else(|| Error::from(ErrorKind::InvalidModel))?
         } else {
             RnnModel::default()
         };
 
         *self.inner.core_state.denoise_model.write().await = model;
         Ok(())
-    }
-}
-
-pub struct AudioDevice {
-    pub name: String,
-    pub id: String,
-}
-
-impl From<AudioDeviceInfo> for AudioDevice {
-    fn from(value: AudioDeviceInfo) -> Self {
-        Self {
-            name: value.name,
-            id: value.id,
-        }
-    }
-}
-
-/// state used early in the call before it starts
-#[derive(Clone)]
-pub(crate) struct EarlyCallState {
-    peer: PeerId,
-    local_configuration: AudioHeader,
-    remote_configuration: AudioHeader,
-}
-
-impl EarlyCallState {
-    fn codec_config(&self) -> (bool, bool, f32) {
-        let codec_enabled =
-            self.remote_configuration.codec_enabled || self.local_configuration.codec_enabled;
-        let vbr = self.remote_configuration.vbr || self.local_configuration.vbr;
-        let residual_bits = (self.remote_configuration.residual_bits as f32)
-            .min(self.local_configuration.residual_bits as f32);
-        (codec_enabled, vbr, residual_bits)
-    }
-}
-
-/// shared values for a single session
-#[derive(Debug)]
-pub(crate) struct SessionState {
-    /// identifies a unique session state
-    id: Uuid,
-
-    /// signals the session to initiate a call
-    start_call: Notify,
-
-    /// notifies during shutdown & manager restarts
-    stop_session: CancellationToken,
-
-    /// if the session is in a call
-    in_call: AtomicBool,
-
-    /// a reusable sender for messages while a call is active
-    message_sender: MSender<Message>,
-
-    /// forwards sub-streams to the session
-    stream_sender: AsyncSender<Stream>,
-
-    /// receives sub-streams for the session
-    stream_receiver: AsyncReceiver<Stream>,
-
-    /// a shared latency value for the session from libp2p ping
-    latency: Arc<AtomicUsize>,
-
-    /// a shared upload bandwidth value for the session
-    upload_bandwidth: Arc<AtomicUsize>,
-
-    /// a shared download bandwidth value for the session
-    download_bandwidth: Arc<AtomicUsize>,
-
-    /// whether the session wants a sub-stream
-    wants_stream: Arc<AtomicBool>,
-
-    end_call: Arc<Notify>,
-
-    stop_screenshare: Arc<Mutex<Option<Arc<Notify>>>>,
-}
-
-impl SessionState {
-    fn new(message_sender: &MSender<Message>) -> Self {
-        let stream_channel = unbounded_async();
-
-        Self {
-            id: Uuid::new_v4(),
-            start_call: Notify::new(),
-            stop_session: Default::default(),
-            in_call: AtomicBool::new(false),
-            message_sender: message_sender.clone(),
-            stream_sender: stream_channel.0,
-            stream_receiver: stream_channel.1,
-            latency: Default::default(),
-            upload_bandwidth: Default::default(),
-            download_bandwidth: Default::default(),
-            wants_stream: Default::default(),
-            end_call: Default::default(),
-            stop_screenshare: Default::default(),
-        }
-    }
-
-    async fn open_stream(
-        &self,
-        mut control: Option<&mut Control>,
-        call_state: &EarlyCallState,
-    ) -> Result<Stream> {
-        // change the session state to accept incoming audio streams
-        self.wants_stream.store(true, Relaxed);
-
-        let stream_future = async {
-            if let Some(control) = control.as_mut() {
-                // if dialer, open stream
-                control
-                    .open_stream(call_state.peer, CHAT_PROTOCOL)
-                    .await
-                    .map_err(Error::from)
-            } else {
-                // if listener, receive stream
-                self.stream_receiver.recv().await.map_err(Error::from)
-            }
-        };
-
-        let stream_result = select! {
-            _ = self.end_call.notified() => Ok(Err(ErrorKind::NoStream.into())),
-            _ = self.stop_session.cancelled() => Ok(Err(ErrorKind::NoStream.into())),
-            result = timeout(HELLO_TIMEOUT, stream_future) => result,
-        };
-
-        self.wants_stream.store(false, Relaxed);
-        stream_result?
-    }
-
-    async fn receive_stream(&self) -> Result<Stream> {
-        self.wants_stream.store(true, Relaxed);
-        let result = self.stream_receiver.recv().await.map_err(Into::into);
-        self.wants_stream.store(false, Relaxed);
-        result
-    }
-
-    async fn teardown(&self) {
-        // stops any call
-        self.end_call.notify_one();
-        // stops the session loop
-        self.stop_session.cancel();
-        // stops any active screenshare threads
-        if let Some(notify) = self.stop_screenshare.lock().await.take() {
-            notify.notify_waiters();
-        }
-    }
-}
-
-pub(crate) struct RoomState {
-    peers: Vec<PeerId>,
-
-    sender: MSender<RoomMessage>,
-
-    cancel: CancellationToken,
-
-    end_call: Arc<Notify>,
-
-    early_state: EarlyCallState,
-}
-
-pub(crate) enum RoomMessage {
-    Join {
-        /// established audio transport
-        audio_transport: Box<Transport<TransportStream>>,
-
-        /// established early call state
-        state: EarlyCallState,
-    },
-    Leave(PeerId),
-}
-
-struct RoomConnection {
-    _output: OutputHelper,
-    handle: JoinHandle<Result<()>>,
-}
-
-pub(crate) struct OptionalCallArgs<'a> {
-    audio_transport: Transport<TransportStream>,
-    control_transport: &'a mut Transport<TransportStream>,
-    message_receiver: &'a mut MReceiver<Message>,
-    state: &'a Arc<SessionState>,
-}
-
-#[derive(Clone)]
-pub(crate) struct StatisticsCollectorState {
-    input_rms: Arc<AtomicF32>,
-    output_rms: Arc<AtomicF32>,
-    latency: Arc<AtomicUsize>,
-    upload_bandwidth: Arc<AtomicUsize>,
-    download_bandwidth: Arc<AtomicUsize>,
-    loss: Arc<AtomicUsize>,
-}
-
-impl StatisticsCollectorState {
-    fn new(state: Option<&Arc<SessionState>>) -> Self {
-        Self {
-            input_rms: Arc::new(Default::default()),
-            output_rms: Arc::new(Default::default()),
-            latency: state.map(|s| s.latency.clone()).unwrap_or_default(),
-            upload_bandwidth: state
-                .map(|s| s.upload_bandwidth.clone())
-                .unwrap_or_default(),
-            download_bandwidth: state
-                .map(|s| s.download_bandwidth.clone())
-                .unwrap_or_default(),
-            loss: Arc::new(Default::default()),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct StartScreenshare {
-    peer: PeerId,
-    header: Option<Message>,
-}
-
-/// the state of a single connection during session negotiation
-#[derive(Debug, Clone)]
-pub(crate) struct ConnectionState {
-    /// the latest latency, when available
-    latency: Option<Duration>,
-
-    /// whether the connection is relayed
-    pub(crate) relayed: bool,
-
-    /// an IP address for the underlying connection, if known
-    pub(crate) remote_address: Option<IpAddr>,
-
-    /// tracks failed open stream attempts
-    retries: Arc<AtomicUsize>,
-}
-
-impl From<ConnectedPoint> for ConnectionState {
-    fn from(endpoint: ConnectedPoint) -> Self {
-        Self {
-            latency: None,
-            relayed: endpoint.is_relayed(),
-            remote_address: Self::remote_address(&endpoint),
-            retries: Default::default(),
-        }
-    }
-}
-
-impl ConnectionState {
-    /// extract an IP address from the endpoint if possible
-    pub(crate) fn remote_address(endpoint: &ConnectedPoint) -> Option<IpAddr> {
-        let remote_address = endpoint.get_remote_address();
-        remote_address.iter().find_map(|p| match p {
-            Protocol::Ip4(ip) => Some(IpAddr::V4(ip)),
-            Protocol::Ip6(ip) => Some(IpAddr::V6(ip)),
-            _ => None,
-        })
     }
 }

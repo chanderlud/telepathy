@@ -53,6 +53,12 @@ pub(crate) enum ErrorKind {
     NoEncoderAvailable,
     NoIdentityAvailable,
     NoStream,
+    CallAlreadyActive,
+    NoSessionForContact,
+    ManagerRestartDuringCall,
+    AttachmentsTooLarge,
+    MpscSend,
+    InvalidModel,
 }
 
 impl From<std::io::Error> for Error {
@@ -264,6 +270,13 @@ impl Display for Error {
                 ErrorKind::NoEncoderAvailable => "No encoder available".to_string(),
                 ErrorKind::NoIdentityAvailable => "No identity available".to_string(),
                 ErrorKind::NoStream => "Did not get a stream".to_string(),
+                ErrorKind::CallAlreadyActive => "A call is already active".to_string(),
+                ErrorKind::NoSessionForContact => "No session found for contact".to_string(),
+                ErrorKind::ManagerRestartDuringCall =>
+                    "Cannot restart manager while a call is active".to_string(),
+                ErrorKind::AttachmentsTooLarge => "Attachments too large".to_string(),
+                ErrorKind::MpscSend => "Channel closed (mpsc send failed)".to_string(),
+                ErrorKind::InvalidModel => "Invalid RNN model".to_string(),
             }
         )
     }
@@ -279,32 +292,5 @@ impl Error {
 
     pub(crate) fn is_audio_error(&self) -> bool {
         matches!(self.kind, ErrorKind::DeviceError(_))
-    }
-}
-
-#[derive(Debug)]
-pub struct DartError {
-    pub message: String,
-}
-
-impl From<Error> for DartError {
-    fn from(err: Error) -> Self {
-        Self {
-            message: err.to_string(),
-        }
-    }
-}
-
-impl From<ErrorKind> for DartError {
-    fn from(kind: ErrorKind) -> Self {
-        Self {
-            message: Error { kind }.to_string(),
-        }
-    }
-}
-
-impl From<String> for DartError {
-    fn from(message: String) -> Self {
-        Self { message }
     }
 }

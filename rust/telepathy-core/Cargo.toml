@@ -1,13 +1,19 @@
 [package]
 name = "telepathy_core"
-version = "2.6.3"
+version = "2.7.0"
 edition = "2024"
 build = "build.rs"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
-crate-type = ["cdylib", "staticlib"]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[features]
+flutter = ["dep:flutter_rust_bridge"]
+native = []
+mock-audio = ["telepathy-audio/mock-audio"]
+default = ["flutter"]
 
 [dependencies]
 telepathy-audio = { path = "../telepathy-audio" }
@@ -16,7 +22,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "json", "env-filter", "registry", "std"] }
 kanal = "0.1.1"
 atomic_float = "1"
-flutter_rust_bridge = { version = "=2.12.0", default-features = false, features = ["rust-async", "thread-pool", "dart-opaque", "anyhow"] }
+flutter_rust_bridge = { version = "=2.12.0", default-features = false, features = ["rust-async", "thread-pool", "dart-opaque", "anyhow"], optional = true }
 lazy_static = "1"
 libp2p-stream = { version = "0.4.0-alpha" }
 chrono = "*"
@@ -24,6 +30,7 @@ regex = "1" # TODO consider removing regex dep
 speedy = "=0.8.7"
 cfg-if = "1"
 bytes = "1"
+serde = { version = "1", features = ["derive"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.22"

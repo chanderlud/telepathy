@@ -1,14 +1,13 @@
-use crate::error::ErrorKind;
-use crate::flutter::DartNotify;
-use crate::flutter::callbacks::{FrbCallbacks, FrbStatisticsCallback};
-use crate::internal::audio_adapters::{KanalSink, KanalSource};
+use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::core::TelepathyCore;
-use crate::internal::messages::{AudioHeader, Message};
+use crate::internal::error::ErrorKind;
+use crate::internal::messages::{AudioHeader, ProtocolMessage, StartScreenshare};
 #[cfg(not(target_family = "wasm"))]
 use crate::internal::screenshare;
-use crate::internal::{
-    CHAT_PROTOCOL, EarlyCallState, Result, StartScreenshare, StatisticsCollectorState,
-};
+use crate::internal::state::{EarlyCallState, StatisticsCollectorState};
+use crate::internal::utils::{KanalSink, KanalSource};
+use crate::internal::{Result, SESSION_PROTOCOL, STREAM_PROTOCOL};
+use crate::types::FrontendNotify;
 use crate::{Behaviour, BehaviourEvent};
 use bytes::Bytes;
 use libp2p::futures::StreamExt;
@@ -25,7 +24,7 @@ use std::sync::atomic::Ordering::Relaxed;
 use std::time::Duration;
 #[cfg(target_family = "wasm")]
 use telepathy_audio::WebAudioWrapper;
-use telepathy_audio::devices::get_input_device;
+use telepathy_audio::devices::AudioHost;
 use telepathy_audio::internal::buffer_pool::PooledBuffer;
 use telepathy_audio::io::{
     AudioInputBuilder, AudioInputHandle, AudioOutputBuilder, AudioOutputHandle, CodecBitrateMode,
@@ -37,10 +36,11 @@ use tokio::io::AsyncReadExt;
 use tokio::sync::Notify;
 use tracing::{error, info, instrument, warn};
 
-impl<C, S> TelepathyCore<C, S>
+impl<C, S, H> TelepathyCore<C, S, H>
 where
-    S: FrbStatisticsCallback + Send + Sync + 'static,
-    C: FrbCallbacks<S> + Send + Sync + 'static,
+    S: CoreStatisticsCallback + Send + Sync + 'static,
+    C: CoreCallbacks<S> + Send + Sync + 'static,
+    H: AudioHost + Send + Sync + Clone + 'static,
 {
     /// builds a p2p swarm & connects to the relay server
     #[instrument(name = "manager.swarm_setup", skip_all)]
@@ -80,7 +80,7 @@ where
                 relay_client: relay_behaviour,
                 ping: ping::Behaviour::new(ping::Config::new()),
                 identify: identify::Behaviour::new(identify::Config::new(
-                    CHAT_PROTOCOL.to_string(),
+                    SESSION_PROTOCOL.to_string(),
                     keypair.public(),
                 )),
                 dcutr: dcutr::Behaviour::new(keypair.public().to_peer_id()),
@@ -231,15 +231,13 @@ where
 
         let stop = Arc::new(Notify::new());
         *state.stop_screenshare.lock().await = Some(stop.clone());
-        let dart_stop = DartNotify {
-            inner: stop.clone(),
-        };
+        let dart_stop = FrontendNotify::new(&stop);
 
-        if let Some(Message::ScreenshareHeader { encoder_name }) = message.header
+        if let Some(ProtocolMessage::ScreenshareHeader { encoder_name }) = message.header
             && let Some(mut control) = control_option
         {
             // the other peer is waiting for a stream
-            let stream = control.open_stream(message.peer, CHAT_PROTOCOL).await?;
+            let stream = control.open_stream(message.peer, STREAM_PROTOCOL).await?;
             // alert the frontend
             self.callbacks.screenshare_started(dart_stop, false).await;
             // start playing back the screenshare
@@ -272,7 +270,7 @@ where
             // the peer will open a stream after receiving it
             let result = state
                 .message_sender
-                .send(Message::ScreenshareHeader {
+                .send(ProtocolMessage::ScreenshareHeader {
                     encoder_name: config.encoder.to_string(),
                 })
                 .await;
@@ -399,7 +397,7 @@ where
                         .sample_rate as u32
                 } else {
                     let device_id = self.core_state.input_device.lock().await;
-                    let device_handle = get_input_device(&self.host, device_id.as_deref())?;
+                    let device_handle = self.host.get_input_device(device_id.as_deref())?;
                     info!("input_device: {:?}", device_handle.name());
                     device_handle.sample_rate()?
                 }
@@ -424,6 +422,9 @@ where
             if #[cfg(target_family = "wasm")] {
                 None
             } else {
+                if !self.core_state.send_custom_ringtone.load(Relaxed) {
+                    return None;
+                }
                 let path = PathBuf::from("ringtone.sea");
                 if !path.exists() {
                     None
@@ -475,7 +476,11 @@ where
             || self.core_state.end_audio_test.lock().await.is_some()
     }
 
-    pub(crate) async fn send_start_screenshare(&self, peer: PeerId, header: Option<Message>) {
+    pub(crate) async fn send_start_screenshare(
+        &self,
+        peer: PeerId,
+        header: Option<ProtocolMessage>,
+    ) {
         if let Some(ref sender) = self.start_screenshare {
             _ = sender.send(StartScreenshare { peer, header }).await;
         }

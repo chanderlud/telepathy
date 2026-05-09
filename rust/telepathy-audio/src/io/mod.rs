@@ -12,13 +12,13 @@
 //! ## Example
 //!
 //! ```rust,no_run
-//! use telepathy_audio::devices::AudioHost;
+//! use telepathy_audio::devices::CpalAudioHost;
 //! use telepathy_audio::io::{AudioInputBuilder, AudioOutputBuilder};
 //! use telepathy_audio::adapters::MpscSource;
 //! use bytes::Bytes;
 //! use std::sync::mpsc;
 //!
-//! let host = AudioHost::new();
+//! let host = CpalAudioHost::new();
 //!
 //! // Create audio input with callback
 //! let input = AudioInputBuilder::new()
@@ -51,6 +51,7 @@ pub use traits::{AudioDataSink, AudioDataSource};
 /// cpal::Stream is not yet send and sync on WASM
 ///
 /// SendStream allows the Stream to be used in spawned tasks
+#[allow(unused)]
 struct SendStream(cpal::Stream);
 unsafe impl Send for SendStream {}
 unsafe impl Sync for SendStream {}

@@ -1,0 +1,8 @@
+name: smoke_ready
+steps:
+  - actor: alice
+    expect_event:
+      type: ready
+      timeout: 10.0
+      match:
+        version: "*"

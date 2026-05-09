@@ -8,12 +8,11 @@ use std::str::FromStr;
 use std::sync::Arc;
 #[cfg(not(target_family = "wasm"))]
 use std::sync::atomic::AtomicUsize;
-#[cfg(not(target_family = "wasm"))]
 use std::sync::atomic::Ordering::Relaxed;
 
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-use crate::flutter::Capabilities;
-use crate::flutter::RecordingConfig;
+use crate::types::Capabilities;
+use crate::types::{RecordingConfig, ScreenshareConfig};
 #[cfg(not(target_family = "wasm"))]
 use libp2p::Stream;
 #[cfg(not(target_family = "wasm"))]
@@ -33,7 +32,7 @@ use tokio::sync::Notify;
 use tracing::{error, info, instrument};
 
 #[cfg(not(target_family = "wasm"))]
-use crate::error::{Error, ErrorKind};
+use crate::internal::error::{Error, ErrorKind};
 
 #[cfg(not(target_family = "wasm"))]
 type Result<T> = std::result::Result<T, Error>;
@@ -42,6 +41,23 @@ type Result<T> = std::result::Result<T, Error>;
 const BUFFER_SIZE: usize = 512;
 #[cfg(target_os = "windows")]
 const CREATION_FLAGS: u32 = 0x08000000;
+
+#[derive(Readable, Writable)]
+pub(crate) struct ScreenshareConfigDisk {
+    pub(crate) recording_config: Option<RecordingConfig>,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+}
+
+impl From<&ScreenshareConfig> for ScreenshareConfigDisk {
+    fn from(cfg: &ScreenshareConfig) -> Self {
+        Self {
+            recording_config: cfg.recording_config.blocking_read().clone(),
+            width: cfg.width.load(Relaxed),
+            height: cfg.height.load(Relaxed),
+        }
+    }
+}
 
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 impl Capabilities {
@@ -268,6 +284,11 @@ impl FromStr for Encoder {
             _ => Err(()),
         }
     }
+}
+
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+pub(crate) fn encoder_from_str(value: &str) -> std::result::Result<Encoder, ()> {
+    Encoder::from_str(value)
 }
 
 #[cfg(not(target_family = "wasm"))]

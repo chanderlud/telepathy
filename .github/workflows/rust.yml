@@ -105,6 +105,50 @@ jobs:
       - name: Build
         run: cd rust && cargo build --verbose --target ${{ matrix.info.target }}
 
+  system_tests:
+    needs: lint
+    runs-on: ubuntu-latest
+    name: System Tests
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Linux Prerequisites
+        run: sudo apt-get update && sudo apt-get install clang cmake git ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev libasound2-dev iproute2
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: 'stable'
+          cache: true
+          cache-workspaces: rust
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: system-tests/requirements.txt
+
+      - name: Install system test dependencies
+        run: python -m pip install -r system-tests/requirements.txt
+
+      - name: Build relay and CLI binaries
+        run: bash system-tests/build.sh
+
+      - name: Run system tests
+        run: |
+          PYTHON_BIN="$(command -v python)"
+          sudo -E "$PYTHON_BIN" -m pytest system-tests/tests --artifacts-dir system-tests/artifacts --save-artifacts failures
+
+      - name: Upload system-test artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: system-tests-artifacts
+          path: system-tests/artifacts
+          if-no-files-found: ignore
+
   build_flutter:
     needs: lint
     runs-on: ${{ matrix.info.image }}
@@ -161,7 +205,7 @@ jobs:
           path: |
             ~/.cargo/bin/flutter_rust_bridge_codegen
             ~/.cargo/bin/wasm-pack
-          key: cargo-tools-${{ runner.os }}-${{ hashFiles('pubspec.lock') }}
+          key: cargo-tools-${{ runner.os }}-${{ hashFiles('pubspec.lock', '.github/workflows/rust.yml', 'web/build_web.sh') }}
 
       - name: Setup Flutter SDK
         uses: flutter-actions/setup-flutter@v4
@@ -219,7 +263,7 @@ jobs:
 
       - name: Install Web Tools
         if: matrix.info.target == 'web' && steps.cache-cargo-tools.outputs.cache-hit != 'true'
-        run: cargo install flutter_rust_bridge_codegen@2.11.1 wasm-pack@0.14.0
+        run: cargo install flutter_rust_bridge_codegen@2.12.0 wasm-pack
 
       - name: Setup Rust nightly for Web
         if: matrix.info.target == 'web'

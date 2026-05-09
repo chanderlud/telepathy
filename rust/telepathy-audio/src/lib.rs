@@ -61,10 +61,10 @@
 //! ### Device Enumeration
 //!
 //! ```rust,no_run
-//! use telepathy_audio::devices::{AudioHost, list_all_devices, get_default_input_device};
+//! use telepathy_audio::devices::{CpalAudioHost, list_all_devices, get_default_input_device};
 //!
 //! // Create an audio host
-//! let host = AudioHost::new();
+//! let host = CpalAudioHost::new();
 //!
 //! // List all available devices
 //! let devices = list_all_devices(&host).unwrap();
@@ -79,10 +79,10 @@
 //!
 //! ```rust,no_run
 //! use telepathy_audio::RnnModel;
-//! use telepathy_audio::devices::AudioHost;
+//! use telepathy_audio::devices::CpalAudioHost;
 //! use telepathy_audio::io::AudioInputBuilder;
 //!
-//! let host = AudioHost::new();
+//! let host = CpalAudioHost::new();
 //!
 //! // Create an audio input with callback
 //! let input = AudioInputBuilder::new()
@@ -107,11 +107,11 @@
 //! ```rust,no_run
 //! use bytes::Bytes;
 //! use std::sync::mpsc;
-//! use telepathy_audio::devices::AudioHost;
+//! use telepathy_audio::devices::CpalAudioHost;
 //! use telepathy_audio::io::AudioOutputBuilder;
 //! use telepathy_audio::adapters::MpscSource;
 //!
-//! let host = AudioHost::new();
+//! let host = CpalAudioHost::new();
 //! let (_tx, rx) = mpsc::channel::<Bytes>();
 //!
 //! // Create an audio output
@@ -135,11 +135,11 @@
 //! ```rust,no_run
 //! use bytes::Bytes;
 //! use std::sync::mpsc;
-//! use telepathy_audio::devices::AudioHost;
+//! use telepathy_audio::devices::CpalAudioHost;
 //! use telepathy_audio::io::AudioOutputBuilder;
 //! use telepathy_audio::adapters::MpscSource;
 //!
-//! let host = AudioHost::new();
+//! let host = CpalAudioHost::new();
 //!
 //! // Create multiple outputs for different audio sources
 //! let (_tx1, rx1) = mpsc::channel::<Bytes>();
@@ -162,11 +162,11 @@
 //! ```rust,no_run
 //! use bytes::Bytes;
 //! use std::sync::mpsc;
-//! use telepathy_audio::devices::AudioHost;
+//! use telepathy_audio::devices::CpalAudioHost;
 //! use telepathy_audio::io::{AudioInputBuilder, AudioOutputBuilder, CodecBitrateMode};
 //! use telepathy_audio::adapters::MpscSource;
 //!
-//! let host = AudioHost::new();
+//! let host = CpalAudioHost::new();
 //!
 //! // Input with codec encoding
 //! let input = AudioInputBuilder::new()
@@ -197,7 +197,7 @@
 //! use atomic_float::AtomicF32;
 //! use bytes::Bytes;
 //! use std::sync::mpsc;
-//! use telepathy_audio::devices::AudioHost;
+//! use telepathy_audio::devices::CpalAudioHost;
 //! use telepathy_audio::io::{AudioInputBuilder, AudioOutputBuilder};
 //! use telepathy_audio::adapters::MpscSource;
 //!
@@ -207,7 +207,7 @@
 //! let muted = Arc::new(AtomicBool::new(false));
 //! let deafened = Arc::new(AtomicBool::new(false));
 //!
-//! let host = AudioHost::new();
+//! let host = CpalAudioHost::new();
 //!
 //! // Input using shared atomics - changes to core state affect processing immediately
 //! let input = AudioInputBuilder::new()
@@ -247,10 +247,15 @@ pub mod internal;
 #[doc(hidden)]
 pub mod sea;
 
+#[cfg(feature = "mock-audio")]
+mod mock;
 mod platform;
 
 pub use constants::FRAME_SIZE;
 pub use error::Error;
+
+#[cfg(feature = "mock-audio")]
+pub use mock::MockAudioHost;
 
 // Re-export web audio wrapper for WASM consumers
 #[cfg(target_family = "wasm")]

@@ -3,16 +3,17 @@
 
 // ignore_for_file: invalid_use_of_internal_member, unused_import, unnecessary_import
 
-import '../frb_generated.dart';
+import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These functions are ignored because they are not marked as `pub`: `_disable`, `_enable`, `_hide`, `_move_overlay`, `_show`, `controller`, `redraw`, `start_overlay`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `BACKGROUND_COLOR`, `CONNECTED`, `FONT_COLOR`, `FONT_HEIGHT`, `LATENCY`, `LOSS`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `deref`, `deref`, `deref`, `deref`, `deref`, `deref`, `initialize`, `initialize`, `initialize`, `initialize`, `initialize`, `initialize`
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Overlay>>
 abstract class Overlay implements RustOpaqueInterface {
   static Future<Overlay> default_() =>
-      RustLib.instance.api.crateOverlayOverlayOverlayDefault();
+      RustLib.instance.api.crateOverlayOverlayDefault();
 
   /// disable the overlay
   Future<void> disable();
@@ -40,7 +41,7 @@ abstract class Overlay implements RustOpaqueInterface {
           required int fontHeight,
           required int backgroundColor,
           required int fontColor}) =>
-      RustLib.instance.api.crateOverlayOverlayOverlayNew(
+      RustLib.instance.api.crateOverlayOverlayNew(
           enabled: enabled,
           x: x,
           y: y,

@@ -42,4 +42,5 @@ pub(crate) const MINIMUM_SILENCE_LENGTH: u16 = 40;
 /// The transition prevents discontinuities in the audio waveform that would
 /// create high-frequency artifacts perceived as clicks. The linear ramp
 /// spreads the energy change across multiple samples.
+#[cfg(not(feature = "mock-audio"))]
 pub(crate) const TRANSITION_LENGTH: usize = 48;

@@ -4,9 +4,9 @@ import 'package:provider/provider.dart';
 import 'package:telepathy/controllers/index.dart';
 import 'package:telepathy/core/utils/index.dart';
 import 'package:telepathy/screens/settings/view.dart';
-import 'package:telepathy/core/rust/audio/player.dart';
+import 'package:telepathy/core/rust/player.dart';
 import 'package:telepathy/core/rust/flutter.dart';
-import 'package:telepathy/core/rust/internal.dart';
+import 'package:telepathy/core/rust/flutter/utils.dart';
 
 /// A widget with commonly used controls for a call.
 class CallControls extends StatefulWidget {
@@ -87,7 +87,8 @@ class _CallControlsState extends State<CallControls> {
           );
         }),
         Padding(
-          padding: EdgeInsets.only(left: 25, right: 25, top: isCompact ? 4 : 20),
+          padding:
+              EdgeInsets.only(left: 25, right: 25, top: isCompact ? 4 : 20),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [

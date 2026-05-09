@@ -4,7 +4,7 @@ import 'package:flutter/material.dart' hide Overlay;
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:provider/provider.dart';
 import 'package:telepathy/controllers/index.dart';
-import 'package:telepathy/core/rust/internal.dart';
+import 'package:telepathy/core/rust/flutter.dart';
 import 'package:telepathy/models/index.dart';
 import 'package:telepathy/widgets/common/index.dart';
 

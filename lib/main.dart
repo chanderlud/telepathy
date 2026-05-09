@@ -11,12 +11,13 @@ import 'package:provider/provider.dart';
 import 'package:telepathy/app.dart';
 import 'package:telepathy/controllers/index.dart';
 import 'package:telepathy/core/utils/index.dart';
-import 'package:telepathy/core/rust/audio/player.dart';
-import 'package:telepathy/core/rust/flutter.dart';
+import 'package:telepathy/core/rust/player.dart';
 import 'package:telepathy/core/rust/frb_generated.dart';
-import 'package:telepathy/core/rust/overlay/overlay.dart';
-import 'package:telepathy/core/rust/internal.dart';
+import 'package:telepathy/core/rust/overlay.dart';
+import 'package:telepathy/core/rust/flutter.dart';
+import 'package:telepathy/core/rust/types.dart';
 import 'package:window_manager/window_manager.dart';
+import 'package:telepathy/core/rust/flutter/logging.dart';
 
 Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -108,8 +109,8 @@ Future<void> main(List<String> args) async {
 
   /// called when there is an incoming call
   FutureOr<bool> acceptCall(
-      (String id, Uint8List? ringtone, DartNotify cancel) record) async {
-    final (String id, Uint8List? ringtone, DartNotify cancel) = record;
+      (String id, Uint8List? ringtone, FrontendNotify cancel) record) async {
+    final (String id, Uint8List? ringtone, FrontendNotify cancel) = record;
 
     Contact? contact = profilesController.getContact(id);
 

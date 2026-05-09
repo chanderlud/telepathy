@@ -19,11 +19,11 @@
 //! ```rust,no_run
 //! use bytes::Bytes;
 //! use std::sync::mpsc;
-//! use telepathy_audio::devices::AudioHost;
+//! use telepathy_audio::devices::CpalAudioHost;
 //! use telepathy_audio::io::AudioOutputBuilder;
 //! use telepathy_audio::adapters::MpscSource;
 //!
-//! let host = AudioHost::new();
+//! let host = CpalAudioHost::new();
 //! let (_tx, rx) = mpsc::channel::<Bytes>();
 //! let _output = AudioOutputBuilder::new()
 //!     .sample_rate(48_000)

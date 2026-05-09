@@ -1,55 +1,50 @@
 use crate::BehaviourEvent;
-#[cfg(target_os = "ios")]
-use crate::audio::ios::{configure_audio_session, deactivate_audio_session};
-use crate::error::ErrorKind;
-use crate::flutter::callbacks::{FrbCallbacks, FrbStatisticsCallback};
-use crate::flutter::{
-    CallState, ChatMessage, CodecConfig, Contact, NetworkConfig, ScreenshareConfig, SessionStatus,
-};
-use crate::internal::messages::Message;
+use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
+use crate::internal::error::ErrorKind;
+use crate::internal::helpers::OutputHelper;
+use crate::internal::messages::{ProtocolMessage, RoomMessage, StartScreenshare};
 use crate::internal::sockets::{
     ConstSocket, SendingSockets, SharedSockets, Transport, TransportStream, audio_input,
     audio_output,
 };
+use crate::internal::state::{ConnectionState, StatisticsCollectorState};
+use crate::internal::state::{CoreState, PeerState};
+use crate::internal::utils::{JoinHandle, spawn_task};
+#[cfg(target_os = "ios")]
+use crate::internal::utils::{configure_audio_session, deactivate_audio_session};
 use crate::internal::utils::{
     loopback, read_message, select_best_connection, statistics_collector,
     stream_to_audio_transport, write_message,
 };
 use crate::internal::{
-    CHAT_PROTOCOL, DCUTR_TIMEOUT, EarlyCallState, HELLO_TIMEOUT, KEEP_ALIVE, OptionalCallArgs,
-    RoomConnection, RoomMessage, RoomState, SESSION_MAX_FRAME_LENGTH, SessionState, SharedDeviceId,
-    StartScreenshare, StatisticsCollectorState,
+    DCUTR_TIMEOUT, EarlyCallState, HELLO_TIMEOUT, KEEP_ALIVE, RoomState, SESSION_MAX_FRAME_LENGTH,
+    SESSION_PROTOCOL, SessionState,
 };
-use crate::internal::{ConnectionState, Result};
+use crate::internal::{Result, STREAM_PROTOCOL};
 use crate::overlay::CONNECTED;
-use crate::overlay::overlay::Overlay;
-use atomic_float::AtomicF32;
+use crate::overlay::Overlay;
+use crate::types::{
+    CallState, ChatMessage, CodecConfig, Contact, NetworkConfig, ScreenshareConfig, SessionStatus,
+};
 use chrono::Local;
-#[cfg(target_family = "wasm")]
-use flutter_rust_bridge::JoinHandle;
-use flutter_rust_bridge::for_generated::futures::StreamExt;
-use flutter_rust_bridge::spawn;
-use libp2p::core::ConnectedPoint;
-use libp2p::identity::Keypair;
+use libp2p::futures::StreamExt;
 use libp2p::multiaddr::Protocol;
-use libp2p::swarm::{ConnectionId, SwarmEvent};
+use libp2p::swarm::SwarmEvent;
 use libp2p::{PeerId, Stream, dcutr::Event as DcutrEvent, identify::Event as IdentifyEvent};
 use libp2p_stream::Control;
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::Duration;
-use telepathy_audio::RnnModel;
 #[cfg(target_family = "wasm")]
 use telepathy_audio::WebAudioWrapper;
 use telepathy_audio::devices::AudioHost;
 use tokio::select;
-use tokio::sync::mpsc::{Receiver as MReceiver, Sender as MSender, channel};
-use tokio::sync::{Mutex, Notify, RwLock};
-#[cfg(not(target_family = "wasm"))]
-use tokio::task::JoinHandle;
+#[cfg(target_family = "wasm")]
+use tokio::sync::Mutex;
+use tokio::sync::mpsc::{Receiver, Sender, channel};
+use tokio::sync::{Notify, RwLock};
 #[cfg(not(target_family = "wasm"))]
 use tokio::time::{Instant, Interval, interval, sleep_until, timeout};
 use tokio_util::codec::LengthDelimitedCodec;
@@ -62,13 +57,14 @@ use wasmtimer::std::Instant;
 #[cfg(target_family = "wasm")]
 use wasmtimer::tokio::{Interval, interval, sleep_until, timeout};
 
-pub(crate) struct TelepathyCore<C, S>
+pub(crate) struct TelepathyCore<C, S, H>
 where
-    S: FrbStatisticsCallback + Send + Sync + 'static,
-    C: FrbCallbacks<S> + Send + Sync + 'static,
+    S: CoreStatisticsCallback + Send + Sync + 'static,
+    C: CoreCallbacks<S> + Send + Sync + 'static,
+    H: AudioHost + Send + Sync + Clone + 'static,
 {
     /// The audio host
-    pub(crate) host: AudioHost,
+    pub(crate) host: H,
 
     /// Core state for telepathy
     pub(crate) core_state: CoreState,
@@ -80,10 +76,10 @@ where
     pub(crate) session_states: Arc<RwLock<HashMap<PeerId, Arc<SessionState>>>>,
 
     /// Signals the session manager to start a new session
-    pub(crate) start_session: Option<MSender<PeerId>>,
+    pub(crate) start_session: Option<Sender<PeerId>>,
 
     /// Signals the session manager to start a screenshare
-    pub(crate) start_screenshare: Option<MSender<StartScreenshare>>,
+    pub(crate) start_screenshare: Option<Sender<StartScreenshare>>,
 
     /// Restarts the session manager when needed
     pub(crate) restart_manager: Arc<Notify>,
@@ -101,28 +97,20 @@ where
     phantom: PhantomData<Arc<S>>,
 }
 
-pub(crate) struct SessionTask(JoinHandle<Result<()>>);
-
-impl SessionTask {
-    async fn join(self) -> Result<()> {
-        self.0.await??;
-        Ok(())
-    }
-}
-
-impl<C, S> TelepathyCore<C, S>
+impl<C, S, H> TelepathyCore<C, S, H>
 where
-    S: FrbStatisticsCallback + Send + Sync + 'static,
-    C: FrbCallbacks<S> + Send + Sync + 'static,
+    S: CoreStatisticsCallback + Send + Sync + 'static,
+    C: CoreCallbacks<S> + Send + Sync + 'static,
+    H: AudioHost + Send + Sync + Clone + 'static,
 {
     pub(crate) fn new(
-        host: AudioHost,
+        host: H,
         network_config: &NetworkConfig,
         screenshare_config: &ScreenshareConfig,
         overlay: &Overlay,
         codec_config: &CodecConfig,
         callbacks: C,
-    ) -> TelepathyCore<C, S> {
+    ) -> TelepathyCore<C, S, H> {
         Self {
             host,
             core_state: CoreState {
@@ -160,7 +148,7 @@ where
 
         // start the session manager
         let manager_clone = self.clone();
-        Some(spawn(
+        Some(spawn_task(
             async move {
                 let mut retries = 0;
                 // break when stop_manager==true
@@ -212,10 +200,10 @@ where
         skip_all,
         fields(manager.id = %Uuid::new_v4(), restart_count = field::Empty)
     )]
-    pub(crate) async fn session_manager(
+    async fn session_manager(
         &self,
-        start: &mut MReceiver<PeerId>,
-        screenshare: &mut MReceiver<StartScreenshare>,
+        start: &mut Receiver<PeerId>,
+        screenshare: &mut Receiver<StartScreenshare>,
     ) -> Result<()> {
         let setup_started = Instant::now();
         // build the swarm & connect to relay
@@ -238,7 +226,7 @@ where
         let stop_handler = Arc::new(Notify::new());
         let stop_handler_clone = stop_handler.clone();
         let self_clone = self.clone();
-        let stream_handler_handle = spawn(
+        let stream_handler_handle = spawn_task(
             async move {
                 self_clone
                     .incoming_stream_handler(control, stop_handler_clone)
@@ -341,7 +329,7 @@ where
                         let control_option = message.header.is_some()
                             .then(|| swarm.behaviour().stream.new_control());
                         let self_clone = self.clone();
-                        spawn(async move {
+                        spawn_task(async move {
                             let result = self_clone.start_screenshare(message, control_option).await;
                             if let Err(error) = result {
                                 error!(event = "screenshare_start_failed", error = ?error);
@@ -714,44 +702,43 @@ where
 
     /// Handles incoming streams for the libp2p swarm. spawns incoming sessions
     #[instrument(name = "streams.accept_loop", skip_all)]
-    pub(crate) async fn incoming_stream_handler(
-        &self,
-        mut control: Control,
-        stop: Arc<Notify>,
-    ) -> Result<()> {
-        let mut incoming_streams = control.accept(CHAT_PROTOCOL)?;
+    async fn incoming_stream_handler(&self, mut control: Control, stop: Arc<Notify>) -> Result<()> {
+        let mut incoming_sessions = control.accept(SESSION_PROTOCOL)?;
+        let mut incoming_streams = control.accept(STREAM_PROTOCOL)?;
         let mut handles: Vec<SessionTask> = Vec::new();
 
         let result = loop {
             select! {
                 _ = stop.notified() => break Ok(()),
-                Some((peer, stream)) = incoming_streams.next() => {
-                    let state_option = self.session_states.read().await.get(&peer).cloned();
-
-                    if let Some(state) = state_option {
-                        if state.wants_stream.load(Relaxed) {
-                            info!(event = "substream_accepted", peer.id = %peer);
-
-                            if let Err(error) = state.stream_sender.send(stream).await {
-                                error!(
-                                    event = "substream_forward_failed",
-                                    peer.id = %peer,
-                                    error = %error
-                                );
-                            }
-
-                            continue;
-                        } else {
-                            warn!(
-                                event = "substream_unexpected_starting_session",
-                                peer.id = %peer
-                            );
-                        }
+                Some((peer, stream)) = incoming_sessions.next() => {
+                    if self.session_states.read().await.get(&peer).is_some() {
+                       warn!(
+                            event = "unexpected_stream_restarting_session",
+                            peer.id = %peer
+                        );
                     } else {
                         info!(event = "stream_accepted_new_session", peer.id = %peer);
                     }
 
                     handles.push(self.initialize_session(peer, None, stream, None).await);
+                }
+                Some((peer, stream)) = incoming_streams.next() => {
+                    if let Some(state) = self.session_states.read().await.get(&peer) {
+                        info!(event = "data_stream_accepted", peer.id = %peer);
+
+                        if let Err(error) = state.stream_sender.send(stream).await {
+                            error!(
+                                event = "data_stream_forward_failed",
+                                peer.id = %peer,
+                                error = %error
+                            );
+                        }
+                    } else {
+                        warn!(
+                            event = "unexpected_stream_no_session",
+                            peer.id = %peer
+                        );
+                    }
                 }
                 else => {
                     error!(event = "incoming_streams_closed_unexpectedly");
@@ -781,7 +768,7 @@ where
         handles: &mut Vec<SessionTask>,
         state: ConnectionState,
     ) {
-        match control.open_stream(peer, CHAT_PROTOCOL).await {
+        match control.open_stream(peer, SESSION_PROTOCOL).await {
             Ok(stream) => {
                 info!(event = "session_stream_opened", peer.id = %peer);
                 handles.push(
@@ -813,7 +800,7 @@ where
 
     /// Entry point to a session that sets up state and spawns session outer
     #[instrument(name = "session.init", skip_all, fields(peer.id = %peer, session.id = field::Empty))]
-    pub(crate) async fn initialize_session(
+    async fn initialize_session(
         &self,
         peer: PeerId,
         control: Option<Control>,
@@ -822,7 +809,7 @@ where
     ) -> SessionTask {
         let contact_option = self.callbacks.get_contact(peer.to_bytes()).await;
         // sends messages to the session from elsewhere in the program
-        let message_channel = channel::<Message>(8);
+        let message_channel = channel::<ProtocolMessage>(8);
         // create the state and a clone of it for the session
         let state = Arc::new(SessionState::new(&message_channel.0));
         Span::current().record("session.id", state.id.to_string());
@@ -858,7 +845,7 @@ where
         };
 
         let self_clone = self.clone();
-        SessionTask(spawn(
+        SessionTask(spawn_task(
             async move {
                 self_clone
                     .session_outer(peer, control, stream, state, contact, message_channel)
@@ -881,14 +868,14 @@ where
             session.role = field::Empty
         )
     )]
-    pub(crate) async fn session_outer(
+    async fn session_outer(
         &self,
         peer: PeerId,
         mut control: Option<Control>,
         stream: Stream,
         state: Arc<SessionState>,
         contact: Contact,
-        mut message_channel: (MSender<Message>, MReceiver<Message>),
+        mut message_channel: (Sender<ProtocolMessage>, Receiver<ProtocolMessage>),
     ) {
         let session_role = if control.is_some() {
             "dialer"
@@ -983,13 +970,13 @@ where
         skip_all,
         fields(peer.id = %contact.peer_id, room.hash = field::Empty)
     )]
-    pub(crate) async fn session_inner(
+    async fn session_inner(
         &self,
         contact: &Contact,
         control: Option<&mut Control>,
         transport: &mut Transport<TransportStream>,
         state: &Arc<SessionState>,
-        message_channel: &mut (MSender<Message>, MReceiver<Message>),
+        message_channel: &mut (Sender<ProtocolMessage>, Receiver<ProtocolMessage>),
         keep_alive: &mut Interval,
     ) -> Result<bool> {
         let room_hash = self.room_hash().await;
@@ -1002,17 +989,16 @@ where
                 Ok(false)
             },
             result = read_message(transport) => {
+                info!(event = "session_message_received", ?result);
                 let mut other_ringtone = None;
                 let remote_audio_header;
                 let room_hash_option;
 
-                info!(event = "session_message_received", ?result);
-
                 match result? {
-                    Message::Hello { ringtone, audio_header, room_hash } => {
+                    ProtocolMessage::Hello { ringtone, audio_header, room_hash } => {
                         if !audio_header.is_valid() {
                             warn!(event = "invalid_audio_header_rejected");
-                            write_message(transport, &Message::Reject).await?;
+                            write_message(transport, &ProtocolMessage::Reject).await?;
                             return Ok(false);
                         }
 
@@ -1022,7 +1008,7 @@ where
                             other_ringtone = ringtone;
                         }
                     },
-                    Message::KeepAlive => return Ok(true),
+                    ProtocolMessage::KeepAlive => return Ok(true),
                     message => {
                         warn!(event = "session_message_unexpected", ?message);
                         return Ok(true);
@@ -1038,12 +1024,12 @@ where
                 } else if room_hash_option.is_some() {
                     // the call is part of a room, but the client is not in the room
                     info!(event = "room_call_rejected_not_in_room");
-                    write_message(transport, &Message::Reject).await?;
+                    write_message(transport, &ProtocolMessage::Reject).await?;
                     return Ok(true);
                 } else if self.is_call_active().await {
                     // do not accept another call if already active
                     info!(event = "call_busy_sent_call_already_active");
-                    write_message(transport, &Message::Busy).await?;
+                    write_message(transport, &ProtocolMessage::Busy).await?;
                     return Ok(true);
                 } else {
                     let cancel = Arc::new(Notify::new());
@@ -1053,9 +1039,19 @@ where
 
                 state.in_call.store(true, Relaxed); // blocks the session from being restarted
 
+                let cancel_prompt_clone = cancel_prompt.clone();
                 let accept_future = async {
                     if let Some(accept_handle) = accept_handle {
-                        accept_handle.await
+                        select! {
+                            result = accept_handle => result,
+                            _ = state.start_call.notified() => {
+                                info!(event = "call_started_while_prompting");
+                                if let Some(cancel) = cancel_prompt_clone {
+                                    cancel.notify_one();
+                                }
+                                Ok(true)
+                            },
+                        }
                     } else {
                         Ok(true)
                     }
@@ -1072,7 +1068,7 @@ where
                     accepted = accept_future => {
                         if !accepted? {
                             // reject the call if not accepted
-                            write_message(transport, &Message::Reject).await?;
+                            write_message(transport, &ProtocolMessage::Reject).await?;
                             return Ok(true);
                         }
 
@@ -1080,7 +1076,7 @@ where
                             Ok(mut call_state) => {
                                 // respond with hello ack containing audio header
                                 call_state.remote_configuration = remote_audio_header;
-                                write_message(transport, &Message::HelloAck { audio_header: call_state.local_configuration.clone() }).await?;
+                                write_message(transport, &ProtocolMessage::HelloAck { audio_header: call_state.local_configuration.clone() }).await?;
 
                                 if is_in_room {
                                     self.room_handshake(transport, control, state, call_state).await?;
@@ -1094,7 +1090,7 @@ where
                             Err(error) => {
                                 // if the audio input setup fails, other client will be left hanging
                                 error!(event = "setup_call_failed", ?error);
-                                write_message(transport, &Message::Goodbye {
+                                write_message(transport, &ProtocolMessage::Goodbye {
                                     reason: Some("audio device error".to_string())
                                 }).await?;
                                 // still propagate the error
@@ -1128,7 +1124,7 @@ where
                 // when custom ringtone is used wait longer for a response to account for extra data being sent in Hello
                 let hello_timeout = HELLO_TIMEOUT + if other_ringtone.is_some() { Duration::from_secs(10) } else { Default::default() };
                 // queries the other client for a call
-                write_message(transport, &Message::Hello { ringtone: other_ringtone, audio_header: call_state.local_configuration.clone(), room_hash }).await?;
+                write_message(transport, &ProtocolMessage::Hello { ringtone: other_ringtone, audio_header: call_state.local_configuration.clone(), room_hash }).await?;
 
                 loop {
                     select! {
@@ -1139,7 +1135,7 @@ where
                         _ = state.end_call.notified() => {
                             // gracefully end the call & continue the session
                             info!(event = "end_call_notified_waiting_hello_ack");
-                            write_message(transport, &Message::Goodbye { reason: None }).await?;
+                            write_message(transport, &ProtocolMessage::Goodbye { reason: None }).await?;
                             break;
                         }
                         result = timeout(hello_timeout, read_message(transport)) => {
@@ -1152,7 +1148,7 @@ where
                             }
                             // handles a variety of outcomes in response to Hello
                             let message_option = match result?? {
-                                Message::HelloAck { audio_header } => {
+                                ProtocolMessage::HelloAck { audio_header } => {
                                     call_state.remote_configuration = audio_header;
 
                                     if is_in_room {
@@ -1165,23 +1161,51 @@ where
                                     keep_alive.reset(); // start sending normal keep alive messages
                                     None
                                 }
-                                Message::Goodbye { reason: Some(m) } => {
+                                ProtocolMessage::Goodbye { reason: Some(m) } => {
                                     Some(format!("{} did not accept the call because of {m}", contact.nickname))
                                 }
-                                Message::Reject | Message::Busy if is_in_room => {
+                                ProtocolMessage::Reject | ProtocolMessage::Busy if is_in_room => {
                                     info!(event = "room_peer_rejected_or_busy_ignored");
                                     None
                                 },
-                                Message::Goodbye { .. } | Message::Reject => {
+                                ProtocolMessage::Goodbye { .. } | ProtocolMessage::Reject => {
                                     info!(event = "call_not_accepted");
                                     Some(format!("{} did not accept the call", contact.nickname))
                                 },
-                                Message::Busy => {
+                                ProtocolMessage::Busy => {
                                     info!(event = "call_peer_busy");
                                     Some(format!("{} is busy", contact.nickname))
                                 },
                                 // keep alive messages are sometimes received here
-                                Message::KeepAlive => continue,
+                                ProtocolMessage::KeepAlive => continue,
+                                ProtocolMessage::Hello { audio_header, .. } => {
+                                    if self.peer_id().await < contact.peer_id {
+                                        info!(event = "simultaneous_dial_detected_yielding");
+                                        if !audio_header.is_valid() {
+                                            warn!(event = "invalid_audio_header_rejected");
+                                            write_message(transport, &ProtocolMessage::Reject).await?;
+                                            None
+                                        } else {
+                                            call_state.remote_configuration = audio_header;
+                                            write_message(transport, &ProtocolMessage::HelloAck {
+                                                audio_header: call_state.local_configuration.clone()
+                                            }).await?;
+
+                                            if is_in_room {
+                                                self.room_handshake(transport, control, state, call_state).await?;
+                                            } else {
+                                                // normal call handshake
+                                                self.call_handshake(transport, control, &mut message_channel.1, state, call_state).await?;
+                                            }
+
+                                            keep_alive.reset(); // start sending normal keep alive messages
+                                            None
+                                        }
+                                    } else {
+                                        info!(event = "simultaneous_dial_detected_winning");
+                                        continue;
+                                    }
+                                }
                                 message => {
                                     // the front end needs to know that the call ended here
                                     warn!(event = "hello_ack_flow_unexpected_message", ?message);
@@ -1202,7 +1226,7 @@ where
             }
             _ = keep_alive.tick() => {
                 debug!(event = "session_keep_alive_sent");
-                write_message(transport, &Message::KeepAlive).await?;
+                write_message(transport, &ProtocolMessage::KeepAlive).await?;
                 Ok(true)
             },
         }
@@ -1214,11 +1238,11 @@ where
         skip_all,
         fields(peer.id = %call_state.peer, call.kind = "direct")
     )]
-    pub(crate) async fn call_handshake(
+    async fn call_handshake(
         &self,
         transport: &mut Transport<TransportStream>,
         control: Option<&mut Control>,
-        message_receiver: &mut MReceiver<Message>,
+        message_receiver: &mut Receiver<ProtocolMessage>,
         state: &Arc<SessionState>,
         call_state: EarlyCallState,
     ) -> Result<()> {
@@ -1254,7 +1278,7 @@ where
         // send a goodbye message on errors
         if let Err(error) = result.as_ref() {
             warn!(event = "call_handshake_sending_error_goodbye", ?error);
-            let message = Message::error_goodbye(error);
+            let message = ProtocolMessage::error_goodbye(error);
             write_message(transport, &message).await?;
         }
 
@@ -1307,7 +1331,7 @@ where
             )
             .await?;
 
-        let statistics_handle = spawn(statistics_collector(
+        let statistics_handle = spawn_task(statistics_collector(
             statistics_state,
             self.callbacks.statistics_callback(),
             stop_io.clone(),
@@ -1318,14 +1342,14 @@ where
         if let Some(o) = optional {
             let (write, read) = o.audio_transport.split();
 
-            let input_handle = spawn(audio_input(
+            let input_handle = spawn_task(audio_input(
                 input_helper.receiver(),
                 ConstSocket::new(write),
                 stop_io.clone(),
                 upload_bandwidth,
             ));
 
-            let output_handle = spawn(audio_output(
+            let output_handle = spawn_task(audio_output(
                 output_helper.sender(),
                 read,
                 stop_io.clone(),
@@ -1413,10 +1437,10 @@ where
 
     /// Controller for normal calls
     #[instrument(name = "call.controller", skip_all)]
-    pub(crate) async fn call_controller(
+    async fn call_controller(
         &self,
         transport: &mut Transport<TransportStream>,
-        receiver: &mut MReceiver<Message>,
+        receiver: &mut Receiver<ProtocolMessage>,
         peer: PeerId,
         end_call: &Arc<Notify>,
     ) -> Result<(Option<String>, bool)> {
@@ -1429,14 +1453,14 @@ where
             select! {
                 // receives and handles messages from the callee
                 result = read_message(transport) => {
-                    let message: Message = result?;
+                    let message: ProtocolMessage = result?;
 
                     match message {
-                        Message::Goodbye { reason } => {
+                        ProtocolMessage::Goodbye { reason } => {
                             debug!(event = "call_goodbye_received", ?reason);
                             break Ok((reason, true));
                         },
-                        Message::Chat { text, attachments } => {
+                        ProtocolMessage::Chat { text, attachments } => {
                             self.callbacks.message_received(ChatMessage {
                                 text,
                                 receiver: identity,
@@ -1444,7 +1468,7 @@ where
                                 attachments,
                             }).await;
                         }
-                        Message::ScreenshareHeader { .. } => {
+                        ProtocolMessage::ScreenshareHeader { .. } => {
                             info!(event = "screenshare_header_received", ?message);
                             self.send_start_screenshare(peer, Some(message)).await;
                         }
@@ -1463,7 +1487,7 @@ where
                 },
                 // ends the call
                 _ = end_call.notified() => {
-                    write_message(transport, &Message::Goodbye { reason: None }).await?;
+                    write_message(transport, &ProtocolMessage::Goodbye { reason: None }).await?;
                     break Ok((None, false));
                 },
             }
@@ -1476,7 +1500,7 @@ where
         skip_all,
         fields(peer.id = %call_state.peer, call.kind = "room")
     )]
-    pub(crate) async fn room_handshake(
+    async fn room_handshake(
         &self,
         transport: &mut Transport<TransportStream>,
         control: Option<&mut Control>,
@@ -1507,16 +1531,16 @@ where
                 _ = cancel.cancelled() => {
                     // try to say goodbye
                     info!(event = "room_cancelled_sending_goodbye", peer.id = %peer_id);
-                    _ = write_message(transport, &Message::Goodbye { reason: None }).await;
+                    _ = write_message(transport, &ProtocolMessage::Goodbye { reason: None }).await;
                     break
                 }
                 result = read_message(transport) => {
                     match result {
-                        Ok(Message::Goodbye { .. }) => {
+                        Ok(ProtocolMessage::Goodbye { .. }) => {
                             info!(event = "room_goodbye_received", peer.id = %peer_id);
                             break;
                         }
-                        Ok(Message::Chat { .. }) => {
+                        Ok(ProtocolMessage::Chat { .. }) => {
                             // TODO handle chat messages
                         }
                         Err(error) => {
@@ -1544,7 +1568,7 @@ where
     )]
     pub(crate) async fn room_controller(
         &self,
-        mut receiver: MReceiver<RoomMessage>,
+        mut receiver: Receiver<RoomMessage>,
         end_sessions: CancellationToken,
         stop_io: &CancellationToken,
         end_call: Arc<Notify>,
@@ -1571,14 +1595,14 @@ where
             )
             .await?;
 
-        let input_handle = spawn(audio_input(
+        let input_handle = spawn_task(audio_input(
             input_helper.receiver(),
             SendingSockets::new(new_sockets.clone()),
             stop_io.clone(),
             statistics_state.upload_bandwidth.clone(),
         ));
 
-        let statistics_handle = spawn(statistics_collector(
+        let statistics_handle = spawn_task(statistics_collector(
             statistics_state.clone(),
             self.callbacks.statistics_callback(),
             stop_io.clone(),
@@ -1615,7 +1639,7 @@ where
                                 )
                                 .await?;
                             // begin sending
-                            let handle = spawn(audio_output(
+                            let handle = spawn_task(audio_output(
                                 helper.sender(),
                                 read,
                                 stop_io.clone(),
@@ -1680,10 +1704,11 @@ where
     }
 }
 
-impl<C, S> Clone for TelepathyCore<C, S>
+impl<C, S, H> Clone for TelepathyCore<C, S, H>
 where
-    S: FrbStatisticsCallback + Send + Sync + 'static,
-    C: FrbCallbacks<S> + Send + Sync + 'static,
+    S: CoreStatisticsCallback + Send + Sync + 'static,
+    C: CoreCallbacks<S> + Send + Sync + 'static,
+    H: AudioHost + Send + Sync + Clone + 'static,
 {
     fn clone(&self) -> Self {
         Self {
@@ -1703,122 +1728,25 @@ where
     }
 }
 
-#[derive(Clone, Default)]
-pub(crate) struct CoreState {
-    /// Controls the threshold for silence detection
-    pub(crate) rms_threshold: Arc<AtomicF32>,
+struct SessionTask(JoinHandle<Result<()>>);
 
-    /// The factor to adjust the input volume by
-    pub(crate) input_volume: Arc<AtomicF32>,
-
-    /// The factor to adjust the output volume by
-    pub(crate) output_volume: Arc<AtomicF32>,
-
-    /// Enables rnnoise denoising
-    pub(crate) denoise: Arc<AtomicBool>,
-
-    /// The rnnoise model
-    pub(crate) denoise_model: Arc<RwLock<RnnModel>>,
-
-    /// Manually set the input device
-    pub(crate) input_device: SharedDeviceId,
-
-    /// Manually set the output device
-    pub(crate) output_device: SharedDeviceId,
-
-    /// The current libp2p private key
-    pub(crate) identity: Arc<RwLock<Option<Keypair>>>,
-
-    /// Keeps track of whether the user is in a call
-    pub(crate) in_call: Arc<AtomicBool>,
-
-    /// used to end an audio test, if there is one
-    pub(crate) end_audio_test: Arc<Mutex<Option<Arc<Notify>>>>,
-
-    /// Disables the output stream
-    pub(crate) deafened: Arc<AtomicBool>,
-
-    /// Disables the input stream
-    pub(crate) muted: Arc<AtomicBool>,
-
-    /// Disables the playback of custom ringtones
-    pub(crate) play_custom_ringtones: Arc<AtomicBool>,
-
-    /// Enables sending your custom ringtone
-    pub(crate) send_custom_ringtone: Arc<AtomicBool>,
-
-    /// Decreases the statistics update rate
-    pub(crate) efficiency_mode: Arc<AtomicBool>,
-
-    /// Pauses statistics callbacks when window is minimized
-    pub(crate) statistics_paused: Arc<AtomicBool>,
-
-    /// set to true at shutdown to break manager loop
-    pub(crate) stop_manager: Arc<AtomicBool>,
-
-    /// notifies when a manager starts
-    pub(crate) manager_active: Arc<Notify>,
-
-    /// Network configuration for p2p connections
-    pub(crate) network_config: NetworkConfig,
-
-    /// Configuration for the screenshare functionality
-    #[allow(dead_code)]
-    pub(crate) screenshare_config: ScreenshareConfig,
-
-    /// configuration for audio codec, or lack thereof
-    pub(crate) codec_config: CodecConfig,
+impl SessionTask {
+    async fn join(self) -> Result<()> {
+        self.0.await??;
+        Ok(())
+    }
 }
 
-/// a state used for session negotiation
-#[derive(Debug)]
-struct PeerState {
-    /// set to true after dialing peer's identity addresses
-    dialed: bool,
-
-    /// when true the peer is the dialer
-    dialer: bool,
-
-    /// a map of connections and their latencies
-    connections: HashMap<ConnectionId, ConnectionState>,
-
-    /// a single connection has been selected to become a session
-    selected_connection: bool,
-
-    /// the instant the state was created
-    created: Instant,
+struct RoomConnection {
+    _output: OutputHelper,
+    handle: JoinHandle<Result<()>>,
 }
 
-impl PeerState {
-    fn dialer() -> Self {
-        Self {
-            dialed: false,
-            dialer: true,
-            connections: Default::default(),
-            selected_connection: false,
-            created: Instant::now(),
-        }
-    }
-
-    fn non_dialer(endpoint: ConnectedPoint, connection_id: ConnectionId) -> Self {
-        Self {
-            dialed: false,
-            dialer: false,
-            connections: HashMap::from([(connection_id, endpoint.into())]),
-            selected_connection: false,
-            created: Instant::now(),
-        }
-    }
-
-    fn relayed_only(&self) -> bool {
-        self.connections.iter().all(|(_, state)| state.relayed)
-    }
-
-    fn latencies_missing(&self) -> bool {
-        self.connections
-            .iter()
-            .any(|(_, state)| state.latency.is_none())
-    }
+pub(crate) struct OptionalCallArgs<'a> {
+    audio_transport: Transport<TransportStream>,
+    control_transport: &'a mut Transport<TransportStream>,
+    message_receiver: &'a mut Receiver<ProtocolMessage>,
+    state: &'a Arc<SessionState>,
 }
 
 fn dialer_control_needed(state: &HashMap<PeerId, PeerState>) -> bool {

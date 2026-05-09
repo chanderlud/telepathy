@@ -3,20 +3,15 @@ extern crate windows as other_windows;
 
 #[cfg(windows)]
 use std::mem;
-use std::sync::Arc;
-#[cfg(windows)]
-use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32};
 #[cfg(windows)]
 use std::time::Duration;
 
 #[cfg(windows)]
-use crate::overlay::windows;
-use crate::overlay::{BACKGROUND_COLOR, FONT_COLOR, FONT_HEIGHT};
-use flutter_rust_bridge::frb;
+use crate::internal::spawn_task;
 #[cfg(windows)]
 use kanal::Sender;
+use lazy_static::lazy_static;
 #[cfg(windows)]
 use other_windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 #[cfg(windows)]
@@ -28,6 +23,8 @@ use other_windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, GetMessageW, MoveWindow, SW_HIDE, SW_SHOW, SendMessageA, ShowWindow,
     TranslateMessage, WM_CLOSE,
 };
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicUsize};
 #[cfg(windows)]
 use tokio::select;
 use tokio::sync::Notify;
@@ -36,7 +33,25 @@ use tokio::time::interval;
 #[cfg(windows)]
 use tracing::error;
 
-#[frb(opaque)]
+/// flutter_rust_bridge:ignore
+#[cfg(windows)]
+mod color;
+/// flutter_rust_bridge:ignore
+mod error;
+/// flutter_rust_bridge:ignore
+#[cfg(windows)]
+mod windows;
+
+lazy_static! {
+    pub(crate) static ref LATENCY: Arc<AtomicUsize> = Default::default();
+    pub(crate) static ref LOSS: Arc<AtomicUsize> = Default::default();
+    pub(crate) static ref CONNECTED: Arc<AtomicBool> = Default::default();
+    static ref FONT_HEIGHT: Arc<AtomicI32> = Default::default();
+    static ref BACKGROUND_COLOR: Arc<AtomicU32> = Default::default();
+    static ref FONT_COLOR: Arc<AtomicU32> = Default::default();
+}
+
+#[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(opaque))]
 #[derive(Clone, Default)]
 pub struct Overlay {
     /// the HWND of the overlay window
@@ -120,7 +135,7 @@ impl Overlay {
         };
 
         let other_this = this.clone();
-        flutter_rust_bridge::spawn(async move {
+        spawn_task(async move {
             other_this.controller().await;
         });
 
@@ -224,7 +239,7 @@ impl Overlay {
     }
 
     /// show the overlay on windows
-    #[frb(ignore)]
+    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(ignore))]
     #[cfg(windows)]
     fn _show(&self) {
         let hwnd = HWND(self._window.load(Relaxed) as *mut _);
@@ -235,7 +250,7 @@ impl Overlay {
     }
 
     /// non-windows platforms don't have an overlay
-    #[frb(ignore)]
+    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(ignore))]
     #[cfg(not(windows))]
     fn _show(&self) {}
 
@@ -251,7 +266,7 @@ impl Overlay {
     }
 
     /// hide the overlay on windows
-    #[frb(ignore)]
+    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(ignore))]
     #[cfg(windows)]
     fn _hide(&self) {
         let hwnd = HWND(self._window.load(Relaxed) as *mut _);
@@ -262,7 +277,7 @@ impl Overlay {
     }
 
     /// non-windows platforms don't have an overlay
-    #[frb(ignore)]
+    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(ignore))]
     #[cfg(not(windows))]
     fn _hide(&self) {}
 
@@ -403,7 +418,7 @@ impl Overlay {
 
     /// access the screen resolution for overlay positioning in the front end
     #[cfg(windows)]
-    #[frb(sync)]
+    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
     pub fn screen_resolution(&self) -> (i32, i32) {
         let hwnd = HWND(self._window.load(Relaxed) as *mut _);
 
@@ -424,7 +439,7 @@ impl Overlay {
 
     /// non-windows platforms don't have an overlay
     #[cfg(not(windows))]
-    #[frb(sync)]
+    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
     pub fn screen_resolution(&self) -> (i32, i32) {
         (0, 0)
     }

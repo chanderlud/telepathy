@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart' hide Overlay;
 import 'package:provider/provider.dart';
 import 'package:telepathy/controllers/index.dart';
-import 'package:telepathy/core/rust/overlay/overlay.dart';
+import 'package:telepathy/core/rust/overlay.dart';
 
 class OverlayPositionWidget extends StatefulWidget {
   final double realMaxX;
