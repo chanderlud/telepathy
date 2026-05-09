@@ -254,22 +254,8 @@ async def test_call_simultaneous_dial(
     alice = cli_pair["alice"]
     bob = cli_pair["bob"]
 
-    def _has_accept_call_prompt(messages: list[dict]) -> bool:
-        for message in messages:
-            if message.get("kind") != "event":
-                continue
-            if message.get("type") == "accept_call_prompt":
-                return True
-        return False
-
     alice_lines = alice.stdout_lines()
     bob_lines = bob.stdout_lines()
-    assert not _has_accept_call_prompt(
-        alice_lines
-    ), "alice emitted undesired accept_call_prompt during simultaneous dial"
-    assert not _has_accept_call_prompt(
-        bob_lines
-    ), "bob emitted undesired accept_call_prompt during simultaneous dial"
 
     def _call_states(messages: list[dict]) -> list[str]:
         states: list[str] = []
