@@ -6,7 +6,7 @@ use crate::internal::messages::{AudioHeader, ProtocolMessage, StartScreenshare};
 use crate::internal::screenshare;
 use crate::internal::state::{EarlyCallState, StatisticsCollectorState};
 use crate::internal::utils::{KanalSink, KanalSource};
-use crate::internal::{CHAT_PROTOCOL, Result};
+use crate::internal::{Result, SESSION_PROTOCOL, STREAM_PROTOCOL};
 use crate::types::FrontendNotify;
 use crate::{Behaviour, BehaviourEvent};
 use bytes::Bytes;
@@ -80,7 +80,7 @@ where
                 relay_client: relay_behaviour,
                 ping: ping::Behaviour::new(ping::Config::new()),
                 identify: identify::Behaviour::new(identify::Config::new(
-                    CHAT_PROTOCOL.to_string(),
+                    SESSION_PROTOCOL.to_string(),
                     keypair.public(),
                 )),
                 dcutr: dcutr::Behaviour::new(keypair.public().to_peer_id()),
@@ -237,7 +237,7 @@ where
             && let Some(mut control) = control_option
         {
             // the other peer is waiting for a stream
-            let stream = control.open_stream(message.peer, CHAT_PROTOCOL).await?;
+            let stream = control.open_stream(message.peer, STREAM_PROTOCOL).await?;
             // alert the frontend
             self.callbacks.screenshare_started(dart_stop, false).await;
             // start playing back the screenshare

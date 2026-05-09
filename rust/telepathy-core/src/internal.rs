@@ -45,8 +45,10 @@ type Result<T> = std::result::Result<T, Error>;
 const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 /// How often to keep-alive libp2p streams
 const KEEP_ALIVE: Duration = Duration::from_secs(10);
-/// the protocol identifier for Telepathy
-const CHAT_PROTOCOL: StreamProtocol = StreamProtocol::new("/telepathy/0.0.1");
+/// the protocol identifier for Telepathy sessions
+const SESSION_PROTOCOL: StreamProtocol = StreamProtocol::new("/telepathy-session/0.0.1");
+/// the protocol identifier for Telepathy data streams (calls or screen shares)
+const STREAM_PROTOCOL: StreamProtocol = StreamProtocol::new("/telepathy-stream/0.0.1");
 /// Maximum allowed size for a single length-delimited control/message frame on the session stream.
 const SESSION_MAX_FRAME_LENGTH: usize = 1024 * 1024 * 1024;
 /// How long to attempt direct connection upgrade before falling back to a relayed option

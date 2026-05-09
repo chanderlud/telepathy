@@ -1,6 +1,6 @@
 use crate::internal::error::{Error, ErrorKind};
 use crate::internal::messages::{AudioHeader, ProtocolMessage, RoomMessage};
-use crate::internal::{CHAT_PROTOCOL, HELLO_TIMEOUT};
+use crate::internal::{HELLO_TIMEOUT, Result, STREAM_PROTOCOL};
 use crate::types::{CodecConfig, NetworkConfig, ScreenshareConfig, SessionStatus};
 use atomic_float::AtomicF32;
 use kanal::{AsyncReceiver, AsyncSender, unbounded_async};
@@ -13,7 +13,6 @@ use libp2p_stream::Control;
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::Arc;
-use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::time::Duration;
 use telepathy_audio::RnnModel;
@@ -286,9 +285,6 @@ pub(crate) struct SessionState {
     /// a shared download bandwidth value for the session
     pub(crate) download_bandwidth: Arc<AtomicUsize>,
 
-    /// whether the session wants a sub-stream
-    pub(crate) wants_stream: Arc<AtomicBool>,
-
     pub(crate) end_call: Arc<Notify>,
 
     pub(crate) stop_screenshare: Arc<Mutex<Option<Arc<Notify>>>>,
@@ -309,7 +305,6 @@ impl SessionState {
             latency: Default::default(),
             upload_bandwidth: Default::default(),
             download_bandwidth: Default::default(),
-            wants_stream: Default::default(),
             end_call: Default::default(),
             stop_screenshare: Default::default(),
         }
@@ -319,15 +314,12 @@ impl SessionState {
         &self,
         mut control: Option<&mut Control>,
         call_state: &EarlyCallState,
-    ) -> crate::internal::Result<Stream> {
-        // change the session state to accept incoming audio streams
-        self.wants_stream.store(true, Relaxed);
-
+    ) -> Result<Stream> {
         let stream_future = async {
             if let Some(control) = control.as_mut() {
                 // if dialer, open stream
                 control
-                    .open_stream(call_state.peer, CHAT_PROTOCOL)
+                    .open_stream(call_state.peer, STREAM_PROTOCOL)
                     .await
                     .map_err(Error::from)
             } else {
@@ -342,15 +334,11 @@ impl SessionState {
             result = timeout(HELLO_TIMEOUT, stream_future) => result,
         };
 
-        self.wants_stream.store(false, Relaxed);
         stream_result?
     }
 
-    pub(crate) async fn receive_stream(&self) -> crate::internal::Result<Stream> {
-        self.wants_stream.store(true, Relaxed);
-        let result = self.stream_receiver.recv().await.map_err(Into::into);
-        self.wants_stream.store(false, Relaxed);
-        result
+    pub(crate) async fn receive_stream(&self) -> Result<Stream> {
+        self.stream_receiver.recv().await.map_err(Into::into)
     }
 
     pub(crate) async fn teardown(&self) {

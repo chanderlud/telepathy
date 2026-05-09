@@ -1,5 +1,4 @@
 use crate::BehaviourEvent;
-use crate::internal::Result;
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::error::ErrorKind;
 use crate::internal::helpers::OutputHelper;
@@ -18,9 +17,10 @@ use crate::internal::utils::{
     stream_to_audio_transport, write_message,
 };
 use crate::internal::{
-    CHAT_PROTOCOL, DCUTR_TIMEOUT, EarlyCallState, HELLO_TIMEOUT, KEEP_ALIVE, RoomState,
-    SESSION_MAX_FRAME_LENGTH, SessionState,
+    DCUTR_TIMEOUT, EarlyCallState, HELLO_TIMEOUT, KEEP_ALIVE, RoomState, SESSION_MAX_FRAME_LENGTH,
+    SESSION_PROTOCOL, SessionState,
 };
+use crate::internal::{Result, STREAM_PROTOCOL};
 use crate::overlay::CONNECTED;
 use crate::overlay::Overlay;
 use crate::types::{
@@ -703,39 +703,42 @@ where
     /// Handles incoming streams for the libp2p swarm. spawns incoming sessions
     #[instrument(name = "streams.accept_loop", skip_all)]
     async fn incoming_stream_handler(&self, mut control: Control, stop: Arc<Notify>) -> Result<()> {
-        let mut incoming_streams = control.accept(CHAT_PROTOCOL)?;
+        let mut incoming_sessions = control.accept(SESSION_PROTOCOL)?;
+        let mut incoming_streams = control.accept(STREAM_PROTOCOL)?;
         let mut handles: Vec<SessionTask> = Vec::new();
 
         let result = loop {
             select! {
                 _ = stop.notified() => break Ok(()),
-                Some((peer, stream)) = incoming_streams.next() => {
-                    let state_option = self.session_states.read().await.get(&peer).cloned();
-
-                    if let Some(state) = state_option {
-                        if state.wants_stream.load(Relaxed) {
-                            info!(event = "substream_accepted", peer.id = %peer);
-
-                            if let Err(error) = state.stream_sender.send(stream).await {
-                                error!(
-                                    event = "substream_forward_failed",
-                                    peer.id = %peer,
-                                    error = %error
-                                );
-                            }
-
-                            continue;
-                        } else {
-                            warn!(
-                                event = "substream_unexpected_starting_session",
-                                peer.id = %peer
-                            );
-                        }
+                Some((peer, stream)) = incoming_sessions.next() => {
+                    if self.session_states.read().await.get(&peer).is_some() {
+                       warn!(
+                            event = "unexpected_stream_restarting_session",
+                            peer.id = %peer
+                        );
                     } else {
                         info!(event = "stream_accepted_new_session", peer.id = %peer);
                     }
 
                     handles.push(self.initialize_session(peer, None, stream, None).await);
+                }
+                Some((peer, stream)) = incoming_streams.next() => {
+                    if let Some(state) = self.session_states.read().await.get(&peer) {
+                        info!(event = "data_stream_accepted", peer.id = %peer);
+
+                        if let Err(error) = state.stream_sender.send(stream).await {
+                            error!(
+                                event = "data_stream_forward_failed",
+                                peer.id = %peer,
+                                error = %error
+                            );
+                        }
+                    } else {
+                        warn!(
+                            event = "unexpected_stream_no_session",
+                            peer.id = %peer
+                        );
+                    }
                 }
                 else => {
                     error!(event = "incoming_streams_closed_unexpectedly");
@@ -765,7 +768,7 @@ where
         handles: &mut Vec<SessionTask>,
         state: ConnectionState,
     ) {
-        match control.open_stream(peer, CHAT_PROTOCOL).await {
+        match control.open_stream(peer, SESSION_PROTOCOL).await {
             Ok(stream) => {
                 info!(event = "session_stream_opened", peer.id = %peer);
                 handles.push(
