@@ -44,6 +44,14 @@ NETWORK_PROFILES = [
         burst_loss=True,
         seed=102,
     ),
+    NetworkProfile(
+        name="satellite",
+        delay_ms=350,
+        jitter_ms=150,
+        loss_pct=8.0,
+        burst_loss=True,
+        seed=103,
+    ),
 ]
 
 
