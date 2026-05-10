@@ -16,13 +16,19 @@ class ContactsList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final bool isCompact = MediaQuery.of(context).size.height < 700;
     final List<Object> items = [
       ...contacts,
       ...rooms,
     ];
 
     return Container(
-      padding: const EdgeInsets.only(bottom: 15, left: 12, right: 12, top: 8),
+      padding: EdgeInsets.only(
+        bottom: isCompact ? 8 : 15,
+        left: 12,
+        right: 12,
+        top: isCompact ? 4 : 8,
+      ),
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.secondaryContainer,
         borderRadius: BorderRadius.circular(10.0),
@@ -32,7 +38,10 @@ class ContactsList extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+              padding: EdgeInsets.symmetric(
+                horizontal: 8,
+                vertical: isCompact ? 3 : 7,
+              ),
               child: Row(
                 children: [
                   const Padding(
@@ -68,7 +77,7 @@ class ContactsList extends StatelessWidget {
                   ),
                 ],
               )),
-          const SizedBox(height: 10.0),
+          SizedBox(height: isCompact ? 5 : 10),
           Flexible(
             fit: FlexFit.loose,
             child: Container(

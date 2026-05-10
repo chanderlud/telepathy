@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import 'package:collection/collection.dart';
-import 'package:flutter/foundation.dart';
+import 'package:flutter/foundation.dart' show ChangeNotifier, kIsWeb;
 import 'package:telepathy/core/utils/console.dart';
 import 'package:telepathy/core/rust/lib.dart';
 import 'package:telepathy/core/rust/flutter.dart';
@@ -36,6 +36,7 @@ class AudioDevices extends ChangeNotifier {
   }
 
   Future<void> updateDevices() async {
+    if (kIsWeb) return;
     if (_refreshing) return;
     _refreshing = true;
     try {
@@ -64,6 +65,7 @@ class AudioDevices extends ChangeNotifier {
   }
 
   void startUpdates() {
+    if (kIsWeb) return;
     periodicTimer?.cancel();
     periodicTimer = Timer.periodic(const Duration(milliseconds: 500), (timer) {
       updateDevices();

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart' hide Overlay;
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:provider/provider.dart';
@@ -256,52 +257,56 @@ class _CallControlsState extends State<CallControls> {
                                   icon: SvgPicture.asset(
                                       'assets/icons/Settings.svg')),
                               const SizedBox(width: 1),
-                              IconButton(
-                                  onPressed: () async {
-                                    if (stateController.activeContact == null) {
-                                      return;
-                                    }
-
-                                    final networkSettingsController = context
-                                        .read<NetworkSettingsController>();
-
-                                    if (!(await screenshareAvailable())) {
-                                      if (context.mounted) {
-                                        showErrorDialog(
-                                            context,
-                                            'Screenshare Unavailable',
-                                            'ffmpeg must be installed to use the screenshare feature');
+                              if (!kIsWeb &&
+                                  !Platform.isAndroid &&
+                                  !Platform.isIOS)
+                                IconButton(
+                                    onPressed: () async {
+                                      if (stateController.activeContact == null) {
+                                        return;
                                       }
 
-                                      return;
-                                    } else if ((await networkSettingsController
-                                            .screenshareConfig
-                                            .recordingConfig()) ==
-                                        null) {
-                                      if (context.mounted) {
-                                        showErrorDialog(
-                                            context,
-                                            'Invalid Configuration',
-                                            'An invalid screenshare configuration is active, visit settings to select new options.');
+                                      final networkSettingsController = context
+                                          .read<NetworkSettingsController>();
+
+                                      if (!(await screenshareAvailable())) {
+                                        if (context.mounted) {
+                                          showErrorDialog(
+                                              context,
+                                              'Screenshare Unavailable',
+                                              'ffmpeg must be installed to use the screenshare feature');
+                                        }
+
+                                        return;
+                                      } else if ((await networkSettingsController
+                                              .screenshareConfig
+                                              .recordingConfig()) ==
+                                          null) {
+                                        if (context.mounted) {
+                                          showErrorDialog(
+                                              context,
+                                              'Invalid Configuration',
+                                              'An invalid screenshare configuration is active, visit settings to select new options.');
+                                        }
+
+                                        return;
                                       }
 
-                                      return;
-                                    }
-
-                                    if (!stateController.isSendingScreenshare) {
-                                      telepathy.startScreenshare(
-                                          contact:
-                                              stateController.activeContact!);
-                                    } else {
-                                      stateController.stopScreenshare(
-                                          true, true);
-                                    }
-                                  },
-                                  icon: SvgPicture.asset(
-                                      stateController.isSendingScreenshare
-                                          ? 'assets/icons/PhoneOff.svg'
-                                          : 'assets/icons/Screenshare.svg',
-                                      semanticsLabel: 'Screenshare icon')),
+                                      if (!stateController
+                                          .isSendingScreenshare) {
+                                        telepathy.startScreenshare(
+                                            contact:
+                                                stateController.activeContact!);
+                                      } else {
+                                        stateController.stopScreenshare(
+                                            true, true);
+                                      }
+                                    },
+                                    icon: SvgPicture.asset(
+                                        stateController.isSendingScreenshare
+                                            ? 'assets/icons/PhoneOff.svg'
+                                            : 'assets/icons/Screenshare.svg',
+                                        semanticsLabel: 'Screenshare icon')),
                             ],
                           ))),
             ))
