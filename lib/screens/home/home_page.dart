@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart' hide Overlay;
 import 'package:provider/provider.dart';
 import 'package:telepathy/controllers/index.dart';
+import 'package:telepathy/core/constants/app_constants.dart';
+import 'package:telepathy/core/utils/index.dart';
 import 'package:telepathy/widgets/call/call.dart';
 import 'package:telepathy/widgets/chat/chat.dart';
 import 'package:telepathy/widgets/contacts/contacts.dart';
@@ -21,14 +23,15 @@ class HomePage extends StatelessWidget {
                   builder: (BuildContext context, BoxConstraints constraints) {
                 const Widget contactsList = SortedContactsList();
 
-                if (constraints.maxWidth > 600) {
+                if (constraints.maxWidth > AppConstants.wideLayoutBreakpoint) {
                   return Column(
                     children: [
                       Consumer<StateController>(
                         builder: (BuildContext context,
                             StateController stateController, Widget? child) {
                           return Container(
-                              constraints: const BoxConstraints(maxHeight: 275),
+                              constraints: const BoxConstraints(
+                                  maxHeight: AppConstants.topSectionMaxHeightWide),
                               child: Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
@@ -99,12 +102,14 @@ class HomePage extends StatelessWidget {
                     ],
                   );
                 } else {
-                  final bool isCompact =
-                      MediaQuery.of(context).size.height < 700;
+                  final bool isCompact = context.isCompactContacts;
                   return Column(children: [
                     Container(
-                      constraints:
-                          BoxConstraints(maxHeight: isCompact ? 170 : 250),
+                      constraints: BoxConstraints(
+                        maxHeight: isCompact
+                            ? AppConstants.topSectionMaxHeightNarrowCompact
+                            : AppConstants.topSectionMaxHeightNarrow,
+                      ),
                       child: contactsList,
                     ),
                     SizedBox(height: isCompact ? 10 : 20),

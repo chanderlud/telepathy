@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:provider/provider.dart';
 import 'package:telepathy/controllers/index.dart';
+import 'package:telepathy/core/constants/app_constants.dart';
 import 'package:telepathy/core/utils/index.dart';
 import 'package:telepathy/core/rust/player.dart';
 import 'package:telepathy/core/rust/flutter.dart';
@@ -36,7 +37,9 @@ class RoomDetailsWidget extends StatelessWidget {
 
     return Container(
       padding: const EdgeInsets.only(bottom: 15, left: 12, right: 12, top: 8),
-      height: 300,
+      constraints: const BoxConstraints(
+        maxHeight: AppConstants.topSectionMaxHeightWide,
+      ),
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.secondaryContainer,
         borderRadius: BorderRadius.circular(10.0),

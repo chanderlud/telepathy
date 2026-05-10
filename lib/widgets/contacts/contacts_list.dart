@@ -1,7 +1,9 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:provider/provider.dart';
 import 'package:telepathy/controllers/index.dart';
+import 'package:telepathy/core/utils/index.dart';
 import 'package:telepathy/core/rust/flutter.dart';
 import 'package:telepathy/models/index.dart';
 import 'package:telepathy/core/rust/types.dart';
@@ -22,7 +24,7 @@ class ContactsList extends StatelessWidget {
     final stateController = context.watch<StateController>();
     final telepathy = context.read<Telepathy>();
     final bool sessionManagerActive = stateController.sessionManagerActive;
-    final bool isCompact = MediaQuery.of(context).size.height < 700;
+    final bool isCompact = context.isCompactContacts;
     final List<Object> items = [
       ...contacts,
       ...rooms,

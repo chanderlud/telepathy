@@ -4,6 +4,11 @@ import 'package:flutter/material.dart';
 class AppConstants {
   static const double pagePadding = 20.0;
   static const double cardRadius = 10.0;
+  static const double wideLayoutBreakpoint = 600.0;
+  static const double compactHeightBreakpoint = 690.0;
+  static const double topSectionMaxHeightWide = 275.0;
+  static const double topSectionMaxHeightNarrowCompact = 170.0;
+  static const double topSectionMaxHeightNarrow = 250.0;
 
   static const EdgeInsets pageInsets = EdgeInsets.all(pagePadding);
   static const EdgeInsets cardInsets =

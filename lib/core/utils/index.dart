@@ -5,4 +5,5 @@ export 'dialog_utils.dart';
 export 'file_utils.dart';
 export 'format_utils.dart';
 export 'io_shim.dart';
+export 'layout_context.dart';
 export 'sound_effects.dart';

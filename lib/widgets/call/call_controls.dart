@@ -36,7 +36,7 @@ class _CallControlsState extends State<CallControls> {
   Widget build(BuildContext context) {
     final telepathy = context.read<Telepathy>();
     final player = context.read<SoundPlayer>();
-    final bool isCompact = MediaQuery.of(context).size.height < 700;
+    final bool isCompact = context.isCompactControls;
 
     return Column(
       children: [
@@ -154,7 +154,7 @@ class _CallControlsState extends State<CallControls> {
                   bottomRight: Radius.circular(10.0)),
             ),
             child: Padding(
-              padding: const EdgeInsets.all(5.0),
+              padding: EdgeInsets.all(isCompact ? 0 : 5.0),
               child: Center(
                   child: Consumer<StateController>(
                       builder: (BuildContext context,
