@@ -40,39 +40,21 @@ class _CallControlsState extends State<CallControls> {
 
     return Column(
       children: [
-        SizedBox(height: isCompact ? 4 : 10),
+        SizedBox(height: isCompact ? 8 : 10),
         Consumer<StateController>(builder:
             (BuildContext context, StateController stateController, _) {
           Widget body;
 
-          if (stateController.sessionManagerActive) {
-            if (stateController.isCallActive) {
-              body = ListenableBuilder(
-                  listenable: _notifier,
-                  builder: (BuildContext context, Widget? child) {
-                    return Text(stateController.callDuration,
-                        style: const TextStyle(fontSize: 20));
-                  });
-            } else {
-              body = Text(stateController.status,
-                  style: const TextStyle(fontSize: 20));
-            }
+          if (stateController.isCallActive) {
+            body = ListenableBuilder(
+                listenable: _notifier,
+                builder: (BuildContext context, Widget? child) {
+                  return Text(stateController.callDuration,
+                      style: const TextStyle(fontSize: 20));
+                });
           } else {
-            body = Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                stateController.sessionManagerRestartable
-                    ? IconButton(
-                        onPressed: () {
-                          telepathy.restartManager();
-                        },
-                        icon: SvgPicture.asset('assets/icons/Restart.svg',
-                            colorFilter: const ColorFilter.mode(
-                                Color(0xFFdc2626), BlendMode.srcIn),
-                            semanticsLabel: 'Restart session manager'))
-                    : const SizedBox.shrink(),
-              ],
-            );
+            body = Text(stateController.status,
+                style: const TextStyle(fontSize: 20));
           }
 
           return SizedBox(

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:provider/provider.dart';
 import 'package:telepathy/controllers/index.dart';
+import 'package:telepathy/core/rust/flutter.dart';
 import 'package:telepathy/models/index.dart';
 import 'package:telepathy/core/rust/types.dart';
 import 'package:telepathy/widgets/contacts/contact_form.dart';
@@ -19,6 +20,7 @@ class ContactsList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final stateController = context.watch<StateController>();
+    final telepathy = context.read<Telepathy>();
     final bool sessionManagerActive = stateController.sessionManagerActive;
     final bool isCompact = MediaQuery.of(context).size.height < 700;
     final List<Object> items = [
@@ -85,13 +87,38 @@ class ContactsList extends StatelessWidget {
                     ],
                   ),
                   if (!sessionManagerActive)
-                    const Tooltip(
-                      message: 'Session Manager Inactive',
-                      child: Icon(
-                        Icons.language,
-                        color: Color(0xFFdc2626),
-                        size: 20,
-                      ),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Tooltip(
+                          message: 'Session Manager Inactive',
+                          child: Icon(
+                            Icons.language,
+                            color: Color(0xFFdc2626),
+                            size: 20,
+                          ),
+                        ),
+                        if (stateController.sessionManagerRestartable)
+                          IconButton(
+                              onPressed: () {
+                                telepathy.restartManager();
+                              },
+                              constraints: const BoxConstraints(
+                                maxWidth: 36,
+                                maxHeight: 36,
+                              ),
+                              padding: const EdgeInsetsDirectional.only(
+                                start: 1,
+                                top: 1,
+                                end: 1,
+                                bottom: 1,
+                              ),
+                              icon: SvgPicture.asset(
+                                  'assets/icons/Restart.svg',
+                                  colorFilter: const ColorFilter.mode(
+                                      Color(0xFFdc2626), BlendMode.srcIn),
+                                  semanticsLabel: 'Restart session manager')),
+                      ],
                     ),
                 ],
               )),
