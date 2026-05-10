@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart' hide Overlay;
 import 'package:provider/provider.dart';
 import 'package:telepathy/controllers/index.dart';
+import 'package:telepathy/core/constants/app_constants.dart';
+import 'package:telepathy/core/utils/index.dart';
 import 'package:telepathy/widgets/call/call.dart';
 import 'package:telepathy/widgets/chat/chat.dart';
 import 'package:telepathy/widgets/contacts/contacts.dart';
@@ -21,14 +23,19 @@ class HomePage extends StatelessWidget {
                   builder: (BuildContext context, BoxConstraints constraints) {
                 const Widget contactsList = SortedContactsList();
 
-                if (constraints.maxWidth > 600) {
+                if (constraints.maxWidth > AppConstants.wideLayoutBreakpoint) {
+                  final bool isCompactWide = context.isCompactWide;
                   return Column(
                     children: [
                       Consumer<StateController>(
                         builder: (BuildContext context,
                             StateController stateController, Widget? child) {
                           return Container(
-                              constraints: const BoxConstraints(maxHeight: 275),
+                              constraints: BoxConstraints(
+                                  maxHeight: isCompactWide
+                                      ? AppConstants
+                                          .topSectionMaxHeightWideCompact
+                                      : AppConstants.topSectionMaxHeightWide),
                               child: Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
@@ -99,12 +106,17 @@ class HomePage extends StatelessWidget {
                     ],
                   );
                 } else {
+                  final bool isCompact = context.isCompactContacts;
                   return Column(children: [
                     Container(
-                      constraints: const BoxConstraints(maxHeight: 250),
+                      constraints: BoxConstraints(
+                        maxHeight: isCompact
+                            ? AppConstants.topSectionMaxHeightNarrowCompact
+                            : AppConstants.topSectionMaxHeightNarrow,
+                      ),
                       child: contactsList,
                     ),
-                    const SizedBox(height: 20),
+                    SizedBox(height: isCompact ? 10 : 20),
                     HomeTabView(
                         widgetOne: const CallControls(),
                         widgetTwo: const Padding(

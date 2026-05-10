@@ -1,5 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:provider/provider.dart';
+import 'package:telepathy/controllers/index.dart';
+import 'package:telepathy/core/utils/index.dart';
+import 'package:telepathy/core/rust/flutter.dart';
 import 'package:telepathy/models/index.dart';
 import 'package:telepathy/core/rust/types.dart';
 import 'package:telepathy/widgets/contacts/contact_form.dart';
@@ -16,13 +20,22 @@ class ContactsList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final stateController = context.watch<StateController>();
+    final telepathy = context.read<Telepathy>();
+    final bool sessionManagerActive = stateController.sessionManagerActive;
+    final bool isCompact = context.isCompactContacts || context.isCompactWide;
     final List<Object> items = [
       ...contacts,
       ...rooms,
     ];
 
     return Container(
-      padding: const EdgeInsets.only(bottom: 15, left: 12, right: 12, top: 8),
+      padding: EdgeInsets.only(
+        bottom: isCompact ? 8 : 15,
+        left: 12,
+        right: 12,
+        top: isCompact ? 2 : 8,
+      ),
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.secondaryContainer,
         borderRadius: BorderRadius.circular(10.0),
@@ -32,43 +45,84 @@ class ContactsList extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+              padding: EdgeInsets.symmetric(
+                horizontal: 8,
+                vertical: isCompact ? 0 : 7,
+              ),
               child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Padding(
-                    padding: EdgeInsetsDirectional.only(bottom: 2),
-                    child: Text('Contacts', style: TextStyle(fontSize: 20)),
+                  Row(
+                    children: [
+                      const Padding(
+                        padding: EdgeInsetsDirectional.only(bottom: 2),
+                        child: Text('Contacts', style: TextStyle(fontSize: 20)),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.only(left: 10, top: 3),
+                        child: IconButton(
+                            onPressed: () {
+                              showDialog(
+                                  context: context,
+                                  builder: (BuildContext context) {
+                                    return SimpleDialog(
+                                      backgroundColor: Theme.of(context)
+                                          .colorScheme
+                                          .secondaryContainer,
+                                      children: const [ContactForm()],
+                                    );
+                                  });
+                            },
+                            constraints: const BoxConstraints(
+                              maxWidth: 36,
+                              maxHeight: 36,
+                            ),
+                            padding: const EdgeInsetsDirectional.only(
+                              start: 1,
+                              top: 1,
+                              end: 1,
+                              bottom: 1,
+                            ),
+                            icon: SvgPicture.asset('assets/icons/Plus.svg')),
+                      ),
+                    ],
                   ),
-                  Padding(
-                    padding: const EdgeInsets.only(left: 10, top: 3),
-                    child: IconButton(
-                        onPressed: () {
-                          showDialog(
-                              context: context,
-                              builder: (BuildContext context) {
-                                return SimpleDialog(
-                                  backgroundColor: Theme.of(context)
-                                      .colorScheme
-                                      .secondaryContainer,
-                                  children: const [ContactForm()],
-                                );
-                              });
-                        },
-                        constraints: const BoxConstraints(
-                          maxWidth: 36,
-                          maxHeight: 36,
+                  if (!sessionManagerActive)
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Tooltip(
+                          message: 'Session Manager Inactive',
+                          child: Icon(
+                            Icons.language,
+                            color: Color(0xFFdc2626),
+                            size: 20,
+                          ),
                         ),
-                        padding: const EdgeInsetsDirectional.only(
-                          start: 1,
-                          top: 1,
-                          end: 1,
-                          bottom: 1,
-                        ),
-                        icon: SvgPicture.asset('assets/icons/Plus.svg')),
-                  ),
+                        if (stateController.sessionManagerRestartable)
+                          IconButton(
+                              onPressed: () {
+                                telepathy.restartManager();
+                              },
+                              constraints: const BoxConstraints(
+                                maxWidth: 36,
+                                maxHeight: 36,
+                              ),
+                              padding: const EdgeInsetsDirectional.only(
+                                start: 1,
+                                top: 1,
+                                end: 1,
+                                bottom: 1,
+                              ),
+                              icon: SvgPicture.asset('assets/icons/Restart.svg',
+                                  colorFilter: const ColorFilter.mode(
+                                      Color(0xFFdc2626), BlendMode.srcIn),
+                                  semanticsLabel: 'Restart session manager')),
+                      ],
+                    ),
                 ],
               )),
-          const SizedBox(height: 10.0),
+          SizedBox(height: isCompact ? 2.5 : 10),
           Flexible(
             fit: FlexFit.loose,
             child: Container(
@@ -78,7 +132,7 @@ class ContactsList extends StatelessWidget {
               ),
               padding: const EdgeInsets.symmetric(vertical: 3),
               child: LayoutBuilder(builder: (context, constraints) {
-                final itemHeight = constraints.maxHeight / 3;
+                final itemHeight = constraints.maxHeight / (isCompact ? 2 : 3);
 
                 return ListView.builder(
                   itemCount: items.length,
