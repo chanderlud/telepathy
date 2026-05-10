@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:provider/provider.dart';
@@ -24,7 +23,7 @@ class ContactsList extends StatelessWidget {
     final stateController = context.watch<StateController>();
     final telepathy = context.read<Telepathy>();
     final bool sessionManagerActive = stateController.sessionManagerActive;
-    final bool isCompact = context.isCompactContacts;
+    final bool isCompact = context.isCompactContacts || context.isCompactWide;
     final List<Object> items = [
       ...contacts,
       ...rooms,
@@ -115,8 +114,7 @@ class ContactsList extends StatelessWidget {
                                 end: 1,
                                 bottom: 1,
                               ),
-                              icon: SvgPicture.asset(
-                                  'assets/icons/Restart.svg',
+                              icon: SvgPicture.asset('assets/icons/Restart.svg',
                                   colorFilter: const ColorFilter.mode(
                                       Color(0xFFdc2626), BlendMode.srcIn),
                                   semanticsLabel: 'Restart session manager')),

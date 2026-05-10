@@ -237,7 +237,8 @@ class _CallControlsState extends State<CallControls> {
                                   !Platform.isIOS)
                                 IconButton(
                                     onPressed: () async {
-                                      if (stateController.activeContact == null) {
+                                      if (stateController.activeContact ==
+                                          null) {
                                         return;
                                       }
 

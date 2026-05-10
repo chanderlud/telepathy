@@ -8,6 +8,7 @@ extension LayoutContext on BuildContext {
   bool get isCompactControls =>
       MediaQuery.sizeOf(this).height < AppConstants.compactHeightBreakpoint;
 
-  bool get isCompactContacts =>
-      isCompactControls && !isWideLayout;
+  bool get isCompactWide => isWideLayout && isCompactControls;
+
+  bool get isCompactContacts => isCompactControls && !isWideLayout;
 }

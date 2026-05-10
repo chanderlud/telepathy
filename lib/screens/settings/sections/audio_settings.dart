@@ -86,8 +86,7 @@ class _AudioSettingsState extends State<AudioSettings> {
                   selectedInputDevice: audioSettingsController.inputDeviceId,
                   selectedOutputDevice: audioSettingsController.outputDeviceId,
                 ),
-                builder:
-                    (BuildContext context, _DeviceDropdownState state, _) {
+                builder: (BuildContext context, _DeviceDropdownState state, _) {
                   final inputInitialSelection =
                       state.selectedInputDevice != null &&
                               state.inputDevices
@@ -95,12 +94,12 @@ class _AudioSettingsState extends State<AudioSettings> {
                           ? state.selectedInputDevice!
                           : '';
 
-                  final outputInitialSelection =
-                      state.selectedOutputDevice != null &&
-                              state.outputDevices.any(
-                                  (d) => d.id == state.selectedOutputDevice)
-                          ? state.selectedOutputDevice!
-                          : '';
+                  final outputInitialSelection = state.selectedOutputDevice !=
+                              null &&
+                          state.outputDevices
+                              .any((d) => d.id == state.selectedOutputDevice)
+                      ? state.selectedOutputDevice!
+                      : '';
 
                   final double width = widget.constraints.maxWidth < 650
                       ? widget.constraints.maxWidth

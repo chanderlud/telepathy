@@ -24,14 +24,18 @@ class HomePage extends StatelessWidget {
                 const Widget contactsList = SortedContactsList();
 
                 if (constraints.maxWidth > AppConstants.wideLayoutBreakpoint) {
+                  final bool isCompactWide = context.isCompactWide;
                   return Column(
                     children: [
                       Consumer<StateController>(
                         builder: (BuildContext context,
                             StateController stateController, Widget? child) {
                           return Container(
-                              constraints: const BoxConstraints(
-                                  maxHeight: AppConstants.topSectionMaxHeightWide),
+                              constraints: BoxConstraints(
+                                  maxHeight: isCompactWide
+                                      ? AppConstants
+                                          .topSectionMaxHeightWideCompact
+                                      : AppConstants.topSectionMaxHeightWide),
                               child: Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [

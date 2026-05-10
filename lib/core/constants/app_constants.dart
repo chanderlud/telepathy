@@ -7,6 +7,7 @@ class AppConstants {
   static const double wideLayoutBreakpoint = 600.0;
   static const double compactHeightBreakpoint = 690.0;
   static const double topSectionMaxHeightWide = 275.0;
+  static const double topSectionMaxHeightWideCompact = 170.0;
   static const double topSectionMaxHeightNarrowCompact = 170.0;
   static const double topSectionMaxHeightNarrow = 250.0;
 
