@@ -99,12 +99,15 @@ class HomePage extends StatelessWidget {
                     ],
                   );
                 } else {
+                  final bool isCompact =
+                      MediaQuery.of(context).size.height < 700;
                   return Column(children: [
                     Container(
-                      constraints: const BoxConstraints(maxHeight: 250),
+                      constraints:
+                          BoxConstraints(maxHeight: isCompact ? 170 : 250),
                       child: contactsList,
                     ),
-                    const SizedBox(height: 20),
+                    SizedBox(height: isCompact ? 10 : 20),
                     HomeTabView(
                         widgetOne: const CallControls(),
                         widgetTwo: const Padding(

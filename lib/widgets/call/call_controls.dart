@@ -61,12 +61,6 @@ class _CallControlsState extends State<CallControls> {
             body = Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                const SizedBox(width: 15),
-                const Text('Session Manager Inactive',
-                    style: TextStyle(fontSize: 16, color: Color(0xFFdc2626))),
-                stateController.sessionManagerRestartable
-                    ? const Spacer()
-                    : const SizedBox(width: 10),
                 stateController.sessionManagerRestartable
                     ? IconButton(
                         onPressed: () {
@@ -77,7 +71,6 @@ class _CallControlsState extends State<CallControls> {
                                 Color(0xFFdc2626), BlendMode.srcIn),
                             semanticsLabel: 'Restart session manager'))
                     : const SizedBox.shrink(),
-                const SizedBox(width: 5),
               ],
             );
           }
