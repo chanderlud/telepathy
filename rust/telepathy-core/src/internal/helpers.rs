@@ -295,7 +295,8 @@ where
         &self,
         codec_options: (bool, bool, f32),
         statistics_state: &StatisticsCollectorState,
-        end_call: &Arc<Notify>,
+        _end_call: &Arc<Notify>,
+        audio_error: &Arc<Notify>,
     ) -> Result<InputHelper> {
         let (codec_enabled, vbr, residual_bits) = codec_options;
         // Channel for receiving processed audio data
@@ -307,7 +308,7 @@ where
             .rms_threshold_shared(&self.core_state.rms_threshold)
             .muted_shared(&self.core_state.muted)
             .rms_shared(&statistics_state.input_rms)
-            .on_error(end_call)
+            .on_error(audio_error)
             .sink(KanalSink::new(sender));
 
         if codec_enabled {
@@ -346,7 +347,8 @@ where
         remote_sample_rate: f64,
         codec_enabled: bool,
         statistics_state: &StatisticsCollectorState,
-        end_call: Arc<Notify>,
+        _end_call: Arc<Notify>,
+        audio_error: Arc<Notify>,
     ) -> Result<OutputHelper> {
         // Get device ID
         let device_id = self.core_state.output_device.lock().await.clone();
@@ -362,7 +364,7 @@ where
             .rms_shared(&statistics_state.output_rms)
             .loss_shared(&statistics_state.loss)
             .codec(codec_enabled)
-            .on_error(end_call)
+            .on_error(audio_error)
             .build(&self.host)?;
 
         Ok(OutputHelper::new(handle, sender))

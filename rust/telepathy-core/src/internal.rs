@@ -54,6 +54,13 @@ const SESSION_MAX_FRAME_LENGTH: usize = 1024 * 1024 * 1024;
 /// How long to attempt direct connection upgrade before falling back to a relayed option
 const DCUTR_TIMEOUT: Duration = Duration::from_secs(5);
 
+const WATCHDOG_CHANNEL_CAPACITY: usize = 64;
+const SESSION_RETRY_BACKOFF_BASE: Duration = Duration::from_millis(500);
+const SESSION_RETRY_MAX: u32 = 5;
+const CALL_RETRY_BACKOFF: Duration = Duration::from_millis(750);
+const CALL_RETRY_MAX: u32 = 3;
+const AUDIO_DEFAULT_FALLBACK_RETRIES: u32 = 2;
+
 pub(crate) struct TelepathyHandle<C, S, H>
 where
     C: CoreCallbacks<S> + Send + Sync + 'static,
@@ -95,8 +102,8 @@ where
     }
 
     pub async fn start_manager(&mut self) {
-        if let Some(handle) = self.inner.start_manager().await {
-            self.handles.lock().await.push(handle);
+        if let Some(handles) = self.inner.start_manager().await {
+            self.handles.lock().await.extend(handles);
         }
     }
 

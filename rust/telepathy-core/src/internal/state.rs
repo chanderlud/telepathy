@@ -288,6 +288,9 @@ pub(crate) struct SessionState {
     pub(crate) end_call: Arc<Notify>,
 
     pub(crate) stop_screenshare: Arc<Mutex<Option<Arc<Notify>>>>,
+
+    /// Set when `call_handshake` emits `CallFailedSessionAlive` so `session_outer` does not duplicate it.
+    pub(crate) call_failed_watchdog_emitted: AtomicBool,
 }
 
 impl SessionState {
@@ -307,6 +310,7 @@ impl SessionState {
             download_bandwidth: Default::default(),
             end_call: Default::default(),
             stop_screenshare: Default::default(),
+            call_failed_watchdog_emitted: AtomicBool::new(false),
         }
     }
 

@@ -17,8 +17,10 @@ use crate::internal::utils::{
     stream_to_audio_transport, write_message,
 };
 use crate::internal::{
-    DCUTR_TIMEOUT, EarlyCallState, HELLO_TIMEOUT, KEEP_ALIVE, RoomState, SESSION_MAX_FRAME_LENGTH,
-    SESSION_PROTOCOL, SessionState,
+    AUDIO_DEFAULT_FALLBACK_RETRIES, CALL_RETRY_BACKOFF, CALL_RETRY_MAX, DCUTR_TIMEOUT,
+    EarlyCallState, HELLO_TIMEOUT, KEEP_ALIVE, RoomState, SESSION_MAX_FRAME_LENGTH,
+    SESSION_PROTOCOL, SESSION_RETRY_BACKOFF_BASE, SESSION_RETRY_MAX, SessionState,
+    WATCHDOG_CHANNEL_CAPACITY,
 };
 use crate::internal::{Result, STREAM_PROTOCOL};
 use crate::overlay::CONNECTED;
@@ -32,7 +34,8 @@ use libp2p::multiaddr::Protocol;
 use libp2p::swarm::SwarmEvent;
 use libp2p::{PeerId, Stream, dcutr::Event as DcutrEvent, identify::Event as IdentifyEvent};
 use libp2p_stream::Control;
-use std::collections::HashMap;
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
@@ -43,6 +46,7 @@ use telepathy_audio::devices::AudioHost;
 use tokio::select;
 #[cfg(target_family = "wasm")]
 use tokio::sync::Mutex;
+use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::{Receiver, Sender, channel};
 use tokio::sync::{Notify, RwLock};
 #[cfg(not(target_family = "wasm"))]
@@ -56,6 +60,76 @@ use uuid::Uuid;
 use wasmtimer::std::Instant;
 #[cfg(target_family = "wasm")]
 use wasmtimer::tokio::{Interval, interval, sleep_until, timeout};
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum AudioErrorSource {
+    MidCall,
+    IncomingSetup,
+    OutgoingSetup,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SessionInnerOutcome {
+    /// Run `session_outer`'s loop again.
+    Continue,
+    /// Session task ends; watchdog may retry.
+    End,
+    /// `stop_session` cancelled the task; do not retry.
+    IntentionalStop,
+}
+
+#[derive(Debug)]
+pub(crate) enum WatchdogEvent {
+    ManagerRestarted,
+    SessionInitFailed {
+        peer: PeerId,
+        partial_connections: bool,
+        error: String,
+    },
+    SessionOpenGaveUp {
+        peer: PeerId,
+        retries: usize,
+    },
+    SessionReady {
+        peer: PeerId,
+    },
+    SessionEnded {
+        peer: PeerId,
+        in_call: bool,
+        in_room: bool,
+        error: Option<String>,
+        /// User stopped the session (e.g. deleted contact); do not auto-retry.
+        intentional_stop: bool,
+    },
+    SessionErrorWhileCallActive {
+        peer: PeerId,
+        in_room: bool,
+        error: String,
+    },
+    CallFailedSessionAlive {
+        peer: PeerId,
+        error: String,
+    },
+    AudioDeviceError {
+        peer: PeerId,
+        source: AudioErrorSource,
+    },
+}
+
+pub(crate) type WatchdogSender = Sender<WatchdogEvent>;
+
+fn watchdog_event_kind(event: &WatchdogEvent) -> &'static str {
+    match event {
+        WatchdogEvent::ManagerRestarted => "ManagerRestarted",
+        WatchdogEvent::SessionInitFailed { .. } => "SessionInitFailed",
+        WatchdogEvent::SessionOpenGaveUp { .. } => "SessionOpenGaveUp",
+        WatchdogEvent::SessionReady { .. } => "SessionReady",
+        WatchdogEvent::SessionEnded { .. } => "SessionEnded",
+        WatchdogEvent::SessionErrorWhileCallActive { .. } => "SessionErrorWhileCallActive",
+        WatchdogEvent::CallFailedSessionAlive { .. } => "CallFailedSessionAlive",
+        WatchdogEvent::AudioDeviceError { .. } => "AudioDeviceError",
+    }
+}
 
 pub(crate) struct TelepathyCore<C, S, H>
 where
@@ -80,6 +154,8 @@ where
 
     /// Signals the session manager to start a screenshare
     pub(crate) start_screenshare: Option<Sender<StartScreenshare>>,
+
+    pub(crate) watchdog_tx: Option<WatchdogSender>,
 
     /// Restarts the session manager when needed
     pub(crate) restart_manager: Arc<Notify>,
@@ -123,6 +199,7 @@ where
             session_states: Default::default(),
             start_session: None,
             start_screenshare: None,
+            watchdog_tx: None,
             restart_manager: Default::default(),
             overlay: overlay.clone(),
             #[cfg(target_family = "wasm")]
@@ -132,9 +209,9 @@ where
         }
     }
 
-    /// Spawns the manager & returns the handle if no manager exists yet
+    /// Spawns the manager & returns handles if no manager exists yet
     #[instrument(name = "manager.spawn", skip_all)]
-    pub(crate) async fn start_manager(&mut self) -> Option<JoinHandle<()>> {
+    pub(crate) async fn start_manager(&mut self) -> Option<Vec<JoinHandle<()>>> {
         // only allow one manager
         if self.start_screenshare.is_some() || self.start_session.is_some() {
             return None;
@@ -146,9 +223,22 @@ where
         self.start_session = Some(start_session);
         self.start_screenshare = Some(start_screenshare);
 
+        let (watchdog_tx, watchdog_rx) = channel(WATCHDOG_CHANNEL_CAPACITY);
+        self.watchdog_tx = Some(watchdog_tx);
+
+        let mut watchdog_clone = self.clone();
+        // Watchdog must not hold a sender for its own channel or recv() never closes.
+        watchdog_clone.watchdog_tx = None;
+        let watchdog_handle = spawn_task(
+            async move {
+                watchdog_clone.watchdog(watchdog_rx).await;
+            }
+            .in_current_span(),
+        );
+
         // start the session manager
         let manager_clone = self.clone();
-        Some(spawn_task(
+        let manager_handle = spawn_task(
             async move {
                 let mut retries = 0;
                 // break when stop_manager==true
@@ -183,7 +273,367 @@ where
                 }
             }
             .in_current_span(),
-        ))
+        );
+
+        Some(vec![watchdog_handle, manager_handle])
+    }
+
+    async fn emit_watchdog(&self, event: WatchdogEvent) {
+        let Some(tx) = self.watchdog_tx.as_ref() else {
+            return;
+        };
+        let dropped_event_kind = watchdog_event_kind(&event);
+        match tx.try_send(event) {
+            Ok(()) => {}
+            Err(TrySendError::Full(_)) => {
+                warn!(
+                    event = "watchdog_event_dropped",
+                    reason = "full",
+                    dropped_event_kind
+                );
+            }
+            Err(TrySendError::Closed(_)) => {
+                warn!(
+                    event = "watchdog_event_dropped",
+                    reason = "closed",
+                    dropped_event_kind
+                );
+            }
+        }
+    }
+
+    #[instrument(name = "watchdog.run", skip_all)]
+    async fn watchdog(self, mut rx: Receiver<WatchdogEvent>) {
+        #[derive(Eq, PartialEq, Ord, PartialOrd, Clone, Copy, Debug)]
+        enum ScheduledAction {
+            RetrySession(PeerId),
+            RetryCall(PeerId),
+        }
+
+        #[derive(Clone, Copy, Debug)]
+        struct AudioRetryState {
+            fell_back_to_default: bool,
+            retries: u32,
+        }
+
+        let mut session_retries: HashMap<PeerId, u32> = HashMap::new();
+        let mut call_retries: HashMap<PeerId, u32> = HashMap::new();
+        let mut pending_resume: HashSet<PeerId> = HashSet::new();
+        let mut audio_state: HashMap<PeerId, AudioRetryState> = HashMap::new();
+        let mut scheduled: BinaryHeap<Reverse<(Instant, ScheduledAction)>> = BinaryHeap::new();
+
+        let schedule_session_retry = |peer: PeerId,
+                                          session_retries: &mut HashMap<PeerId, u32>,
+                                          scheduled: &mut BinaryHeap<
+            Reverse<(Instant, ScheduledAction)>,
+        >| {
+            let n = session_retries.entry(peer).or_insert(0);
+            if *n >= SESSION_RETRY_MAX {
+                warn!(event = "watchdog_session_retries_exhausted", peer.id = %peer);
+                return;
+            }
+            *n += 1;
+            let pow = 2u32.saturating_pow((*n).saturating_sub(1));
+            let delay = SESSION_RETRY_BACKOFF_BASE * pow;
+            scheduled.push(Reverse((Instant::now() + delay, ScheduledAction::RetrySession(peer))));
+        };
+
+        macro_rules! drain_scheduled_actions {
+            () => {
+                while let Some(Reverse((when, _))) = scheduled.peek() {
+                    if *when > Instant::now() {
+                        break;
+                    }
+                    let Reverse((_, action)) = scheduled.pop().unwrap();
+                    if self.core_state.stop_manager.load(Relaxed) {
+                        break;
+                    }
+                    match action {
+                        ScheduledAction::RetrySession(peer) => {
+                            if self.core_state.stop_manager.load(Relaxed) {
+                                continue;
+                            }
+                            if let Some(s) = self.start_session.as_ref() {
+                                let _ = s.send(peer).await;
+                            }
+                        }
+                        ScheduledAction::RetryCall(peer) => {
+                            if let Some(state) =
+                                self.session_states.read().await.get(&peer).cloned()
+                            {
+                                state.start_call.notify_one();
+                            }
+                        }
+                    }
+                }
+            };
+        }
+
+        loop {
+            if self.core_state.stop_manager.load(Relaxed) {
+                break;
+            }
+
+            let channel_closed = tokio::select! {
+                event_opt = rx.recv() => {
+                    match event_opt {
+                        None => true,
+                        Some(event) => {
+                            match event {
+                        WatchdogEvent::ManagerRestarted => {
+                            session_retries.clear();
+                            call_retries.clear();
+                            pending_resume.clear();
+                            audio_state.clear();
+                            scheduled.clear();
+                        }
+                        WatchdogEvent::SessionInitFailed {
+                            peer,
+                            partial_connections: true,
+                            error,
+                        } => {
+                            debug!(
+                                event = "watchdog_session_init_failed_retry",
+                                peer.id = %peer,
+                                error = %error
+                            );
+                            schedule_session_retry(peer, &mut session_retries, &mut scheduled);
+                        }
+                        WatchdogEvent::SessionOpenGaveUp { peer, retries } => {
+                            debug!(
+                                event = "watchdog_session_open_gave_up_retry",
+                                peer.id = %peer,
+                                retries
+                            );
+                            schedule_session_retry(peer, &mut session_retries, &mut scheduled);
+                        }
+                        WatchdogEvent::SessionInitFailed {
+                            peer,
+                            partial_connections: false,
+                            error,
+                        } => {
+                            debug!(
+                                event = "watchdog_session_init_failed_reset",
+                                peer.id = %peer,
+                                error = %error
+                            );
+                            session_retries.insert(peer, 0);
+                        }
+                        WatchdogEvent::SessionEnded {
+                            peer,
+                            in_call,
+                            in_room,
+                            error,
+                            intentional_stop,
+                        } => {
+                            debug!(
+                                event = "watchdog_session_ended",
+                                peer.id = %peer,
+                                in_call,
+                                in_room,
+                                intentional_stop,
+                                ?error
+                            );
+                            if !intentional_stop {
+                                if in_call && !in_room {
+                                    pending_resume.insert(peer);
+                                }
+                                schedule_session_retry(peer, &mut session_retries, &mut scheduled);
+                            }
+                        }
+                        WatchdogEvent::SessionErrorWhileCallActive {
+                            peer,
+                            in_room: false,
+                            error,
+                        } => {
+                            debug!(
+                                event = "watchdog_session_error_call_active",
+                                peer.id = %peer,
+                                error = %error
+                            );
+                            pending_resume.insert(peer);
+                            schedule_session_retry(peer, &mut session_retries, &mut scheduled);
+                        }
+                        WatchdogEvent::SessionErrorWhileCallActive {
+                            peer,
+                            in_room: true,
+                            error,
+                        } => {
+                            debug!(
+                                event = "watchdog_session_error_call_active_room",
+                                peer.id = %peer,
+                                error = %error
+                            );
+                        }
+                        WatchdogEvent::SessionReady { peer } => {
+                            session_retries.insert(peer, 0);
+                            if pending_resume.remove(&peer) {
+                                if let Some(state) =
+                                    self.session_states.read().await.get(&peer).cloned()
+                                {
+                                    state.start_call.notify_one();
+                                }
+                            }
+                        }
+                        WatchdogEvent::CallFailedSessionAlive { peer, error } => {
+                            debug!(
+                                event = "watchdog_call_failed_session_alive",
+                                peer.id = %peer,
+                                error = %error
+                            );
+                            let n = call_retries.entry(peer).or_insert(0);
+                            *n += 1;
+                            if *n < CALL_RETRY_MAX {
+                                scheduled.push(Reverse((
+                                    Instant::now() + CALL_RETRY_BACKOFF,
+                                    ScheduledAction::RetryCall(peer),
+                                )));
+                            } else {
+                                warn!(event = "watchdog_call_retries_exhausted", peer.id = %peer);
+                            }
+                        }
+                        WatchdogEvent::AudioDeviceError {
+                            peer,
+                            source: AudioErrorSource::MidCall,
+                        } => {
+                            let st = audio_state.entry(peer).or_insert(AudioRetryState {
+                                fell_back_to_default: false,
+                                retries: 0,
+                            });
+                            if !st.fell_back_to_default {
+                                let mut cleared = false;
+                                {
+                                    let mut in_dev = self.core_state.input_device.lock().await;
+                                    if in_dev.is_some() {
+                                        warn!(
+                                            event = "audio_device_fallback_cleared_input",
+                                            peer.id = %peer,
+                                            source = "mid_call"
+                                        );
+                                        *in_dev = None;
+                                        cleared = true;
+                                    }
+                                }
+                                {
+                                    let mut out_dev = self.core_state.output_device.lock().await;
+                                    if out_dev.is_some() {
+                                        warn!(
+                                            event = "audio_device_fallback_cleared_output",
+                                            peer.id = %peer,
+                                            source = "mid_call"
+                                        );
+                                        *out_dev = None;
+                                        cleared = true;
+                                    }
+                                }
+                                if cleared {
+                                    st.fell_back_to_default = true;
+                                    scheduled.push(Reverse((
+                                        Instant::now() + CALL_RETRY_BACKOFF,
+                                        ScheduledAction::RetryCall(peer),
+                                    )));
+                                } else if st.retries < AUDIO_DEFAULT_FALLBACK_RETRIES {
+                                    st.retries += 1;
+                                    scheduled.push(Reverse((
+                                        Instant::now() + CALL_RETRY_BACKOFF,
+                                        ScheduledAction::RetryCall(peer),
+                                    )));
+                                } else {
+                                    self.callbacks
+                                        .call_state(CallState::CallEnded(
+                                            "audio device unavailable".into(),
+                                            true,
+                                        ))
+                                        .await;
+                                }
+                            } else if st.retries < AUDIO_DEFAULT_FALLBACK_RETRIES {
+                                st.retries += 1;
+                                scheduled.push(Reverse((
+                                    Instant::now() + CALL_RETRY_BACKOFF,
+                                    ScheduledAction::RetryCall(peer),
+                                )));
+                            } else {
+                                self.callbacks
+                                    .call_state(CallState::CallEnded(
+                                        "audio device unavailable".into(),
+                                        true,
+                                    ))
+                                    .await;
+                            }
+                        }
+                        WatchdogEvent::AudioDeviceError {
+                            peer,
+                            source: AudioErrorSource::IncomingSetup,
+                        } => {
+                            let st = audio_state.entry(peer).or_insert(AudioRetryState {
+                                fell_back_to_default: false,
+                                retries: 0,
+                            });
+                            st.fell_back_to_default = true;
+                            let mut in_dev = self.core_state.input_device.lock().await;
+                            if in_dev.is_some() {
+                                warn!(
+                                    event = "audio_device_fallback_cleared_input",
+                                    peer.id = %peer,
+                                    source = "incoming_setup"
+                                );
+                                *in_dev = None;
+                            }
+                        }
+                        WatchdogEvent::AudioDeviceError {
+                            peer,
+                            source: AudioErrorSource::OutgoingSetup,
+                        } => {
+                            let st = audio_state.entry(peer).or_insert(AudioRetryState {
+                                fell_back_to_default: false,
+                                retries: 0,
+                            });
+                            st.fell_back_to_default = true;
+                            let mut in_dev = self.core_state.input_device.lock().await;
+                            if in_dev.is_some() {
+                                warn!(
+                                    event = "audio_device_fallback_cleared_input",
+                                    peer.id = %peer,
+                                    source = "outgoing_setup"
+                                );
+                                *in_dev = None;
+                            }
+                            let n = call_retries.entry(peer).or_insert(0);
+                            *n += 1;
+                            if *n < CALL_RETRY_MAX {
+                                scheduled.push(Reverse((
+                                    Instant::now() + CALL_RETRY_BACKOFF,
+                                    ScheduledAction::RetryCall(peer),
+                                )));
+                            } else {
+                                warn!(event = "watchdog_call_retries_exhausted", peer.id = %peer);
+                            }
+                        }
+                    }
+
+                            false
+                        }
+                    }
+                }
+                _ = async {
+                    match scheduled.peek() {
+                        Some(Reverse((when, _))) => sleep_until(*when).await,
+                        None => std::future::pending::<()>().await,
+                    }
+                } => false,
+                _ = self.restart_manager.notified() => false,
+            };
+
+            drain_scheduled_actions!();
+
+            if channel_closed {
+                break;
+            }
+
+            if self.core_state.stop_manager.load(Relaxed) {
+                break;
+            }
+        }
     }
 
     /// Ends all sessions & restores session_states to default
@@ -242,6 +692,8 @@ where
         self.callbacks.manager_active(true, true).await;
         // the manager is about to start processing events
         self.core_state.manager_active.notify_waiters();
+
+        self.emit_watchdog(WatchdogEvent::ManagerRestarted).await;
 
         loop {
             // extract peers with single connection session states
@@ -309,6 +761,12 @@ where
                     // dial the peer through the relay
                     let status = if let Err(error) = swarm.dial(relay_address.clone().with(Protocol::P2p(peer_id))) {
                         error!(event = "dial_error", peer.id = %peer_id, error = %error);
+                        self.emit_watchdog(WatchdogEvent::SessionInitFailed {
+                            peer: peer_id,
+                            partial_connections: false,
+                            error: error.to_string(),
+                        })
+                        .await;
                         SessionStatus::Inactive
                     } else {
                         // insert a dialer peer state right away
@@ -482,6 +940,12 @@ where
                             self.callbacks
                                 .session_status(SessionStatus::Inactive, peer_id)
                                 .await;
+                            self.emit_watchdog(WatchdogEvent::SessionInitFailed {
+                                peer: peer_id,
+                                partial_connections: true,
+                                error: error.to_string(),
+                            })
+                            .await;
                         } else {
                             // session initialization is still possible
                             info!(
@@ -520,6 +984,7 @@ where
                     connection_id,
                     ..
                 } => {
+                    let had_peer_state = peer_states.contains_key(&peer_id);
                     let remove_state = if !swarm.is_connected(&peer_id) {
                         // if there is no connection to the peer, the session initialization failed
                         debug!(
@@ -530,6 +995,14 @@ where
                         self.callbacks
                             .session_status(SessionStatus::Inactive, peer_id)
                             .await;
+                        if had_peer_state {
+                            self.emit_watchdog(WatchdogEvent::SessionInitFailed {
+                                peer: peer_id,
+                                partial_connections: true,
+                                error: format!("{:?}", cause),
+                            })
+                            .await;
+                        }
                         true
                     } else if let Some(peer_state) = peer_states.get_mut(&peer_id) {
                         // untrack the connection
@@ -786,6 +1259,11 @@ where
                     self.callbacks
                         .session_status(SessionStatus::Inactive, peer)
                         .await;
+                    self.emit_watchdog(WatchdogEvent::SessionOpenGaveUp {
+                        peer,
+                        retries: retries as usize,
+                    })
+                    .await;
                 } else {
                     warn!(
                         event = "session_open_stream_error",
@@ -883,6 +1361,7 @@ where
             "listener"
         };
         Span::current().record("session.role", session_role);
+        self.emit_watchdog(WatchdogEvent::SessionReady { peer }).await;
         // controls keep alive messages
         let mut keep_alive = interval(KEEP_ALIVE);
         // the length delimited transport used for the session
@@ -895,6 +1374,9 @@ where
         if self.is_in_room(&peer).await && control.is_some() {
             state.start_call.notify_one();
         }
+
+        let mut had_call = false;
+        let mut intentional_stop = false;
 
         loop {
             let result = self
@@ -909,29 +1391,55 @@ where
                 .await;
 
             match (result, contact.is_room_only) {
-                // the session was stopped
-                (Ok(false), _) => break,
+                // `stop_session` was invoked (e.g. contact removed)
+                (Ok(SessionInnerOutcome::IntentionalStop), _) => {
+                    intentional_stop = true;
+                    break;
+                }
+                // session ended (e.g. protocol reject); may retry
+                (Ok(SessionInnerOutcome::End), _) => break,
                 // room only sessions never continue
-                (Ok(true), true) => {
+                (Ok(SessionInnerOutcome::Continue), true) => {
                     info!(event = "session_room_only_completed", peer.id = %contact.peer_id);
                     break;
                 }
                 // normal session continue
-                (Ok(true), false) => {
+                (Ok(SessionInnerOutcome::Continue), false) => {
                     // the session is not in a call
                     debug!(event = "session_continuing_after_call");
+                    if state.in_call.load(Relaxed) {
+                        had_call = true;
+                    }
+                    self.emit_watchdog(WatchdogEvent::SessionReady { peer }).await;
                     state.in_call.store(false, Relaxed);
                 }
                 (Err(error), room_only) => {
                     // if an error occurred during a non-room call, it is ended now
-                    if state.in_call.swap(false, Relaxed)
-                        && !room_only
-                        && !self.is_in_room(&contact.peer_id).await
-                    {
+                    let was_in_call = state.in_call.swap(false, Relaxed);
+                    if was_in_call {
+                        had_call = true;
+                    }
+                    if was_in_call && !room_only && !self.is_in_room(&contact.peer_id).await {
                         warn!(event = "session_error_while_call_active", ?error);
+                        self.emit_watchdog(WatchdogEvent::SessionErrorWhileCallActive {
+                            peer: contact.peer_id,
+                            in_room: self.is_in_room(&contact.peer_id).await,
+                            error: error.to_string(),
+                        })
+                        .await;
                         self.callbacks
                             .call_state(CallState::CallEnded(error.to_string(), false))
                             .await;
+                    }
+
+                    if !error.is_session_critical()
+                        && !state.call_failed_watchdog_emitted.swap(false, Relaxed)
+                    {
+                        self.emit_watchdog(WatchdogEvent::CallFailedSessionAlive {
+                            peer: contact.peer_id,
+                            error: error.to_string(),
+                        })
+                        .await;
                     }
 
                     if room_only || error.is_session_critical() {
@@ -944,6 +1452,15 @@ where
                 }
             }
         }
+
+        self.emit_watchdog(WatchdogEvent::SessionEnded {
+            peer,
+            in_call: state.in_call.load(Relaxed) || had_call,
+            in_room: contact.is_room_only,
+            error: None,
+            intentional_stop,
+        })
+        .await;
 
         // if the state exists and has the same id, clean it up
         // if a new session state already exists with a new ID, we don't want to clean it up
@@ -978,7 +1495,7 @@ where
         state: &Arc<SessionState>,
         message_channel: &mut (Sender<ProtocolMessage>, Receiver<ProtocolMessage>),
         keep_alive: &mut Interval,
-    ) -> Result<bool> {
+    ) -> Result<SessionInnerOutcome> {
         let room_hash = self.room_hash().await;
         Span::current().record("room.hash", field::debug(room_hash));
         info!(event = "session_waiting_for_event");
@@ -986,7 +1503,7 @@ where
         select! {
             _ = state.stop_session.cancelled() => {
                 info!(event = "session_stopped");
-                Ok(false)
+                Ok(SessionInnerOutcome::IntentionalStop)
             },
             result = read_message(transport) => {
                 info!(event = "session_message_received", ?result);
@@ -999,7 +1516,7 @@ where
                         if !audio_header.is_valid() {
                             warn!(event = "invalid_audio_header_rejected");
                             write_message(transport, &ProtocolMessage::Reject).await?;
-                            return Ok(false);
+                            return Ok(SessionInnerOutcome::End);
                         }
 
                         remote_audio_header = audio_header;
@@ -1008,10 +1525,10 @@ where
                             other_ringtone = ringtone;
                         }
                     },
-                    ProtocolMessage::KeepAlive => return Ok(true),
+                    ProtocolMessage::KeepAlive => return Ok(SessionInnerOutcome::Continue),
                     message => {
                         warn!(event = "session_message_unexpected", ?message);
-                        return Ok(true);
+                        return Ok(SessionInnerOutcome::Continue);
                     }
                 }
 
@@ -1025,12 +1542,12 @@ where
                     // the call is part of a room, but the client is not in the room
                     info!(event = "room_call_rejected_not_in_room");
                     write_message(transport, &ProtocolMessage::Reject).await?;
-                    return Ok(true);
+                    return Ok(SessionInnerOutcome::Continue);
                 } else if self.is_call_active().await {
                     // do not accept another call if already active
                     info!(event = "call_busy_sent_call_already_active");
                     write_message(transport, &ProtocolMessage::Busy).await?;
-                    return Ok(true);
+                    return Ok(SessionInnerOutcome::Continue);
                 } else {
                     let cancel = Arc::new(Notify::new());
                     accept_handle = Some(self.callbacks.get_accept_handle(&contact.id, other_ringtone, &cancel));
@@ -1063,13 +1580,13 @@ where
                         if let Some(cancel) = cancel_prompt {
                             cancel.notify_one();
                         }
-                        return Ok(false);
+                        return Ok(SessionInnerOutcome::IntentionalStop);
                     }
                     accepted = accept_future => {
                         if !accepted? {
                             // reject the call if not accepted
                             write_message(transport, &ProtocolMessage::Reject).await?;
-                            return Ok(true);
+                            return Ok(SessionInnerOutcome::Continue);
                         }
 
                         match self.setup_call(contact.peer_id).await {
@@ -1090,6 +1607,13 @@ where
                             Err(error) => {
                                 // if the audio input setup fails, other client will be left hanging
                                 error!(event = "setup_call_failed", ?error);
+                                if error.is_audio_error() {
+                                    self.emit_watchdog(WatchdogEvent::AudioDeviceError {
+                                        peer: contact.peer_id,
+                                        source: AudioErrorSource::IncomingSetup,
+                                    })
+                                    .await;
+                                }
                                 write_message(transport, &ProtocolMessage::Goodbye {
                                     reason: Some("audio device error".to_string())
                                 }).await?;
@@ -1110,7 +1634,7 @@ where
                     }
                 }
 
-                Ok(true)
+                Ok(SessionInnerOutcome::Continue)
             }
             _ = state.start_call.notified() => {
                 // limits session restarts
@@ -1120,7 +1644,19 @@ where
                 // load custom ringtone if enabled
                 let other_ringtone = self.load_ringtone().await;
                 // initialize call state
-                let mut call_state = self.setup_call(contact.peer_id).await?;
+                let mut call_state = match self.setup_call(contact.peer_id).await {
+                    Ok(s) => s,
+                    Err(error) => {
+                        if error.is_audio_error() {
+                            self.emit_watchdog(WatchdogEvent::AudioDeviceError {
+                                peer: contact.peer_id,
+                                source: AudioErrorSource::OutgoingSetup,
+                            })
+                            .await;
+                        }
+                        return Err(error);
+                    }
+                };
                 // when custom ringtone is used wait longer for a response to account for extra data being sent in Hello
                 let hello_timeout = HELLO_TIMEOUT + if other_ringtone.is_some() { Duration::from_secs(10) } else { Default::default() };
                 // queries the other client for a call
@@ -1130,7 +1666,7 @@ where
                     select! {
                         _ = state.stop_session.cancelled() => {
                             info!(event = "session_stopped_waiting_hello_ack");
-                            return Ok(false);
+                            return Ok(SessionInnerOutcome::IntentionalStop);
                         }
                         _ = state.end_call.notified() => {
                             // gracefully end the call & continue the session
@@ -1222,12 +1758,12 @@ where
                     }
                 }
 
-                Ok(true)
+                Ok(SessionInnerOutcome::Continue)
             }
             _ = keep_alive.tick() => {
                 debug!(event = "session_keep_alive_sent");
                 write_message(transport, &ProtocolMessage::KeepAlive).await?;
-                Ok(true)
+                Ok(SessionInnerOutcome::Continue)
             },
         }
     }
@@ -1246,6 +1782,7 @@ where
         state: &Arc<SessionState>,
         call_state: EarlyCallState,
     ) -> Result<()> {
+        let peer = call_state.peer;
         let stream = state.open_stream(control, &call_state).await?;
         // stop_io must always cancel, even when the call fails
         let stop_io = CancellationToken::new();
@@ -1280,6 +1817,14 @@ where
             warn!(event = "call_handshake_sending_error_goodbye", ?error);
             let message = ProtocolMessage::error_goodbye(error);
             write_message(transport, &message).await?;
+            if !error.is_session_critical() {
+                state.call_failed_watchdog_emitted.store(true, Relaxed);
+                self.emit_watchdog(WatchdogEvent::CallFailedSessionAlive {
+                    peer,
+                    error: error.to_string(),
+                })
+                .await;
+            }
         }
 
         result
@@ -1316,9 +1861,17 @@ where
         // the two clients agree on these codec options
         let codec_config = call_state.codec_config();
 
+        let peer = call_state.peer;
+        let audio_error = Arc::new(Notify::new());
+
         // Setup input (stream is managed internally)
         let mut input_helper = self
-            .setup_input(codec_config, &statistics_state, end_call)
+            .setup_input(
+                codec_config,
+                &statistics_state,
+                end_call,
+                &audio_error,
+            )
             .await?;
 
         // Setup output (stream is managed internally)
@@ -1328,8 +1881,33 @@ where
                 codec_config.0,
                 &statistics_state,
                 end_call.clone(),
+                audio_error.clone(),
             )
             .await?;
+
+        let audio_supervisor = {
+            let self_clone = self.clone();
+            let end_call_clone = end_call.clone();
+            let stop_io_clone = stop_io.clone();
+            let audio_error_clone = audio_error.clone();
+            spawn_task(
+                async move {
+                    select! {
+                        _ = stop_io_clone.cancelled() => {}
+                        _ = audio_error_clone.notified() => {
+                            self_clone
+                                .emit_watchdog(WatchdogEvent::AudioDeviceError {
+                                    peer,
+                                    source: AudioErrorSource::MidCall,
+                                })
+                                .await;
+                            end_call_clone.notify_one();
+                        }
+                    }
+                }
+                .in_current_span(),
+            )
+        };
 
         let statistics_handle = spawn_task(statistics_collector(
             statistics_state,
@@ -1430,6 +2008,7 @@ where
         }
         // join background tasks
         statistics_handle.await?;
+        let _ = audio_supervisor.await;
         // dropping input and output handles cleans up resources
         debug!(event = "call_teardown_done");
         Ok(())
@@ -1586,12 +2165,29 @@ where
         // tracks connection state for peers
         let mut connections = HashMap::new();
 
+        let room_audio_error = Arc::new(Notify::new());
+        let room_audio_fwd = room_audio_error.clone();
+        let end_fwd = end_call.clone();
+        let stop_fwd = stop_io.clone();
+        spawn_task(
+            async move {
+                select! {
+                    _ = stop_fwd.cancelled() => {}
+                    _ = room_audio_fwd.notified() => {
+                        end_fwd.notify_one();
+                    }
+                }
+            }
+            .in_current_span(),
+        );
+
         // Setup input (stream is managed internally)
         let mut input_helper = self
             .setup_input(
                 (true, true, 5_f32), // hard coded room codec options
                 &statistics_state,
                 &end_call,
+                &room_audio_error,
             )
             .await?;
 
@@ -1636,6 +2232,7 @@ where
                                     true,
                                     &statistics_state,
                                     end_call.clone(),
+                                    room_audio_error.clone(),
                                 )
                                 .await?;
                             // begin sending
@@ -1718,6 +2315,7 @@ where
             session_states: Arc::clone(&self.session_states),
             start_session: self.start_session.clone(),
             start_screenshare: self.start_screenshare.clone(),
+            watchdog_tx: self.watchdog_tx.clone(),
             restart_manager: Arc::clone(&self.restart_manager),
             overlay: self.overlay.clone(),
             #[cfg(target_family = "wasm")]
