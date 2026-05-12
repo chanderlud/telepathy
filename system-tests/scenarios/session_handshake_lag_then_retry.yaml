@@ -1,0 +1,85 @@
+name: session_handshake_lag_then_retry
+steps:
+  - actor: alice
+    expect_event:
+      type: ready
+      timeout: 10.0
+      match:
+        version: "*"
+  - actor: bob
+    expect_event:
+      type: ready
+      timeout: 10.0
+      match:
+        version: "*"
+  - block_namespace:
+      actor: bob
+      duration: 4.0
+      wait: false
+  - sleep: 0.5
+  - actor: alice
+    send:
+      cmd: add_contact
+      args:
+        contact_id: bob
+        peer_id: ${bob.peer_id}
+    expect_ack:
+      ok: true
+  - actor: bob
+    send:
+      cmd: add_contact
+      args:
+        contact_id: alice
+        peer_id: ${alice.peer_id}
+    expect_ack:
+      ok: true
+  - actor: alice
+    send:
+      cmd: start_session
+      args:
+        contact_id: bob
+    expect_ack:
+      ok: true
+  - actor: alice
+    expect_event:
+      type: session_status
+      timeout: 5.0
+      match:
+        status: Connecting
+  - sleep: 5.0
+  - actor: alice
+    send:
+      cmd: start_session
+      args:
+        contact_id: bob
+    expect_ack:
+      ok: true
+  - actor: alice
+    expect_event:
+      type: session_status
+      timeout: 30.0
+      match:
+        status: Connected
+        peer: ${bob.peer_id}
+  - actor: bob
+    expect_event:
+      type: session_status
+      timeout: 30.0
+      match:
+        status: Connected
+        peer: ${alice.peer_id}
+  - actor: alice
+    send:
+      cmd: send_chat
+      args:
+        contact_id: bob
+        text: "handshake recovery check"
+        attachments: []
+    expect_ack:
+      ok: true
+  - actor: bob
+    expect_event:
+      type: message_received
+      timeout: 15.0
+      match:
+        text: "handshake recovery check"

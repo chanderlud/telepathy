@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
 import re
@@ -8,6 +9,31 @@ import signal
 import uuid
 from contextlib import suppress
 from typing import Callable
+
+_BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+
+
+def peer_id_from_identity_key_b64(key_b64: str) -> str:
+    key_bytes = base64.b64decode(key_b64)
+    if len(key_bytes) != 68 or key_bytes[:4] != b"\x08\x01\x12\x40":
+        raise AssertionError("unexpected protobuf-encoded ed25519 private key format")
+
+    public_key = key_bytes[36:68]
+    protobuf_public_key = b"\x08\x01\x12\x20" + public_key
+    identity_multihash = b"\x00\x24" + protobuf_public_key
+    return _base58btc_encode(identity_multihash)
+
+
+def _base58btc_encode(raw: bytes) -> str:
+    value = int.from_bytes(raw, "big")
+    encoded = ""
+    while value > 0:
+        value, remainder = divmod(value, 58)
+        encoded = _BASE58_ALPHABET[remainder] + encoded
+
+    leading_zeroes = len(raw) - len(raw.lstrip(b"\x00"))
+    return ("1" * leading_zeroes) + (encoded or "1")
+
 
 _UNIT_COMMANDS = {
     "start_manager",
@@ -305,6 +331,25 @@ class CliProcess:
             elif kind == "event":
                 await self._events.put(msg)
 
+    async def _cleanup_after_exit(self, pending_error_message: str) -> None:
+        for pending in self._pending.values():
+            if not pending.done():
+                pending.set_exception(RuntimeError(pending_error_message))
+        self._pending.clear()
+
+        if self._stdout_task is not None:
+            self._stdout_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._stdout_task
+            self._stdout_task = None
+        if self._stderr_task is not None:
+            self._stderr_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._stderr_task
+            self._stderr_task = None
+
+        self._proc = None
+
     async def terminate(self) -> None:
         if self._proc is None:
             return
@@ -323,19 +368,46 @@ class CliProcess:
                 with suppress(Exception):
                     await self._proc.wait()
 
-        for pending in self._pending.values():
-            if not pending.done():
-                pending.set_exception(RuntimeError("CLI process terminated"))
-        self._pending.clear()
+        await self._cleanup_after_exit("CLI process terminated")
 
-        if self._stdout_task is not None:
-            self._stdout_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await self._stdout_task
-        if self._stderr_task is not None:
-            self._stderr_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await self._stderr_task
+    async def crash(self) -> None:
+        if self._proc is None or self._proc.returncode is not None:
+            return
+
+        self._proc.kill()
+        await self._proc.wait()
+        await self._cleanup_after_exit("CLI process crashed")
+
+    async def relaunch_same_identity(self, identity_key_b64: str) -> None:
+        prior_peer_id = self.identity_peer_id
+        if not isinstance(prior_peer_id, str):
+            raise AssertionError("relaunch_same_identity requires a prior identity_peer_id")
+
+        self._stdout_log.clear()
+        self._stderr_log.clear()
+        self._pending.clear()
+        while True:
+            try:
+                self._events.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+        self.identity_peer_id = None
+
+        # start() always assigns a new subprocess; _proc was cleared by crash()/terminate().
+        await self.start()
+
+        response = await self.send(
+            {"cmd": "set_identity", "args": {"key_b64": identity_key_b64}}
+        )
+        if not response.get("ok"):
+            raise AssertionError(f"set_identity after relaunch failed: {response}")
+
+        derived = peer_id_from_identity_key_b64(identity_key_b64)
+        if derived != prior_peer_id:
+            raise AssertionError(
+                f"identity key produced peer id {derived!r}, expected {prior_peer_id!r}"
+            )
+        self.identity_peer_id = prior_peer_id
 
     async def restart(self) -> None:
         await self.terminate()

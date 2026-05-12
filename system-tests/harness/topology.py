@@ -51,6 +51,101 @@ class TopologyManager:
                 f"stderr: {stderr.decode(errors='replace')}"
             )
 
+    async def _run_silent(self, *args: str) -> None:
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await proc.wait()
+
+    async def _run_in_namespace(self, namespace: str, *args: str) -> None:
+        await self._run("ip", "netns", "exec", namespace, *args)
+
+    async def block_namespace(self, namespace: str, duration_seconds: float) -> None:
+        iface = self._client_ifaces.get(namespace)
+        if iface is None:
+            raise AssertionError(f"unknown client namespace '{namespace}'")
+
+        inserted = False
+        try:
+            await self._run_in_namespace(
+                namespace,
+                "iptables",
+                "-A",
+                "INPUT",
+                "-i",
+                iface,
+                "-j",
+                "DROP",
+            )
+            await self._run_in_namespace(
+                namespace,
+                "iptables",
+                "-A",
+                "OUTPUT",
+                "-o",
+                iface,
+                "-j",
+                "DROP",
+            )
+            inserted = True
+            await asyncio.sleep(duration_seconds)
+        finally:
+            if inserted:
+                await self._run_silent(
+                    "ip",
+                    "netns",
+                    "exec",
+                    namespace,
+                    "iptables",
+                    "-D",
+                    "INPUT",
+                    "-i",
+                    iface,
+                    "-j",
+                    "DROP",
+                )
+                await self._run_silent(
+                    "ip",
+                    "netns",
+                    "exec",
+                    namespace,
+                    "iptables",
+                    "-D",
+                    "OUTPUT",
+                    "-o",
+                    iface,
+                    "-j",
+                    "DROP",
+                )
+
+    def block_namespace_for(
+        self, namespace: str, duration_seconds: float
+    ) -> asyncio.Task[None]:
+        return asyncio.create_task(self.block_namespace(namespace, duration_seconds))
+
+    async def restart_link(self, namespace: str, down_seconds: float = 0.5) -> None:
+        iface = self._client_ifaces.get(namespace)
+        if iface is None:
+            raise AssertionError(f"unknown client namespace '{namespace}'")
+
+        await self._run_in_namespace(namespace, "ip", "link", "set", iface, "down")
+        await asyncio.sleep(down_seconds)
+        await self._run_in_namespace(namespace, "ip", "link", "set", iface, "up")
+
+    async def flap_link(
+        self,
+        namespace: str,
+        count: int = 3,
+        down_seconds: float = 0.5,
+        up_seconds: float = 0.5,
+    ) -> None:
+        for index in range(count):
+            await self.restart_link(namespace, down_seconds)
+            if index < count - 1:
+                await asyncio.sleep(up_seconds)
+
     async def setup(
         self,
         num_clients: int,

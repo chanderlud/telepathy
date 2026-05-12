@@ -1,0 +1,106 @@
+name: session_after_peer_hard_crash
+steps:
+  - actor: alice
+    expect_event:
+      type: ready
+      timeout: 10.0
+      match:
+        version: "*"
+  - actor: bob
+    expect_event:
+      type: ready
+      timeout: 10.0
+      match:
+        version: "*"
+  - actor: alice
+    send:
+      cmd: add_contact
+      args:
+        contact_id: bob
+        peer_id: ${bob.peer_id}
+    expect_ack:
+      ok: true
+  - actor: bob
+    send:
+      cmd: add_contact
+      args:
+        contact_id: alice
+        peer_id: ${alice.peer_id}
+    expect_ack:
+      ok: true
+  - actor: alice
+    send:
+      cmd: start_session
+      args:
+        contact_id: bob
+    expect_ack:
+      ok: true
+  - actor: alice
+    expect_event:
+      type: session_status
+      timeout: 10.0
+      match:
+        status:
+          - Connecting
+          - Connected
+  - crash_actor: bob
+  - actor: alice
+    expect_event:
+      type: session_status
+      timeout: 30.0
+      match:
+        status:
+          - Inactive
+          - Unknown
+        peer: ${bob.peer_id}
+  - relaunch_actor:
+      actor: bob
+  - actor: bob
+    expect_event:
+      type: ready
+      timeout: 10.0
+      match:
+        version: "*"
+  - actor: bob
+    send:
+      cmd: start_manager
+      args: {}
+    expect_ack:
+      ok: true
+  - actor: bob
+    expect_event:
+      type: manager_active
+      timeout: 15.0
+      match:
+        active: true
+  - actor: bob
+    send:
+      cmd: add_contact
+      args:
+        contact_id: alice
+        peer_id: ${alice.peer_id}
+    expect_ack:
+      ok: true
+  # Second dial: verifies Alice's session manager accepts a fresh start_session against
+  # the resurrected peer (same peer-id), not implicit auto-reconnect alone.
+  - actor: alice
+    send:
+      cmd: start_session
+      args:
+        contact_id: bob
+    expect_ack:
+      ok: true
+  - actor: alice
+    expect_event:
+      type: session_status
+      timeout: 45.0
+      match:
+        status: Connected
+        peer: ${bob.peer_id}
+  - actor: bob
+    expect_event:
+      type: session_status
+      timeout: 45.0
+      match:
+        status: Connected
+        peer: ${alice.peer_id}

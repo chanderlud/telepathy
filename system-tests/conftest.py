@@ -74,7 +74,9 @@ def pytest_configure(config: pytest.Config) -> None:
 
 
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
-    if "iteration_id" not in metafunc.fixturenames:
+    if "topology" not in metafunc.fixturenames:
+        return
+    if "profile" not in metafunc.fixturenames:
         return
 
     iterations = int(metafunc.config.getoption("test_iterations") or 1)
@@ -203,11 +205,6 @@ def worker_tag() -> str:
 def iteration_id(request: pytest.FixtureRequest) -> str:
     param = getattr(request, "param", "0")
     return str(param)
-
-
-@pytest.fixture(autouse=True)
-def _attach_iteration_id(iteration_id: str) -> None:
-    _ = iteration_id
 
 
 @pytest.fixture(scope="session")
