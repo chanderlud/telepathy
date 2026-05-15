@@ -1,3 +1,6 @@
+### Agent Skills
+- Search .cursor/skills for relevant skills.
+
 ### Formatting and Lint Rules
 - Run `cargo fmt --manifest-path .\rust\Cargo.toml --all` in the project root directory after editing Rust files.
 - After editing Rust files in a specific package, run `cargo clippy --manifest-path .\rust\Cargo.toml -p <package_name>` from the project root directory.
