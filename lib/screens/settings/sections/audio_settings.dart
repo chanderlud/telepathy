@@ -229,7 +229,7 @@ class _AudioSettingsState extends State<AudioSettings> {
                         // set denoise to false
                         telepathy.setDenoise(denoise: false);
                       } else {
-                          // save denoise option
+                        // save denoise option
                         audioSettingsController.updateUseDenoise(true);
                         // save denoise model
                         audioSettingsController.setDenoiseModel(value);
