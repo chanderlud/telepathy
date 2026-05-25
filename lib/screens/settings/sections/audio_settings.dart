@@ -229,18 +229,15 @@ class _AudioSettingsState extends State<AudioSettings> {
                         // set denoise to false
                         telepathy.setDenoise(denoise: false);
                       } else {
-                        if (value == 'Vanilla') {
-                          value = null;
-                        }
-
-                        // save denoise option
+                          // save denoise option
                         audioSettingsController.updateUseDenoise(true);
                         // save denoise model
                         audioSettingsController.setDenoiseModel(value);
                         // set denoise to true
                         telepathy.setDenoise(denoise: true);
-                        // set denoise model
-                        updateDenoiseModel(value, telepathy);
+                        // set denoise model — pass null for Vanilla (built-in default)
+                        updateDenoiseModel(
+                            value == 'Vanilla' ? null : value, telepathy);
                       }
                     });
               },

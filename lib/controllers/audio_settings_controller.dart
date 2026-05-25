@@ -36,7 +36,7 @@ class AudioSettingsController with ChangeNotifier {
     soundVolume = await options.getDouble('soundVolume') ?? -10;
     inputSensitivity = await options.getDouble('inputSensitivity') ?? -16;
     useDenoise = await options.getBool('useDenoise') ?? true;
-    denoiseModel = await options.getString('denoiseModel') ?? 'Hogwash';
+    denoiseModel = await options.getString('denoiseModel') ?? 'Vanilla';
     outputDeviceId = await options.getString('outputDeviceId');
     inputDeviceId = await options.getString('inputDeviceId');
 

@@ -14,7 +14,7 @@ Future<List<int>> readAssetBytes(String assetName) async {
 }
 
 Future<void> updateDenoiseModel(String? model, Telepathy telepathy) async {
-  if (model == null) {
+  if (model == null || model == 'Vanilla') {
     telepathy.setModel(model: null);
     return;
   }
