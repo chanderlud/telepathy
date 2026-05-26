@@ -9,14 +9,11 @@ use std::sync::Arc;
 #[cfg(not(target_family = "wasm"))]
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
-
+use bytes::Bytes;
+use iroh::endpoint::Connection;
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 use crate::types::Capabilities;
 use crate::types::{RecordingConfig, ScreenshareConfig};
-#[cfg(not(target_family = "wasm"))]
-use libp2p::Stream;
-#[cfg(not(target_family = "wasm"))]
-use libp2p::futures::{AsyncReadExt as ReadExt, AsyncWriteExt as WriteExt};
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 use regex::Regex;
 use speedy::{Readable, Writable};
@@ -424,7 +421,7 @@ impl PlaybackConfig {
 #[cfg(not(target_family = "wasm"))]
 #[instrument(name = "screenshare.record", skip_all)]
 pub(crate) async fn record(
-    mut stream: Stream,
+    connection: Connection,
     stop: Arc<Notify>,
     bandwidth: Arc<AtomicUsize>,
     config: RecordingConfig,
@@ -453,7 +450,7 @@ pub(crate) async fn record(
             }
 
             bandwidth.fetch_add(read, Relaxed);
-            if let Err(error) = WriteExt::write(&mut stream, &frame[..read]).await {
+            if let Err(error) = connection.send_datagram(Bytes::copy_from_slice(&frame[..read])) {
                 error!("Failed to write frame to ffmpeg {}", error);
                 break;
             }
@@ -477,7 +474,7 @@ pub(crate) async fn record(
 #[cfg(not(target_family = "wasm"))]
 #[instrument(name = "screenshare.playback", skip_all)]
 pub(crate) async fn playback(
-    mut stream: Stream,
+    connection: Connection,
     stop: Arc<Notify>,
     bandwidth: Arc<AtomicUsize>,
     encoder: String,
@@ -526,15 +523,9 @@ pub(crate) async fn playback(
     let mut stdin = child.stdin.take().expect("Failed to capture stdin");
 
     let future = async {
-        let mut buffer = [0u8; BUFFER_SIZE];
-
-        while let Ok(read) = ReadExt::read(&mut stream, &mut buffer).await {
-            if read == 0 {
-                break;
-            }
-
-            bandwidth.fetch_add(read, Relaxed);
-            if let Err(error) = stdin.write(&buffer[..read]).await {
+        while let Ok(message) = connection.read_datagram().await {
+            bandwidth.fetch_add(message.len(), Relaxed);
+            if let Err(error) = stdin.write(&message).await {
                 error!("Failed to write frame to ffmpeg {}", error);
                 break;
             }

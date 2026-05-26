@@ -1,7 +1,7 @@
+use iroh::endpoint::Connection;
+use iroh::PublicKey;
 use crate::internal::error::Error;
-use crate::internal::sockets::{Transport, TransportStream};
 use crate::internal::state::EarlyCallState;
-use libp2p::PeerId;
 use serde::Serialize;
 use speedy::{Readable, Writable};
 
@@ -68,16 +68,35 @@ pub(crate) struct Attachment {
 pub(crate) enum RoomMessage {
     Join {
         /// established audio transport
-        audio_transport: Box<Transport<TransportStream>>,
+        connection: Connection,
 
         /// established early call state
         state: EarlyCallState,
     },
-    Leave(PeerId),
+    Leave(PublicKey),
 }
 
 #[derive(Debug)]
 pub(crate) struct StartScreenshare {
-    pub(crate) peer: PeerId,
+    pub(crate) peer: PublicKey,
     pub(crate) header: Option<ProtocolMessage>,
+    pub(crate) connection: Connection,
+}
+
+impl StartScreenshare {
+    pub(crate) fn new_sender(peer: PublicKey, connection: Connection) -> Self {
+        Self {
+            peer,
+            header: None,
+            connection,
+        }
+    }
+
+    pub(crate) fn new_receiver(peer: PublicKey, message: ProtocolMessage, connection: Connection) -> Self {
+        Self {
+            peer,
+            header: Some(message),
+            connection,
+        }
+    }
 }

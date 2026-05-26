@@ -24,13 +24,13 @@ kanal = "0.1.1"
 atomic_float = "1"
 flutter_rust_bridge = { version = "=2.12.0", default-features = false, features = ["rust-async", "thread-pool", "dart-opaque", "anyhow"], optional = true }
 lazy_static = "1"
-libp2p-stream = { version = "0.4.0-alpha" }
 chrono = "*"
 regex = "1" # TODO consider removing regex dep
 speedy = "=0.8.7"
 cfg-if = "1"
 bytes = "1"
 serde = { version = "1", features = ["derive"] }
+rustls = "0.23"
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.22"
@@ -48,21 +48,17 @@ objc2-foundation = "*"
 uuid = { version = "1", features = ["v4", "js"] }
 getrandom = { version = "0.3", features = ["wasm_js"] }
 tokio = { version = "1", features = ["time", "io-util", "macros", "rt"] }
-libp2p = { version = "0.56", features = ["quic", "ping", "dcutr", "identify", "macros", "noise", "yamux", "relay", "wasm-bindgen", "autonat"] }
-libp2p-webtransport-websys = "0.5"
+iroh = { version = "1.0.0-rc.0", default-features = false }
 tracing-wasm = "0.2"
 wasmtimer = "0.4"
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 uuid = { version = "1", features = ["v4"] }
 tokio = { version = "1", features = ["time", "io-util", "macros", "process", "net", "rt-multi-thread", "fs"] }
-libp2p = { version = "0.56", features = ["tokio", "quic", "tcp", "ping", "dcutr", "identify", "macros", "noise", "yamux", "relay", "autonat"] }
+iroh = { version = "1.0.0-rc.0", features = ["tls-aws-lc-rs"] }
 tracing-appender = "0.2"
 tracing-panic = "0.1"
 
 [dev-dependencies]
 mockall = "0.14"
 async-trait = "0.1"
-
-[target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
-relay-server = { path = "../relay-server" }

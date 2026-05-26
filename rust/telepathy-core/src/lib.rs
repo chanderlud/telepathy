@@ -1,5 +1,3 @@
-use libp2p::swarm::NetworkBehaviour;
-use libp2p::{autonat, dcutr, identify, ping, relay};
 use telepathy_audio::devices::AudioDeviceInfo;
 
 #[cfg(feature = "flutter")]
@@ -26,16 +24,6 @@ impl From<AudioDeviceInfo> for AudioDevice {
             id: value.id,
         }
     }
-}
-
-#[derive(NetworkBehaviour)]
-pub(crate) struct Behaviour {
-    relay_client: relay::client::Behaviour,
-    ping: ping::Behaviour,
-    identify: identify::Behaviour,
-    dcutr: dcutr::Behaviour,
-    stream: libp2p_stream::Behaviour,
-    auto_nat: autonat::Behaviour,
 }
 
 // https://github.com/RustAudio/cpal/issues/720#issuecomment-1311813294

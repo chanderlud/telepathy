@@ -3,10 +3,10 @@ use crate::internal::TelepathyHandle;
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::{JoinHandle, spawn_task};
 use crate::types::{CallState, ChatMessage, Contact, FrontendNotify, SessionStatus, Statistics};
-use libp2p::PeerId;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use iroh::PublicKey;
 #[cfg(feature = "mock-audio")]
 use telepathy_audio::MockAudioHost;
 #[cfg(not(feature = "mock-audio"))]
@@ -90,7 +90,7 @@ impl NativeTelepathy {
 
     pub async fn set_identity(&self, key: Vec<u8>) -> Result<(), String> {
         self.handle
-            .set_identity(key)
+            .set_identity(&(key.try_into().map_err(|_| "Key must be 32 bytes")?))
             .await
             .map_err(|e| e.to_string())
     }
@@ -251,7 +251,7 @@ impl NativeCallbacks {
 }
 
 impl CoreCallbacks<NativeStatisticsCallback> for NativeCallbacks {
-    async fn session_status(&self, status: SessionStatus, peer: PeerId) {
+    async fn session_status(&self, status: SessionStatus, peer: PublicKey) {
         (self.session_status)((peer.to_string(), status)).await
     }
 

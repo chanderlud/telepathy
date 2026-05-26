@@ -76,9 +76,9 @@ pub fn rust_set_up() {
     // https://stackoverflow.com/questions/30177845/how-to-initialize-the-logger-for-integration-tests
     INIT_LOGGER_ONCE.call_once(|| {
         let default_level = if cfg!(debug_assertions) {
-            "telepathy_core=debug,libp2p=info,telepathy_audio=info"
+            "telepathy_core=debug,telepathy_audio=info"
         } else {
-            "telepathy_core=warn,libp2p=warn,telepathy_audio=warn"
+            "telepathy_core=warn,telepathy_audio=warn"
         };
         cfg_if::cfg_if! {
             if #[cfg(target_family = "wasm")] {

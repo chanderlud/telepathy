@@ -47,5 +47,5 @@ jq 'select(.fields.event=="edge_case")' telepathy-trace.log
 ```
 
 ```sh
-RUST_LOG=telepathy_core=debug,telepathy_audio=info,relay_server=info,libp2p=warn
+RUST_LOG=telepathy_core=debug,telepathy_audio=info,relay_server=info
 ```

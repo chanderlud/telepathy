@@ -1,12 +1,9 @@
-use crate::BehaviourEvent;
 #[cfg(target_family = "wasm")]
 use flutter_rust_bridge::for_generated::futures::channel::oneshot::Canceled;
-use libp2p::identity::{DecodingError, ParseError};
-use libp2p::swarm::{DialError, SwarmEvent};
-use libp2p::{TransportBuilderError, TransportError};
-use libp2p_stream::{AlreadyRegistered, OpenStreamError};
 use std::fmt::{Display, Formatter};
 use std::net::AddrParseError;
+use iroh::endpoint::{BindError, ConnectionError};
+use iroh::KeyParsingError;
 use telepathy_audio::devices::DeviceError;
 use tokio::task::JoinError;
 use tokio::time::error::Elapsed;
@@ -29,17 +26,13 @@ pub(crate) enum ErrorKind {
     Timeout(Elapsed),
     #[cfg(target_family = "wasm")]
     WasmTimeout(wasmtimer::tokio::error::Elapsed),
-    IdentityDecode(DecodingError),
-    OpenStream(OpenStreamError),
-    Dial(DialError),
-    IdentityParse(ParseError),
-    Transport(TransportError<std::io::Error>),
-    AlreadyRegistered(AlreadyRegistered),
     AudioError(telepathy_audio::Error),
     #[cfg(target_family = "wasm")]
     Canceled(Canceled),
-    TransportBuildError(TransportBuilderError),
     DeviceError(DeviceError),
+    BindError(BindError),
+    KeyParsing(KeyParsingError),
+    Connection(ConnectionError),
     InvalidContactFormat,
     TransportSend,
     TransportRecv,
@@ -125,75 +118,11 @@ impl From<Elapsed> for Error {
     }
 }
 
-impl From<DecodingError> for Error {
-    fn from(err: DecodingError) -> Self {
-        Self {
-            kind: ErrorKind::IdentityDecode(err),
-        }
-    }
-}
-
-impl From<OpenStreamError> for Error {
-    fn from(err: OpenStreamError) -> Self {
-        Self {
-            kind: ErrorKind::OpenStream(err),
-        }
-    }
-}
-
-impl From<DialError> for Error {
-    fn from(err: DialError) -> Self {
-        Self {
-            kind: ErrorKind::Dial(err),
-        }
-    }
-}
-
-impl From<ParseError> for Error {
-    fn from(err: ParseError) -> Self {
-        Self {
-            kind: ErrorKind::IdentityParse(err),
-        }
-    }
-}
-
-impl From<SwarmEvent<BehaviourEvent>> for Error {
-    fn from(_: SwarmEvent<BehaviourEvent>) -> Self {
-        Self {
-            kind: ErrorKind::UnexpectedSwarmEvent,
-        }
-    }
-}
-
-impl From<TransportError<std::io::Error>> for Error {
-    fn from(err: TransportError<std::io::Error>) -> Self {
-        Self {
-            kind: ErrorKind::Transport(err),
-        }
-    }
-}
-
-impl From<AlreadyRegistered> for Error {
-    fn from(err: AlreadyRegistered) -> Self {
-        Self {
-            kind: ErrorKind::AlreadyRegistered(err),
-        }
-    }
-}
-
 #[cfg(target_family = "wasm")]
 impl From<Canceled> for Error {
     fn from(err: Canceled) -> Self {
         Self {
             kind: ErrorKind::Canceled(err),
-        }
-    }
-}
-
-impl From<TransportBuilderError> for Error {
-    fn from(err: TransportBuilderError) -> Self {
-        Self {
-            kind: ErrorKind::TransportBuildError(err),
         }
     }
 }
@@ -223,6 +152,30 @@ impl From<DeviceError> for Error {
     }
 }
 
+impl From<BindError> for Error {
+    fn from(err: BindError) -> Self {
+        Self {
+            kind: ErrorKind::BindError(err)
+        }
+    }
+}
+
+impl From<KeyParsingError> for Error {
+    fn from(err: KeyParsingError) -> Self {
+        Self {
+            kind: ErrorKind::KeyParsing(err)
+        }
+    }
+}
+
+impl From<ConnectionError> for Error {
+    fn from(err: ConnectionError) -> Self {
+        Self {
+            kind: ErrorKind::Connection(err)
+        }
+    }
+}
+
 impl From<ErrorKind> for Error {
     fn from(kind: ErrorKind) -> Self {
         Self { kind }
@@ -245,18 +198,13 @@ impl Display for Error {
                 #[cfg(target_family = "wasm")]
                 ErrorKind::WasmTimeout(_) => "The connection timed out".to_string(),
                 ErrorKind::AddrParse(ref err) => err.to_string(),
-                ErrorKind::IdentityDecode(ref err) => format!("Identity decode error: {}", err),
-                ErrorKind::OpenStream(ref err) => format!("Open stream error: {}", err),
-                ErrorKind::Dial(ref err) => format!("Dial error: {}", err),
-                ErrorKind::IdentityParse(ref err) => format!("Identity parse error: {}", err),
-                ErrorKind::Transport(ref err) => format!("Transport error: {}", err),
-                ErrorKind::AlreadyRegistered(ref err) => format!("Already registered: {}", err),
                 ErrorKind::AudioError(ref err) => format!("Audio error: {err}"),
                 #[cfg(target_family = "wasm")]
                 ErrorKind::Canceled(ref err) => format!("Canceled: {}", err),
-                ErrorKind::TransportBuildError(ref err) =>
-                    format!("Transport build error: {}", err),
                 ErrorKind::DeviceError(ref err) => format!("Device error: {}", err),
+                ErrorKind::BindError(ref err) => format!("Bind error: {}", err),
+                ErrorKind::KeyParsing(ref err) => format!("Key parsing error: {}", err),
+                ErrorKind::Connection(ref err) => format!("Connection error: {}", err),
                 ErrorKind::InvalidContactFormat => "Invalid contact format".to_string(),
                 ErrorKind::TransportSend => "Transport failed on send".to_string(),
                 ErrorKind::TransportRecv => "Transport failed on receive".to_string(),

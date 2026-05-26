@@ -95,13 +95,13 @@ abstract class RustLibApi extends BaseApi {
   List<(String, Uint8List)> crateTypesChatMessageAttachments(
       {required ChatMessage that});
 
-  PeerId crateTypesChatMessageAutoAccessorGetReceiver(
+  PublicKey crateTypesChatMessageAutoAccessorGetReceiver(
       {required ChatMessage that});
 
   String crateTypesChatMessageAutoAccessorGetText({required ChatMessage that});
 
   void crateTypesChatMessageAutoAccessorSetReceiver(
-      {required ChatMessage that, required PeerId receiver});
+      {required ChatMessage that, required PublicKey receiver});
 
   void crateTypesChatMessageAutoAccessorSetText(
       {required ChatMessage that, required String text});
@@ -450,11 +450,13 @@ abstract class RustLibApi extends BaseApi {
 
   CrossPlatformFinalizerArg get rust_arc_decrement_strong_count_OverlayPtr;
 
-  RustArcIncrementStrongCountFnType get rust_arc_increment_strong_count_PeerId;
+  RustArcIncrementStrongCountFnType
+      get rust_arc_increment_strong_count_PublicKey;
 
-  RustArcDecrementStrongCountFnType get rust_arc_decrement_strong_count_PeerId;
+  RustArcDecrementStrongCountFnType
+      get rust_arc_decrement_strong_count_PublicKey;
 
-  CrossPlatformFinalizerArg get rust_arc_decrement_strong_count_PeerIdPtr;
+  CrossPlatformFinalizerArg get rust_arc_decrement_strong_count_PublicKeyPtr;
 
   RustArcIncrementStrongCountFnType
       get rust_arc_increment_strong_count_RecordingConfig;
@@ -601,7 +603,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  PeerId crateTypesChatMessageAutoAccessorGetReceiver(
+  PublicKey crateTypesChatMessageAutoAccessorGetReceiver(
       {required ChatMessage that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
@@ -612,7 +614,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       },
       codec: SseCodec(
         decodeSuccessData:
-            sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerId,
+            sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPublicKey,
         decodeErrorData: null,
       ),
       constMeta: kCrateTypesChatMessageAutoAccessorGetReceiverConstMeta,
@@ -654,13 +656,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @override
   void crateTypesChatMessageAutoAccessorSetReceiver(
-      {required ChatMessage that, required PeerId receiver}) {
+      {required ChatMessage that, required PublicKey receiver}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerChatMessage(
             that, serializer);
-        sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerId(
+        sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPublicKey(
             receiver, serializer);
         return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 7)!;
       },
@@ -3080,7 +3082,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_record_string_list_prim_u_8_strict,
-        decodeErrorData: sse_decode_dart_error,
+        decodeErrorData: null,
       ),
       constMeta: kCrateFlutterUtilsGenerateKeysConstMeta,
       argValues: [],
@@ -3622,12 +3624,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerOverlay;
 
   RustArcIncrementStrongCountFnType
-      get rust_arc_increment_strong_count_PeerId => wire
-          .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerId;
+      get rust_arc_increment_strong_count_PublicKey => wire
+          .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPublicKey;
 
   RustArcDecrementStrongCountFnType
-      get rust_arc_decrement_strong_count_PeerId => wire
-          .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerId;
+      get rust_arc_decrement_strong_count_PublicKey => wire
+          .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPublicKey;
 
   RustArcIncrementStrongCountFnType
       get rust_arc_increment_strong_count_RecordingConfig => wire
@@ -3748,11 +3750,11 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  PeerId
-      dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerId(
+  PublicKey
+      dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPublicKey(
           dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
-    return PeerIdImpl.frbInternalDcoDecode(raw as List<dynamic>);
+    return PublicKeyImpl.frbInternalDcoDecode(raw as List<dynamic>);
   }
 
   @protected
@@ -4066,11 +4068,11 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  PeerId
-      dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerId(
+  PublicKey
+      dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPublicKey(
           dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
-    return PeerIdImpl.frbInternalDcoDecode(raw as List<dynamic>);
+    return PublicKeyImpl.frbInternalDcoDecode(raw as List<dynamic>);
   }
 
   @protected
@@ -4575,11 +4577,11 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  PeerId
-      sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerId(
+  PublicKey
+      sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPublicKey(
           SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    return PeerIdImpl.frbInternalSseDecode(
+    return PublicKeyImpl.frbInternalSseDecode(
         sse_decode_usize(deserializer), sse_decode_i_32(deserializer));
   }
 
@@ -4852,11 +4854,11 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  PeerId
-      sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerId(
+  PublicKey
+      sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPublicKey(
           SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    return PeerIdImpl.frbInternalSseDecode(
+    return PublicKeyImpl.frbInternalSseDecode(
         sse_decode_usize(deserializer), sse_decode_i_32(deserializer));
   }
 
@@ -5377,11 +5379,11 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void
-      sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerId(
-          PeerId self, SseSerializer serializer) {
+      sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPublicKey(
+          PublicKey self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_usize(
-        (self as PeerIdImpl).frbInternalSseEncode(move: true), serializer);
+        (self as PublicKeyImpl).frbInternalSseEncode(move: true), serializer);
   }
 
   @protected
@@ -5771,11 +5773,11 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void
-      sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerId(
-          PeerId self, SseSerializer serializer) {
+      sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPublicKey(
+          PublicKey self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_usize(
-        (self as PeerIdImpl).frbInternalSseEncode(move: null), serializer);
+        (self as PublicKeyImpl).frbInternalSseEncode(move: null), serializer);
   }
 
   @protected
@@ -6229,7 +6231,7 @@ class ChatMessageImpl extends RustOpaque implements ChatMessage {
         that: this,
       );
 
-  PeerId get receiver =>
+  PublicKey get receiver =>
       RustLib.instance.api.crateTypesChatMessageAutoAccessorGetReceiver(
         that: this,
       );
@@ -6239,7 +6241,7 @@ class ChatMessageImpl extends RustOpaque implements ChatMessage {
         that: this,
       );
 
-  set receiver(PeerId receiver) =>
+  set receiver(PublicKey receiver) =>
       RustLib.instance.api.crateTypesChatMessageAutoAccessorSetReceiver(
           that: this, receiver: receiver);
 
@@ -6522,22 +6524,22 @@ class OverlayImpl extends RustOpaque implements Overlay {
 }
 
 @sealed
-class PeerIdImpl extends RustOpaque implements PeerId {
+class PublicKeyImpl extends RustOpaque implements PublicKey {
   // Not to be used by end users
-  PeerIdImpl.frbInternalDcoDecode(List<dynamic> wire)
+  PublicKeyImpl.frbInternalDcoDecode(List<dynamic> wire)
       : super.frbInternalDcoDecode(wire, _kStaticData);
 
   // Not to be used by end users
-  PeerIdImpl.frbInternalSseDecode(BigInt ptr, int externalSizeOnNative)
+  PublicKeyImpl.frbInternalSseDecode(BigInt ptr, int externalSizeOnNative)
       : super.frbInternalSseDecode(ptr, externalSizeOnNative, _kStaticData);
 
   static final _kStaticData = RustArcStaticData(
     rustArcIncrementStrongCount:
-        RustLib.instance.api.rust_arc_increment_strong_count_PeerId,
+        RustLib.instance.api.rust_arc_increment_strong_count_PublicKey,
     rustArcDecrementStrongCount:
-        RustLib.instance.api.rust_arc_decrement_strong_count_PeerId,
+        RustLib.instance.api.rust_arc_decrement_strong_count_PublicKey,
     rustArcDecrementStrongCountPtr:
-        RustLib.instance.api.rust_arc_decrement_strong_count_PeerIdPtr,
+        RustLib.instance.api.rust_arc_decrement_strong_count_PublicKeyPtr,
   );
 }
 

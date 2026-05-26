@@ -22,12 +22,11 @@ pub(crate) use crate::internal::utils::{JoinHandle, spawn_task};
 use crate::overlay::Overlay;
 use crate::types::{ChatMessage, CodecConfig, Contact, NetworkConfig, ScreenshareConfig};
 use chrono::Local;
-use libp2p::identity::Keypair;
-use libp2p::{PeerId, StreamProtocol};
 use std::mem;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::Duration;
+use iroh::SecretKey;
 use telepathy_audio::RnnModel;
 use telepathy_audio::devices::AudioHost;
 use telepathy_audio::internal::utils::db_to_multiplier;
@@ -46,13 +45,9 @@ const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 /// How often to keep-alive libp2p streams
 const KEEP_ALIVE: Duration = Duration::from_secs(10);
 /// the protocol identifier for Telepathy sessions
-const SESSION_PROTOCOL: StreamProtocol = StreamProtocol::new("/telepathy-session/0.0.1");
-/// the protocol identifier for Telepathy data streams (calls or screen shares)
-const STREAM_PROTOCOL: StreamProtocol = StreamProtocol::new("/telepathy-stream/0.0.1");
+const ALPN: &[u8] = b"telepathy/session/0";
 /// Maximum allowed size for a single length-delimited control/message frame on the session stream.
 const SESSION_MAX_FRAME_LENGTH: usize = 1024 * 1024 * 1024;
-/// How long to attempt direct connection upgrade before falling back to a relayed option
-const DCUTR_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(crate) struct TelepathyHandle<C, S, H>
 where
@@ -172,7 +167,7 @@ where
         // gracefully ends the room call
         let end_call = Arc::new(Notify::new());
         // the same early call state is used throughout the room, the real peer ids are set later
-        let call_state = self.inner.setup_call(PeerId::random()).await?;
+        let call_state = self.inner.setup_call(SecretKey::generate().public()).await?;
         // set room state
         let old_state_option = self.inner.room_state.write().await.replace(RoomState {
             peers: members.clone(),
@@ -246,9 +241,9 @@ where
     }
 
     /// Sets the signing key (called when the profile changes)
-    pub async fn set_identity(&self, key: Vec<u8>) -> Result<()> {
+    pub async fn set_identity(&self, key: &[u8; 32]) -> Result<()> {
         *self.inner.core_state.identity.write().await =
-            Some(Keypair::from_protobuf_encoding(&key).map_err(Error::from)?);
+            Some(SecretKey::from_bytes(key));
         Ok(())
     }
 
@@ -284,7 +279,7 @@ where
             return Err(error);
         }
 
-        let result = match self.inner.setup_call(PeerId::random()).await {
+        let result = match self.inner.setup_call(SecretKey::generate().public()).await {
             Ok(mut audio_config) => {
                 audio_config.remote_configuration = audio_config.local_configuration.clone();
                 let stop_io = CancellationToken::new();
@@ -380,9 +375,10 @@ where
     }
 
     pub async fn start_screenshare(&self, contact: &Contact) {
-        self.inner
-            .send_start_screenshare(contact.peer_id, None)
-            .await;
+        // TODO make this work :)
+        // self.inner
+        //     .send_start_screenshare(contact.peer_id, None)
+        //     .await;
     }
 
     pub fn set_rms_threshold(&self, decimal: f32) {

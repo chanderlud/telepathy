@@ -1,12 +1,12 @@
 Telepathy is a cross-platform peer-to-peer (P2P) chat application built to deliver real-time communication without relying on centralized servers.
 The UI is built with [Flutter](https://flutter.dev/) enabling the app to target Windows, Linux, macOS, iOS, Android, and the [web](https://telepathy.chanchan.dev/).
-[libp2p](https://libp2p.io/) is used for P2P networking and cryptography, enabling secure connections behind NAT/firewalls without requiring manual port forwarding.
+[iroh](https://www.iroh.computer/) is used for P2P networking and cryptography, enabling secure connections behind NAT/firewalls without requiring manual port forwarding.
 
 
 ## Features
 
 - [Flutter](https://flutter.dev/) UI with Windows, Linux, macOS, iOS, Android, and web support
-- [libp2p](https://libp2p.io/) networking and cryptography, enables p2p networking without port forwarding
+- [iroh](https://www.iroh.computer/) networking and cryptography, enables p2p networking without port forwarding
 - Lossless raw audio and [SEA codec](https://github.com/Daninet/sea-codec) options
 - [nnnoiseless](https://github.com/jneem/nnnoiseless) noise suppression
 - Built-in text chat with attachments
@@ -53,7 +53,7 @@ enables high quality real-time performance on any device with remarkably low res
 
 ### Classic Call Design
 
-- Telepathy Audio provides the audio processing while libp2p handles networking
+- Telepathy Audio provides the audio processing while iroh handles networking
 - Denoising runs on the sending side; each participant in a call decides if they want to use their compute resources to denoise their audio input
 - Every participant in a call must agree on the same audio codec options for sending & receiving
 - If a frame's RMS is below the input sensitivity threshold, no audio is sent (keep-alive packets are used during silence). The output stream gracefully transitions between speech and silence using cross-fade
@@ -66,6 +66,7 @@ enables high quality real-time performance on any device with remarkably low res
 - Telepathy started as “Audio Chat,” a Python Tkinter application with simple UDP networking and AES cryptography.
 - After proving the concept with Python and Tkinter, the project was rewritten in Rust with Flutter for cross-platform support.
 - The networking layer was upgraded from a custom approach to libp2p to gain enterprise-grade security primitives and more capable P2P connectivity.
+- libp2p was replaced with iroh for more robust real-time networking & simpler session logic
 
 ## UI Screenshots
 ![screenshot of telepathy main user interface](https://chanchan.dev/cdn-cgi/image/width=828,fit=scale-down,format=auto/images/projects/telepathy/cover.png)

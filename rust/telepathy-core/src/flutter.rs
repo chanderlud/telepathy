@@ -96,7 +96,7 @@ impl Telepathy {
 
     /// Sets the signing key (called when the profile changes)
     pub async fn set_identity(&self, key: Vec<u8>) -> std::result::Result<(), DartError> {
-        self.handle.set_identity(key).await.map_err(DartError::from)
+        self.handle.set_identity(&(key.try_into().map_err(|_| DartError::from("Key must be 32 bytes".to_string()))?)).await.map_err(DartError::from)
     }
 
     /// Stops a specific session (called when a contact is deleted)

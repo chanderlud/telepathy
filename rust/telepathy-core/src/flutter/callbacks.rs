@@ -4,15 +4,15 @@ use crate::flutter::{
 };
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::{JoinHandle, spawn_task};
-use libp2p::PeerId;
 use std::sync::Arc;
+use iroh::PublicKey;
 use tokio::sync::Notify;
 
 impl CoreCallbacks<FlutterStatisticsCallback> for FlutterCallbacks {
     fn session_status(
         &self,
         status: SessionStatus,
-        peer: PeerId,
+        peer: PublicKey,
     ) -> impl Future<Output = ()> + Send {
         notify(&self.session_status, (peer.to_string(), status))
     }

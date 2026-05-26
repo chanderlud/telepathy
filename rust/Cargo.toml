@@ -1,6 +1,5 @@
 [workspace]
 members = [
-    "relay-server",
     "telepathy-core",
     "telepathy-audio",
     "telepathy-cli"

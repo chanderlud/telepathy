@@ -6,22 +6,17 @@ use crate::internal::messages::{AudioHeader, ProtocolMessage, StartScreenshare};
 use crate::internal::screenshare;
 use crate::internal::state::{EarlyCallState, StatisticsCollectorState};
 use crate::internal::utils::{KanalSink, KanalSource};
-use crate::internal::{Result, SESSION_PROTOCOL, STREAM_PROTOCOL};
+use crate::internal::{Result, ALPN};
 use crate::types::FrontendNotify;
-use crate::{Behaviour, BehaviourEvent};
 use bytes::Bytes;
-use libp2p::futures::StreamExt;
-use libp2p::multiaddr::Protocol;
-use libp2p::swarm::SwarmEvent;
-#[cfg(not(target_family = "wasm"))]
-use libp2p::tcp;
-use libp2p::{Multiaddr, PeerId, Swarm, autonat, dcutr, identify, noise, ping, yamux};
-use libp2p_stream::Control;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
-use std::time::Duration;
+use iroh::{Endpoint, PublicKey, RelayMode, SecretKey};
+use iroh::address_lookup::{PkarrPublisher, N0_DNS_PKARR_RELAY_PROD};
+use iroh::endpoint::{presets};
+use rustls::crypto::aws_lc_rs::{self, kx_group};
 #[cfg(target_family = "wasm")]
 use telepathy_audio::WebAudioWrapper;
 use telepathy_audio::devices::AudioHost;
@@ -42,167 +37,35 @@ where
     C: CoreCallbacks<S> + Send + Sync + 'static,
     H: AudioHost + Send + Sync + Clone + 'static,
 {
-    /// builds a p2p swarm & connects to the relay server
-    #[instrument(name = "manager.swarm_setup", skip_all)]
-    pub(crate) async fn setup_swarm(&self) -> Result<(Swarm<Behaviour>, Multiaddr)> {
+    /// builds an iroh endpoint and waits for it to come online
+    #[instrument(name = "manager.setup_endpoint", skip_all)]
+    pub(crate) async fn setup_endpoint(&self) -> Result<Endpoint> {
         let identity = if let Some(keypair) = self.core_state.identity.read().await.as_ref() {
             keypair.clone()
         } else {
             return Err(ErrorKind::NoIdentityAvailable.into());
         };
 
-        let builder = libp2p::SwarmBuilder::with_existing_identity(identity);
+        let mut provider = aws_lc_rs::default_provider();
+        provider.kx_groups = vec![
+            kx_group::X25519MLKEM768,
+            kx_group::X25519,
+            kx_group::SECP256R1,
+            kx_group::SECP384R1,
+        ];
 
-        #[cfg(not(target_family = "wasm"))]
-        let provider_phase = builder
-            .with_tokio()
-            .with_tcp(
-                tcp::Config::default().nodelay(true),
-                noise::Config::new,
-                yamux::Config::default,
-            )
-            .map_err(|_| ErrorKind::SwarmBuild)?
-            .with_quic();
+        let endpoint = Endpoint::builder(presets::N0)
+            .crypto_provider(Arc::new(provider))
+            .secret_key(identity)
+            .alpns(vec![ALPN.to_vec()])
+            .relay_mode(RelayMode::Default)
+            .address_lookup(PkarrPublisher::builder(N0_DNS_PKARR_RELAY_PROD.parse().unwrap()))
+            .bind()
+            .await?;
 
-        #[cfg(target_family = "wasm")]
-        let provider_phase = builder
-            .with_wasm_bindgen()
-            .with_other_transport(|id_keys| {
-                Ok(libp2p_webtransport_websys::Transport::new(
-                    libp2p_webtransport_websys::Config::new(id_keys),
-                ))
-            })?;
+        endpoint.online().await;
 
-        let mut swarm = provider_phase
-            .with_relay_client(noise::Config::new, yamux::Config::default)
-            .map_err(|_| ErrorKind::SwarmBuild)?
-            .with_behaviour(|keypair, relay_behaviour| Behaviour {
-                relay_client: relay_behaviour,
-                ping: ping::Behaviour::new(ping::Config::new()),
-                identify: identify::Behaviour::new(identify::Config::new(
-                    SESSION_PROTOCOL.to_string(),
-                    keypair.public(),
-                )),
-                dcutr: dcutr::Behaviour::new(keypair.public().to_peer_id()),
-                stream: libp2p_stream::Behaviour::new(),
-                auto_nat: autonat::Behaviour::new(
-                    keypair.public().to_peer_id(),
-                    autonat::Config::default(),
-                ),
-            })
-            .map_err(|_| ErrorKind::SwarmBuild)?
-            .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(30)))
-            .build();
-
-        let listen_port = self.core_state.network_config.listen_port.load(Relaxed);
-        for bind_address in &self.core_state.network_config.bind_addresses {
-            #[cfg(not(target_family = "wasm"))]
-            {
-                let listen_addr_quic = Multiaddr::empty()
-                    .with(Protocol::from(*bind_address))
-                    .with(Protocol::Udp(listen_port))
-                    .with(Protocol::QuicV1);
-
-                swarm.listen_on(listen_addr_quic)?;
-
-                let listen_addr_tcp = Multiaddr::empty()
-                    .with(Protocol::from(*bind_address))
-                    .with(Protocol::Tcp(listen_port));
-
-                swarm.listen_on(listen_addr_tcp)?;
-            }
-
-            #[cfg(target_family = "wasm")]
-            {
-                let listen_addr = Multiaddr::empty()
-                    .with(Protocol::from(*bind_address))
-                    .with(Protocol::Udp(listen_port))
-                    .with(Protocol::QuicV1)
-                    .with(Protocol::WebTransport);
-
-                swarm.listen_on(listen_addr)?;
-            }
-        }
-
-        let socket_address = *self.core_state.network_config.relay_address.read().await;
-        let relay_identity = *self.core_state.network_config.relay_id.read().await;
-
-        #[cfg(not(target_family = "wasm"))]
-        let relay_address = {
-            let relay_address_udp = Multiaddr::from(socket_address.ip())
-                .with(Protocol::Udp(socket_address.port()))
-                .with(Protocol::QuicV1)
-                .with_p2p(relay_identity)
-                .map_err(|_| ErrorKind::SwarmBuild)?;
-
-            let relay_address_tcp = Multiaddr::from(socket_address.ip())
-                .with(Protocol::Tcp(socket_address.port()))
-                .with_p2p(relay_identity)
-                .map_err(|_| ErrorKind::SwarmBuild)?;
-
-            if swarm.dial(relay_address_udp.clone()).is_err() {
-                swarm.dial(relay_address_tcp.clone())?;
-                info!("connected to relay with tcp");
-                relay_address_tcp.with(Protocol::P2pCircuit)
-            } else {
-                info!("connected to relay with udp");
-                relay_address_udp.with(Protocol::P2pCircuit)
-            }
-        };
-
-        #[cfg(target_family = "wasm")]
-        let relay_address = {
-            // TODO the relay currently does not support WebTransport
-            let address = Multiaddr::from(socket_address.ip())
-                .with(Protocol::Udp(socket_address.port()))
-                .with(Protocol::QuicV1)
-                .with(Protocol::WebTransport)
-                .with_p2p(relay_identity)
-                .map_err(|_| ErrorKind::SwarmBuild)?;
-
-            swarm.dial(address.clone())?;
-            info!("connected to relay with webtransport");
-            address.with(Protocol::P2pCircuit)
-        };
-
-        let mut learned_observed_addr = false;
-        let mut told_relay_observed_addr = false;
-
-        loop {
-            match swarm.next().await.ok_or(ErrorKind::SwarmEnded)? {
-                SwarmEvent::NewListenAddr { .. } => (),
-                SwarmEvent::Dialing { .. } => (),
-                SwarmEvent::ConnectionEstablished { .. } => (),
-                SwarmEvent::Behaviour(BehaviourEvent::Ping(_)) => (),
-                SwarmEvent::NewExternalAddrCandidate { .. } => (),
-                SwarmEvent::NewExternalAddrOfPeer { .. } => (),
-                SwarmEvent::Behaviour(BehaviourEvent::Identify(identify::Event::Sent {
-                    ..
-                })) => {
-                    info!("Told relay its public address");
-                    told_relay_observed_addr = true;
-                }
-                SwarmEvent::Behaviour(BehaviourEvent::Identify(identify::Event::Received {
-                    info: identify::Info { .. },
-                    ..
-                })) => {
-                    info!("Relay told us our observed address");
-                    learned_observed_addr = true;
-                }
-                // no other event occurs during a successful initialization
-                event => {
-                    error!("Unexpected event during initialization {:?}", event);
-                    return Err(ErrorKind::UnexpectedSwarmEvent.into());
-                }
-            }
-
-            if learned_observed_addr && told_relay_observed_addr {
-                break;
-            }
-        }
-
-        swarm.listen_on(relay_address.clone())?;
-        Ok((swarm, relay_address))
+        Ok(endpoint)
     }
 
     #[cfg(not(target_family = "wasm"))]
@@ -217,7 +80,6 @@ where
     pub(crate) async fn start_screenshare(
         &self,
         message: StartScreenshare,
-        control_option: Option<Control>,
     ) -> Result<()> {
         let state = if let Some(s) = self.session_states.read().await.get(&message.peer) {
             s.clone()
@@ -234,15 +96,12 @@ where
         let dart_stop = FrontendNotify::new(&stop);
 
         if let Some(ProtocolMessage::ScreenshareHeader { encoder_name }) = message.header
-            && let Some(mut control) = control_option
         {
-            // the other peer is waiting for a stream
-            let stream = control.open_stream(message.peer, STREAM_PROTOCOL).await?;
             // alert the frontend
             self.callbacks.screenshare_started(dart_stop, false).await;
             // start playing back the screenshare
             screenshare::playback(
-                stream,
+                message.connection,
                 stop,
                 state.download_bandwidth.clone(),
                 encoder_name,
@@ -276,12 +135,10 @@ where
                 .await;
 
             if result.is_ok() {
-                // wait for the other peer to open a stream
-                let stream = state.receive_stream().await?;
                 // alert the frontend & provide the stop object
                 self.callbacks.screenshare_started(dart_stop, true).await;
                 // start recording the screenshare
-                screenshare::record(stream, stop, state.upload_bandwidth.clone(), config).await?;
+                screenshare::record(message.connection, stop, state.upload_bandwidth.clone(), config).await?;
             } else {
                 warn!("giving up on screenshare start, state closed");
             }
@@ -369,7 +226,7 @@ where
     }
 
     /// helper method to set up EarlyCallState
-    pub(crate) async fn setup_call(&self, peer: PeerId) -> Result<EarlyCallState> {
+    pub(crate) async fn setup_call(&self, peer: PublicKey) -> Result<EarlyCallState> {
         // if there is an early room state, use it w/ the real peer id
         if let Some(mut state) = self
             .room_state
@@ -451,7 +308,7 @@ where
     }
 
     /// helper method to check if a peer is in the current room
-    pub(crate) async fn is_in_room(&self, peer_id: &PeerId) -> bool {
+    pub(crate) async fn is_in_room(&self, peer_id: &PublicKey) -> bool {
         self.room_state
             .read()
             .await
@@ -476,21 +333,11 @@ where
             || self.core_state.end_audio_test.lock().await.is_some()
     }
 
-    pub(crate) async fn send_start_screenshare(
-        &self,
-        peer: PeerId,
-        header: Option<ProtocolMessage>,
-    ) {
-        if let Some(ref sender) = self.start_screenshare {
-            _ = sender.send(StartScreenshare { peer, header }).await;
-        }
-    }
-
-    pub(crate) async fn peer_id(&self) -> PeerId {
+    pub(crate) async fn peer_id(&self) -> PublicKey {
         if let Some(keypair) = self.core_state.identity.read().await.as_ref() {
-            keypair.public().to_peer_id()
+            keypair.public()
         } else {
-            PeerId::random()
+            SecretKey::generate().public()
         }
     }
 

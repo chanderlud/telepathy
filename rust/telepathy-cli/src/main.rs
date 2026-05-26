@@ -28,7 +28,7 @@ async fn main() -> Result<()> {
         .with_ansi(false)
         .with_writer(std::io::stderr)
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-            EnvFilter::new("telepathy_cli=info,telepathy_core=info,libp2p=warn")
+            EnvFilter::new("telepathy_cli=info,telepathy_core=info")
         }))
         .init();
 

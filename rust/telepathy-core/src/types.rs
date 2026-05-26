@@ -7,7 +7,6 @@ use crate::internal::screenshare::{Decoder, Device, Encoder, ScreenshareConfigDi
 use crate::internal::spawn_task;
 use atomic_float::AtomicF32;
 use chrono::{DateTime, Local, SecondsFormat, Utc};
-pub use libp2p::PeerId;
 use serde::{Serialize, Serializer};
 use speedy::{Readable, Writable};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4};
@@ -15,6 +14,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32};
+pub use iroh::{PublicKey, SecretKey};
 #[cfg(not(target_family = "wasm"))]
 use tokio::net::lookup_host;
 use tokio::sync::{Notify, RwLock};
@@ -30,7 +30,7 @@ pub struct Contact {
     pub(crate) nickname: String,
 
     /// The public/verifying key for the contact
-    pub(crate) peer_id: PeerId,
+    pub(crate) peer_id: PublicKey,
 
     /// In rooms, some contacts are dummy representing unknown peers
     pub(crate) is_room_only: bool,
@@ -42,7 +42,7 @@ impl Contact {
         Ok(Self {
             id: Uuid::new_v4().to_string(),
             nickname,
-            peer_id: PeerId::from_str(&peer_id).map_err(|_| ErrorKind::InvalidContactFormat)?,
+            peer_id: PublicKey::from_str(&peer_id).map_err(|_| ErrorKind::InvalidContactFormat)?,
             is_room_only: false,
         })
     }
@@ -52,7 +52,7 @@ impl Contact {
         Ok(Self {
             id,
             nickname,
-            peer_id: PeerId::from_str(&peer_id).map_err(|_| ErrorKind::InvalidContactFormat)?,
+            peer_id: PublicKey::from_str(&peer_id).map_err(|_| ErrorKind::InvalidContactFormat)?,
             is_room_only: false,
         })
     }
@@ -84,7 +84,7 @@ impl Contact {
 
     #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
     pub fn id_eq(&self, id: Vec<u8>) -> bool {
-        self.peer_id.to_bytes() == id
+        self.peer_id.to_vec() == id
     }
 }
 
@@ -112,8 +112,7 @@ pub enum SessionStatus {
 pub struct ChatMessage {
     pub text: String,
 
-    #[serde(serialize_with = "serialize_peer_id")]
-    pub receiver: PeerId,
+    pub receiver: PublicKey,
 
     #[serde(rename = "time", serialize_with = "serialize_timestamp_rfc3339_utc")]
     pub(crate) timestamp: DateTime<Local>,
@@ -204,7 +203,7 @@ pub struct NetworkConfig {
     pub(crate) relay_address: Arc<RwLock<SocketAddr>>,
 
     /// the relay server's peer id
-    pub(crate) relay_id: Arc<RwLock<PeerId>>,
+    pub(crate) relay_id: Arc<RwLock<PublicKey>>,
 
     /// the libp2p port for the swarm
     pub(crate) listen_port: Arc<AtomicU16>,
@@ -216,23 +215,26 @@ pub struct NetworkConfig {
 impl NetworkConfig {
     #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
     pub fn new(relay_address: String, relay_id: String) -> Result<Self, DartError> {
-        Ok(Self {
-            relay_address: Arc::new(RwLock::new(relay_address.parse().map_err(Error::from)?)),
-            relay_id: Arc::new(RwLock::new(
-                PeerId::from_str(&relay_id).map_err(Error::from)?,
-            )),
-            listen_port: Arc::new(AtomicU16::new(0)),
-            bind_addresses: vec![
-                IpAddr::V4(Ipv4Addr::UNSPECIFIED),
-                IpAddr::V6(Ipv6Addr::UNSPECIFIED),
-            ],
-        })
+        // Ok(Self {
+        //     relay_address: Arc::new(RwLock::new(relay_address.parse().map_err(Error::from)?)),
+        //     relay_id: Arc::new(RwLock::new(
+        //         PublicKey::from_str(&relay_id).map_err(Error::from)?,
+        //     )),
+        //     listen_port: Arc::new(AtomicU16::new(0)),
+        //     bind_addresses: vec![
+        //         IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+        //         IpAddr::V6(Ipv6Addr::UNSPECIFIED),
+        //     ],
+        // })
+
+        // TODO rework the network config
+        Ok(Self::default())
     }
 
     #[cfg(test)]
     pub(crate) fn mock(
         relay_address: SocketAddr,
-        relay_id: PeerId,
+        relay_id: PublicKey,
         port: u16,
         bind_addresses: Vec<IpAddr>,
     ) -> Self {
@@ -270,7 +272,7 @@ impl NetworkConfig {
     }
 
     pub async fn set_relay_id(&self, relay_id: String) -> Result<(), DartError> {
-        *self.relay_id.write().await = PeerId::from_str(&relay_id).map_err(Error::from)?;
+        *self.relay_id.write().await = PublicKey::from_str(&relay_id).map_err(Error::from)?;
         Ok(())
     }
 
@@ -286,7 +288,7 @@ impl Default for NetworkConfig {
                 Ipv4Addr::UNSPECIFIED,
                 0,
             )))),
-            relay_id: Arc::new(RwLock::new(PeerId::random())),
+            relay_id: Arc::new(RwLock::new(SecretKey::generate().public())),
             listen_port: Arc::new(Default::default()),
             bind_addresses: vec![IpAddr::V4(Ipv4Addr::UNSPECIFIED)],
         }
@@ -551,13 +553,6 @@ impl From<String> for DartError {
     fn from(message: String) -> Self {
         Self { message }
     }
-}
-
-fn serialize_peer_id<S>(value: &PeerId, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    serializer.serialize_str(&value.to_string())
 }
 
 fn serialize_timestamp_rfc3339_utc<S>(

@@ -48,7 +48,6 @@ class RelayProcess:
     async def start(self) -> None:
         exec_args = _build_exec_args(self.namespace, self.binary_path, [])
         env = dict(os.environ)
-        env.setdefault("RUST_LOG", "relay_server=info,libp2p=warn")
         self._proc = await asyncio.create_subprocess_exec(
             *exec_args,
             stdin=asyncio.subprocess.DEVNULL,

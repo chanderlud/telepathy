@@ -1,23 +1,21 @@
-use crate::flutter::PeerId;
 use crate::types::DartError;
 use flutter_rust_bridge::frb;
-use libp2p::identity::Keypair;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::str::FromStr;
+use iroh::{PublicKey, SecretKey};
 #[cfg(not(target_family = "wasm"))]
 use tokio::process::Command;
 
 #[frb(sync)]
-pub fn generate_keys() -> Result<(String, Vec<u8>), DartError> {
-    let pair = Keypair::generate_ed25519();
+pub fn generate_keys() -> (String, Vec<u8>) {
+    let pair = SecretKey::generate();
 
-    let peer_id = pair.public().to_peer_id();
+    let peer_id = pair.public();
 
-    Ok((
+    (
         peer_id.to_string(),
-        pair.to_protobuf_encoding()
-            .map_err(|e| DartError::from(e.to_string()))?,
-    ))
+        pair.to_bytes().to_vec(),
+    )
 }
 
 #[frb(sync)]
@@ -25,7 +23,7 @@ pub fn room_hash(peers: Vec<String>) -> Result<String, DartError> {
     let mut acc = 0;
 
     for peer in peers {
-        if let Ok(peer) = PeerId::from_str(&peer) {
+        if let Ok(peer) = PublicKey::from_str(&peer) {
             let mut hasher = DefaultHasher::new();
             peer.hash(&mut hasher);
             acc ^= hasher.finish();
@@ -39,7 +37,7 @@ pub fn room_hash(peers: Vec<String>) -> Result<String, DartError> {
 
 #[frb(sync)]
 pub fn validate_peer_id(peer_id: String) -> bool {
-    PeerId::from_str(&peer_id).is_ok()
+    PublicKey::from_str(&peer_id).is_ok()
 }
 
 pub async fn screenshare_available() -> bool {

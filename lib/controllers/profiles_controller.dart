@@ -34,7 +34,7 @@ class ProfilesController with ChangeNotifier {
     // initialize an empty map for profiles
     profiles = {};
     // load a list of profile ids from the options storage
-    List<String> profileIds = await options.getStringList('profiles') ?? [];
+    List<String> profileIds = await options.getStringList('profilesV2') ?? [];
 
     // load each profile from the secure storage
     for (String id in profileIds) {
@@ -183,7 +183,7 @@ class ProfilesController with ChangeNotifier {
       rooms: {},
     );
 
-    await options.setStringList('profiles', profiles.keys.toList());
+    await options.setStringList('profilesV2', profiles.keys.toList());
     notifyListeners();
 
     return id;
@@ -191,7 +191,7 @@ class ProfilesController with ChangeNotifier {
 
   Future<void> removeProfile(String id) async {
     profiles.remove(id);
-    await options.setStringList('profiles', profiles.keys.toList());
+    await options.setStringList('profilesV2', profiles.keys.toList());
 
     await storage.delete(key: '$id-keypair');
     await storage.delete(key: '$id-peerId');

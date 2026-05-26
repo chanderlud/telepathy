@@ -1,13 +1,11 @@
 use crate::internal::KEEP_ALIVE;
 use crate::internal::error::Error;
 use kanal::{AsyncReceiver, Sender};
-use libp2p::Stream;
-use libp2p::bytes::Bytes;
-use libp2p::futures::stream::{SplitSink, SplitStream};
-use libp2p::futures::{SinkExt, StreamExt};
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::{Arc, Mutex};
+use bytes::Bytes;
+use iroh::endpoint::Connection;
 use telepathy_audio::FRAME_SIZE;
 use telepathy_audio::internal::NETWORK_FRAME;
 use telepathy_audio::internal::buffer_pool::{BufferPool, PooledBuffer, PooledBytes};
@@ -22,10 +20,7 @@ use tracing::{debug, error, info, warn};
 #[cfg(target_family = "wasm")]
 use wasmtimer::{std::Instant, tokio::timeout};
 
-pub(crate) type SharedSockets = Arc<Mutex<Vec<(AudioSocket, Instant)>>>;
-pub(crate) type TransportStream = Compat<Stream>;
-pub(crate) type Transport<T> = Framed<T, LengthDelimitedCodec>;
-pub(crate) type AudioSocket = SplitSink<Transport<TransportStream>, Bytes>;
+pub(crate) type SharedConnections = Arc<Mutex<Vec<(Connection, Instant)>>>;
 
 /// only packets younger than this are accepted, represents 2.5 seconds
 const MAX_AGE: u32 = 250;
@@ -36,12 +31,12 @@ pub(crate) const TIMESTAMP_BUFFER_CAPACITY: usize = 4 + NETWORK_FRAME;
 /// Pool size for timestamp buffers - increased from 2 to 8 for better pipelining
 const TIMESTAMP_POOL_SIZE: usize = 8;
 
-pub(crate) trait SendingSocket {
-    async fn send(&mut self, packet: &Bytes) -> usize;
+pub(crate) trait TelepathyConnection {
+    fn send(&mut self, packet: &Bytes) -> usize;
 }
 
-pub(crate) struct ConstSocket {
-    socket: AudioSocket,
+pub(crate) struct ConstConnection {
+    connection: Connection,
 
     start: Instant,
     /// Reused buffers via `BufferPool` for zero-reallocation packet construction.
@@ -50,10 +45,10 @@ pub(crate) struct ConstSocket {
     timestamp_buffers: Arc<BufferPool>,
 }
 
-impl ConstSocket {
-    pub(crate) fn new(socket: AudioSocket) -> Self {
+impl ConstConnection {
+    pub(crate) fn new(connection: Connection) -> Self {
         Self {
-            socket,
+            connection,
             start: Instant::now(),
             timestamp_buffers: Arc::new(BufferPool::new(
                 TIMESTAMP_POOL_SIZE,
@@ -63,53 +58,54 @@ impl ConstSocket {
     }
 }
 
-impl SendingSocket for ConstSocket {
-    async fn send(&mut self, packet: &Bytes) -> usize {
+impl TelepathyConnection for ConstConnection {
+    fn send(&mut self, packet: &Bytes) -> usize {
         let pooled_buffer = BufferPool::acquire(&self.timestamp_buffers);
         let pooled_bytes = prepend_timestamp(pooled_buffer, packet, timestamp(&self.start));
         // Clone the inner Bytes (O(1) refcount increment) for send, allowing
         // automatic buffer recovery when pooled_bytes is dropped after send completes.
-        let ok = self.socket.send((*pooled_bytes).clone()).await.is_ok();
+        let ok = self.connection.send_datagram((*pooled_bytes).clone()).is_ok();
         ok as usize
     }
 }
 
-pub(crate) struct SendingSockets {
-    new_sockets: SharedSockets,
+pub(crate) struct DynamicConnection {
+    new_connections: SharedConnections,
 
-    sockets: Vec<(AudioSocket, Instant)>,
+    connections: Vec<(Connection, Instant)>,
+    
     /// Reused buffers via `BufferPool` for zero-reallocation packet construction.
     /// Buffers are automatically returned to the pool when `PooledBytes` is dropped.
     timestamp_buffers: Arc<BufferPool>,
 }
 
-impl SendingSocket for SendingSockets {
-    async fn send(&mut self, packet: &Bytes) -> usize {
+impl TelepathyConnection for DynamicConnection {
+    fn send(&mut self, packet: &Bytes) -> usize {
         // this unwrap is safe because holders of SharedSockets do not panic
-        for pair in self.new_sockets.lock().unwrap().drain(..) {
-            self.sockets.push(pair);
+        for pair in self.new_connections.lock().unwrap().drain(..) {
+            self.connections.push(pair);
         }
 
         // send the bytes to all connections, dropping any that error
         let mut i = 0;
         let mut successful_sends = 0;
 
-        while i < self.sockets.len() {
+        while i < self.connections.len() {
             let pooled_buffer = BufferPool::acquire(&self.timestamp_buffers);
             let send_result = {
                 // limit the &mut borrow to this block
-                let socket = &mut self.sockets[i];
+                let socket = &mut self.connections[i];
                 let now = timestamp(&socket.1);
                 let pooled_bytes = prepend_timestamp(pooled_buffer, packet, now);
                 // Clone for send (O(1)), buffer recovered automatically via Drop
-                socket.0.send((*pooled_bytes).clone()).await
+                socket.0.send_datagram((*pooled_bytes).clone())
             };
 
             if send_result.is_err() {
                 // remove this socket, do NOT increment i
-                _ = self.sockets.remove(i);
+                _ = self.connections.remove(i);
                 info!(
-                    remaining = self.sockets.len(),
+                    remaining = self.connections.len(),
                     "audio_input dropping socket"
                 );
             } else {
@@ -122,11 +118,11 @@ impl SendingSocket for SendingSockets {
     }
 }
 
-impl SendingSockets {
-    pub(crate) fn new(new_sockets: SharedSockets) -> Self {
+impl DynamicConnection {
+    pub(crate) fn new(new_connections: SharedConnections) -> Self {
         Self {
-            new_sockets,
-            sockets: Vec::new(),
+            new_connections,
+            connections: Vec::new(),
             timestamp_buffers: Arc::new(BufferPool::new(
                 TIMESTAMP_POOL_SIZE,
                 TIMESTAMP_BUFFER_CAPACITY,
@@ -136,7 +132,7 @@ impl SendingSockets {
 }
 
 /// Receives frames of audio data from the input processor and sends them to the socket
-pub(crate) async fn audio_input<S: SendingSocket>(
+pub(crate) async fn audio_input<S: TelepathyConnection>(
     input_receiver: AsyncReceiver<PooledBuffer>,
     mut sockets: S,
     cancel: CancellationToken,
@@ -158,7 +154,7 @@ pub(crate) async fn audio_input<S: SendingSocket>(
             Ok(Ok(buffer)) => {
                 // send the bytes to all connections, dropping any that error
                 let bytes = buffer.freeze();
-                (bytes.len(), sockets.send(bytes.as_ref()).await)
+                (bytes.len(), sockets.send(bytes.as_ref()))
             }
             // shutdown
             Ok(_) => {
@@ -166,7 +162,7 @@ pub(crate) async fn audio_input<S: SendingSocket>(
                 break Ok(());
             }
             // send keep alive during extended silence
-            Err(_) => (1, sockets.send(&keep_alive).await),
+            Err(_) => (1, sockets.send(&keep_alive)),
         };
 
         // update bandwidth based on successful sends only
@@ -179,7 +175,7 @@ pub(crate) async fn audio_input<S: SendingSocket>(
 /// Receives audio data from the socket and sends it to the output processor
 pub(crate) async fn audio_output(
     sender: Sender<Bytes>,
-    mut socket: SplitStream<Transport<TransportStream>>,
+    connection: Connection,
     cancel: CancellationToken,
     bandwidth: Arc<AtomicUsize>,
     loss: Arc<AtomicUsize>,
@@ -188,15 +184,15 @@ pub(crate) async fn audio_output(
 
     loop {
         let message = select! {
-            message = socket.next() => message,
             _ = cancel.cancelled() => {
                 debug!("audio_output ended with cancellation");
                 break Ok(());
             },
+            message = connection.read_datagram() => message,
         };
 
         match message {
-            Some(Ok(mut message)) => {
+            Ok(mut message) => {
                 let len = message.len();
                 bandwidth.fetch_add(len, Relaxed);
 
@@ -209,7 +205,7 @@ pub(crate) async fn audio_output(
                         .min(current_ts.wrapping_sub(packet_ts));
 
                     if age < MAX_AGE {
-                        if sender.try_send(message.freeze()).is_err() {
+                        if sender.try_send(message).is_err() {
                             info!("audio_output ended with closed channel");
                             break Ok(());
                         }
@@ -222,13 +218,9 @@ pub(crate) async fn audio_output(
                     warn!("audio_output received unexpected message len={len}");
                 }
             }
-            Some(Err(error)) => {
+            Err(error) => {
                 error!("audio_output error: {}", error);
                 break Err(error.into());
-            }
-            None => {
-                debug!("audio_output ended with None");
-                break Ok(());
             }
         }
     }
