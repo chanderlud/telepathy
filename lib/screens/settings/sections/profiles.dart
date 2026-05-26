@@ -77,10 +77,11 @@ class ProfileSettingsState extends State<ProfileSettings> {
                           height: 25,
                           disabled: stateController.isCallActive ||
                               profilesController.activeProfile == profile.id,
-                          onPressed: () {
-                            profilesController.setActiveProfile(profile.id);
-                            telepathy.setIdentity(key: profile.keypair);
-                            telepathy.restartManager();
+                          onPressed: () async {
+                            await profilesController
+                                .setActiveProfile(profile.id);
+                            await telepathy.setIdentity(key: profile.keypair);
+                            await telepathy.restartManager();
                           },
                           noSplash: true,
                           disabledColor:
