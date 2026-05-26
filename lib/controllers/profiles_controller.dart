@@ -12,7 +12,7 @@ import 'package:telepathy/models/index.dart';
 import 'package:uuid/uuid.dart';
 
 class ProfilesController with ChangeNotifier {
-  static const String _profilesKey = 'profiles';
+  static const String _profilesKey = 'profilesV2';
   static const String _activeProfileKey = 'activeProfile';
   static const String _defaultProfileNickname = 'Default';
   static const String _unnamedProfileNickname = 'Unnamed Profile';
