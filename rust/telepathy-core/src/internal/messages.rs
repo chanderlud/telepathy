@@ -1,7 +1,7 @@
-use iroh::endpoint::Connection;
-use iroh::PublicKey;
 use crate::internal::error::Error;
 use crate::internal::state::EarlyCallState;
+use iroh::PublicKey;
+use iroh::endpoint::Connection;
 use serde::Serialize;
 use speedy::{Readable, Writable};
 
@@ -92,7 +92,11 @@ impl StartScreenshare {
         }
     }
 
-    pub(crate) fn new_receiver(peer: PublicKey, message: ProtocolMessage, connection: Connection) -> Self {
+    pub(crate) fn new_receiver(
+        peer: PublicKey,
+        message: ProtocolMessage,
+        connection: Connection,
+    ) -> Self {
         Self {
             peer,
             header: Some(message),

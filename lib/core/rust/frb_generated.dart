@@ -158,7 +158,7 @@ abstract class RustLibApi extends BaseApi {
       required FutureOr<List<Contact>> Function(void) getContacts,
       required FutureOr<void> Function(Statistics) statistics,
       required FutureOr<void> Function(ChatMessage) messageReceived,
-      required FutureOr<void> Function((bool, bool)) managerActive,
+      required FutureOr<void> Function(ManagerState) managerActive,
       required FutureOr<void> Function((FrontendNotify, bool))
           screenshareStarted});
 
@@ -1158,7 +1158,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       required FutureOr<List<Contact>> Function(void) getContacts,
       required FutureOr<void> Function(Statistics) statistics,
       required FutureOr<void> Function(ChatMessage) messageReceived,
-      required FutureOr<void> Function((bool, bool)) managerActive,
+      required FutureOr<void> Function(ManagerState) managerActive,
       required FutureOr<void> Function((FrontendNotify, bool))
           screenshareStarted}) {
     return handler.executeSync(SyncTask(
@@ -1178,7 +1178,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             statistics, serializer);
         sse_encode_DartFn_Inputs_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerChatMessage_Output_unit_AnyhowException(
             messageReceived, serializer);
-        sse_encode_DartFn_Inputs_record_bool_bool_Output_unit_AnyhowException(
+        sse_encode_DartFn_Inputs_manager_state_Output_unit_AnyhowException(
             managerActive, serializer);
         sse_encode_DartFn_Inputs_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_bool_Output_unit_AnyhowException(
             screenshareStarted, serializer);
@@ -3341,12 +3341,10 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   Future<void> Function(int, dynamic)
-      encode_DartFn_Inputs_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_bool_Output_unit_AnyhowException(
-          FutureOr<void> Function((FrontendNotify, bool)) raw) {
+      encode_DartFn_Inputs_manager_state_Output_unit_AnyhowException(
+          FutureOr<void> Function(ManagerState) raw) {
     return (callId, rawArg0) async {
-      final arg0 =
-          dco_decode_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_bool(
-              rawArg0);
+      final arg0 = dco_decode_manager_state(rawArg0);
 
       Box<void>? rawOutput;
       Box<AnyhowException>? rawError;
@@ -3376,10 +3374,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   Future<void> Function(int, dynamic)
-      encode_DartFn_Inputs_record_bool_bool_Output_unit_AnyhowException(
-          FutureOr<void> Function((bool, bool)) raw) {
+      encode_DartFn_Inputs_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_bool_Output_unit_AnyhowException(
+          FutureOr<void> Function((FrontendNotify, bool)) raw) {
     return (callId, rawArg0) async {
-      final arg0 = dco_decode_record_bool_bool(rawArg0);
+      final arg0 =
+          dco_decode_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_bool(
+              rawArg0);
 
       Box<void>? rawOutput;
       Box<AnyhowException>? rawError;
@@ -3934,16 +3934,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  FutureOr<void> Function((FrontendNotify, bool))
-      dco_decode_DartFn_Inputs_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_bool_Output_unit_AnyhowException(
+  FutureOr<void> Function(ManagerState)
+      dco_decode_DartFn_Inputs_manager_state_Output_unit_AnyhowException(
           dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     throw UnimplementedError('');
   }
 
   @protected
-  FutureOr<void> Function((bool, bool))
-      dco_decode_DartFn_Inputs_record_bool_bool_Output_unit_AnyhowException(
+  FutureOr<void> Function((FrontendNotify, bool))
+      dco_decode_DartFn_Inputs_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_bool_Output_unit_AnyhowException(
           dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     throw UnimplementedError('');
@@ -4261,6 +4261,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  ManagerState dco_decode_manager_state(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return ManagerState.values[raw as int];
+  }
+
+  @protected
   String? dco_decode_opt_String(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_String(raw);
@@ -4314,19 +4320,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     return (
       dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFrontendNotify(
           arr[0]),
-      dco_decode_bool(arr[1]),
-    );
-  }
-
-  @protected
-  (bool, bool) dco_decode_record_bool_bool(dynamic raw) {
-    // Codec=Dco (DartCObject based), see doc to use other codecs
-    final arr = raw as List<dynamic>;
-    if (arr.length != 2) {
-      throw Exception('Expected 2 elements, got ${arr.length}');
-    }
-    return (
-      dco_decode_bool(arr[0]),
       dco_decode_bool(arr[1]),
     );
   }
@@ -5068,6 +5061,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  ManagerState sse_decode_manager_state(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var inner = sse_decode_i_32(deserializer);
+    return ManagerState.values[inner];
+  }
+
+  @protected
   String? sse_decode_opt_String(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
@@ -5138,14 +5138,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_field0 =
         sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFrontendNotify(
             deserializer);
-    var var_field1 = sse_decode_bool(deserializer);
-    return (var_field0, var_field1);
-  }
-
-  @protected
-  (bool, bool) sse_decode_record_bool_bool(SseDeserializer deserializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    var var_field0 = sse_decode_bool(deserializer);
     var var_field1 = sse_decode_bool(deserializer);
     return (var_field0, var_field1);
   }
@@ -5602,6 +5594,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_DartFn_Inputs_manager_state_Output_unit_AnyhowException(
+      FutureOr<void> Function(ManagerState) self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_DartOpaque(
+        encode_DartFn_Inputs_manager_state_Output_unit_AnyhowException(self),
+        serializer);
+  }
+
+  @protected
   void
       sse_encode_DartFn_Inputs_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_bool_Output_unit_AnyhowException(
           FutureOr<void> Function((FrontendNotify, bool)) self,
@@ -5610,15 +5611,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_DartOpaque(
         encode_DartFn_Inputs_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_bool_Output_unit_AnyhowException(
             self),
-        serializer);
-  }
-
-  @protected
-  void sse_encode_DartFn_Inputs_record_bool_bool_Output_unit_AnyhowException(
-      FutureOr<void> Function((bool, bool)) self, SseSerializer serializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_DartOpaque(
-        encode_DartFn_Inputs_record_bool_bool_Output_unit_AnyhowException(self),
         serializer);
   }
 
@@ -5978,6 +5970,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_manager_state(ManagerState self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.index, serializer);
+  }
+
+  @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
@@ -6041,14 +6039,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFrontendNotify(
         self.$1, serializer);
-    sse_encode_bool(self.$2, serializer);
-  }
-
-  @protected
-  void sse_encode_record_bool_bool(
-      (bool, bool) self, SseSerializer serializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_bool(self.$1, serializer);
     sse_encode_bool(self.$2, serializer);
   }
 

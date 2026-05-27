@@ -1,8 +1,8 @@
 use crate::types::DartError;
 use flutter_rust_bridge::frb;
+use iroh::{PublicKey, SecretKey};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::str::FromStr;
-use iroh::{PublicKey, SecretKey};
 #[cfg(not(target_family = "wasm"))]
 use tokio::process::Command;
 
@@ -12,10 +12,7 @@ pub fn generate_keys() -> (String, Vec<u8>) {
 
     let peer_id = pair.public();
 
-    (
-        peer_id.to_string(),
-        pair.to_bytes().to_vec(),
-    )
+    (peer_id.to_string(), pair.to_bytes().to_vec())
 }
 
 #[frb(sync)]

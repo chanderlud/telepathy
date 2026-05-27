@@ -18,7 +18,7 @@ type DartMethod<A, R> = Arc<Mutex<dyn Fn(A) -> DartFnFuture<R> + Send>>;
 type AcceptCallArgs = (String, Option<Vec<u8>>, FrontendNotify);
 type SessionStatusArgs = (String, SessionStatus);
 type ScreenshareStartedArgs = (FrontendNotify, bool);
-type ManagerActiveArgs = (bool, bool);
+type ManagerActiveArgs = ManagerState;
 
 /// Rust API for FRB frontend.
 ///
@@ -96,7 +96,14 @@ impl Telepathy {
 
     /// Sets the signing key (called when the profile changes)
     pub async fn set_identity(&self, key: Vec<u8>) -> std::result::Result<(), DartError> {
-        self.handle.set_identity(&(key.try_into().map_err(|_| DartError::from("Key must be 32 bytes".to_string()))?)).await.map_err(DartError::from)
+        self.handle
+            .set_identity(
+                &(key
+                    .try_into()
+                    .map_err(|_| DartError::from("Key must be 32 bytes".to_string()))?),
+            )
+            .await
+            .map_err(DartError::from)
     }
 
     /// Stops a specific session (called when a contact is deleted)

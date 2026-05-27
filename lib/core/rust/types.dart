@@ -188,6 +188,14 @@ class DartError implements FrbException {
           message == other.message;
 }
 
+enum ManagerState {
+  stopped,
+  starting,
+  active,
+  failed,
+  ;
+}
+
 @freezed
 sealed class SessionStatus with _$SessionStatus {
   const SessionStatus._();

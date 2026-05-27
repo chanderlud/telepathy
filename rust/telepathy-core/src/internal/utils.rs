@@ -1,12 +1,15 @@
 use crate::internal::callbacks::CoreStatisticsCallback;
 use crate::internal::error::{Error, ErrorKind};
 use crate::internal::messages::ProtocolMessage;
-use crate::internal::sockets::{TIMESTAMP_BUFFER_CAPACITY};
+use crate::internal::sockets::TIMESTAMP_BUFFER_CAPACITY;
 use crate::internal::state::StatisticsCollectorState;
 use crate::overlay::{CONNECTED, LATENCY, LOSS};
 use crate::types::Statistics;
+use bytes::Bytes;
 #[cfg(feature = "flutter")]
 pub use flutter_rust_bridge::JoinHandle;
+use flutter_rust_bridge::for_generated::futures::{SinkExt, StreamExt};
+use iroh::endpoint::{RecvStream, SendStream};
 use kanal::AsyncReceiver;
 use speedy::{Readable, Writable};
 use std::future::Future;
@@ -14,9 +17,6 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::time::Duration;
-use bytes::Bytes;
-use flutter_rust_bridge::for_generated::futures::{SinkExt, StreamExt};
-use iroh::endpoint::{RecvStream, SendStream};
 use telepathy_audio::internal::buffer_pool::PooledBuffer;
 use telepathy_audio::io::traits::ClosedOrFailed;
 use telepathy_audio::io::{AudioDataSink, AudioDataSource};
@@ -99,8 +99,7 @@ pub(crate) fn level_from_window(local_max: f32, max: &mut f32) -> f32 {
 pub(crate) async fn write_message(
     transport: &mut FramedWrite<SendStream, LengthDelimitedCodec>,
     message: &ProtocolMessage,
-) -> Result<()>
-{
+) -> Result<()> {
     let buffer = message.write_to_vec()?;
     transport
         .send(Bytes::from(buffer))

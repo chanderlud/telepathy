@@ -26,7 +26,7 @@ abstract class FlutterCallbacks implements RustOpaqueInterface {
           required FutureOr<List<Contact>> Function(void) getContacts,
           required FutureOr<void> Function(Statistics) statistics,
           required FutureOr<void> Function(ChatMessage) messageReceived,
-          required FutureOr<void> Function((bool, bool)) managerActive,
+          required FutureOr<void> Function(ManagerState) managerActive,
           required FutureOr<void> Function((FrontendNotify, bool))
               screenshareStarted}) =>
       RustLib.instance.api.crateFlutterFlutterCallbacksNew(

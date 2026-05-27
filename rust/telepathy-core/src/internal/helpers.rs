@@ -1,3 +1,4 @@
+use crate::flutter::ManagerState;
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::core::TelepathyCore;
 use crate::internal::error::ErrorKind;
@@ -6,17 +7,16 @@ use crate::internal::messages::{AudioHeader, ProtocolMessage, StartScreenshare};
 use crate::internal::screenshare;
 use crate::internal::state::{EarlyCallState, StatisticsCollectorState};
 use crate::internal::utils::{KanalSink, KanalSource};
-use crate::internal::{Result, ALPN};
+use crate::internal::{ALPN, Result};
 use crate::types::FrontendNotify;
 use bytes::Bytes;
+use iroh::endpoint::presets;
+use iroh::{Endpoint, PublicKey, SecretKey};
+use rustls::crypto::aws_lc_rs::{self, kx_group};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
-use iroh::{Endpoint, PublicKey, RelayMode, SecretKey};
-use iroh::address_lookup::{PkarrPublisher, N0_DNS_PKARR_RELAY_PROD};
-use iroh::endpoint::{presets};
-use rustls::crypto::aws_lc_rs::{self, kx_group};
 #[cfg(target_family = "wasm")]
 use telepathy_audio::WebAudioWrapper;
 use telepathy_audio::devices::AudioHost;
@@ -28,6 +28,7 @@ use telepathy_audio::io::{
 use tokio::fs::File;
 #[cfg(not(target_family = "wasm"))]
 use tokio::io::AsyncReadExt;
+use tokio::select;
 use tokio::sync::Notify;
 use tracing::{error, info, instrument, warn};
 
@@ -39,12 +40,14 @@ where
 {
     /// builds an iroh endpoint and waits for it to come online
     #[instrument(name = "manager.setup_endpoint", skip_all)]
-    pub(crate) async fn setup_endpoint(&self) -> Result<Endpoint> {
+    pub(crate) async fn setup_endpoint(&self) -> Result<Option<Endpoint>> {
         let identity = if let Some(keypair) = self.core_state.identity.read().await.as_ref() {
             keypair.clone()
         } else {
             return Err(ErrorKind::NoIdentityAvailable.into());
         };
+
+        self.callbacks.manager_state(ManagerState::Starting).await;
 
         let mut provider = aws_lc_rs::default_provider();
         provider.kx_groups = vec![
@@ -54,18 +57,25 @@ where
             kx_group::SECP384R1,
         ];
 
+        // the N0 present configures the relay mode & address lookup
+        // we then override the crypto provider to prefer post-quantum key exchange
         let endpoint = Endpoint::builder(presets::N0)
             .crypto_provider(Arc::new(provider))
             .secret_key(identity)
             .alpns(vec![ALPN.to_vec()])
-            .relay_mode(RelayMode::Default)
-            .address_lookup(PkarrPublisher::builder(N0_DNS_PKARR_RELAY_PROD.parse().unwrap()))
             .bind()
             .await?;
 
-        endpoint.online().await;
-
-        Ok(endpoint)
+        select! {
+            _ = self.restart_manager.notified() => {
+                self.callbacks.manager_state(ManagerState::Stopped).await;
+                Ok(None)
+            },
+            _ = endpoint.online() => {
+                self.callbacks.manager_state(ManagerState::Active).await;
+                Ok(Some(endpoint))
+            }
+        }
     }
 
     #[cfg(not(target_family = "wasm"))]
@@ -77,10 +87,7 @@ where
             role = if message.header.is_some() { "receiver" } else { "sender" }
         )
     )]
-    pub(crate) async fn start_screenshare(
-        &self,
-        message: StartScreenshare,
-    ) -> Result<()> {
+    pub(crate) async fn start_screenshare(&self, message: StartScreenshare) -> Result<()> {
         let state = if let Some(s) = self.session_states.read().await.get(&message.peer) {
             s.clone()
         } else {
@@ -95,8 +102,7 @@ where
         *state.stop_screenshare.lock().await = Some(stop.clone());
         let dart_stop = FrontendNotify::new(&stop);
 
-        if let Some(ProtocolMessage::ScreenshareHeader { encoder_name }) = message.header
-        {
+        if let Some(ProtocolMessage::ScreenshareHeader { encoder_name }) = message.header {
             // alert the frontend
             self.callbacks.screenshare_started(dart_stop, false).await;
             // start playing back the screenshare
@@ -138,7 +144,13 @@ where
                 // alert the frontend & provide the stop object
                 self.callbacks.screenshare_started(dart_stop, true).await;
                 // start recording the screenshare
-                screenshare::record(message.connection, stop, state.upload_bandwidth.clone(), config).await?;
+                screenshare::record(
+                    message.connection,
+                    stop,
+                    state.upload_bandwidth.clone(),
+                    config,
+                )
+                .await?;
             } else {
                 warn!("giving up on screenshare start, state closed");
             }

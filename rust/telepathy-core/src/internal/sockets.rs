@@ -1,11 +1,11 @@
 use crate::internal::KEEP_ALIVE;
 use crate::internal::error::Error;
+use bytes::Bytes;
+use iroh::endpoint::Connection;
 use kanal::{AsyncReceiver, Sender};
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::{Arc, Mutex};
-use bytes::Bytes;
-use iroh::endpoint::Connection;
 use telepathy_audio::FRAME_SIZE;
 use telepathy_audio::internal::NETWORK_FRAME;
 use telepathy_audio::internal::buffer_pool::{BufferPool, PooledBuffer, PooledBytes};
@@ -64,7 +64,10 @@ impl TelepathyConnection for ConstConnection {
         let pooled_bytes = prepend_timestamp(pooled_buffer, packet, timestamp(&self.start));
         // Clone the inner Bytes (O(1) refcount increment) for send, allowing
         // automatic buffer recovery when pooled_bytes is dropped after send completes.
-        let ok = self.connection.send_datagram((*pooled_bytes).clone()).is_ok();
+        let ok = self
+            .connection
+            .send_datagram((*pooled_bytes).clone())
+            .is_ok();
         ok as usize
     }
 }
@@ -73,7 +76,7 @@ pub(crate) struct DynamicConnection {
     new_connections: SharedConnections,
 
     connections: Vec<(Connection, Instant)>,
-    
+
     /// Reused buffers via `BufferPool` for zero-reallocation packet construction.
     /// Buffers are automatically returned to the pool when `PooledBytes` is dropped.
     timestamp_buffers: Arc<BufferPool>,

@@ -7,14 +7,14 @@ use crate::internal::screenshare::{Decoder, Device, Encoder, ScreenshareConfigDi
 use crate::internal::spawn_task;
 use atomic_float::AtomicF32;
 use chrono::{DateTime, Local, SecondsFormat, Utc};
+pub use iroh::{PublicKey, SecretKey};
 use serde::{Serialize, Serializer};
 use speedy::{Readable, Writable};
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32};
-pub use iroh::{PublicKey, SecretKey};
 #[cfg(not(target_family = "wasm"))]
 use tokio::net::lookup_host;
 use tokio::sync::{Notify, RwLock};
@@ -100,6 +100,7 @@ pub enum CallState {
 #[derive(Debug, Serialize, Clone)]
 pub enum SessionStatus {
     Connecting,
+    // TODO rework connected to report all of the paths, current direct %, and other detailed metrics like packet loss. Connected should be re-delivered periodically to the frontend
     Connected {
         relayed: bool,
         remote_address: String,
@@ -553,6 +554,13 @@ impl From<String> for DartError {
     fn from(message: String) -> Self {
         Self { message }
     }
+}
+
+pub enum ManagerState {
+    Stopped,
+    Starting,
+    Active,
+    Failed,
 }
 
 fn serialize_timestamp_rfc3339_utc<S>(

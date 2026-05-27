@@ -2,29 +2,32 @@ use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::error::ErrorKind;
 use crate::internal::helpers::OutputHelper;
 use crate::internal::messages::{ProtocolMessage, RoomMessage, StartScreenshare};
-use crate::internal::sockets::{SharedConnections, audio_input, audio_output, DynamicConnection, ConstConnection};
-use crate::internal::state::{StatisticsCollectorState, CoreState};
+use crate::internal::sockets::{
+    ConstConnection, DynamicConnection, SharedConnections, audio_input, audio_output,
+};
+use crate::internal::state::{CoreState, StatisticsCollectorState};
 use crate::internal::utils::{JoinHandle, spawn_task};
 #[cfg(target_os = "ios")]
 use crate::internal::utils::{configure_audio_session, deactivate_audio_session};
-use crate::internal::utils::{
-    loopback, read_message, statistics_collector,
-    write_message,
+use crate::internal::utils::{loopback, read_message, statistics_collector, write_message};
+use crate::internal::{
+    ALPN, EarlyCallState, HELLO_TIMEOUT, KEEP_ALIVE, Result, RoomState, SESSION_MAX_FRAME_LENGTH,
+    SessionState,
 };
-use crate::internal::{EarlyCallState, HELLO_TIMEOUT, KEEP_ALIVE, RoomState, SESSION_MAX_FRAME_LENGTH, SessionState, Result, ALPN};
 use crate::overlay::CONNECTED;
 use crate::overlay::Overlay;
 use crate::types::{
-    CallState, ChatMessage, CodecConfig, Contact, NetworkConfig, ScreenshareConfig, SessionStatus,
+    CallState, ChatMessage, CodecConfig, Contact, ManagerState, NetworkConfig, ScreenshareConfig,
+    SessionStatus,
 };
 use chrono::Local;
+use iroh::endpoint::{ConnectError, ConnectingError, Connection, ConnectionError, RecvStream, SendStream, VarInt};
+use iroh::{Endpoint, PublicKey};
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::Duration;
-use iroh::{Endpoint, PublicKey};
-use iroh::endpoint::{Connection, RecvStream, SendStream};
 #[cfg(target_family = "wasm")]
 use telepathy_audio::WebAudioWrapper;
 use telepathy_audio::devices::AudioHost;
@@ -68,6 +71,8 @@ where
     /// Restarts the session manager when needed
     pub(crate) restart_manager: Arc<Notify>,
 
+    pub(crate) cancel_outbound_connections: Arc<Notify>,
+
     /// A reference to the object that controls the call overlay
     pub(crate) overlay: Overlay,
 
@@ -107,6 +112,7 @@ where
             session_states: Default::default(),
             start_session: None,
             restart_manager: Default::default(),
+            cancel_outbound_connections: Default::default(),
             overlay: overlay.clone(),
             #[cfg(target_family = "wasm")]
             web_input: Default::default(),
@@ -136,11 +142,13 @@ where
                 while !manager_clone.core_state.stop_manager.load(Relaxed) {
                     let last_launch = Instant::now();
                     // run the session manager to completion
-                    let result = manager_clone
-                        .session_manager(&mut receive_session)
-                        .await;
+                    let result = manager_clone.session_manager(&mut receive_session).await;
 
                     if let Err(error) = result {
+                        manager_clone
+                            .callbacks
+                            .manager_state(ManagerState::Failed)
+                            .await;
                         Span::current().record("restart_count", retries);
                         error!(
                             event = "session_manager_failed",
@@ -181,24 +189,23 @@ where
         skip_all,
         fields(manager.id = %Uuid::new_v4(), restart_count = field::Empty)
     )]
-    async fn session_manager(
-        &self,
-        start: &mut Receiver<PublicKey>,
-    ) -> Result<()> {
+    async fn session_manager(&self, start: &mut Receiver<PublicKey>) -> Result<()> {
         let setup_started = Instant::now();
         // build the endpoint & bring online
-        let mut endpoint = self.setup_endpoint().await?;
+        let Some(endpoint) = self.setup_endpoint().await? else {
+            info!(event = "mananger_restart_setup_endpoint");
+            return Ok(());
+        };
         info!(
             event = "manager_endpoint_setup",
             elapsed_ms = setup_started.elapsed().as_millis() as u64
         );
+
         // handles to threads spawned by the session manager
-        let mut handles: Vec<SessionTask> = Vec::new();
+        let mut handles: Vec<JoinHandle<()>> = Vec::new();
         // preload public identity
         let public_identity = self.peer_id().await;
 
-        // alerts the UI that the manager is active
-        self.callbacks.manager_active(true, true).await;
         // the manager is about to start processing events
         self.core_state.manager_active.notify_waiters();
 
@@ -221,7 +228,10 @@ where
 
                     match accepting.await {
                         Ok(connection) => {
-                            self.initialize_session(connection.remote_id(), connection).await;
+                            let self_clone = self.clone();
+                            handles.push(spawn_task(async move {
+                                self_clone.initialize_session(connection.remote_id(), connection).await;
+                            }))
                         }
                         Err(error) => {
                             warn!(event = "incoming_connection_failed", error = %error);
@@ -237,8 +247,11 @@ where
                     } else {
                         debug!(event = "dial_initial", peer.id = %peer_id);
                         self.callbacks.session_status(SessionStatus::Connecting, peer_id).await;
-                        self.open_session(peer_id, &mut endpoint, &mut handles).await;
-                        debug!(event = "dial_finished", peer.id = %peer_id);
+                        let self_clone = self.clone();
+                        let endpoint_clone = endpoint.clone();
+                        handles.push(spawn_task(async move {
+                            self_clone.open_session(peer_id, endpoint_clone).await;
+                        }));
                     }
                 }
                 else => {
@@ -249,7 +262,8 @@ where
         }
 
         debug!(event = "manager_teardown_start");
-        self.callbacks.manager_active(false, false).await;
+        self.callbacks.manager_state(ManagerState::Stopped).await;
+        self.cancel_outbound_connections.notify_waiters();
         // reset room state
         if let Some(state) = self.room_state.write().await.take() {
             state.end_call.notify_one();
@@ -257,50 +271,70 @@ where
         }
         // join all sessions created in manager
         for handle in handles {
-            handle.join().await?;
+            handle.await?;
         }
         debug!(event = "manager_session_handles_joined");
+        endpoint.close().await; // TODO this currently takes 3 seconds when there are outgoing connections, i think we need to decouple the UI disappearing from the shutdown
+        debug!(event = "endpoint_closed");
         Ok(())
     }
 
-    /// Called by the dialer to open a connection and session
+    /// Called by the dialer to open a connection and initialize a session
     #[instrument(
         name = "session.open",
         skip_all,
         fields(peer.id = %peer)
     )]
-    async fn open_session(
-        &self,
-        peer: PublicKey,
-        endpoint: &mut Endpoint,
-        handles: &mut Vec<SessionTask>,
-    ) {
-        // TODO this can take a while to timeout, which blocks the manager
-        match endpoint.connect(peer, ALPN).await {
-            Ok(connection) => {
-                info!(event = "session_connection_opened", peer.id = %peer);
-                handles.push(
-                    self.initialize_session(peer, connection)
-                        .await,
-                );
+    async fn open_session(&self, peer: PublicKey, endpoint: Endpoint) {
+        let connect_future = async {
+            let mut retries = 0;
+            loop {
+                match endpoint.connect(peer, ALPN).await {
+                    Ok(connection) => {
+                        break Some(connection);
+                    }
+                    Err(error) => {
+                        match error {
+                            // do not retry timeouts
+                            ConnectError::Connecting { source: ConnectingError::ConnectionError { source: ConnectionError::TimedOut { .. }, .. }, .. } => {
+                                break None;
+                            }
+                            _ => ()
+                        }
+
+                        if retries > 3 {
+                            break None;
+                        } else {
+                            retries += 1;
+                            warn!(event = "connect_failed", peer.id = %peer, error = %error, retries = retries);
+                        }
+                    }
+                }
             }
-            Err(error) => {
-                // TODO implement connection retries similar to original implementation
-                warn!(event = "session_open_give_up", peer.id = %peer, error = %error);
-                self.callbacks
-                    .session_status(SessionStatus::Inactive, peer)
-                    .await;
+        };
+
+        select! {
+            _ = self.cancel_outbound_connections.notified() => {
+                warn!(event = "outbound_connection_canceled", peer = %peer);
+            }
+            result = connect_future => {
+                if let Some(connection) = result {
+                    info!(event = "connect_succeeded", peer.id = %peer);
+                    self.initialize_session(peer, connection)
+                        .await;
+                } else {
+                    warn!(event = "connect_abandoned", peer.id = %peer);
+                    self.callbacks
+                        .session_status(SessionStatus::Inactive, peer)
+                        .await;
+                }
             }
         }
     }
 
     /// Entry point to a session that sets up state and spawns session outer
     #[instrument(name = "session.init", skip_all, fields(peer.id = %peer, session.id = field::Empty))]
-    async fn initialize_session(
-        &self,
-        peer: PublicKey,
-        connection: Connection,
-    ) -> SessionTask {
+    async fn initialize_session(&self, peer: PublicKey, connection: Connection) {
         let contact_option = self.callbacks.get_contact(peer.to_vec()).await;
         // sends messages to the session from elsewhere in the program
         let message_channel = channel::<ProtocolMessage>(8);
@@ -314,6 +348,7 @@ where
             .await
             .insert(peer, state.clone());
 
+        // TODO this case is often being reached because BOTH clients are dialing & receiving
         if let Some(old_state) = old_state_option {
             warn!(event = "session_replaced_existing_state", peer.id = %peer);
             old_state.teardown().await;
@@ -322,7 +357,13 @@ where
         let contact = if let Some(contact) = contact_option {
             // TODO this isn't a super ideal place to notify the frontend of the relay status and remote address because i think they can still change
             self.callbacks
-                .session_status(SessionStatus::Connected { relayed: false, remote_address: "127.0.0.1".to_string() }, peer)
+                .session_status(
+                    SessionStatus::Connected {
+                        relayed: false,
+                        remote_address: "127.0.0.1".to_string(),
+                    },
+                    peer,
+                )
                 .await;
             contact
         } else {
@@ -336,17 +377,8 @@ where
             }
         };
 
-        let self_clone = self.clone();
-        SessionTask(spawn_task(
-            async move {
-                self_clone
-                    .session_outer(peer, connection, state, contact, message_channel)
-                    .await;
-
-                Ok(())
-            }
-            .in_current_span(),
-        ))
+        self.session_outer(peer, connection, state, contact, message_channel)
+            .await;
     }
 
     /// Runs session_inner as many times as needed, performs cleanup if needed
@@ -443,6 +475,9 @@ where
                 }
             }
         }
+
+        // gracefully close the connection
+        connection.close(VarInt::from_u32(0), &[]);
 
         // if the state exists and has the same id, clean it up
         // if a new session state already exists with a new ID, we don't want to clean it up
@@ -856,11 +891,7 @@ where
                 loss,
             ));
 
-            let controller_future = self.call_controller(
-                o,
-                call_state.peer,
-                end_call,
-            );
+            let controller_future = self.call_controller(o, call_state.peer, end_call);
 
             info!(event = "call_controller_starting");
 
@@ -1225,21 +1256,13 @@ where
             session_states: Arc::clone(&self.session_states),
             start_session: self.start_session.clone(),
             restart_manager: Arc::clone(&self.restart_manager),
+            cancel_outbound_connections: Arc::clone(&self.cancel_outbound_connections),
             overlay: self.overlay.clone(),
             #[cfg(target_family = "wasm")]
             web_input: Arc::clone(&self.web_input),
             callbacks: Arc::clone(&self.callbacks),
             phantom: self.phantom,
         }
-    }
-}
-
-struct SessionTask(JoinHandle<Result<()>>);
-
-impl SessionTask {
-    async fn join(self) -> Result<()> {
-        self.0.await??;
-        Ok(())
     }
 }
 

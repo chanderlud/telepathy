@@ -1,9 +1,9 @@
 #[cfg(target_family = "wasm")]
 use flutter_rust_bridge::for_generated::futures::channel::oneshot::Canceled;
+use iroh::KeyParsingError;
+use iroh::endpoint::{BindError, ConnectionError};
 use std::fmt::{Display, Formatter};
 use std::net::AddrParseError;
-use iroh::endpoint::{BindError, ConnectionError};
-use iroh::KeyParsingError;
 use telepathy_audio::devices::DeviceError;
 use tokio::task::JoinError;
 use tokio::time::error::Elapsed;
@@ -36,16 +36,11 @@ pub(crate) enum ErrorKind {
     InvalidContactFormat,
     TransportSend,
     TransportRecv,
-    UnexpectedSwarmEvent,
-    SwarmBuild,
-    SwarmEnded,
     #[cfg(not(target_family = "wasm"))]
     InvalidEncoder,
     RoomStateMissing,
-    StreamsEnded,
     NoEncoderAvailable,
     NoIdentityAvailable,
-    NoStream,
     CallAlreadyActive,
     NoSessionForContact,
     ManagerRestartDuringCall,
@@ -155,7 +150,7 @@ impl From<DeviceError> for Error {
 impl From<BindError> for Error {
     fn from(err: BindError) -> Self {
         Self {
-            kind: ErrorKind::BindError(err)
+            kind: ErrorKind::BindError(err),
         }
     }
 }
@@ -163,7 +158,7 @@ impl From<BindError> for Error {
 impl From<KeyParsingError> for Error {
     fn from(err: KeyParsingError) -> Self {
         Self {
-            kind: ErrorKind::KeyParsing(err)
+            kind: ErrorKind::KeyParsing(err),
         }
     }
 }
@@ -171,7 +166,7 @@ impl From<KeyParsingError> for Error {
 impl From<ConnectionError> for Error {
     fn from(err: ConnectionError) -> Self {
         Self {
-            kind: ErrorKind::Connection(err)
+            kind: ErrorKind::Connection(err),
         }
     }
 }
@@ -208,16 +203,11 @@ impl Display for Error {
                 ErrorKind::InvalidContactFormat => "Invalid contact format".to_string(),
                 ErrorKind::TransportSend => "Transport failed on send".to_string(),
                 ErrorKind::TransportRecv => "Transport failed on receive".to_string(),
-                ErrorKind::UnexpectedSwarmEvent => "Unexpected swarm event".to_string(),
-                ErrorKind::SwarmBuild => "Swarm build error".to_string(),
-                ErrorKind::SwarmEnded => "Swarm ended".to_string(),
                 #[cfg(not(target_family = "wasm"))]
                 ErrorKind::InvalidEncoder => "Invalid encoder".to_string(),
                 ErrorKind::RoomStateMissing => "Room state missing".to_string(),
-                ErrorKind::StreamsEnded => "Streams ended".to_string(),
                 ErrorKind::NoEncoderAvailable => "No encoder available".to_string(),
                 ErrorKind::NoIdentityAvailable => "No identity available".to_string(),
-                ErrorKind::NoStream => "Did not get a stream".to_string(),
                 ErrorKind::CallAlreadyActive => "A call is already active".to_string(),
                 ErrorKind::NoSessionForContact => "No session found for contact".to_string(),
                 ErrorKind::ManagerRestartDuringCall =>

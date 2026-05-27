@@ -1,12 +1,14 @@
 use crate::internal::utils::JoinHandle;
-use crate::types::{CallState, ChatMessage, Contact, FrontendNotify, SessionStatus, Statistics};
+use crate::types::{
+    CallState, ChatMessage, Contact, FrontendNotify, ManagerState, SessionStatus, Statistics,
+};
 #[cfg(test)]
 use async_trait::async_trait;
+use iroh::PublicKey;
 #[cfg(test)]
 use mockall::automock;
 use std::future::Future;
 use std::sync::Arc;
-use iroh::PublicKey;
 use tokio::sync::Notify;
 
 #[cfg_attr(test, automock)]
@@ -22,7 +24,7 @@ pub(crate) trait CoreCallbacks<S: CoreStatisticsCallback> {
 
     fn get_contacts(&self) -> impl Future<Output = Vec<Contact>> + Send;
 
-    fn manager_active(&self, active: bool, restartable: bool) -> impl Future<Output = ()> + Send;
+    fn manager_state(&self, state: ManagerState) -> impl Future<Output = ()> + Send;
 
     fn screenshare_started(
         &self,

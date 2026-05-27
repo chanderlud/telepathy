@@ -22,11 +22,11 @@ pub(crate) use crate::internal::utils::{JoinHandle, spawn_task};
 use crate::overlay::Overlay;
 use crate::types::{ChatMessage, CodecConfig, Contact, NetworkConfig, ScreenshareConfig};
 use chrono::Local;
+use iroh::SecretKey;
 use std::mem;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::Duration;
-use iroh::SecretKey;
 use telepathy_audio::RnnModel;
 use telepathy_audio::devices::AudioHost;
 use telepathy_audio::internal::utils::db_to_multiplier;
@@ -167,7 +167,10 @@ where
         // gracefully ends the room call
         let end_call = Arc::new(Notify::new());
         // the same early call state is used throughout the room, the real peer ids are set later
-        let call_state = self.inner.setup_call(SecretKey::generate().public()).await?;
+        let call_state = self
+            .inner
+            .setup_call(SecretKey::generate().public())
+            .await?;
         // set room state
         let old_state_option = self.inner.room_state.write().await.replace(RoomState {
             peers: members.clone(),
@@ -242,8 +245,7 @@ where
 
     /// Sets the signing key (called when the profile changes)
     pub async fn set_identity(&self, key: &[u8; 32]) -> Result<()> {
-        *self.inner.core_state.identity.write().await =
-            Some(SecretKey::from_bytes(key));
+        *self.inner.core_state.identity.write().await = Some(SecretKey::from_bytes(key));
         Ok(())
     }
 

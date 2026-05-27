@@ -1,9 +1,9 @@
 use crate::internal::messages::{AudioHeader, ProtocolMessage, RoomMessage};
 use crate::types::{CodecConfig, NetworkConfig, ScreenshareConfig};
 use atomic_float::AtomicF32;
+use iroh::{PublicKey, SecretKey};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
-use iroh::{PublicKey, SecretKey};
 use telepathy_audio::RnnModel;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::{Mutex, Notify, RwLock};

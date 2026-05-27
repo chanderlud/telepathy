@@ -2,11 +2,13 @@ use crate::AudioDevice;
 use crate::internal::TelepathyHandle;
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::{JoinHandle, spawn_task};
-use crate::types::{CallState, ChatMessage, Contact, FrontendNotify, SessionStatus, Statistics};
+use crate::types::{
+    CallState, ChatMessage, Contact, FrontendNotify, ManagerState, SessionStatus, Statistics,
+};
+use iroh::PublicKey;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use iroh::PublicKey;
 #[cfg(feature = "mock-audio")]
 use telepathy_audio::MockAudioHost;
 #[cfg(not(feature = "mock-audio"))]
@@ -216,7 +218,7 @@ pub struct NativeCallbacks {
     get_contacts: NativeMethod<(), Vec<Contact>>,
     statistics: NativeVoid<Statistics>,
     message_received: NativeVoid<ChatMessage>,
-    manager_active: NativeVoid<(bool, bool)>,
+    manager_active: NativeVoid<ManagerState>,
     screenshare_started: NativeVoid<(FrontendNotify, bool)>,
 }
 
@@ -233,7 +235,7 @@ impl NativeCallbacks {
         get_contacts: impl Fn(()) -> NativeFuture<Vec<Contact>> + Send + Sync + 'static,
         statistics: impl Fn(Statistics) -> NativeFuture<()> + Send + Sync + 'static,
         message_received: impl Fn(ChatMessage) -> NativeFuture<()> + Send + Sync + 'static,
-        manager_active: impl Fn((bool, bool)) -> NativeFuture<()> + Send + Sync + 'static,
+        manager_active: impl Fn(ManagerState) -> NativeFuture<()> + Send + Sync + 'static,
         screenshare_started: impl Fn((FrontendNotify, bool)) -> NativeFuture<()> + Send + Sync + 'static,
     ) -> Self {
         Self {
@@ -263,8 +265,8 @@ impl CoreCallbacks<NativeStatisticsCallback> for NativeCallbacks {
         (self.get_contacts)(()).await
     }
 
-    async fn manager_active(&self, active: bool, restartable: bool) {
-        (self.manager_active)((active, restartable)).await
+    async fn manager_state(&self, state: ManagerState) {
+        (self.manager_active)(state).await
     }
 
     async fn screenshare_started(&self, stop: FrontendNotify, sender: bool) {

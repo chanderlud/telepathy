@@ -27,9 +27,10 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_ansi(false)
         .with_writer(std::io::stderr)
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-            EnvFilter::new("telepathy_cli=info,telepathy_core=info")
-        }))
+        .with_env_filter(
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new("telepathy_cli=info,telepathy_core=info")),
+        )
         .init();
 
     let args = parse_args(std::env::args().collect())?;

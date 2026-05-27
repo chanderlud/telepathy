@@ -250,13 +250,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
           dynamic raw);
 
   @protected
-  FutureOr<void> Function((FrontendNotify, bool))
-      dco_decode_DartFn_Inputs_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_bool_Output_unit_AnyhowException(
+  FutureOr<void> Function(ManagerState)
+      dco_decode_DartFn_Inputs_manager_state_Output_unit_AnyhowException(
           dynamic raw);
 
   @protected
-  FutureOr<void> Function((bool, bool))
-      dco_decode_DartFn_Inputs_record_bool_bool_Output_unit_AnyhowException(
+  FutureOr<void> Function((FrontendNotify, bool))
+      dco_decode_DartFn_Inputs_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_bool_Output_unit_AnyhowException(
           dynamic raw);
 
   @protected
@@ -419,6 +419,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       dynamic raw);
 
   @protected
+  ManagerState dco_decode_manager_state(dynamic raw);
+
+  @protected
   String? dco_decode_opt_String(dynamic raw);
 
   @protected
@@ -443,9 +446,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
     bool
   ) dco_decode_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_bool(
       dynamic raw);
-
-  @protected
-  (bool, bool) dco_decode_record_bool_bool(dynamic raw);
 
   @protected
   (bool, bool, double) dco_decode_record_bool_bool_f_32(dynamic raw);
@@ -784,6 +784,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       SseDeserializer deserializer);
 
   @protected
+  ManagerState sse_decode_manager_state(SseDeserializer deserializer);
+
+  @protected
   String? sse_decode_opt_String(SseDeserializer deserializer);
 
   @protected
@@ -808,9 +811,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
     bool
   ) sse_decode_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_bool(
       SseDeserializer deserializer);
-
-  @protected
-  (bool, bool) sse_decode_record_bool_bool(SseDeserializer deserializer);
 
   @protected
   (bool, bool, double) sse_decode_record_bool_bool_f_32(
@@ -1028,14 +1028,14 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
           SseSerializer serializer);
 
   @protected
+  void sse_encode_DartFn_Inputs_manager_state_Output_unit_AnyhowException(
+      FutureOr<void> Function(ManagerState) self, SseSerializer serializer);
+
+  @protected
   void
       sse_encode_DartFn_Inputs_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_bool_Output_unit_AnyhowException(
           FutureOr<void> Function((FrontendNotify, bool)) self,
           SseSerializer serializer);
-
-  @protected
-  void sse_encode_DartFn_Inputs_record_bool_bool_Output_unit_AnyhowException(
-      FutureOr<void> Function((bool, bool)) self, SseSerializer serializer);
 
   @protected
   void
@@ -1202,6 +1202,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       List<(String, Uint8List)> self, SseSerializer serializer);
 
   @protected
+  void sse_encode_manager_state(ManagerState self, SseSerializer serializer);
+
+  @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer);
 
   @protected
@@ -1225,9 +1228,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void
       sse_encode_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_bool(
           (FrontendNotify, bool) self, SseSerializer serializer);
-
-  @protected
-  void sse_encode_record_bool_bool((bool, bool) self, SseSerializer serializer);
 
   @protected
   void sse_encode_record_bool_bool_f_32(

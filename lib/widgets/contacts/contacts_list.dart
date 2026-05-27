@@ -87,6 +87,7 @@ class ContactsList extends StatelessWidget {
                       ),
                     ],
                   ),
+                  // TODO rework this UI based on the rich manager state, show a spinner when reconnecting, rich tooltip messages
                   if (!sessionManagerActive)
                     Row(
                       mainAxisSize: MainAxisSize.min,
