@@ -1266,6 +1266,51 @@ mod tests {
         }
     }
 
+    fn make_wav_header(
+        channels: u16,
+        sample_rate: u32,
+        audio_format: u16,
+        bits_per_sample: u16,
+    ) -> Vec<u8> {
+        let mut header = vec![0u8; 44];
+        let bytes_per_sample = bits_per_sample / 8;
+        let block_align = channels.saturating_mul(bytes_per_sample);
+        let byte_rate = sample_rate.saturating_mul(block_align as u32);
+
+        header[0..4].copy_from_slice(b"RIFF");
+        header[8..12].copy_from_slice(b"WAVE");
+        header[12..16].copy_from_slice(b"fmt ");
+        header[16..20].copy_from_slice(&16u32.to_le_bytes());
+        header[20..22].copy_from_slice(&audio_format.to_le_bytes());
+        header[22..24].copy_from_slice(&channels.to_le_bytes());
+        header[24..28].copy_from_slice(&sample_rate.to_le_bytes());
+        header[28..32].copy_from_slice(&byte_rate.to_le_bytes());
+        header[32..34].copy_from_slice(&block_align.to_le_bytes());
+        header[34..36].copy_from_slice(&bits_per_sample.to_le_bytes());
+        header[36..40].copy_from_slice(b"data");
+        header
+    }
+
+    fn make_i16_wav(channels: u16, sample_rate: u32, samples: &[i16]) -> Vec<u8> {
+        let mut bytes = make_wav_header(channels, sample_rate, 1, 16);
+        let data_len = (samples.len() * 2) as u32;
+        let riff_len = 36 + data_len;
+        bytes[4..8].copy_from_slice(&riff_len.to_le_bytes());
+        bytes[40..44].copy_from_slice(&data_len.to_le_bytes());
+        for sample in samples {
+            bytes.extend_from_slice(&sample.to_le_bytes());
+        }
+        bytes
+    }
+
+    fn assert_i16_close(actual: i16, expected: i16, tolerance: i16) {
+        let diff = (actual as i32 - expected as i32).abs();
+        assert!(
+            diff <= tolerance as i32,
+            "expected {expected}, got {actual}, diff {diff}"
+        );
+    }
+
     struct TestFrameSource {
         channels: usize,
         total_frames: usize,
@@ -1308,20 +1353,7 @@ mod tests {
 
     #[test]
     fn test_audio_header_parsing() {
-        // Minimal valid WAV header (44 bytes, 16-bit PCM, stereo, 44100 Hz)
-        let mut header = vec![0u8; 44];
-        // RIFF header
-        header[0..4].copy_from_slice(b"RIFF");
-        header[8..12].copy_from_slice(b"WAVE");
-        // Format chunk
-        header[12..16].copy_from_slice(b"fmt ");
-        header[16..20].copy_from_slice(&16u32.to_le_bytes()); // Chunk size
-        header[20..22].copy_from_slice(&1u16.to_le_bytes()); // Audio format (PCM)
-        header[22..24].copy_from_slice(&2u16.to_le_bytes()); // Channels
-        header[24..28].copy_from_slice(&44100u32.to_le_bytes()); // Sample rate
-        header[28..32].copy_from_slice(&176400u32.to_le_bytes()); // Byte rate
-        header[32..34].copy_from_slice(&4u16.to_le_bytes()); // Block align
-        header[34..36].copy_from_slice(&16u16.to_le_bytes()); // Bits per sample
+        let header = make_wav_header(2, 44_100, 1, 16);
 
         let parsed = AudioHeader::try_from(&header[..]).unwrap();
         assert_eq!(parsed.channels, 2);
@@ -1331,8 +1363,40 @@ mod tests {
 
     #[test]
     fn test_audio_header_too_short() {
-        let short_header = vec![0u8; 20];
+        let short_header = [0u8; 20];
         assert!(AudioHeader::try_from(&short_header[..]).is_err());
+    }
+
+    #[test]
+    fn test_audio_header_rejects_invalid_wav_metadata() {
+        let mut bad_riff = make_wav_header(1, 48_000, 1, 16);
+        bad_riff[0..4].copy_from_slice(b"RIFX");
+
+        let zero_channels = make_wav_header(0, 48_000, 1, 16);
+        let zero_sample_rate = make_wav_header(1, 0, 1, 16);
+        let unsupported_format = make_wav_header(1, 48_000, 2, 16);
+        let unsupported_depth = make_wav_header(1, 48_000, 1, 24);
+
+        assert!(matches!(
+            AudioHeader::try_from(&bad_riff[..]),
+            Err(Error::InvalidWav)
+        ));
+        assert!(matches!(
+            AudioHeader::try_from(&zero_channels[..]),
+            Err(Error::InvalidWav)
+        ));
+        assert!(matches!(
+            AudioHeader::try_from(&zero_sample_rate[..]),
+            Err(Error::InvalidWav)
+        ));
+        assert!(matches!(
+            AudioHeader::try_from(&unsupported_format[..]),
+            Err(Error::InvalidWav)
+        ));
+        assert!(matches!(
+            AudioHeader::try_from(&unsupported_depth[..]),
+            Err(Error::InvalidWav)
+        ));
     }
 
     // Tests for SampleConversion trait
@@ -1422,17 +1486,13 @@ mod tests {
 
     #[test]
     fn test_unpack_wav_frame_u8_mono() {
-        // Mono U8 audio: 3 samples [64, 128, 192]
         let chunk = vec![64_u8, 128, 192];
         let mut output = vec![0.0_f32; 3];
 
         let frames = unpack_wav_frame(&chunk, SampleFormat::U8, 1, &mut output).unwrap();
 
         assert_eq!(frames, 3);
-        // 64/255*2-1 ≈ -0.498, 128/255*2-1 ≈ 0.004, 192/255*2-1 ≈ 0.506
-        assert!(output[0] < 0.0); // 64 is below center
-        assert!(output[1].abs() < 0.02); // 128 is center
-        assert!(output[2] > 0.0); // 192 is above center
+        assert_samples_close(&output, &[-0.4980392, 0.00392163, 0.5058824]);
     }
 
     #[test]
@@ -1444,10 +1504,7 @@ mod tests {
         let frames = unpack_wav_frame(&chunk, SampleFormat::U8, 2, &mut output).unwrap();
 
         assert_eq!(frames, 2);
-        assert!(output[0] < 0.0); // L1 = 64
-        assert!(output[1] > 0.0); // R1 = 192
-        assert!(output[2].abs() < 0.02); // L2 = 128
-        assert!(output[3] > 0.99); // R2 = 255
+        assert_samples_close(&output, &[-0.4980392, 0.5058824, 0.00392163, 1.0]);
     }
 
     #[test]
@@ -1461,8 +1518,10 @@ mod tests {
         let frames = unpack_wav_frame(&chunk, SampleFormat::I16, 1, &mut output).unwrap();
 
         assert_eq!(frames, 2);
-        assert!(output[0] > 0.0); // Positive sample
-        assert!(output[1] < 0.0); // Negative sample
+        assert_samples_close(
+            &output,
+            &[1000.0 / i16::MAX as f32, -1000.0 / i16::MAX as f32],
+        );
     }
 
     #[test]
@@ -1478,8 +1537,15 @@ mod tests {
         let frames = unpack_wav_frame(&chunk, SampleFormat::I16, 2, &mut output).unwrap();
 
         assert_eq!(frames, 2);
-        assert!(output[0] > 0.0 && output[2] > 0.0);
-        assert!(output[1] < 0.0 && output[3] < 0.0);
+        assert_samples_close(
+            &output,
+            &[
+                10000.0 / i16::MAX as f32,
+                -10000.0 / i16::MAX as f32,
+                5000.0 / i16::MAX as f32,
+                -5000.0 / i16::MAX as f32,
+            ],
+        );
     }
 
     #[test]
@@ -1626,10 +1692,15 @@ mod tests {
 
         let frames = src.next_frame(&mut out).unwrap().unwrap();
         assert_eq!(frames, 2);
-        assert!(out[0] > 0.0);
-        assert!(out[1] < 0.0);
-        assert!(out[2] > 0.0);
-        assert!(out[3] < 0.0);
+        assert_samples_close(
+            &out[..4],
+            &[
+                1000.0 / i16::MAX as f32,
+                -1000.0 / i16::MAX as f32,
+                2000.0 / i16::MAX as f32,
+                -2000.0 / i16::MAX as f32,
+            ],
+        );
 
         let next = src.next_frame(&mut out).unwrap();
         assert!(next.is_none());
@@ -1638,8 +1709,8 @@ mod tests {
     #[test]
     fn test_decoded_frame_source_next_frame_and_eos() {
         let mut frame = [0_i16; FRAME_SIZE];
-        for i in 0..FRAME_SIZE {
-            frame[i] = if i % 2 == 0 { i as i16 } else { -(i as i16) };
+        for (i, sample) in frame.iter_mut().enumerate() {
+            *sample = if i % 2 == 0 { i as i16 } else { -(i as i16) };
         }
 
         let mut src = DecodedFrameSource::new(vec![frame], 2);
@@ -1652,8 +1723,8 @@ mod tests {
         assert_eq!(frames, FRAME_SIZE / 2);
 
         let scale = 1_f32 / i16::MAX as f32;
-        assert!((out[0] - (0_f32 * scale)).abs() < 1e-6);
-        assert!((out[1] - (-1_f32 * scale)).abs() < 1e-6);
+        assert!(out[0].abs() < 1e-6);
+        assert!((out[1] + scale).abs() < 1e-6);
         assert!((out[2] - (2_f32 * scale)).abs() < 1e-6);
         assert!((out[3] - (-3_f32 * scale)).abs() < 1e-6);
 
@@ -1715,5 +1786,29 @@ mod tests {
 
         assert_eq!(output[0], 750);
         assert_eq!(output[1], -1000);
+    }
+
+    #[tokio::test]
+    async fn test_wav_to_sea_produces_decodable_downmixed_padded_frame() {
+        let wav = make_i16_wav(2, 48_000, &[10_000, -2_000, 3_000, 1_000, -4_000, -8_000]);
+
+        let sea = wav_to_sea(wav, 8.0).await.unwrap();
+        let header = SeaFileHeader::from_frame(&sea[..14]).unwrap();
+        assert_eq!(header.channels, 1);
+        assert_eq!(header.sample_rate, 48_000);
+        assert_eq!(header.frames_per_chunk, FRAME_SIZE as u16);
+        assert!(header.chunk_size > 0);
+        let chunk_size = header.chunk_size as usize;
+
+        let mut decoder = SeaDecoder::new(header).unwrap();
+        let mut decoded = [0_i16; FRAME_SIZE];
+        decoder
+            .decode_frame(&sea[14..14 + chunk_size], &mut decoded)
+            .unwrap();
+
+        assert_i16_close(decoded[0], 4_000, 750);
+        assert_i16_close(decoded[1], 2_000, 750);
+        assert_i16_close(decoded[2], -6_000, 750);
+        assert!(decoded[3..].iter().all(|sample| sample.abs() <= 750));
     }
 }

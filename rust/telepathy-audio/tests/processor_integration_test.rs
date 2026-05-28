@@ -5,8 +5,9 @@ mod common;
 use atomic_float::AtomicF32;
 use bytes::{Bytes, BytesMut};
 use common::{
-    FullAudioOutput, QueueSource, TEST_SAMPLE_RATE, TestAudioInput, TestAudioOutput,
-    make_input_state, make_output_state,
+    FailingAudioOutput, FailingSource, FullAudioOutput, QueueSource, RecordingAudioOutput,
+    TEST_SAMPLE_RATE, TestAudioInput, TestAudioOutput, bytes_to_i16_samples, make_input_state,
+    make_output_state, raw_frame_from_i16, raw_frame_with_start,
 };
 use nnnoiseless::DenoiseState;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -24,6 +25,24 @@ use telepathy_audio::sea::encoder::{EncoderSettings, SeaEncoder};
 
 const MINIMUM_SILENCE_LENGTH: usize = 40;
 const TEST_FRAMES: usize = 100;
+
+fn flatten_recorded(recorded: &Arc<std::sync::Mutex<Vec<Vec<f32>>>>) -> Vec<f32> {
+    recorded.lock().unwrap().iter().flatten().copied().collect()
+}
+
+fn assert_i16_content_close(actual: &[f32], expected: &[i16], tolerance: i16) {
+    assert_eq!(actual.len(), expected.len());
+    let scale = 1.0_f32 / i16::MAX as f32;
+    for (idx, (actual, expected)) in actual.iter().zip(expected.iter()).enumerate() {
+        let expected = *expected as f32 * scale;
+        let diff = (actual - expected).abs();
+        let allowed = tolerance as f32 * scale;
+        assert!(
+            diff <= allowed,
+            "sample {idx} mismatch: expected {expected}, got {actual}, diff {diff}"
+        );
+    }
+}
 
 #[test]
 fn input_processor_encodes_frames_with_sea() {
@@ -44,14 +63,31 @@ fn input_processor_encodes_frames_with_sea() {
         )
     });
 
+    let mut encoded_frames = Vec::new();
     for _ in 0..10 {
         let buf = rx
             .recv_timeout(Duration::from_secs(2))
             .expect("expected encoded frame");
         assert!(buf.as_ref().len() < FRAME_SIZE * 2);
+        encoded_frames.push(Bytes::copy_from_slice(buf.as_ref()));
     }
 
     handle.join().unwrap().unwrap();
+
+    let header = SeaFileHeader {
+        version: 1,
+        channels: 1,
+        chunk_size: encoded_frames[0].len() as u16,
+        frames_per_chunk: FRAME_SIZE as u16,
+        sample_rate: TEST_SAMPLE_RATE as u32,
+    };
+    let mut decoder = SeaDecoder::new(header).unwrap();
+    let mut decoded = [0_i16; FRAME_SIZE];
+    for frame in encoded_frames {
+        decoder.decode_frame(&frame, &mut decoded).unwrap();
+        assert_eq!(decoded.len(), FRAME_SIZE);
+        assert!(decoded.iter().any(|sample| sample.abs() > 1_000));
+    }
 }
 
 #[test]
@@ -59,6 +95,7 @@ fn output_processor_decodes_frames_with_sea() {
     let mut encoder =
         SeaEncoder::new(1, TEST_SAMPLE_RATE as u32, EncoderSettings::default()).unwrap();
     let mut encoded_frames = Vec::new();
+    let mut original_frames = Vec::new();
     let mut phase = 0.0_f64;
 
     for _ in 0..10 {
@@ -67,6 +104,7 @@ fn output_processor_decodes_frames_with_sea() {
             phase += 2.0 * std::f64::consts::PI * 440.0 / TEST_SAMPLE_RATE as f64;
             sample
         });
+        original_frames.extend_from_slice(&frame);
         let mut encoded = BytesMut::new();
         encoder.encode_frame(frame, &mut encoded).unwrap();
         encoded_frames.push(encoded.freeze());
@@ -81,7 +119,7 @@ fn output_processor_decodes_frames_with_sea() {
     };
     let decoder = SeaDecoder::new(header).unwrap();
     let source = QueueSource::new(encoded_frames);
-    let (output, samples_counter, frames_counter) = TestAudioOutput::new();
+    let (output, recorded) = RecordingAudioOutput::new();
 
     output_processor(
         source,
@@ -93,8 +131,88 @@ fn output_processor_decodes_frames_with_sea() {
     )
     .unwrap();
 
-    assert_eq!(frames_counter.load(Ordering::Relaxed), 10);
-    assert!(samples_counter.load(Ordering::Relaxed) > 0);
+    let samples = flatten_recorded(&recorded);
+    assert_eq!(samples.len(), FRAME_SIZE * 10);
+    assert_i16_content_close(&samples, &original_frames, 500);
+}
+
+#[test]
+fn output_processor_raw_frame_writes_exact_sample_values() {
+    let input_samples = [i16::MIN, -12_000, 0, 12_000, i16::MAX];
+    let mut frame_samples = vec![0_i16; FRAME_SIZE];
+    frame_samples[..input_samples.len()].copy_from_slice(&input_samples);
+    let source = QueueSource::new(vec![raw_frame_from_i16(&frame_samples)]);
+    let (output, recorded) = RecordingAudioOutput::new();
+
+    output_processor(
+        source,
+        output,
+        TEST_SAMPLE_RATE,
+        TEST_SAMPLE_RATE,
+        OutputProcessorState::default(),
+        None,
+    )
+    .unwrap();
+
+    let samples = flatten_recorded(&recorded);
+    assert_i16_content_close(&samples[..input_samples.len()], &input_samples, 1);
+    assert_eq!(samples.len(), FRAME_SIZE);
+}
+
+#[test]
+fn output_processor_ignores_malformed_raw_frame() {
+    let source = QueueSource::new(vec![Bytes::from_static(&[1, 2, 3])]);
+    let (output, recorded) = RecordingAudioOutput::new();
+
+    output_processor(
+        source,
+        output,
+        TEST_SAMPLE_RATE,
+        TEST_SAMPLE_RATE,
+        OutputProcessorState::default(),
+        None,
+    )
+    .unwrap();
+
+    assert!(recorded.lock().unwrap().is_empty());
+}
+
+#[test]
+fn output_processor_source_failures_propagate() {
+    let (output, _recorded) = RecordingAudioOutput::new();
+
+    let err = output_processor(
+        FailingSource,
+        output,
+        TEST_SAMPLE_RATE,
+        TEST_SAMPLE_RATE,
+        OutputProcessorState::default(),
+        None,
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(err, telepathy_audio::Error::Processing(msg) if msg.contains("intentional source failure"))
+    );
+}
+
+#[test]
+fn output_processor_sink_failures_propagate() {
+    let source = QueueSource::new(vec![raw_frame_with_start(0)]);
+
+    let err = output_processor(
+        source,
+        FailingAudioOutput,
+        TEST_SAMPLE_RATE,
+        TEST_SAMPLE_RATE,
+        OutputProcessorState::default(),
+        None,
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(err, telepathy_audio::Error::Processing(msg) if msg.contains("intentional output failure"))
+    );
 }
 
 fn run_input_and_measure_rms(input_volume: f32) -> f32 {
@@ -179,7 +297,11 @@ fn input_processor_updates_rms_atomic() {
     while rx.recv_timeout(Duration::from_millis(200)).is_ok() {}
     handle.join().unwrap().unwrap();
 
-    assert!(rms_sender.load(Ordering::Relaxed) > 0.0);
+    let rms = rms_sender.load(Ordering::Relaxed);
+    assert!(
+        (10_000.0..13_500.0).contains(&rms),
+        "expected half-amplitude sine RMS in i16 units, got {rms}"
+    );
 }
 
 #[test]
@@ -270,13 +392,13 @@ fn input_processor_passes_all_frames_with_denoiser() {
         )
     });
 
-    let mut frames_received = 0;
-    while frames_received < TEST_FRAMES {
+    let mut frames_received = Vec::new();
+    while frames_received.len() < TEST_FRAMES {
         match output_rx.recv_timeout(Duration::from_secs(5)) {
-            Ok(_frame) => frames_received += 1,
+            Ok(frame) => frames_received.push(bytes_to_i16_samples(frame.as_ref())),
             Err(_) => panic!(
                 "Timeout waiting for frame {} (with denoise)",
-                frames_received
+                frames_received.len()
             ),
         }
     }
@@ -286,13 +408,24 @@ fn input_processor_passes_all_frames_with_denoiser() {
         .expect("Input processor panicked")
         .expect("Input processor failed");
 
-    assert_eq!(frames_received, TEST_FRAMES);
+    assert_eq!(frames_received.len(), TEST_FRAMES);
+    assert!(
+        frames_received
+            .iter()
+            .all(|frame| frame.len() == FRAME_SIZE)
+    );
+    assert!(
+        frames_received
+            .iter()
+            .flatten()
+            .any(|sample| sample.abs() > 100)
+    );
 }
 
 #[test]
 fn output_processor_resampling_delivers_all_frames() {
     let (input_tx, input_rx) = mpsc::channel::<Bytes>();
-    let (output, _samples_counter, frames_counter) = TestAudioOutput::new();
+    let (output, recorded) = RecordingAudioOutput::new();
     let state = OutputProcessorState::default();
 
     let input_rate = TEST_SAMPLE_RATE;
@@ -309,10 +442,10 @@ fn output_processor_resampling_delivers_all_frames() {
         )
     });
 
-    for _ in 0..TEST_FRAMES {
-        let mut frame = BytesMut::with_capacity(FRAME_SIZE * 2);
-        frame.resize(FRAME_SIZE * 2, 0);
-        input_tx.send(frame.freeze()).expect("Failed to send frame");
+    for frame_idx in 0..TEST_FRAMES {
+        input_tx
+            .send(raw_frame_with_start((frame_idx * 10) as i16))
+            .expect("Failed to send frame");
     }
 
     drop(input_tx);
@@ -321,7 +454,15 @@ fn output_processor_resampling_delivers_all_frames() {
         .expect("Output processor panicked")
         .expect("Output processor failed");
 
-    assert_eq!(frames_counter.load(Ordering::Relaxed), TEST_FRAMES);
+    let samples = flatten_recorded(&recorded);
+    let expected_samples = TEST_FRAMES * FRAME_SIZE * output_rate / input_rate;
+    assert!(
+        samples.len().abs_diff(expected_samples) <= TEST_FRAMES,
+        "expected approximately {expected_samples} resampled samples, got {}",
+        samples.len()
+    );
+    assert!(samples.iter().any(|sample| sample.abs() > 0.001));
+    assert!(samples.windows(2).any(|pair| pair[0] != pair[1]));
 }
 
 #[test]

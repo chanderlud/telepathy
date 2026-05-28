@@ -234,7 +234,7 @@ mod tests {
         let capacity = 10;
         let (producer, _consumer) = RingBuffer::<f32>::new(capacity);
         let mut output = RingBufferOutput::new(producer);
-        output.write_samples(&vec![0.1; 5]).unwrap();
+        output.write_samples(&[0.1; 5]).unwrap();
 
         let samples = vec![0.2; 8];
         let loss = output.write_samples(&samples).unwrap();

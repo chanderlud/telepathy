@@ -195,12 +195,19 @@ fn encoder_chunk_size_stable_across_frames() {
 }
 
 #[test]
-fn decoder_reuses_scratch_buffers_across_frames() {
+fn decoder_overwrites_stale_output_across_distinct_frames() {
     let settings = EncoderSettings::default();
     let mut encoder = SeaEncoder::new(1, SAMPLE_RATE, settings.clone()).unwrap();
-    let frame = sine_frame(FRAME_SIZE, 1, 440.0);
-    let mut encoded = BytesMut::new();
-    encoder.encode_frame(frame, &mut encoded).unwrap();
+    let first_frame = sine_frame(FRAME_SIZE, 1, 440.0);
+    let second_frame = sine_frame(FRAME_SIZE, 1, 880.0);
+    let mut first_encoded = BytesMut::new();
+    let mut second_encoded = BytesMut::new();
+    encoder
+        .encode_frame(first_frame, &mut first_encoded)
+        .unwrap();
+    encoder
+        .encode_frame(second_frame, &mut second_encoded)
+        .unwrap();
 
     let header = header_from_encoder(
         1,
@@ -209,15 +216,37 @@ fn decoder_reuses_scratch_buffers_across_frames() {
         encoder.chunk_size(),
     );
     let mut decoder = SeaDecoder::new(header).unwrap();
-    let mut decoded = [0_i16; FRAME_SIZE];
+    let mut decoded = [i16::MIN; FRAME_SIZE];
 
-    for _ in 0..100 {
-        decoded.fill(0);
-        decoder
-            .decode_frame(encoded.as_ref(), &mut decoded)
-            .unwrap();
-        assert!(decoded.iter().any(|&sample| sample != 0));
-    }
+    decoder
+        .decode_frame(first_encoded.as_ref(), &mut decoded)
+        .unwrap();
+    assert_eq!(decoded.len(), FRAME_SIZE);
+    assert!(max_abs_diff(&first_frame, &decoded) <= 500);
+    assert!(!decoded.contains(&i16::MIN));
+
+    decoded.fill(i16::MAX);
+    decoder
+        .decode_frame(second_encoded.as_ref(), &mut decoded)
+        .unwrap();
+    assert_eq!(decoded.len(), FRAME_SIZE);
+    assert!(max_abs_diff(&second_frame, &decoded) <= 2_000);
+    assert!(!decoded.contains(&i16::MAX));
+}
+
+#[test]
+fn malformed_file_headers_are_rejected() {
+    let too_short = [0_u8; 13];
+    let bad_magic = [0_u8; 14];
+
+    assert!(matches!(
+        SeaFileHeader::from_frame(&too_short),
+        Err(SeaError::InvalidFile)
+    ));
+    assert!(matches!(
+        SeaFileHeader::from_frame(&bad_magic),
+        Err(SeaError::InvalidFile)
+    ));
 }
 
 #[test]
