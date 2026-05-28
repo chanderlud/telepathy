@@ -48,14 +48,14 @@ objc2-foundation = "*"
 uuid = { version = "1", features = ["v4", "js"] }
 getrandom = { version = "0.3", features = ["wasm_js"] }
 tokio = { version = "1", features = ["time", "io-util", "macros", "rt"] }
-iroh = { version = "1.0.0-rc.0", default-features = false }
+iroh = { version = "1.0.0-rc.1", default-features = false }
 tracing-wasm = "0.2"
 wasmtimer = "0.4"
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 uuid = { version = "1", features = ["v4"] }
 tokio = { version = "1", features = ["time", "io-util", "macros", "process", "net", "rt-multi-thread", "fs"] }
-iroh = { version = "1.0.0-rc.0", features = ["tls-aws-lc-rs"] }
+iroh = { version = "1.0.0-rc.1", features = ["tls-aws-lc-rs"] }
 tracing-appender = "0.2"
 tracing-panic = "0.1"
 

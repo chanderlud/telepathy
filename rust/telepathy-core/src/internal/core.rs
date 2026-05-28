@@ -21,7 +21,9 @@ use crate::types::{
     SessionStatus,
 };
 use chrono::Local;
-use iroh::endpoint::{ConnectError, ConnectingError, Connection, ConnectionError, RecvStream, SendStream, VarInt};
+use iroh::endpoint::{
+    ConnectError, ConnectingError, Connection, ConnectionError, RecvStream, SendStream, VarInt,
+};
 use iroh::{Endpoint, PublicKey};
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -40,7 +42,7 @@ use tokio::sync::{Notify, RwLock};
 use tokio::time::{Instant, Interval, interval, sleep_until, timeout};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, Span, debug, error, field, info, instrument, trace, warn};
+use tracing::{Instrument, Span, debug, error, field, info, instrument, warn};
 use uuid::Uuid;
 #[cfg(target_family = "wasm")]
 use wasmtimer::std::Instant;
@@ -274,7 +276,8 @@ where
             handle.await?;
         }
         debug!(event = "manager_session_handles_joined");
-        endpoint.close().await; // TODO this currently takes 3 seconds when there are outgoing connections, i think we need to decouple the UI disappearing from the shutdown
+        // TODO this currently takes 3 seconds when there are outgoing connections, i think we need to decouple the UI disappearing from the shutdown
+        endpoint.close().await;
         debug!(event = "endpoint_closed");
         Ok(())
     }
@@ -296,10 +299,17 @@ where
                     Err(error) => {
                         match error {
                             // do not retry timeouts
-                            ConnectError::Connecting { source: ConnectingError::ConnectionError { source: ConnectionError::TimedOut { .. }, .. }, .. } => {
+                            ConnectError::Connecting {
+                                source:
+                                    ConnectingError::ConnectionError {
+                                        source: ConnectionError::TimedOut,
+                                        ..
+                                    },
+                                ..
+                            } => {
                                 break None;
                             }
-                            _ => ()
+                            _ => (),
                         }
 
                         if retries > 3 {
@@ -354,19 +364,17 @@ where
             old_state.teardown().await;
         }
 
-        let contact = if let Some(contact) = contact_option {
-            // TODO this isn't a super ideal place to notify the frontend of the relay status and remote address because i think they can still change
-            self.callbacks
-                .session_status(
-                    SessionStatus::Connected {
-                        relayed: false,
-                        remote_address: "127.0.0.1".to_string(),
-                    },
-                    peer,
-                )
+        // connection monitor sends SessionStatus::Connected to the frontend
+        let state_clone = state.clone();
+        let callbacks_clone = self.callbacks.clone();
+        let connection_clone = connection.clone();
+        spawn_task(async move {
+            state_clone
+                .connection_monitor(connection_clone, callbacks_clone, peer)
                 .await;
-            contact
-        } else {
+        });
+
+        let contact = contact_option.unwrap_or_else(|| {
             // there may be no contact for members of a group
             debug!(event = "group_contact_created", peer.id = %peer);
             Contact {
@@ -375,10 +383,30 @@ where
                 peer_id: peer,
                 is_room_only: true,
             }
-        };
+        });
 
-        self.session_outer(peer, connection, state, contact, message_channel)
+        self.session_outer(peer, &connection, &state, &contact, message_channel)
             .await;
+
+        // gracefully close the connection
+        connection.close(VarInt::from_u32(0), &[]);
+
+        // if the state exists and has the same id, clean it up
+        // if a new session state already exists with a new ID, we don't want to clean it up
+        let mut states = self.session_states.write().await;
+        if states.get(&peer).map(|s| s.id == state.id).unwrap_or(false) {
+            states.remove(&peer);
+        }
+        drop(states);
+
+        // avoid sending session statuses for dummy contacts
+        if !contact.is_room_only {
+            self.callbacks
+                .session_status(SessionStatus::Inactive, peer)
+                .await;
+        }
+
+        info!(event = "session_cleaned_up", session.id = %state.id);
     }
 
     /// Runs session_inner as many times as needed, performs cleanup if needed
@@ -395,18 +423,25 @@ where
     async fn session_outer(
         &self,
         peer: PublicKey,
-        connection: Connection,
-        state: Arc<SessionState>,
-        contact: Contact,
+        connection: &Connection,
+        state: &Arc<SessionState>,
+        contact: &Contact,
         mut message_channel: (Sender<ProtocolMessage>, Receiver<ProtocolMessage>),
     ) {
-        // TODO handle errors here
-        let (send, recv) = if connection.side().is_client() {
+        let stream_result = if connection.side().is_client() {
             Span::current().record("session.role", "dialer");
-            connection.open_bi().await.unwrap()
+            connection.open_bi().await
         } else {
             Span::current().record("session.role", "listener");
-            connection.accept_bi().await.unwrap()
+            connection.accept_bi().await
+        };
+
+        let (send, recv) = match stream_result {
+            Ok(streams) => streams,
+            Err(error) => {
+                error!(event = "session_stream_failure", error = ?error, peer.id = %peer);
+                return;
+            }
         };
 
         // controls keep alive messages
@@ -429,11 +464,11 @@ where
         loop {
             let result = self
                 .session_inner(
-                    &contact,
+                    contact,
                     &mut send_transport,
                     &mut recv_transport,
-                    &connection,
-                    &state,
+                    connection,
+                    state,
                     &mut message_channel,
                     &mut keep_alive,
                 )
@@ -475,26 +510,6 @@ where
                 }
             }
         }
-
-        // gracefully close the connection
-        connection.close(VarInt::from_u32(0), &[]);
-
-        // if the state exists and has the same id, clean it up
-        // if a new session state already exists with a new ID, we don't want to clean it up
-        let mut states = self.session_states.write().await;
-        if states.get(&peer).map(|s| s.id == state.id).unwrap_or(false) {
-            states.remove(&peer);
-        }
-        drop(states);
-
-        // avoid sending session statuses for dummy contacts
-        if !contact.is_room_only {
-            self.callbacks
-                .session_status(SessionStatus::Inactive, peer)
-                .await;
-        }
-
-        info!(event = "session_cleaned_up", session.id = %state.id);
     }
 
     /// The inner logic of a session that may execute many times
@@ -614,7 +629,7 @@ where
                                 write_message(send, &ProtocolMessage::HelloAck { audio_header: call_state.local_configuration.clone() }).await?;
 
                                 if is_in_room {
-                                    self.room_handshake(send, recv, connection, state, call_state).await?;
+                                    self.room_handshake(send, recv, connection, call_state).await?;
                                 } else {
                                     // normal call handshake
                                     self.call_handshake(send, recv, connection, &mut message_channel.1, state, call_state).await?;
@@ -687,7 +702,7 @@ where
                                     call_state.remote_configuration = audio_header;
 
                                     if is_in_room {
-                                        self.room_handshake(send, recv, connection, state, call_state).await?;
+                                        self.room_handshake(send, recv, connection, call_state).await?;
                                     } else {
                                         // normal call handshake
                                         self.call_handshake(send, recv, connection, &mut message_channel.1, state, call_state).await?;
@@ -727,7 +742,7 @@ where
                                             }).await?;
 
                                             if is_in_room {
-                                                self.room_handshake(send, recv, connection, state, call_state).await?;
+                                                self.room_handshake(send, recv, connection, call_state).await?;
                                             } else {
                                                 // normal call handshake
                                                 self.call_handshake(send, recv, connection, &mut message_channel.1, state, call_state).await?;
@@ -979,6 +994,26 @@ where
 
         loop {
             select! {
+                // ends the call
+                _ = end_call.notified() => {
+                    write_message(o.control_send, &ProtocolMessage::Goodbye { reason: None }).await?;
+                    break Ok((None, false));
+                },
+                _ = o.state.start_screenshare.notified() => {
+                    info!(event = "starting_screenshare", peer.id = ?peer);
+
+                    #[cfg(not(target_family = "wasm"))]
+                    {
+                        let message = StartScreenshare::new_sender(peer, o.connection.clone());
+                        let self_clone = self.clone();
+                        spawn_task(async move {
+                            let result = self_clone.start_screenshare(message).await;
+                            if let Err(error) = result {
+                                error!(event = "screenshare_start_failed", error = ?error);
+                            }
+                        }.in_current_span());
+                    }
+                }
                 // receives and handles messages from the callee
                 result = read_message(o.control_recv) => {
                     let message: ProtocolMessage = result?;
@@ -997,7 +1032,7 @@ where
                             }).await;
                         }
                         ProtocolMessage::ScreenshareHeader { .. } => {
-                            info!(event = "screenshare_header_received", ?message);
+                            info!(event = "screenshare_header_received", ?message, peer.id = ?peer);
 
                             #[cfg(not(target_family = "wasm"))]
                             {
@@ -1025,11 +1060,6 @@ where
                         break Ok((None, true));
                     }
                 },
-                // ends the call
-                _ = end_call.notified() => {
-                    write_message(o.control_send, &ProtocolMessage::Goodbye { reason: None }).await?;
-                    break Ok((None, false));
-                },
             }
         }
     }
@@ -1045,7 +1075,6 @@ where
         send: &mut FramedWrite<SendStream, LengthDelimitedCodec>,
         recv: &mut FramedRead<RecvStream, LengthDelimitedCodec>,
         connection: &Connection,
-        state: &Arc<SessionState>,
         call_state: EarlyCallState,
     ) -> Result<()> {
         let peer_id = call_state.peer;

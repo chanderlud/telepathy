@@ -1,7 +1,6 @@
 use crate::internal::callbacks::CoreStatisticsCallback;
 use crate::internal::error::{Error, ErrorKind};
 use crate::internal::messages::ProtocolMessage;
-use crate::internal::sockets::TIMESTAMP_BUFFER_CAPACITY;
 use crate::internal::state::StatisticsCollectorState;
 use crate::overlay::{CONNECTED, LATENCY, LOSS};
 use crate::types::Statistics;
@@ -13,14 +12,12 @@ use iroh::endpoint::{RecvStream, SendStream};
 use kanal::AsyncReceiver;
 use speedy::{Readable, Writable};
 use std::future::Future;
-use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::time::Duration;
 use telepathy_audio::internal::buffer_pool::PooledBuffer;
 use telepathy_audio::io::traits::ClosedOrFailed;
 use telepathy_audio::io::{AudioDataSink, AudioDataSource};
-use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::select;
 use tokio::sync::Notify;
 #[cfg(all(feature = "native", not(feature = "flutter")))]
@@ -28,7 +25,6 @@ pub use tokio::task::JoinHandle;
 #[cfg(not(target_family = "wasm"))]
 use tokio::time::interval;
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
-use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 #[cfg(target_family = "wasm")]
@@ -74,14 +70,6 @@ impl AudioDataSource for KanalSource {
     fn try_recv(&self) -> std::result::Result<Option<Bytes>, ClosedOrFailed> {
         self.receiver.try_recv().map_err(|_| ClosedOrFailed::Closed)
     }
-}
-
-#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Debug)]
-enum Locality {
-    Loopback = 0,
-    Lan = 1,
-    Public = 2,
-    Unknown = 3,
 }
 
 /// Returns the percentage of the max input volume in the window compared to the max volume
@@ -199,30 +187,6 @@ pub(crate) async fn loopback(
                 }
             },
         }
-    }
-}
-
-fn classify_locality(addr: Option<IpAddr>) -> Locality {
-    match addr {
-        Some(IpAddr::V4(v4)) => {
-            if v4.is_loopback() {
-                Locality::Loopback
-            } else if v4.is_private() || v4.is_link_local() {
-                Locality::Lan
-            } else {
-                Locality::Public
-            }
-        }
-        Some(IpAddr::V6(v6)) => {
-            if v6.is_loopback() {
-                Locality::Loopback
-            } else if v6.is_unique_local() || v6.is_unicast_link_local() {
-                Locality::Lan
-            } else {
-                Locality::Public
-            }
-        }
-        None => Locality::Unknown,
     }
 }
 

@@ -114,13 +114,10 @@ impl Hub {
                     let _ = tx.send(Event::from(message));
                 })
             },
-            move |(active, restartable)| {
+            move |state| {
                 let tx = tx_for_manager.clone();
                 Box::pin(async move {
-                    let _ = tx.send(Event::ManagerActive {
-                        active,
-                        restartable,
-                    });
+                    let _ = tx.send(Event::ManagerActive(state));
                 })
             },
             move |(_notify, sender)| {

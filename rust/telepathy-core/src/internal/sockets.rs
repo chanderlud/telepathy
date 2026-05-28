@@ -13,8 +13,6 @@ use tokio::select;
 #[cfg(not(target_family = "wasm"))]
 use tokio::time::{Instant, timeout};
 use tokio_util::bytes::{Buf, BufMut};
-use tokio_util::codec::{Framed, LengthDelimitedCodec};
-use tokio_util::compat::Compat;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 #[cfg(target_family = "wasm")]

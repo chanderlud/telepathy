@@ -377,10 +377,9 @@ where
     }
 
     pub async fn start_screenshare(&self, contact: &Contact) {
-        // TODO make this work :)
-        // self.inner
-        //     .send_start_screenshare(contact.peer_id, None)
-        //     .await;
+        if let Some(state) = self.inner.session_states.read().await.get(&contact.peer_id) {
+            state.start_screenshare.notify_one();
+        }
     }
 
     pub fn set_rms_threshold(&self, decimal: f32) {

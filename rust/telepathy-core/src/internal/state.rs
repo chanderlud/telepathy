@@ -1,14 +1,24 @@
+use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::messages::{AudioHeader, ProtocolMessage, RoomMessage};
-use crate::types::{CodecConfig, NetworkConfig, ScreenshareConfig};
+use crate::types::{CodecConfig, NetworkConfig, ScreenshareConfig, SessionStatus};
 use atomic_float::AtomicF32;
-use iroh::{PublicKey, SecretKey};
+use iroh::endpoint::{Connection, Path};
+use iroh::{PublicKey, SecretKey, TransportAddr};
 use std::sync::Arc;
+use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
+use std::time::Duration;
 use telepathy_audio::RnnModel;
+use tokio::select;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::{Mutex, Notify, RwLock};
+#[cfg(not(target_family = "wasm"))]
+use tokio::time::interval;
 use tokio_util::sync::CancellationToken;
+use tracing::info;
 use uuid::Uuid;
+#[cfg(target_family = "wasm")]
+use wasmtimer::tokio::interval;
 
 type SharedDeviceId = Arc<Mutex<Option<String>>>;
 
@@ -155,7 +165,7 @@ pub(crate) struct SessionState {
     /// a reusable sender for messages while a call is active
     pub(crate) message_sender: Sender<ProtocolMessage>,
 
-    /// a shared latency value for the session from libp2p ping
+    /// a shared latency value for the session from iroh rtt
     pub(crate) latency: Arc<AtomicUsize>,
 
     /// a shared upload bandwidth value for the session
@@ -165,6 +175,8 @@ pub(crate) struct SessionState {
     pub(crate) download_bandwidth: Arc<AtomicUsize>,
 
     pub(crate) end_call: Arc<Notify>,
+
+    pub(crate) start_screenshare: Notify,
 
     pub(crate) stop_screenshare: Arc<Mutex<Option<Arc<Notify>>>>,
 }
@@ -181,6 +193,7 @@ impl SessionState {
             upload_bandwidth: Default::default(),
             download_bandwidth: Default::default(),
             end_call: Default::default(),
+            start_screenshare: Default::default(),
             stop_screenshare: Default::default(),
         }
     }
@@ -194,5 +207,76 @@ impl SessionState {
         if let Some(notify) = self.stop_screenshare.lock().await.take() {
             notify.notify_waiters();
         }
+    }
+
+    /// monitors the session connection to update bandwidth, latency, and push session statuses
+    pub(crate) async fn connection_monitor<S, C>(
+        &self,
+        connection: Connection,
+        callbacks: Arc<C>,
+        peer: PublicKey,
+    ) where
+        S: CoreStatisticsCallback + Send + Sync + 'static,
+        C: CoreCallbacks<S> + Send + Sync + 'static,
+    {
+        let mut interval = interval(Duration::from_secs(1));
+        interval.tick().await;
+
+        loop {
+            select! {
+                _ = self.stop_session.cancelled() => break,
+                _ = interval.tick() => {
+                    if connection.close_reason().is_some() {
+                        break;
+                    }
+
+                    // track overall bandwidth across all connections
+                    self.upload_bandwidth.store(connection.stats().udp_tx.bytes as usize, Relaxed);
+                    self.download_bandwidth.store(connection.stats().udp_rx.bytes as usize, Relaxed);
+
+                    let paths = connection.paths();
+                    let mut max_data = u64::MIN;
+                    let mut primary_connection: Option<Path> = None;
+
+                    for path in paths.iter().filter(|p| p.is_selected()) {
+                        let stats = path.stats();
+
+                        // the connection with the most bandwidth should be considered primary
+                        let bandwidth = stats.udp_rx.bytes + stats.udp_tx.bytes;
+                        if bandwidth > max_data {
+                            max_data = bandwidth;
+                            primary_connection = Some(path);
+                        }
+                    }
+
+                    if let Some(primary_connection) = primary_connection {
+                        self.latency.store(primary_connection.rtt().as_millis() as usize, Relaxed);
+
+                        callbacks
+                            .session_status(
+                                SessionStatus::Connected {
+                                    relayed: primary_connection.is_relay(),
+                                    remote_address: match *primary_connection.remote_addr() {
+                                        TransportAddr::Ip(socket) => socket.ip().to_string(),
+                                        TransportAddr::Relay(_) => "relay".to_string(),
+                                        TransportAddr::Custom(_) => "custom".to_string(),
+                                        _ => "unknown".to_string(),
+                                    },
+                                },
+                                peer,
+                            )
+                            .await;
+                    } else {
+                        info!(event = "no_primary_connection", peer.id = %peer)
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl Drop for SessionState {
+    fn drop(&mut self) {
+        self.stop_session.cancel();
     }
 }

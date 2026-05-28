@@ -8,7 +8,7 @@ use crate::internal::spawn_task;
 use atomic_float::AtomicF32;
 use chrono::{DateTime, Local, SecondsFormat, Utc};
 pub use iroh::{PublicKey, SecretKey};
-use serde::{Serialize, Serializer};
+use serde::{Deserialize, Serialize, Serializer};
 use speedy::{Readable, Writable};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::str::FromStr;
@@ -100,7 +100,6 @@ pub enum CallState {
 #[derive(Debug, Serialize, Clone)]
 pub enum SessionStatus {
     Connecting,
-    // TODO rework connected to report all of the paths, current direct %, and other detailed metrics like packet loss. Connected should be re-delivered periodically to the frontend
     Connected {
         relayed: bool,
         remote_address: String,
@@ -149,6 +148,7 @@ impl ChatMessage {
 }
 
 /// processed statistics for the frontend
+// TODO add packet loss & other connection stats
 #[derive(Default, Serialize)]
 pub struct Statistics {
     /// a percentage of the max input volume in the window
@@ -556,6 +556,7 @@ impl From<String> for DartError {
     }
 }
 
+#[derive(Debug, Clone, Serialize)]
 pub enum ManagerState {
     Stopped,
     Starting,
