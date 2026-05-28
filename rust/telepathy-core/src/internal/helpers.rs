@@ -300,6 +300,7 @@ where
         let (codec_enabled, vbr, residual_bits) = codec_options;
         // Channel for receiving processed audio data
         let (sender, receiver) = kanal::unbounded_async();
+        let input_end_call = end_call.clone();
 
         let mut builder = AudioInputBuilder::new()
             .device(self.core_state.input_device.lock().await.clone())
@@ -307,7 +308,10 @@ where
             .rms_threshold_shared(&self.core_state.rms_threshold)
             .muted_shared(&self.core_state.muted)
             .rms_shared(&statistics_state.input_rms)
-            .on_error(end_call)
+            .on_error(move |error| {
+                error!(error = %error, "input_stream_error");
+                input_end_call.notify_one();
+            })
             .sink(KanalSink::new(sender));
 
         if codec_enabled {
@@ -362,7 +366,10 @@ where
             .rms_shared(&statistics_state.output_rms)
             .loss_shared(&statistics_state.loss)
             .codec(codec_enabled)
-            .on_error(end_call)
+            .on_error(move |error| {
+                error!(error = %error, "output_stream_error");
+                end_call.notify_one();
+            })
             .build(&self.host)?;
 
         Ok(OutputHelper::new(handle, sender))
