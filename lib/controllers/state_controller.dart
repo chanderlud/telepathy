@@ -40,11 +40,7 @@ class StateController extends ChangeNotifier {
 
   bool get blockAudioChanges => isCallActive || inAudioTest;
 
-  bool get sessionManagerActive => _sessionManagerState == ManagerState.active;
-
-  bool get sessionManagerRestartable => _sessionManagerState != ManagerState.stopped;
-
-  bool get sessionManagerStarting => _sessionManagerState == ManagerState.starting;
+  ManagerState get sessionManagerState => _sessionManagerState;
 
   String get callDuration => formatTime(_callTimer.elapsed.inMilliseconds);
 

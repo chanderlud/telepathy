@@ -22,7 +22,7 @@ class ContactsList extends StatelessWidget {
   Widget build(BuildContext context) {
     final stateController = context.watch<StateController>();
     final telepathy = context.read<Telepathy>();
-    final bool sessionManagerActive = stateController.sessionManagerActive;
+    final ManagerState managerState = stateController.sessionManagerState;
     final bool isCompact = context.isCompactContacts || context.isCompactWide;
     final List<Object> items = [
       ...contacts,
@@ -87,20 +87,42 @@ class ContactsList extends StatelessWidget {
                       ),
                     ],
                   ),
-                  // TODO rework this UI based on the rich manager state, show a spinner when reconnecting, rich tooltip messages
-                  if (!sessionManagerActive)
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Tooltip(
-                          message: 'Session Manager Inactive',
-                          child: Icon(
-                            Icons.language,
-                            color: Color(0xFFdc2626),
-                            size: 20,
-                          ),
-                        ),
-                        if (stateController.sessionManagerRestartable)
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Tooltip(
+                        message: switch (managerState) {
+                          ManagerState.active => 'Session Manager Connected',
+                          ManagerState.starting =>
+                            'Session Manager Starting…',
+                          ManagerState.failed => 'Session Manager Failed',
+                          ManagerState.stopped => 'Session Manager Inactive',
+                        },
+                        child: switch (managerState) {
+                          ManagerState.active => const Icon(
+                                Icons.language,
+                                color: Color(0xFF16a34a),
+                                size: 20,
+                              ),
+                          ManagerState.starting => const SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 3,
+                                ),
+                              ),
+                          ManagerState.failed ||
+                          ManagerState.stopped =>
+                            const Icon(
+                              Icons.language,
+                              color: Color(0xFFdc2626),
+                              size: 20,
+                            ),
+                        },
+                      ),
+                      if (managerState == ManagerState.failed)
+                        ...[
+                          const SizedBox(width: 10),
                           IconButton(
                               onPressed: () {
                                 telepathy.restartManager();
@@ -119,8 +141,9 @@ class ContactsList extends StatelessWidget {
                                   colorFilter: const ColorFilter.mode(
                                       Color(0xFFdc2626), BlendMode.srcIn),
                                   semanticsLabel: 'Restart session manager')),
-                      ],
-                    ),
+                        ]
+                    ],
+                  ),
                 ],
               )),
           SizedBox(height: isCompact ? 2.5 : 10),
