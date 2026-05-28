@@ -49,6 +49,10 @@ use wasmtimer::std::Instant;
 #[cfg(target_family = "wasm")]
 use wasmtimer::tokio::{Interval, interval, sleep_until, timeout};
 
+fn should_keep_new_session(local_peer: &PublicKey, peer: &PublicKey, new_is_client: bool) -> bool {
+    new_is_client == (local_peer < peer)
+}
+
 pub(crate) struct TelepathyCore<C, S, H>
 where
     S: CoreStatisticsCallback + Send + Sync + 'static,
@@ -351,17 +355,46 @@ where
         // create the state and a clone of it for the session
         let state = Arc::new(SessionState::new(&message_channel.0));
         Span::current().record("session.id", state.id.to_string());
-        // insert the new state
-        let old_state_option = self
-            .session_states
-            .write()
-            .await
-            .insert(peer, state.clone());
+        let local_peer = self.peer_id().await;
+        let keep_new_session =
+            should_keep_new_session(&local_peer, &peer, connection.side().is_client());
+        let mut states = self.session_states.write().await;
+        let old_state_option = if let Some(old_state) = states.get(&peer).cloned() {
+            if keep_new_session {
+                states.insert(peer, state.clone());
+            }
 
-        // TODO this case is often being reached because BOTH clients are dialing & receiving
+            Some(old_state)
+        } else {
+            states.insert(peer, state.clone());
+            None
+        };
+        drop(states);
+
         if let Some(old_state) = old_state_option {
-            warn!(event = "session_replaced_existing_state", peer.id = %peer);
-            old_state.teardown().await;
+            if keep_new_session {
+                warn!(
+                    event = "session_collision_kept_new",
+                    peer.id = %peer,
+                    peer.local = %local_peer,
+                    session.id = %state.id,
+                    old_session.id = %old_state.id,
+                    connection.side.client = connection.side().is_client()
+                );
+                old_state.teardown().await;
+            } else {
+                warn!(
+                    event = "session_collision_kept_existing",
+                    peer.id = %peer,
+                    peer.local = %local_peer,
+                    session.id = %state.id,
+                    old_session.id = %old_state.id,
+                    connection.side.client = connection.side().is_client()
+                );
+                state.teardown().await;
+                connection.close(VarInt::from_u32(0), &[]);
+                return;
+            }
         }
 
         // connection monitor sends SessionStatus::Connected to the frontend
@@ -1306,4 +1339,38 @@ pub(crate) struct OptionalCallArgs<'a> {
     control_recv: &'a mut FramedRead<RecvStream, LengthDelimitedCodec>,
     message_receiver: &'a mut Receiver<ProtocolMessage>,
     state: &'a Arc<SessionState>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_keep_new_session;
+    use iroh::SecretKey;
+
+    #[test]
+    fn session_collision_lower_peer_keeps_client_connection() {
+        let first = SecretKey::generate().public();
+        let second = SecretKey::generate().public();
+        let (lower, higher) = if first < second {
+            (first, second)
+        } else {
+            (second, first)
+        };
+
+        assert!(should_keep_new_session(&lower, &higher, true));
+        assert!(!should_keep_new_session(&lower, &higher, false));
+    }
+
+    #[test]
+    fn session_collision_higher_peer_keeps_server_connection() {
+        let first = SecretKey::generate().public();
+        let second = SecretKey::generate().public();
+        let (lower, higher) = if first < second {
+            (first, second)
+        } else {
+            (second, first)
+        };
+
+        assert!(!should_keep_new_session(&higher, &lower, true));
+        assert!(should_keep_new_session(&higher, &lower, false));
+    }
 }
