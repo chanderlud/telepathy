@@ -1,35 +1,81 @@
-use crate::error::{Error, ErrorKind};
-use crate::flutter::Statistics;
-use crate::flutter::callbacks::FrbStatisticsCallback;
-use crate::internal::messages::Message;
+use crate::internal::callbacks::CoreStatisticsCallback;
+use crate::internal::error::{Error, ErrorKind};
+use crate::internal::messages::ProtocolMessage;
 use crate::internal::sockets::{TIMESTAMP_BUFFER_CAPACITY, Transport, TransportStream};
-use crate::internal::{ConnectionState, StatisticsCollectorState};
+use crate::internal::state::{ConnectionState, StatisticsCollectorState};
 use crate::overlay::{CONNECTED, LATENCY, LOSS};
-use flutter_rust_bridge::for_generated::futures::{Sink, SinkExt};
+use crate::types::Statistics;
+#[cfg(feature = "flutter")]
+pub use flutter_rust_bridge::JoinHandle;
 use kanal::AsyncReceiver;
 use libp2p::bytes::Bytes;
-use libp2p::futures::StreamExt;
+use libp2p::futures::{Sink, SinkExt, StreamExt};
 use libp2p::swarm::ConnectionId;
-use log::debug;
 use speedy::{Readable, Writable};
 use std::collections::HashMap;
+use std::future::Future;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::time::Duration;
 use telepathy_audio::internal::buffer_pool::PooledBuffer;
+use telepathy_audio::io::traits::ClosedOrFailed;
+use telepathy_audio::io::{AudioDataSink, AudioDataSource};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::select;
 use tokio::sync::Notify;
+#[cfg(all(feature = "native", not(feature = "flutter")))]
+pub use tokio::task::JoinHandle;
 #[cfg(not(target_family = "wasm"))]
 use tokio::time::interval;
 use tokio_util::codec::LengthDelimitedCodec;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tokio_util::sync::CancellationToken;
+use tracing::debug;
 #[cfg(target_family = "wasm")]
 use wasmtimer::tokio::interval;
 
 type Result<T> = std::result::Result<T, Error>;
+
+/// An `AudioDataSink` backed by a `kanal` channel.
+pub(crate) struct KanalSink {
+    sender: kanal::Sender<PooledBuffer>,
+}
+
+impl KanalSink {
+    pub fn new(sender: kanal::AsyncSender<PooledBuffer>) -> Self {
+        Self {
+            sender: sender.to_sync(),
+        }
+    }
+}
+
+impl AudioDataSink for KanalSink {
+    fn send(&self, data: PooledBuffer) -> std::result::Result<(), ClosedOrFailed> {
+        self.sender.send(data).map_err(|_| ClosedOrFailed::Closed)
+    }
+}
+
+/// An `AudioDataSource` backed by a `kanal` channel.
+pub(crate) struct KanalSource {
+    receiver: kanal::Receiver<Bytes>,
+}
+
+impl KanalSource {
+    pub(crate) fn new(receiver: kanal::Receiver<Bytes>) -> Self {
+        Self { receiver }
+    }
+}
+
+impl AudioDataSource for KanalSource {
+    fn recv(&self) -> std::result::Result<Bytes, ClosedOrFailed> {
+        self.receiver.recv().map_err(|_| ClosedOrFailed::Closed)
+    }
+
+    fn try_recv(&self) -> std::result::Result<Option<Bytes>, ClosedOrFailed> {
+        self.receiver.try_recv().map_err(|_| ClosedOrFailed::Closed)
+    }
+}
 
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Debug)]
 enum Locality {
@@ -51,7 +97,10 @@ pub(crate) fn level_from_window(local_max: f32, max: &mut f32) -> f32 {
 }
 
 /// Writes a message to the stream
-pub(crate) async fn write_message<W>(transport: &mut Transport<W>, message: &Message) -> Result<()>
+pub(crate) async fn write_message<W>(
+    transport: &mut Transport<W>,
+    message: &ProtocolMessage,
+) -> Result<()>
 where
     W: AsyncWrite + Unpin,
     Transport<W>: Sink<Bytes> + Unpin,
@@ -66,9 +115,9 @@ where
 /// Reads a message from the stream
 pub(crate) async fn read_message<R: AsyncRead + Unpin>(
     transport: &mut Transport<R>,
-) -> Result<Message> {
+) -> Result<ProtocolMessage> {
     if let Some(Ok(buffer)) = transport.next().await {
-        let message = Message::read_from_buffer(&buffer[..])?;
+        let message = ProtocolMessage::read_from_buffer(&buffer[..])?;
         Ok(message)
     } else {
         Err(ErrorKind::TransportRecv.into())
@@ -76,7 +125,7 @@ pub(crate) async fn read_message<R: AsyncRead + Unpin>(
 }
 
 /// Collects statistics from throughout the application, processes them, and provides them to the frontend
-pub(crate) async fn statistics_collector<C: FrbStatisticsCallback>(
+pub(crate) async fn statistics_collector<C: CoreStatisticsCallback>(
     state: StatisticsCollectorState,
     callback: C,
     cancel: CancellationToken,
@@ -219,4 +268,72 @@ pub(crate) fn select_best_connection(
             )
         })
         .map(|(id, s)| (*id, s))
+}
+
+pub(crate) fn spawn_task<F, T>(future: F) -> JoinHandle<T>
+where
+    F: Future<Output = T> + Send + 'static,
+    T: Send + 'static,
+{
+    #[cfg(feature = "flutter")]
+    {
+        flutter_rust_bridge::spawn(future)
+    }
+
+    #[cfg(all(feature = "native", not(feature = "flutter")))]
+    {
+        tokio::spawn(future)
+    }
+}
+
+#[cfg(target_os = "ios")]
+pub(crate) fn configure_audio_session() {
+    use objc2::runtime::{AnyObject, Bool};
+    use objc2::{class, msg_send};
+    use objc2_foundation::ns_string;
+
+    unsafe {
+        let av_audio_session: *mut AnyObject = msg_send![class!(AVAudioSession), sharedInstance];
+
+        // set category to `AVAudioSessionCategoryPlayAndRecord`
+        let category = ns_string!("AVAudioSessionCategoryPlayAndRecord");
+        let mode = ns_string!("AVAudioSessionModeDefault");
+        let error: *mut AnyObject = std::ptr::null_mut();
+
+        let success: Bool = msg_send![av_audio_session, setCategory: category,
+            mode: mode,
+            options: 0_u64,
+            error: &error];
+
+        if success == Bool::NO {
+            tracing::error!("Failed to set AVAudioSession category.");
+        }
+
+        let override_output: *mut AnyObject = msg_send![class!(AVAudioSession), sharedInstance];
+        let _: Bool = msg_send![override_output, overrideOutputAudioPort: 1_u64, error: &error];
+
+        // Activate the audio session
+        let success: Bool = msg_send![av_audio_session, setActive: Bool::YES, error: &error];
+
+        if success == Bool::NO {
+            tracing::error!("Failed to activate AVAudioSession.");
+        }
+    }
+}
+
+#[cfg(target_os = "ios")]
+pub(crate) fn deactivate_audio_session() {
+    use objc2::runtime::{AnyObject, Bool};
+    use objc2::{class, msg_send};
+
+    unsafe {
+        let av_audio_session: *mut AnyObject = msg_send![class!(AVAudioSession), sharedInstance];
+
+        let error: *mut AnyObject = std::ptr::null_mut();
+        let success: Bool = msg_send![av_audio_session, setActive: Bool::NO, error: &error];
+
+        if success == Bool::NO {
+            tracing::error!("Failed to deactivate AVAudioSession.");
+        }
+    }
 }

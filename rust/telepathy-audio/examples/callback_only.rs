@@ -1,8 +1,8 @@
-use telepathy_audio::devices::AudioHost;
+use telepathy_audio::devices::CpalAudioHost;
 use telepathy_audio::io::AudioInputBuilder;
 
 fn main() -> Result<(), telepathy_audio::Error> {
-    let host = AudioHost::new();
+    let host = CpalAudioHost::new();
 
     let _input = AudioInputBuilder::new()
         .volume(1.0)

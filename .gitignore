@@ -47,3 +47,8 @@ app.*.map.json
 
 telepathy_installer.exe
 Podfile.lock
+
+.venv
+.codegraph
+.cursor/rules
+telepathy-trace.log.*

@@ -1,12 +1,14 @@
 import 'package:collection/collection.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:telepathy/controllers/index.dart';
 import 'package:telepathy/core/utils/index.dart';
-import 'package:telepathy/core/rust/audio/player.dart';
-import 'package:telepathy/core/rust/error.dart';
-import 'package:telepathy/core/rust/internal.dart';
+import 'package:telepathy/core/rust/player.dart';
+import 'package:telepathy/core/rust/types.dart';
+import 'package:telepathy/core/rust/lib.dart';
+import 'package:telepathy/core/rust/flutter.dart';
 import 'package:telepathy/widgets/common/index.dart';
 
 class AudioSettings extends StatefulWidget {
@@ -72,72 +74,76 @@ class _AudioSettingsState extends State<AudioSettings> {
         Selector<StateController, bool>(
           selector: (context, controller) => controller.blockAudioChanges,
           builder: (BuildContext context, bool blockAudioChanges, _) {
-            return Selector2<AudioDevices, AudioSettingsController,
-                _DeviceDropdownState>(
-              selector: (context, audioDevices, audioSettingsController) =>
-                  _DeviceDropdownState(
-                inputDevices:
-                    List<AudioDevice>.unmodifiable(audioDevices.inputDevices),
-                outputDevices:
-                    List<AudioDevice>.unmodifiable(audioDevices.outputDevices),
-                selectedInputDevice: audioSettingsController.inputDeviceId,
-                selectedOutputDevice: audioSettingsController.outputDeviceId,
-              ),
-              builder: (BuildContext context, _DeviceDropdownState state, _) {
-                final inputInitialSelection =
-                    state.selectedInputDevice != null &&
-                            state.inputDevices
-                                .any((d) => d.id == state.selectedInputDevice)
-                        ? state.selectedInputDevice!
-                        : '';
+            if (!kIsWeb) {
+              return Selector2<AudioDevices, AudioSettingsController,
+                  _DeviceDropdownState>(
+                selector: (context, audioDevices, audioSettingsController) =>
+                    _DeviceDropdownState(
+                  inputDevices:
+                      List<AudioDevice>.unmodifiable(audioDevices.inputDevices),
+                  outputDevices: List<AudioDevice>.unmodifiable(
+                      audioDevices.outputDevices),
+                  selectedInputDevice: audioSettingsController.inputDeviceId,
+                  selectedOutputDevice: audioSettingsController.outputDeviceId,
+                ),
+                builder: (BuildContext context, _DeviceDropdownState state, _) {
+                  final inputInitialSelection =
+                      state.selectedInputDevice != null &&
+                              state.inputDevices
+                                  .any((d) => d.id == state.selectedInputDevice)
+                          ? state.selectedInputDevice!
+                          : '';
 
-                final outputInitialSelection =
-                    state.selectedOutputDevice != null &&
-                            state.outputDevices
-                                .any((d) => d.id == state.selectedOutputDevice)
-                        ? state.selectedOutputDevice!
-                        : '';
+                  final outputInitialSelection = state.selectedOutputDevice !=
+                              null &&
+                          state.outputDevices
+                              .any((d) => d.id == state.selectedOutputDevice)
+                      ? state.selectedOutputDevice!
+                      : '';
 
-                final double width = widget.constraints.maxWidth < 650
-                    ? widget.constraints.maxWidth
-                    : (widget.constraints.maxWidth - 20) / 2;
+                  final double width = widget.constraints.maxWidth < 650
+                      ? widget.constraints.maxWidth
+                      : (widget.constraints.maxWidth - 20) / 2;
 
-                return Wrap(
-                  spacing: 20,
-                  runSpacing: 20,
-                  children: [
-                    DropDown(
-                        label: 'Input Device',
-                        items: state.inputDevices
+                  return Wrap(
+                    spacing: 20,
+                    runSpacing: 20,
+                    children: [
+                      DropDown(
+                          label: 'Input Device',
+                          items: state.inputDevices
+                              .map((d) => (d.id, d.name))
+                              .toList(),
+                          initialSelection: inputInitialSelection,
+                          enabled: !blockAudioChanges,
+                          onSelected: (String? id) {
+                            if (id == '') id = null;
+                            audioSettingsController.updateInputDevice(id);
+                            telepathy.setInputDevice(deviceId: id);
+                          },
+                          width: width),
+                      DropDown(
+                        label: 'Output Device',
+                        items: state.outputDevices
                             .map((d) => (d.id, d.name))
                             .toList(),
-                        initialSelection: inputInitialSelection,
+                        initialSelection: outputInitialSelection,
                         enabled: !blockAudioChanges,
                         onSelected: (String? id) {
                           if (id == '') id = null;
-                          audioSettingsController.updateInputDevice(id);
-                          telepathy.setInputDevice(deviceId: id);
+                          audioSettingsController.updateOutputDevice(id);
+                          telepathy.setOutputDevice(deviceId: id);
+                          player.updateOutputDevice(deviceId: id);
                         },
-                        width: width),
-                    DropDown(
-                      label: 'Output Device',
-                      items: state.outputDevices
-                          .map((d) => (d.id, d.name))
-                          .toList(),
-                      initialSelection: outputInitialSelection,
-                      enabled: !blockAudioChanges,
-                      onSelected: (String? id) {
-                        if (id == '') id = null;
-                        audioSettingsController.updateOutputDevice(id);
-                        telepathy.setOutputDevice(deviceId: id);
-                        player.updateOutputDevice(deviceId: id);
-                      },
-                      width: width,
-                    )
-                  ],
-                );
-              },
-            );
+                        width: width,
+                      )
+                    ],
+                  );
+                },
+              );
+            }
+
+            return const SizedBox.shrink();
           },
         ),
         const SizedBox(height: 20),
@@ -223,18 +229,15 @@ class _AudioSettingsState extends State<AudioSettings> {
                         // set denoise to false
                         telepathy.setDenoise(denoise: false);
                       } else {
-                        if (value == 'Vanilla') {
-                          value = null;
-                        }
-
                         // save denoise option
                         audioSettingsController.updateUseDenoise(true);
                         // save denoise model
                         audioSettingsController.setDenoiseModel(value);
                         // set denoise to true
                         telepathy.setDenoise(denoise: true);
-                        // set denoise model
-                        updateDenoiseModel(value, telepathy);
+                        // set denoise model — pass null for Vanilla (built-in default)
+                        updateDenoiseModel(
+                            value == 'Vanilla' ? null : value, telepathy);
                       }
                     });
               },
@@ -269,8 +272,7 @@ class _AudioSettingsState extends State<AudioSettings> {
                   final preferencesController =
                       context.read<PreferencesController>();
 
-                  FilePickerResult? result =
-                      await FilePicker.pickFiles(
+                  FilePickerResult? result = await FilePicker.pickFiles(
                     type: FileType.custom,
                     allowedExtensions: ['wav'],
                   );

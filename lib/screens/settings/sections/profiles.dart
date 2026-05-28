@@ -4,7 +4,7 @@ import 'package:flutter/material.dart' hide Overlay;
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:provider/provider.dart';
 import 'package:telepathy/controllers/index.dart';
-import 'package:telepathy/core/rust/internal.dart';
+import 'package:telepathy/core/rust/flutter.dart';
 import 'package:telepathy/models/index.dart';
 import 'package:telepathy/widgets/common/index.dart';
 
@@ -77,10 +77,11 @@ class ProfileSettingsState extends State<ProfileSettings> {
                           height: 25,
                           disabled: stateController.isCallActive ||
                               profilesController.activeProfile == profile.id,
-                          onPressed: () {
-                            profilesController.setActiveProfile(profile.id);
-                            telepathy.setIdentity(key: profile.keypair);
-                            telepathy.restartManager();
+                          onPressed: () async {
+                            await profilesController
+                                .setActiveProfile(profile.id);
+                            await telepathy.setIdentity(key: profile.keypair);
+                            await telepathy.restartManager();
                           },
                           noSplash: true,
                           disabledColor:

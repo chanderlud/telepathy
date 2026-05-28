@@ -1,12 +1,13 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart' hide Overlay;
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:provider/provider.dart';
 import 'package:telepathy/controllers/index.dart';
 import 'package:telepathy/core/utils/index.dart';
 import 'package:telepathy/screens/settings/view.dart';
-import 'package:telepathy/core/rust/audio/player.dart';
+import 'package:telepathy/core/rust/player.dart';
 import 'package:telepathy/core/rust/flutter.dart';
-import 'package:telepathy/core/rust/internal.dart';
+import 'package:telepathy/core/rust/flutter/utils.dart';
 
 /// A widget with commonly used controls for a call.
 class CallControls extends StatefulWidget {
@@ -35,50 +36,25 @@ class _CallControlsState extends State<CallControls> {
   Widget build(BuildContext context) {
     final telepathy = context.read<Telepathy>();
     final player = context.read<SoundPlayer>();
-    final bool isCompact = MediaQuery.of(context).size.height < 700;
+    final bool isCompact = context.isCompactControls;
 
     return Column(
       children: [
-        SizedBox(height: isCompact ? 4 : 10),
+        SizedBox(height: isCompact ? 8 : 10),
         Consumer<StateController>(builder:
             (BuildContext context, StateController stateController, _) {
           Widget body;
 
-          if (stateController.sessionManagerActive) {
-            if (stateController.isCallActive) {
-              body = ListenableBuilder(
-                  listenable: _notifier,
-                  builder: (BuildContext context, Widget? child) {
-                    return Text(stateController.callDuration,
-                        style: const TextStyle(fontSize: 20));
-                  });
-            } else {
-              body = Text(stateController.status,
-                  style: const TextStyle(fontSize: 20));
-            }
+          if (stateController.isCallActive) {
+            body = ListenableBuilder(
+                listenable: _notifier,
+                builder: (BuildContext context, Widget? child) {
+                  return Text(stateController.callDuration,
+                      style: const TextStyle(fontSize: 20));
+                });
           } else {
-            body = Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const SizedBox(width: 15),
-                const Text('Session Manager Inactive',
-                    style: TextStyle(fontSize: 16, color: Color(0xFFdc2626))),
-                stateController.sessionManagerRestartable
-                    ? const Spacer()
-                    : const SizedBox(width: 10),
-                stateController.sessionManagerRestartable
-                    ? IconButton(
-                        onPressed: () {
-                          telepathy.restartManager();
-                        },
-                        icon: SvgPicture.asset('assets/icons/Restart.svg',
-                            colorFilter: const ColorFilter.mode(
-                                Color(0xFFdc2626), BlendMode.srcIn),
-                            semanticsLabel: 'Restart session manager'))
-                    : const SizedBox.shrink(),
-                const SizedBox(width: 5),
-              ],
-            );
+            body = Text(stateController.status,
+                style: const TextStyle(fontSize: 20));
           }
 
           return SizedBox(
@@ -87,7 +63,8 @@ class _CallControlsState extends State<CallControls> {
           );
         }),
         Padding(
-          padding: EdgeInsets.only(left: 25, right: 25, top: isCompact ? 4 : 20),
+          padding:
+              EdgeInsets.only(left: 25, right: 25, top: isCompact ? 4 : 20),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -177,7 +154,7 @@ class _CallControlsState extends State<CallControls> {
                   bottomRight: Radius.circular(10.0)),
             ),
             child: Padding(
-              padding: const EdgeInsets.all(5.0),
+              padding: EdgeInsets.all(isCompact ? 0 : 5.0),
               child: Center(
                   child: Consumer<StateController>(
                       builder: (BuildContext context,
@@ -243,7 +220,7 @@ class _CallControlsState extends State<CallControls> {
                                                       BoxConstraints
                                                           constraints) {
                                             return Title(
-                                              title: 'Telepathy | Settings',
+                                              title: 'Telepathy - Settings',
                                               color: const Color(0xFF000000),
                                               child: SettingsPage(
                                                 constraints: constraints,
@@ -255,52 +232,57 @@ class _CallControlsState extends State<CallControls> {
                                   icon: SvgPicture.asset(
                                       'assets/icons/Settings.svg')),
                               const SizedBox(width: 1),
-                              IconButton(
-                                  onPressed: () async {
-                                    if (stateController.activeContact == null) {
-                                      return;
-                                    }
-
-                                    final networkSettingsController = context
-                                        .read<NetworkSettingsController>();
-
-                                    if (!(await screenshareAvailable())) {
-                                      if (context.mounted) {
-                                        showErrorDialog(
-                                            context,
-                                            'Screenshare Unavailable',
-                                            'ffmpeg must be installed to use the screenshare feature');
+                              if (!kIsWeb &&
+                                  !Platform.isAndroid &&
+                                  !Platform.isIOS)
+                                IconButton(
+                                    onPressed: () async {
+                                      if (stateController.activeContact ==
+                                          null) {
+                                        return;
                                       }
 
-                                      return;
-                                    } else if ((await networkSettingsController
-                                            .screenshareConfig
-                                            .recordingConfig()) ==
-                                        null) {
-                                      if (context.mounted) {
-                                        showErrorDialog(
-                                            context,
-                                            'Invalid Configuration',
-                                            'An invalid screenshare configuration is active, visit settings to select new options.');
+                                      final networkSettingsController = context
+                                          .read<NetworkSettingsController>();
+
+                                      if (!(await screenshareAvailable())) {
+                                        if (context.mounted) {
+                                          showErrorDialog(
+                                              context,
+                                              'Screenshare Unavailable',
+                                              'ffmpeg must be installed to use the screenshare feature');
+                                        }
+
+                                        return;
+                                      } else if ((await networkSettingsController
+                                              .screenshareConfig
+                                              .recordingConfig()) ==
+                                          null) {
+                                        if (context.mounted) {
+                                          showErrorDialog(
+                                              context,
+                                              'Invalid Configuration',
+                                              'An invalid screenshare configuration is active, visit settings to select new options.');
+                                        }
+
+                                        return;
                                       }
 
-                                      return;
-                                    }
-
-                                    if (!stateController.isSendingScreenshare) {
-                                      telepathy.startScreenshare(
-                                          contact:
-                                              stateController.activeContact!);
-                                    } else {
-                                      stateController.stopScreenshare(
-                                          true, true);
-                                    }
-                                  },
-                                  icon: SvgPicture.asset(
-                                      stateController.isSendingScreenshare
-                                          ? 'assets/icons/PhoneOff.svg'
-                                          : 'assets/icons/Screenshare.svg',
-                                      semanticsLabel: 'Screenshare icon')),
+                                      if (!stateController
+                                          .isSendingScreenshare) {
+                                        telepathy.startScreenshare(
+                                            contact:
+                                                stateController.activeContact!);
+                                      } else {
+                                        stateController.stopScreenshare(
+                                            true, true);
+                                      }
+                                    },
+                                    icon: SvgPicture.asset(
+                                        stateController.isSendingScreenshare
+                                            ? 'assets/icons/PhoneOff.svg'
+                                            : 'assets/icons/Screenshare.svg',
+                                        semanticsLabel: 'Screenshare icon')),
                             ],
                           ))),
             ))

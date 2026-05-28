@@ -27,7 +27,7 @@
 //! }
 //! ```
 
-use crate::devices::AudioHost;
+use crate::devices::CpalAudioHost;
 use crate::error::Error;
 use crate::internal::processing::wide_mul;
 #[cfg(target_family = "wasm")]
@@ -42,7 +42,6 @@ use audioadapter_buffers::direct::InterleavedSlice;
 use bytes::BytesMut;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{DeviceId, Host, SampleFormat};
-use log::{debug, error, info};
 use nnnoiseless::FRAME_SIZE;
 use rtrb::RingBuffer;
 use rubato::{FixedSync, Resampler};
@@ -59,6 +58,7 @@ use std::time::Instant;
 use tokio::select;
 use tokio::sync::oneshot;
 use tokio::sync::{Mutex, Notify};
+use tracing::{debug, error, info};
 #[cfg(target_family = "wasm")]
 use wasm_bindgen_futures::spawn_local;
 #[cfg(target_family = "wasm")]
@@ -363,7 +363,7 @@ pub struct AudioPlayer {
     /// Selected output device ID (None uses default device).
     output_device: Arc<Mutex<Option<DeviceId>>>,
     /// The cpal audio host for device access.
-    host: AudioHost,
+    host: CpalAudioHost,
 }
 
 impl AudioPlayer {
@@ -386,7 +386,7 @@ impl AudioPlayer {
         Self {
             output_volume: Arc::new(AtomicF32::new(db_to_multiplier(output_volume_db))),
             output_device: Default::default(),
-            host: AudioHost::new(),
+            host: CpalAudioHost::new(),
         }
     }
 
@@ -683,7 +683,8 @@ pub async fn wav_to_sea(bytes: Vec<u8>, residual_bits: f32) -> Result<Vec<u8>, E
             frames_per_chunk: FRAME_SIZE as u16,
             sample_rate,
         }
-        .serialize();
+        .serialize()
+        .to_vec();
 
         // Create an interleaved scratch buffer for channel-aware unpacking.
         let mut buf: Vec<i16> = vec![0; FRAME_SIZE * channels as usize];

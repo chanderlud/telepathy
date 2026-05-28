@@ -11,6 +11,9 @@ wasm-opt = ["-O", "--enable-bulk-memory", "--enable-nontrapping-float-to-int", "
 [lib]
 crate-type = ["lib"]
 
+[features]
+mock-audio = []
+
 [dependencies]
 atomic_float = "1"
 audioadapter-buffers = "2"
@@ -18,8 +21,8 @@ bytes = "1"
 crossbeam = "0.8"
 cfg-if = "1"
 cpal = { version = "0.17", features = ["wasm-bindgen"] }
-log = "0.4"
-nnnoiseless = { version = "0.5", default-features = false }
+tracing = "0.1"
+nnnoiseless = { git = "https://github.com/chanderlud/nnnoiseless", branch="wasm-optimization", default-features = false }
 rubato = "1"
 libm = "0.2"
 tokio = { version = "1", features = ["time", "sync", "rt", "macros"] }
@@ -29,8 +32,10 @@ rtrb = "0.3"
 wasm_thread = { version = "0.3", default-features = false  }
 web-sys = { version = "=0.3.85", features = [
     "AudioContext",
+    "AudioContextOptions",
     "MediaDevices",
     "MediaStreamConstraints",
+    "MediaTrackConstraints",
     "MediaStream",
     "MediaStreamAudioSourceNode",
     "MediaStreamTrack",
@@ -76,4 +81,8 @@ harness = false
 
 [[bench]]
 name = "wasm_operations"
+harness = false
+
+[[bench]]
+name = "sea_codec"
 harness = false

@@ -1,11 +1,10 @@
-use crate::error::Error;
 use crate::internal::KEEP_ALIVE;
+use crate::internal::error::Error;
 use kanal::{AsyncReceiver, Sender};
 use libp2p::Stream;
 use libp2p::bytes::Bytes;
 use libp2p::futures::stream::{SplitSink, SplitStream};
 use libp2p::futures::{SinkExt, StreamExt};
-use log::{debug, error, info, warn};
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::{Arc, Mutex};
@@ -19,6 +18,7 @@ use tokio_util::bytes::{Buf, BufMut};
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 use tokio_util::compat::Compat;
 use tokio_util::sync::CancellationToken;
+use tracing::{debug, error, info, warn};
 #[cfg(target_family = "wasm")]
 use wasmtimer::{std::Instant, tokio::timeout};
 
@@ -109,8 +109,8 @@ impl SendingSocket for SendingSockets {
                 // remove this socket, do NOT increment i
                 _ = self.sockets.remove(i);
                 info!(
-                    "audio_input dropping socket [remaining={}]",
-                    self.sockets.len()
+                    remaining = self.sockets.len(),
+                    "audio_input dropping socket"
                 );
             } else {
                 successful_sends += 1;

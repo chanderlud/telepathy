@@ -9,3 +9,5 @@ edition = "2024"
 futures = "0.3"
 tokio = { version = "1", features = ["full"] }
 libp2p = { version = "0.56", features = ["tokio", "quic", "tcp", "ping", "dcutr", "relay", "identify", "macros", "noise", "yamux", "autonat"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

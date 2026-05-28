@@ -16,12 +16,12 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  lint:
+  lint_rust:
     runs-on: ubuntu-latest
-    name: Lint
+    name: Lint Rust
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Linux Prerequisites
         run: sudo apt-get update && sudo apt-get install clang cmake git ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev libasound2-dev
@@ -40,8 +40,30 @@ jobs:
       - name: Lint with Clippy
         run: cd rust && cargo clippy -- -D warnings
 
+  lint_flutter:
+    runs-on: ubuntu-latest
+    name: Lint Flutter
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Flutter SDK
+        uses: flutter-actions/setup-flutter@v4
+        with:
+          channel: stable
+          version: 3.35.7
+
+      - name: Get Packages
+        run: flutter pub get
+
+      - name: Check Dart formatting
+        run: dart format --output=none --set-exit-if-changed .
+
+      - name: Lint with flutter analyze
+        run: flutter analyze --fatal-infos --fatal-warnings
+
   test_rust:
-    needs: lint
+    needs: lint_rust
     runs-on: ${{ matrix.info.image }}
     name: Test [${{ matrix.info.image }} ${{ matrix.info.target }}]
 
@@ -62,7 +84,7 @@ jobs:
             target: aarch64-apple-ios
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Linux Prerequisites
         if: runner.os == 'Linux'
@@ -70,7 +92,7 @@ jobs:
 
       - name: Setup Android SDK
         if: matrix.info.target == 'aarch64-linux-android'
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
 
       - uses: nttld/setup-ndk@v1
         if: matrix.info.target == 'aarch64-linux-android'
@@ -105,8 +127,52 @@ jobs:
       - name: Build
         run: cd rust && cargo build --verbose --target ${{ matrix.info.target }}
 
+  system_tests:
+    needs: lint_rust
+    runs-on: ubuntu-latest
+    name: System Tests
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Linux Prerequisites
+        run: sudo apt-get update && sudo apt-get install clang cmake git ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev libasound2-dev iproute2
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: 'stable'
+          cache: true
+          cache-workspaces: rust
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: system-tests/requirements.txt
+
+      - name: Install system test dependencies
+        run: python -m pip install -r system-tests/requirements.txt
+
+      - name: Build relay and CLI binaries
+        run: bash system-tests/build.sh
+
+      - name: Run system tests
+        run: |
+          PYTHON_BIN="$(command -v python)"
+          sudo -E "$PYTHON_BIN" -m pytest system-tests/tests --artifacts-dir system-tests/artifacts --save-artifacts failures
+
+      - name: Upload system-test artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: system-tests-artifacts
+          path: system-tests/artifacts
+          if-no-files-found: ignore
+
   build_flutter:
-    needs: lint
+    needs: [lint_rust, lint_flutter]
     runs-on: ${{ matrix.info.image }}
     name: Build [${{ matrix.info.image }} ${{ matrix.info.target }} ${{ startsWith(github.ref, 'refs/tags/') && 'release' || 'debug' }}]
 
@@ -131,10 +197,10 @@ jobs:
             target: web
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Cache Cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry/index
@@ -147,7 +213,7 @@ jobs:
             cargo-${{ matrix.info.image }}-
 
       - name: Cache Flutter pub
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.pub-cache
           key: pub-${{ runner.os }}-${{ hashFiles('pubspec.lock') }}
@@ -156,12 +222,12 @@ jobs:
       - name: Cache cargo install binaries
         if: matrix.info.target == 'web'
         id: cache-cargo-tools
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/bin/flutter_rust_bridge_codegen
             ~/.cargo/bin/wasm-pack
-          key: cargo-tools-${{ runner.os }}-${{ hashFiles('pubspec.lock') }}
+          key: cargo-tools-${{ runner.os }}-${{ hashFiles('pubspec.lock', '.github/workflows/rust.yml', 'web/build_web.sh') }}
 
       - name: Setup Flutter SDK
         uses: flutter-actions/setup-flutter@v4
@@ -171,16 +237,13 @@ jobs:
 
       - name: Set up Java 17
         if: matrix.info.target == 'apk'
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '17'
 
       - name: Get Packages
         run: flutter pub get
-
-      - name: Lint Flutter
-        run: flutter analyze --fatal-infos --fatal-warnings
 
       - name: Linux Prerequisites
         if: runner.os == 'Linux'
@@ -219,7 +282,7 @@ jobs:
 
       - name: Install Web Tools
         if: matrix.info.target == 'web' && steps.cache-cargo-tools.outputs.cache-hit != 'true'
-        run: cargo install flutter_rust_bridge_codegen@2.11.1 wasm-pack@0.14.0
+        run: cargo install flutter_rust_bridge_codegen@2.12.0 wasm-pack
 
       - name: Setup Rust nightly for Web
         if: matrix.info.target == 'web'
@@ -271,7 +334,7 @@ jobs:
         run: mv build/web telepathy
 
       - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: telepathy_${{ matrix.info.image }}_${{ matrix.info.target }}
           path: |
@@ -285,6 +348,7 @@ jobs:
 
   build_cross:
     runs-on: ubuntu-22.04
+    if: startsWith(github.ref, 'refs/tags/')
     name: Build on ${{ matrix.distro }} ${{ matrix.arch }}
 
     strategy:
@@ -305,10 +369,10 @@ jobs:
           #   distro: ubuntu22.04
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Cache Cargo registry for cross build
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo-cache/registry/index
@@ -341,6 +405,17 @@ jobs:
               ubuntu*)
                 apt-get update -q -y
                 apt-get install -q -y protobuf-compiler clang cmake git ninja-build pkg-config libgtk-3-dev liblzma-dev ${{ matrix.distro == 'ubuntu20.04' && 'libstdc++-10-dev' || 'libstdc++-12-dev' }} libasound2-dev libsecret-1-dev rpm patchelf dpkg-cross curl unzip
+                case "${{ matrix.distro }}" in
+                  ubuntu20.04)
+                    apt-get install -q -y lld-10
+                    ;;
+                  ubuntu22.04)
+                    apt-get install -q -y lld-14
+                    ;;
+                  ubuntu24.04)
+                    apt-get install -q -y lld-18
+                    ;;
+                esac
                 
                 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
                 git clone --depth 1 --branch stable https://github.com/flutter/flutter.git /flutter
@@ -371,6 +446,7 @@ jobs:
             esac
 
           run: |
+            export PATH="$PATH:$HOME/.cargo/bin"
             export PATH="$PATH:/flutter/bin"
             export PATH="$PATH":"$HOME/.pub-cache/bin"
             export PATH=/flutter/bin/cache/dart-sdk/bin:$PATH
@@ -380,7 +456,7 @@ jobs:
             mv build/linux/${{ matrix.out }}/release/bundle /artifacts/telepathy
 
       - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: telepathy_${{ matrix.distro }}_${{ matrix.arch }}
           path: artifacts
@@ -397,10 +473,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
 
@@ -528,10 +604,10 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Download web artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: telepathy_ubuntu-24.04_web
           path: web-artifact

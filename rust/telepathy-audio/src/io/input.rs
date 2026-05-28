@@ -7,10 +7,10 @@
 //! # Example (Native)
 //!
 //! ```rust,no_run
-//! use telepathy_audio::devices::AudioHost;
+//! use telepathy_audio::devices::CpalAudioHost;
 //! use telepathy_audio::io::AudioInputBuilder;
 //!
-//! let host = AudioHost::new();
+//! let host = CpalAudioHost::new();
 //! let input = AudioInputBuilder::new()
 //!     .volume(1.0)
 //!     .callback(|data| {
@@ -24,13 +24,13 @@
 //! # Example (Custom Sink)
 //!
 //! ```rust,no_run
-//! use telepathy_audio::devices::AudioHost;
+//! use telepathy_audio::devices::CpalAudioHost;
 //! use telepathy_audio::io::AudioInputBuilder;
-//! use telepathy_audio::internal::buffer_pool::PooledBuffer;
 //! use telepathy_audio::adapters::MpscSink;
+//! use telepathy_audio::internal::buffer_pool::PooledBuffer;
 //! use std::sync::mpsc;
 //!
-//! let host = AudioHost::new();
+//! let host = CpalAudioHost::new();
 //! let (tx, _rx) = mpsc::channel::<PooledBuffer>();
 //! let _input = AudioInputBuilder::new()
 //!     .sink(MpscSink::new(tx))
@@ -45,14 +45,14 @@
 //! [`build`](AudioInputBuilder::build):
 //!
 //! ```rust,ignore
-//! use telepathy_audio::devices::AudioHost;
+//! use telepathy_audio::devices::CpalAudioHost;
 //! use telepathy_audio::io::AudioInputBuilder;
 //! use telepathy_audio::platform::web_audio::WebAudioWrapper;
 //! use std::sync::Arc;
 //!
 //! // WebAudioWrapper::new() is async and must be called on the main thread
 //! let wrapper = WebAudioWrapper::new().await.unwrap();
-//! let host = AudioHost::new();
+//! let host = CpalAudioHost::new();
 //! let input = AudioInputBuilder::new()
 //!     .web_audio_wrapper(&wrapper)
 //!     .volume(1.0)
@@ -64,36 +64,36 @@
 //! ```
 
 use crate::devices::AudioHost;
-#[cfg(not(target_family = "wasm"))]
-use crate::devices::get_input_device;
 use crate::error::Error;
 use crate::internal::buffer_pool::{DEFAULT_POOL_CAPACITY, PooledBuffer};
 use crate::internal::processor::input_processor;
 use crate::internal::state::InputProcessorState;
 use crate::internal::thread::{self, JoinHandle};
 use crate::internal::traits::AudioInput;
-#[cfg(not(target_family = "wasm"))]
+#[cfg(all(not(target_family = "wasm"), not(feature = "mock-audio")))]
 use crate::internal::traits::{CHANNEL_SIZE, RingBufferInput};
 use crate::io::traits::AudioDataSink;
+#[cfg(all(not(target_family = "wasm"), feature = "mock-audio"))]
+use crate::mock::MockAudioInput;
 #[cfg(target_family = "wasm")]
 use crate::platform::web_audio::WebAudioWrapper;
 use crate::sea::encoder::{EncoderSettings, SeaEncoder};
 use atomic_float::AtomicF32;
-#[cfg(not(target_family = "wasm"))]
+#[cfg(all(not(target_family = "wasm"), not(feature = "mock-audio")))]
 use cpal::Sample;
-#[cfg(not(target_family = "wasm"))]
+#[cfg(all(not(target_family = "wasm"), not(feature = "mock-audio")))]
 use cpal::SampleFormat;
-#[cfg(not(target_family = "wasm"))]
+#[cfg(all(not(target_family = "wasm"), not(feature = "mock-audio")))]
 use cpal::traits::{DeviceTrait, StreamTrait};
-use log::{debug, error};
 use nnnoiseless::{DenoiseState, RnnModel};
-#[cfg(not(target_family = "wasm"))]
+#[cfg(all(not(target_family = "wasm"), not(feature = "mock-audio")))]
 use rtrb::RingBuffer;
 use std::sync::Arc;
-#[cfg(not(target_family = "wasm"))]
+#[cfg(all(not(target_family = "wasm"), not(feature = "mock-audio")))]
 use std::sync::Condvar;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use tokio::sync::Notify;
+use tracing::{debug, error};
 
 /// Configuration for audio input processing.
 ///
@@ -115,11 +115,6 @@ pub struct AudioInputConfig {
     /// When `Some(id)`, attempts to find the device with that ID,
     /// falling back to default if not found.
     pub device_id: Option<String>,
-    /// Whether noise suppression is enabled.
-    ///
-    /// When enabled, audio is upsampled to 48kHz for RNNoise processing.
-    /// This provides significant noise reduction but increases CPU usage.
-    pub denoise_enabled: bool,
     /// Custom noise suppression model bytes.
     ///
     /// When `None`, uses the default RNNoise model.
@@ -139,11 +134,8 @@ pub struct AudioInputConfig {
     /// When enabled, audio is encoded using the SEA codec before being
     /// passed to the callback.
     pub codec_enabled: bool,
-    /// Variable bit rate encoding.
-    ///
-    /// When `true`, the encoder uses variable bit rate for potentially
-    /// smaller output. When `false`, uses constant bit rate.
-    pub codec_vbr: bool,
+    /// Codec bit rate mode.
+    pub codec_mode: CodecBitrateMode,
     /// Residual bits for codec quality (typically 2.0-8.0).
     ///
     /// Higher values provide better quality but larger encoded size.
@@ -170,12 +162,11 @@ impl Default for AudioInputConfig {
     fn default() -> Self {
         Self {
             device_id: None,
-            denoise_enabled: false,
             denoise_model: None,
             volume: 1.0,
             rms_threshold: 0.0,
             codec_enabled: false,
-            codec_vbr: false,
+            codec_mode: CodecBitrateMode::Cbr,
             codec_residual_bits: 5.0,
             error_notify: None,
             output_sample_rate: None,
@@ -248,16 +239,14 @@ where
         self
     }
 
-    /// Configures noise suppression.
+    /// Enables denoising.
     ///
     /// # Arguments
     ///
-    /// * `enabled` - Whether to enable noise suppression
-    /// * `model` - Optional custom RNNoise model bytes (None for default model)
-    pub fn denoise(mut self, enabled: bool, model: Option<RnnModel>) -> Self {
+    /// * `model` - RnnModel::default() or custom model
+    pub fn denoise(mut self, model: RnnModel) -> Self {
         self.config.output_sample_rate = None;
-        self.config.denoise_enabled = enabled;
-        self.config.denoise_model = model;
+        self.config.denoise_model = Some(model);
         self
     }
 
@@ -331,12 +320,13 @@ where
     ///
     /// # Arguments
     ///
-    /// * `enabled` - Whether to enable codec encoding
-    /// * `vbr` - Whether to use variable bit rate
+    /// * `mode` - Whether to use constant bit rate (CBR) or variable bit rate (VBR)
     /// * `residual_bits` - Quality setting for residual encoding
-    pub fn codec(mut self, enabled: bool, vbr: bool, residual_bits: f32) -> Self {
-        self.config.codec_enabled = enabled;
-        self.config.codec_vbr = vbr;
+    ///
+    /// Calling this method always enables codec encoding.
+    pub fn codec(mut self, mode: CodecBitrateMode, residual_bits: f32) -> Self {
+        self.config.codec_enabled = true;
+        self.config.codec_mode = mode;
         self.config.codec_residual_bits = residual_bits;
         self
     }
@@ -366,11 +356,10 @@ where
     /// use telepathy_audio::io::AudioInputBuilder;
     ///
     /// let builder = AudioInputBuilder::new()
-    ///     .denoise(false, None)      // Disable denoising first
-    ///     .output_sample_rate(48000); // Then set custom output rate
+    ///     .output_sample_rate(48000); // Set custom output rate. Do not enable denoising.
     /// ```
     pub fn output_sample_rate(mut self, sample_rate: u32) -> Self {
-        if !self.config.denoise_enabled {
+        if self.config.denoise_model.is_none() {
             self.config.output_sample_rate = Some(sample_rate);
         }
         self
@@ -387,12 +376,12 @@ where
     /// ```rust,no_run
     /// # #[cfg(target_family = "wasm")]
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// use telepathy_audio::devices::AudioHost;
+    /// use telepathy_audio::devices::CpalAudioHost;
     /// use telepathy_audio::io::AudioInputBuilder;
     /// use telepathy_audio::platform::web_audio::WebAudioWrapper;
     /// use std::sync::Arc;
     ///
-    /// let host = AudioHost::new();
+    /// let host = CpalAudioHost::new();
     /// let wrapper = WebAudioWrapper::new().await?;
     /// let input = AudioInputBuilder::new()
     ///     .web_audio_wrapper(&wrapper)
@@ -479,29 +468,20 @@ where
         // Create shared atomic state (use provided shared atomics or create new ones)
         let input_volume = self
             .shared_input_volume
-            .clone()
             .unwrap_or_else(|| Arc::new(AtomicF32::new(self.config.volume)));
         let rms_threshold = self
             .shared_rms_threshold
-            .clone()
             .unwrap_or_else(|| Arc::new(AtomicF32::new(self.config.rms_threshold)));
         let muted = self
             .shared_muted
-            .clone()
             .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
-        let rms_sender = self.shared_rms.clone().unwrap_or_default();
+        let rms_sender = self.shared_rms.unwrap_or_default();
         let sink = self.sink.ok_or_else(|| {
             Error::Config("a data sink must be set via callback() or sink()".to_string())
         })?;
 
         // create denoiser if needed
-        let denoiser = if self.config.denoise_enabled {
-            Some(DenoiseState::from_model(
-                self.config.denoise_model.clone().unwrap_or_default(),
-            ))
-        } else {
-            None
-        };
+        let denoiser = self.config.denoise_model.map(DenoiseState::from_model);
         // build input processor state
         let state = InputProcessorState::new(
             &input_volume,
@@ -511,7 +491,7 @@ where
             DEFAULT_POOL_CAPACITY,
         );
         // determine the output sample rate
-        let output_rate = if self.config.denoise_enabled {
+        let output_rate = if denoiser.is_some() {
             48_000
         } else {
             self.config.output_sample_rate.unwrap_or(input_rate)
@@ -523,7 +503,7 @@ where
                 output_rate,
                 EncoderSettings {
                     residual_bits: self.config.codec_residual_bits,
-                    vbr: self.config.codec_vbr,
+                    vbr: matches!(self.config.codec_mode, CodecBitrateMode::Vbr),
                     ..Default::default()
                 },
             )?)
@@ -567,8 +547,8 @@ where
     /// - The device cannot be found
     /// - The stream cannot be created
     /// - The device uses an unsupported sample format
-    #[cfg(not(target_family = "wasm"))]
-    pub fn build(self, host: &AudioHost) -> Result<AudioInputHandle, Error> {
+    #[cfg(all(not(target_family = "wasm"), not(feature = "mock-audio")))]
+    pub fn build(self, host: &impl AudioHost) -> Result<AudioInputHandle, Error> {
         if self.sink.is_none() {
             return Err(Error::Config(
                 "a data sink must be set via callback() or sink()".to_string(),
@@ -576,7 +556,7 @@ where
         }
 
         // Get the input device
-        let device_handle = get_input_device(host, self.config.device_id.as_deref())?;
+        let device_handle = host.get_input_device(self.config.device_id.as_deref())?;
 
         let device = device_handle.device();
         let config = device.default_input_config()?;
@@ -686,6 +666,26 @@ where
         })
     }
 
+    /// Builds and starts the audio input stream using in-process mock audio.
+    #[cfg(all(not(target_family = "wasm"), feature = "mock-audio"))]
+    pub fn build(self, _host: &impl AudioHost) -> Result<AudioInputHandle, Error> {
+        if self.sink.is_none() {
+            return Err(Error::Config(
+                "a data sink must be set via callback() or sink()".to_string(),
+            ));
+        }
+
+        let context = self.build_common(MockAudioInput::new(48_000), 48_000)?;
+
+        Ok(AudioInputHandle {
+            _stream: None,
+            _processor_handle: Some(context.processor_handle),
+            input_volume: context.input_volume,
+            rms_threshold: context.rms_threshold,
+            muted: context.muted,
+        })
+    }
+
     /// Builds and starts the audio input stream (WASM version).
     ///
     /// On WASM targets, a [`WebAudioWrapper`] must be set via
@@ -705,11 +705,12 @@ where
     /// ```rust,no_run
     /// # #[cfg(target_family = "wasm")]
     /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// use telepathy_audio::{AudioHost, AudioInputBuilder};
+    /// use telepathy_audio::devices::CpalAudioHost;
+    /// use telepathy_audio::io::AudioInputBuilder;
     /// use telepathy_audio::platform::web_audio::WebAudioWrapper;
     /// use std::sync::Arc;
     ///
-    /// let host = AudioHost::new();
+    /// let host = CpalAudioHost::new();
     /// // wrapper must be created ahead of time on the main thread
     /// let wrapper = WebAudioWrapper::new().await;
     /// let input = AudioInputBuilder::new()
@@ -720,7 +721,7 @@ where
     /// # }
     /// ```
     #[cfg(target_family = "wasm")]
-    pub fn build(mut self, _host: &AudioHost) -> Result<AudioInputHandle, Error> {
+    pub fn build(mut self, _host: &impl AudioHost) -> Result<AudioInputHandle, Error> {
         if self.sink.is_none() {
             return Err(Error::Config(
                 "a data sink must be set via callback() or sink()".to_string(),
@@ -830,16 +831,26 @@ impl AudioInputHandle {
     }
 }
 
+/// Codec bit rate mode for input encoding.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum CodecBitrateMode {
+    /// Constant bit rate encoding.
+    #[default]
+    Cbr,
+    /// Variable bit rate encoding.
+    Vbr,
+}
+
 /// Lock free sender for native targets
 ///
 /// Crucially, when the sender is dropped, the input processor is woken up
-#[cfg(not(target_family = "wasm"))]
+#[cfg(all(not(target_family = "wasm"), not(feature = "mock-audio")))]
 struct RingBufferSender {
     producer: rtrb::Producer<f32>,
     notify: Arc<Condvar>,
 }
 
-#[cfg(not(target_family = "wasm"))]
+#[cfg(all(not(target_family = "wasm"), not(feature = "mock-audio")))]
 impl Drop for RingBufferSender {
     fn drop(&mut self) {
         self.notify.notify_one();
@@ -863,7 +874,7 @@ impl Drop for RingBufferSender {
 /// * `input_producer` - Ring buffer producer for f32 samples to the processor
 /// * `input_channels` - Number of input channels
 /// * `error_notify` - Optional notify handle for stream errors
-#[cfg(not(target_family = "wasm"))]
+#[cfg(all(not(target_family = "wasm"), not(feature = "mock-audio")))]
 fn build_input_stream_with_format<T>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
@@ -890,7 +901,7 @@ where
             );
         },
         move |err| {
-            log::error!("Input stream error: {}", err);
+            error!(error = %err, "input_stream_error");
             if let Some(ref notify) = error_notify {
                 notify.notify_one();
             }
@@ -905,7 +916,7 @@ where
 ///
 /// These types use f64 as their intermediate float type, so we need a separate
 /// helper that converts f64 to f32.
-#[cfg(not(target_family = "wasm"))]
+#[cfg(all(not(target_family = "wasm"), not(feature = "mock-audio")))]
 fn build_input_stream_with_format_64<T>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
@@ -933,7 +944,7 @@ where
             );
         },
         move |err| {
-            log::error!("Input stream error: {}", err);
+            error!(error = %err, "input_stream_error");
             if let Some(ref notify) = error_notify {
                 notify.notify_one();
             }
@@ -944,7 +955,7 @@ where
     Ok(stream)
 }
 
-#[cfg(not(target_family = "wasm"))]
+#[cfg(all(not(target_family = "wasm"), not(feature = "mock-audio")))]
 fn input_stream_helper(
     input_sender: &mut RingBufferSender,
     input_channels: usize,

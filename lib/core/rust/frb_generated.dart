@@ -3,17 +3,19 @@
 
 // ignore_for_file: unused_import, unused_element, unnecessary_import, duplicate_ignore, invalid_use_of_internal_member, annotate_overrides, non_constant_identifier_names, curly_braces_in_flow_control_structures, prefer_const_literals_to_create_immutables, unused_field
 
-import 'audio/player.dart';
 import 'dart:async';
 import 'dart:convert';
-import 'error.dart';
 import 'flutter.dart';
+import 'flutter/logging.dart';
+import 'flutter/utils.dart';
 import 'frb_generated.dart';
 import 'frb_generated.io.dart'
     if (dart.library.js_interop) 'frb_generated.web.dart';
-import 'internal.dart';
-import 'overlay/overlay.dart';
+import 'lib.dart';
+import 'overlay.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
+import 'player.dart';
+import 'types.dart';
 
 /// Main entrypoint of the Rust API
 class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
@@ -72,7 +74,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => -1500580087;
+  int get rustContentHash => 1872176494;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -84,70 +86,71 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
 }
 
 abstract class RustLibApi extends BaseApi {
-  Future<Capabilities> crateFlutterCapabilitiesDefault();
+  Future<Capabilities> crateTypesCapabilitiesDefault();
 
-  List<String> crateFlutterCapabilitiesDevices({required Capabilities that});
+  List<String> crateTypesCapabilitiesDevices({required Capabilities that});
 
-  List<String> crateFlutterCapabilitiesEncoders({required Capabilities that});
+  List<String> crateTypesCapabilitiesEncoders({required Capabilities that});
 
-  List<(String, Uint8List)> crateFlutterChatMessageAttachments(
+  List<(String, Uint8List)> crateTypesChatMessageAttachments(
       {required ChatMessage that});
 
-  String crateFlutterChatMessageAutoAccessorGetText(
+  PeerId crateTypesChatMessageAutoAccessorGetReceiver(
       {required ChatMessage that});
 
-  void crateFlutterChatMessageAutoAccessorSetText(
+  String crateTypesChatMessageAutoAccessorGetText({required ChatMessage that});
+
+  void crateTypesChatMessageAutoAccessorSetReceiver(
+      {required ChatMessage that, required PeerId receiver});
+
+  void crateTypesChatMessageAutoAccessorSetText(
       {required ChatMessage that, required String text});
 
-  void crateFlutterChatMessageClearAttachments({required ChatMessage that});
+  void crateTypesChatMessageClearAttachments({required ChatMessage that});
 
-  bool crateFlutterChatMessageIsSender(
+  bool crateTypesChatMessageIsSender(
       {required ChatMessage that, required String identity});
 
-  String crateFlutterChatMessageTime({required ChatMessage that});
+  String crateTypesChatMessageTime({required ChatMessage that});
 
-  Future<CodecConfig> crateFlutterCodecConfigDefault();
+  Future<CodecConfig> crateTypesCodecConfigDefault();
 
-  CodecConfig crateFlutterCodecConfigNew(
+  CodecConfig crateTypesCodecConfigNew(
       {required bool enabled, required bool vbr, required double residualBits});
 
-  void crateFlutterCodecConfigSetEnabled(
+  void crateTypesCodecConfigSetEnabled(
       {required CodecConfig that, required bool enabled});
 
-  void crateFlutterCodecConfigSetResidualBits(
+  void crateTypesCodecConfigSetResidualBits(
       {required CodecConfig that, required double residualBits});
 
-  void crateFlutterCodecConfigSetVbr(
+  void crateTypesCodecConfigSetVbr(
       {required CodecConfig that, required bool vbr});
 
-  (bool, bool, double) crateFlutterCodecConfigToValues(
+  (bool, bool, double) crateTypesCodecConfigToValues(
       {required CodecConfig that});
 
-  Contact crateFlutterContactFromParts(
+  Contact crateTypesContactFromParts(
       {required String id, required String nickname, required String peerId});
 
-  String crateFlutterContactId({required Contact that});
+  String crateTypesContactId({required Contact that});
 
-  bool crateFlutterContactIdEq({required Contact that, required List<int> id});
+  bool crateTypesContactIdEq({required Contact that, required List<int> id});
 
-  Contact crateFlutterContactNew(
+  Contact crateTypesContactNew(
       {required String nickname, required String peerId});
 
-  String crateFlutterContactNickname({required Contact that});
+  String crateTypesContactNickname({required Contact that});
 
-  String crateFlutterContactPeerId({required Contact that});
+  String crateTypesContactPeerId({required Contact that});
 
-  Contact crateFlutterContactPubClone({required Contact that});
+  Contact crateTypesContactPubClone({required Contact that});
 
-  void crateFlutterContactSetNickname(
+  void crateTypesContactSetNickname(
       {required Contact that, required String nickname});
 
-  Future<void> crateFlutterDartNotifyNotified({required DartNotify that});
-
-  void crateFlutterDartNotifyNotify({required DartNotify that});
-
   FlutterCallbacks crateFlutterFlutterCallbacksNew(
-      {required FutureOr<bool> Function((String, Uint8List?, DartNotify))
+      {required FutureOr<bool> Function((String, Uint8List?, FrontendNotify))
           acceptCall,
       required FutureOr<Contact?> Function(Uint8List) getContact,
       required FutureOr<void> Function(CallState) callState,
@@ -156,44 +159,48 @@ abstract class RustLibApi extends BaseApi {
       required FutureOr<void> Function(Statistics) statistics,
       required FutureOr<void> Function(ChatMessage) messageReceived,
       required FutureOr<void> Function((bool, bool)) managerActive,
-      required FutureOr<void> Function((DartNotify, bool)) screenshareStarted});
+      required FutureOr<void> Function((FrontendNotify, bool))
+          screenshareStarted});
 
-  void crateAudioPlayerFlutterSoundHandleCancel(
-      {required FlutterSoundHandle that});
+  void cratePlayerFlutterSoundHandleCancel({required FlutterSoundHandle that});
 
-  Future<NetworkConfig> crateFlutterNetworkConfigDefault();
+  Future<void> crateTypesFrontendNotifyNotified({required FrontendNotify that});
 
-  Future<String> crateFlutterNetworkConfigGetRelayAddress(
+  void crateTypesFrontendNotifyNotify({required FrontendNotify that});
+
+  Future<NetworkConfig> crateTypesNetworkConfigDefault();
+
+  Future<String> crateTypesNetworkConfigGetRelayAddress(
       {required NetworkConfig that});
 
-  Future<String> crateFlutterNetworkConfigGetRelayId(
+  Future<String> crateTypesNetworkConfigGetRelayId(
       {required NetworkConfig that});
 
-  NetworkConfig crateFlutterNetworkConfigNew(
+  NetworkConfig crateTypesNetworkConfigNew(
       {required String relayAddress, required String relayId});
 
-  Future<void> crateFlutterNetworkConfigSetRelayAddress(
+  Future<void> crateTypesNetworkConfigSetRelayAddress(
       {required NetworkConfig that, required String relayAddress});
 
-  Future<void> crateFlutterNetworkConfigSetRelayId(
+  Future<void> crateTypesNetworkConfigSetRelayId(
       {required NetworkConfig that, required String relayId});
 
-  Future<Overlay> crateOverlayOverlayOverlayDefault();
+  Future<Overlay> crateOverlayOverlayDefault();
 
-  Future<void> crateOverlayOverlayOverlayDisable({required Overlay that});
+  Future<void> crateOverlayOverlayDisable({required Overlay that});
 
-  Future<void> crateOverlayOverlayOverlayEnable({required Overlay that});
+  Future<void> crateOverlayOverlayEnable({required Overlay that});
 
-  Future<void> crateOverlayOverlayOverlayHide({required Overlay that});
+  Future<void> crateOverlayOverlayHide({required Overlay that});
 
-  Future<void> crateOverlayOverlayOverlayMoveOverlay(
+  Future<void> crateOverlayOverlayMoveOverlay(
       {required Overlay that,
       required int x,
       required int y,
       required int width,
       required int height});
 
-  Future<Overlay> crateOverlayOverlayOverlayNew(
+  Future<Overlay> crateOverlayOverlayNew(
       {required bool enabled,
       required int x,
       required int y,
@@ -203,45 +210,44 @@ abstract class RustLibApi extends BaseApi {
       required int backgroundColor,
       required int fontColor});
 
-  (int, int) crateOverlayOverlayOverlayScreenResolution(
-      {required Overlay that});
+  (int, int) crateOverlayOverlayScreenResolution({required Overlay that});
 
-  Future<void> crateOverlayOverlayOverlaySetBackgroundColor(
+  Future<void> crateOverlayOverlaySetBackgroundColor(
       {required Overlay that, required int backgroundColor});
 
-  Future<void> crateOverlayOverlayOverlaySetFontColor(
+  Future<void> crateOverlayOverlaySetFontColor(
       {required Overlay that, required int fontColor});
 
-  Future<void> crateOverlayOverlayOverlaySetFontHeight(
+  Future<void> crateOverlayOverlaySetFontHeight(
       {required Overlay that, required int height});
 
-  Future<void> crateOverlayOverlayOverlayShow({required Overlay that});
+  Future<void> crateOverlayOverlayShow({required Overlay that});
 
-  int crateFlutterRecordingConfigBitrate({required RecordingConfig that});
+  int crateTypesRecordingConfigBitrate({required RecordingConfig that});
 
-  String crateFlutterRecordingConfigDevice({required RecordingConfig that});
+  String crateTypesRecordingConfigDevice({required RecordingConfig that});
 
-  String crateFlutterRecordingConfigEncoder({required RecordingConfig that});
+  String crateTypesRecordingConfigEncoder({required RecordingConfig that});
 
-  int crateFlutterRecordingConfigFramerate({required RecordingConfig that});
+  int crateTypesRecordingConfigFramerate({required RecordingConfig that});
 
-  int? crateFlutterRecordingConfigHeight({required RecordingConfig that});
+  int? crateTypesRecordingConfigHeight({required RecordingConfig that});
 
-  Future<Capabilities> crateFlutterScreenshareConfigCapabilities(
+  Future<Capabilities> crateTypesScreenshareConfigCapabilities(
       {required ScreenshareConfig that});
 
-  Future<ScreenshareConfig> crateFlutterScreenshareConfigDefault();
+  Future<ScreenshareConfig> crateTypesScreenshareConfigDefault();
 
-  Future<ScreenshareConfig> crateFlutterScreenshareConfigNew(
+  Future<ScreenshareConfig> crateTypesScreenshareConfigNew(
       {required List<int> buffer});
 
-  Future<RecordingConfig?> crateFlutterScreenshareConfigRecordingConfig(
+  Future<RecordingConfig?> crateTypesScreenshareConfigRecordingConfig(
       {required ScreenshareConfig that});
 
-  Uint8List crateFlutterScreenshareConfigToBytes(
+  Uint8List crateTypesScreenshareConfigToBytes(
       {required ScreenshareConfig that});
 
-  Future<void> crateFlutterScreenshareConfigUpdateRecordingConfig(
+  Future<void> crateTypesScreenshareConfigUpdateRecordingConfig(
       {required ScreenshareConfig that,
       required String encoder,
       required String device,
@@ -249,36 +255,36 @@ abstract class RustLibApi extends BaseApi {
       required int framerate,
       int? height});
 
-  ArcHost crateAudioPlayerSoundPlayerHost({required SoundPlayer that});
+  ArcHost cratePlayerSoundPlayerHost({required SoundPlayer that});
 
-  SoundPlayer crateAudioPlayerSoundPlayerNew({required double outputVolume});
+  SoundPlayer cratePlayerSoundPlayerNew({required double outputVolume});
 
-  Future<FlutterSoundHandle> crateAudioPlayerSoundPlayerPlay(
+  Future<FlutterSoundHandle> cratePlayerSoundPlayerPlay(
       {required SoundPlayer that, required List<int> bytes});
 
-  Future<void> crateAudioPlayerSoundPlayerUpdateOutputDevice(
+  Future<void> cratePlayerSoundPlayerUpdateOutputDevice(
       {required SoundPlayer that, String? deviceId});
 
-  void crateAudioPlayerSoundPlayerUpdateOutputVolume(
+  void cratePlayerSoundPlayerUpdateOutputVolume(
       {required SoundPlayer that, required double volume});
 
-  Future<void> crateInternalTelepathyAudioTest({required Telepathy that});
+  Future<void> crateFlutterTelepathyAudioTest({required Telepathy that});
 
-  ChatMessage crateInternalTelepathyBuildChat(
+  ChatMessage crateFlutterTelepathyBuildChat(
       {required Telepathy that,
       required Contact contact,
       required String text,
       required List<(String, Uint8List)> attachments});
 
-  Future<void> crateInternalTelepathyEndCall({required Telepathy that});
+  Future<void> crateFlutterTelepathyEndCall({required Telepathy that});
 
-  Future<void> crateInternalTelepathyJoinRoom(
+  Future<void> crateFlutterTelepathyJoinRoom(
       {required Telepathy that, required List<String> memberStrings});
 
   Future<(List<AudioDevice>, List<AudioDevice>)>
-      crateInternalTelepathyListDevices({required Telepathy that});
+      crateFlutterTelepathyListDevices({required Telepathy that});
 
-  Telepathy crateInternalTelepathyNew(
+  Telepathy crateFlutterTelepathyNew(
       {required ArcHost host,
       required NetworkConfig networkConfig,
       required ScreenshareConfig screenshareConfig,
@@ -286,87 +292,85 @@ abstract class RustLibApi extends BaseApi {
       required CodecConfig codecConfig,
       required FlutterCallbacks callbacks});
 
-  void crateInternalTelepathyPauseStatistics({required Telepathy that});
+  void crateFlutterTelepathyPauseStatistics({required Telepathy that});
 
-  Future<void> crateInternalTelepathyRestartManager({required Telepathy that});
+  Future<void> crateFlutterTelepathyRestartManager({required Telepathy that});
 
-  void crateInternalTelepathyResumeStatistics({required Telepathy that});
+  void crateFlutterTelepathyResumeStatistics({required Telepathy that});
 
-  Future<void> crateInternalTelepathySendChat(
+  Future<void> crateFlutterTelepathySendChat(
       {required Telepathy that, required ChatMessage message});
 
-  void crateInternalTelepathySetDeafened(
+  void crateFlutterTelepathySetDeafened(
       {required Telepathy that, required bool deafened});
 
-  void crateInternalTelepathySetDenoise(
+  void crateFlutterTelepathySetDenoise(
       {required Telepathy that, required bool denoise});
 
-  void crateInternalTelepathySetEfficiencyMode(
+  void crateFlutterTelepathySetEfficiencyMode(
       {required Telepathy that, required bool enabled});
 
-  Future<void> crateInternalTelepathySetIdentity(
+  Future<void> crateFlutterTelepathySetIdentity(
       {required Telepathy that, required List<int> key});
 
-  Future<void> crateInternalTelepathySetInputDevice(
+  Future<void> crateFlutterTelepathySetInputDevice(
       {required Telepathy that, String? deviceId});
 
-  void crateInternalTelepathySetInputVolume(
+  void crateFlutterTelepathySetInputVolume(
       {required Telepathy that, required double decibel});
 
-  Future<void> crateInternalTelepathySetModel(
+  Future<void> crateFlutterTelepathySetModel(
       {required Telepathy that, Uint8List? model});
 
-  void crateInternalTelepathySetMuted(
+  void crateFlutterTelepathySetMuted(
       {required Telepathy that, required bool muted});
 
-  Future<void> crateInternalTelepathySetOutputDevice(
+  Future<void> crateFlutterTelepathySetOutputDevice(
       {required Telepathy that, String? deviceId});
 
-  void crateInternalTelepathySetOutputVolume(
+  void crateFlutterTelepathySetOutputVolume(
       {required Telepathy that, required double decibel});
 
-  void crateInternalTelepathySetPlayCustomRingtones(
+  void crateFlutterTelepathySetPlayCustomRingtones(
       {required Telepathy that, required bool play});
 
-  void crateInternalTelepathySetRmsThreshold(
+  void crateFlutterTelepathySetRmsThreshold(
       {required Telepathy that, required double decimal});
 
-  void crateInternalTelepathySetSendCustomRingtone(
+  void crateFlutterTelepathySetSendCustomRingtone(
       {required Telepathy that, required bool send});
 
-  Future<void> crateInternalTelepathyShutdown({required Telepathy that});
+  Future<void> crateFlutterTelepathyShutdown({required Telepathy that});
 
-  Future<void> crateInternalTelepathyStartCall(
+  Future<void> crateFlutterTelepathyStartCall(
       {required Telepathy that, required Contact contact});
 
-  Future<void> crateInternalTelepathyStartManager({required Telepathy that});
+  Future<void> crateFlutterTelepathyStartManager({required Telepathy that});
 
-  Future<void> crateInternalTelepathyStartScreenshare(
+  Future<void> crateFlutterTelepathyStartScreenshare(
       {required Telepathy that, required Contact contact});
 
-  Future<void> crateInternalTelepathyStartSession(
+  Future<void> crateFlutterTelepathyStartSession(
       {required Telepathy that, required Contact contact});
 
-  Future<void> crateInternalTelepathyStopSession(
+  Future<void> crateFlutterTelepathyStopSession(
       {required Telepathy that, required Contact contact});
 
-  Stream<String> crateFlutterCreateLogStream();
+  Stream<String> crateFlutterLoggingCreateLogStream();
 
-  (String, Uint8List) crateFlutterGenerateKeys();
+  (String, Uint8List) crateFlutterUtilsGenerateKeys();
 
-  Future<void> crateAudioPlayerLoadRingtone({required String path});
+  Future<void> cratePlayerLoadRingtone({required String path});
 
-  String crateFlutterRoomHash({required List<String> peers});
+  String crateFlutterUtilsRoomHash({required List<String> peers});
 
-  void crateFlutterRustSetUp();
+  void crateFlutterLoggingRustSetUp();
 
-  Future<bool> crateFlutterScreenshareAvailable();
+  Future<bool> crateFlutterUtilsScreenshareAvailable();
 
-  Stream<String> crateFlutterSendToDartLoggerSetStreamSink();
+  Future<Statistics> crateTypesStatisticsDefault();
 
-  Future<Statistics> crateFlutterStatisticsDefault();
-
-  bool crateFlutterValidatePeerId({required String peerId});
+  bool crateFlutterUtilsValidatePeerId({required String peerId});
 
   RustArcIncrementStrongCountFnType get rust_arc_increment_strong_count_ArcHost;
 
@@ -405,14 +409,6 @@ abstract class RustLibApi extends BaseApi {
   CrossPlatformFinalizerArg get rust_arc_decrement_strong_count_ContactPtr;
 
   RustArcIncrementStrongCountFnType
-      get rust_arc_increment_strong_count_DartNotify;
-
-  RustArcDecrementStrongCountFnType
-      get rust_arc_decrement_strong_count_DartNotify;
-
-  CrossPlatformFinalizerArg get rust_arc_decrement_strong_count_DartNotifyPtr;
-
-  RustArcIncrementStrongCountFnType
       get rust_arc_increment_strong_count_FlutterCallbacks;
 
   RustArcDecrementStrongCountFnType
@@ -431,6 +427,15 @@ abstract class RustLibApi extends BaseApi {
       get rust_arc_decrement_strong_count_FlutterSoundHandlePtr;
 
   RustArcIncrementStrongCountFnType
+      get rust_arc_increment_strong_count_FrontendNotify;
+
+  RustArcDecrementStrongCountFnType
+      get rust_arc_decrement_strong_count_FrontendNotify;
+
+  CrossPlatformFinalizerArg
+      get rust_arc_decrement_strong_count_FrontendNotifyPtr;
+
+  RustArcIncrementStrongCountFnType
       get rust_arc_increment_strong_count_NetworkConfig;
 
   RustArcDecrementStrongCountFnType
@@ -444,6 +449,12 @@ abstract class RustLibApi extends BaseApi {
   RustArcDecrementStrongCountFnType get rust_arc_decrement_strong_count_Overlay;
 
   CrossPlatformFinalizerArg get rust_arc_decrement_strong_count_OverlayPtr;
+
+  RustArcIncrementStrongCountFnType get rust_arc_increment_strong_count_PeerId;
+
+  RustArcDecrementStrongCountFnType get rust_arc_decrement_strong_count_PeerId;
+
+  CrossPlatformFinalizerArg get rust_arc_decrement_strong_count_PeerIdPtr;
 
   RustArcIncrementStrongCountFnType
       get rust_arc_increment_strong_count_RecordingConfig;
@@ -489,7 +500,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   });
 
   @override
-  Future<Capabilities> crateFlutterCapabilitiesDefault() {
+  Future<Capabilities> crateTypesCapabilitiesDefault() {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -501,20 +512,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCapabilities,
         decodeErrorData: null,
       ),
-      constMeta: kCrateFlutterCapabilitiesDefaultConstMeta,
+      constMeta: kCrateTypesCapabilitiesDefaultConstMeta,
       argValues: [],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateFlutterCapabilitiesDefaultConstMeta =>
+  TaskConstMeta get kCrateTypesCapabilitiesDefaultConstMeta =>
       const TaskConstMeta(
         debugName: 'Capabilities_default',
         argNames: [],
       );
 
   @override
-  List<String> crateFlutterCapabilitiesDevices({required Capabilities that}) {
+  List<String> crateTypesCapabilitiesDevices({required Capabilities that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -526,20 +537,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_list_String,
         decodeErrorData: null,
       ),
-      constMeta: kCrateFlutterCapabilitiesDevicesConstMeta,
+      constMeta: kCrateTypesCapabilitiesDevicesConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateFlutterCapabilitiesDevicesConstMeta =>
+  TaskConstMeta get kCrateTypesCapabilitiesDevicesConstMeta =>
       const TaskConstMeta(
         debugName: 'Capabilities_devices',
         argNames: ['that'],
       );
 
   @override
-  List<String> crateFlutterCapabilitiesEncoders({required Capabilities that}) {
+  List<String> crateTypesCapabilitiesEncoders({required Capabilities that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -551,20 +562,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_list_String,
         decodeErrorData: null,
       ),
-      constMeta: kCrateFlutterCapabilitiesEncodersConstMeta,
+      constMeta: kCrateTypesCapabilitiesEncodersConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateFlutterCapabilitiesEncodersConstMeta =>
+  TaskConstMeta get kCrateTypesCapabilitiesEncodersConstMeta =>
       const TaskConstMeta(
         debugName: 'Capabilities_encoders',
         argNames: ['that'],
       );
 
   @override
-  List<(String, Uint8List)> crateFlutterChatMessageAttachments(
+  List<(String, Uint8List)> crateTypesChatMessageAttachments(
       {required ChatMessage that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
@@ -577,20 +588,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_list_record_string_list_prim_u_8_strict,
         decodeErrorData: null,
       ),
-      constMeta: kCrateFlutterChatMessageAttachmentsConstMeta,
+      constMeta: kCrateTypesChatMessageAttachmentsConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateFlutterChatMessageAttachmentsConstMeta =>
+  TaskConstMeta get kCrateTypesChatMessageAttachmentsConstMeta =>
       const TaskConstMeta(
         debugName: 'ChatMessage_attachments',
         argNames: ['that'],
       );
 
   @override
-  String crateFlutterChatMessageAutoAccessorGetText(
+  PeerId crateTypesChatMessageAutoAccessorGetReceiver(
       {required ChatMessage that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
@@ -600,23 +611,77 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 5)!;
       },
       codec: SseCodec(
-        decodeSuccessData: sse_decode_String,
+        decodeSuccessData:
+            sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerId,
         decodeErrorData: null,
       ),
-      constMeta: kCrateFlutterChatMessageAutoAccessorGetTextConstMeta,
+      constMeta: kCrateTypesChatMessageAutoAccessorGetReceiverConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateFlutterChatMessageAutoAccessorGetTextConstMeta =>
+  TaskConstMeta get kCrateTypesChatMessageAutoAccessorGetReceiverConstMeta =>
+      const TaskConstMeta(
+        debugName: 'ChatMessage_auto_accessor_get_receiver',
+        argNames: ['that'],
+      );
+
+  @override
+  String crateTypesChatMessageAutoAccessorGetText({required ChatMessage that}) {
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerChatMessage(
+            that, serializer);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 6)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_String,
+        decodeErrorData: null,
+      ),
+      constMeta: kCrateTypesChatMessageAutoAccessorGetTextConstMeta,
+      argValues: [that],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateTypesChatMessageAutoAccessorGetTextConstMeta =>
       const TaskConstMeta(
         debugName: 'ChatMessage_auto_accessor_get_text',
         argNames: ['that'],
       );
 
   @override
-  void crateFlutterChatMessageAutoAccessorSetText(
+  void crateTypesChatMessageAutoAccessorSetReceiver(
+      {required ChatMessage that, required PeerId receiver}) {
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerChatMessage(
+            that, serializer);
+        sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerId(
+            receiver, serializer);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 7)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_unit,
+        decodeErrorData: null,
+      ),
+      constMeta: kCrateTypesChatMessageAutoAccessorSetReceiverConstMeta,
+      argValues: [that, receiver],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateTypesChatMessageAutoAccessorSetReceiverConstMeta =>
+      const TaskConstMeta(
+        debugName: 'ChatMessage_auto_accessor_set_receiver',
+        argNames: ['that', 'receiver'],
+      );
+
+  @override
+  void crateTypesChatMessageAutoAccessorSetText(
       {required ChatMessage that, required String text}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
@@ -624,51 +689,51 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerChatMessage(
             that, serializer);
         sse_encode_String(text, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 6)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 8)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateFlutterChatMessageAutoAccessorSetTextConstMeta,
+      constMeta: kCrateTypesChatMessageAutoAccessorSetTextConstMeta,
       argValues: [that, text],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateFlutterChatMessageAutoAccessorSetTextConstMeta =>
+  TaskConstMeta get kCrateTypesChatMessageAutoAccessorSetTextConstMeta =>
       const TaskConstMeta(
         debugName: 'ChatMessage_auto_accessor_set_text',
         argNames: ['that', 'text'],
       );
 
   @override
-  void crateFlutterChatMessageClearAttachments({required ChatMessage that}) {
+  void crateTypesChatMessageClearAttachments({required ChatMessage that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerChatMessage(
             that, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 7)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 9)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateFlutterChatMessageClearAttachmentsConstMeta,
+      constMeta: kCrateTypesChatMessageClearAttachmentsConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateFlutterChatMessageClearAttachmentsConstMeta =>
+  TaskConstMeta get kCrateTypesChatMessageClearAttachmentsConstMeta =>
       const TaskConstMeta(
         debugName: 'ChatMessage_clear_attachments',
         argNames: ['that'],
       );
 
   @override
-  bool crateFlutterChatMessageIsSender(
+  bool crateTypesChatMessageIsSender(
       {required ChatMessage that, required String identity}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
@@ -676,76 +741,75 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerChatMessage(
             that, serializer);
         sse_encode_String(identity, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 8)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 10)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_bool,
         decodeErrorData: null,
       ),
-      constMeta: kCrateFlutterChatMessageIsSenderConstMeta,
+      constMeta: kCrateTypesChatMessageIsSenderConstMeta,
       argValues: [that, identity],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateFlutterChatMessageIsSenderConstMeta =>
+  TaskConstMeta get kCrateTypesChatMessageIsSenderConstMeta =>
       const TaskConstMeta(
         debugName: 'ChatMessage_is_sender',
         argNames: ['that', 'identity'],
       );
 
   @override
-  String crateFlutterChatMessageTime({required ChatMessage that}) {
+  String crateTypesChatMessageTime({required ChatMessage that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerChatMessage(
             that, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 9)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 11)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_String,
         decodeErrorData: null,
       ),
-      constMeta: kCrateFlutterChatMessageTimeConstMeta,
+      constMeta: kCrateTypesChatMessageTimeConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateFlutterChatMessageTimeConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCrateTypesChatMessageTimeConstMeta => const TaskConstMeta(
         debugName: 'ChatMessage_time',
         argNames: ['that'],
       );
 
   @override
-  Future<CodecConfig> crateFlutterCodecConfigDefault() {
+  Future<CodecConfig> crateTypesCodecConfigDefault() {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 10, port: port_);
+            funcId: 12, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData:
             sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCodecConfig,
         decodeErrorData: null,
       ),
-      constMeta: kCrateFlutterCodecConfigDefaultConstMeta,
+      constMeta: kCrateTypesCodecConfigDefaultConstMeta,
       argValues: [],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateFlutterCodecConfigDefaultConstMeta =>
+  TaskConstMeta get kCrateTypesCodecConfigDefaultConstMeta =>
       const TaskConstMeta(
         debugName: 'CodecConfig_default',
         argNames: [],
       );
 
   @override
-  CodecConfig crateFlutterCodecConfigNew(
+  CodecConfig crateTypesCodecConfigNew(
       {required bool enabled,
       required bool vbr,
       required double residualBits}) {
@@ -755,26 +819,26 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_bool(enabled, serializer);
         sse_encode_bool(vbr, serializer);
         sse_encode_f_32(residualBits, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 11)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 13)!;
       },
       codec: SseCodec(
         decodeSuccessData:
             sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCodecConfig,
         decodeErrorData: null,
       ),
-      constMeta: kCrateFlutterCodecConfigNewConstMeta,
+      constMeta: kCrateTypesCodecConfigNewConstMeta,
       argValues: [enabled, vbr, residualBits],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateFlutterCodecConfigNewConstMeta => const TaskConstMeta(
+  TaskConstMeta get kCrateTypesCodecConfigNewConstMeta => const TaskConstMeta(
         debugName: 'CodecConfig_new',
         argNames: ['enabled', 'vbr', 'residualBits'],
       );
 
   @override
-  void crateFlutterCodecConfigSetEnabled(
+  void crateTypesCodecConfigSetEnabled(
       {required CodecConfig that, required bool enabled}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
@@ -782,26 +846,26 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCodecConfig(
             that, serializer);
         sse_encode_bool(enabled, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 12)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 14)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateFlutterCodecConfigSetEnabledConstMeta,
+      constMeta: kCrateTypesCodecConfigSetEnabledConstMeta,
       argValues: [that, enabled],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateFlutterCodecConfigSetEnabledConstMeta =>
+  TaskConstMeta get kCrateTypesCodecConfigSetEnabledConstMeta =>
       const TaskConstMeta(
         debugName: 'CodecConfig_set_enabled',
         argNames: ['that', 'enabled'],
       );
 
   @override
-  void crateFlutterCodecConfigSetResidualBits(
+  void crateTypesCodecConfigSetResidualBits(
       {required CodecConfig that, required double residualBits}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
@@ -809,26 +873,26 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCodecConfig(
             that, serializer);
         sse_encode_f_32(residualBits, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 13)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 15)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateFlutterCodecConfigSetResidualBitsConstMeta,
+      constMeta: kCrateTypesCodecConfigSetResidualBitsConstMeta,
       argValues: [that, residualBits],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateFlutterCodecConfigSetResidualBitsConstMeta =>
+  TaskConstMeta get kCrateTypesCodecConfigSetResidualBitsConstMeta =>
       const TaskConstMeta(
         debugName: 'CodecConfig_set_residual_bits',
         argNames: ['that', 'residualBits'],
       );
 
   @override
-  void crateFlutterCodecConfigSetVbr(
+  void crateTypesCodecConfigSetVbr(
       {required CodecConfig that, required bool vbr}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
@@ -836,52 +900,52 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCodecConfig(
             that, serializer);
         sse_encode_bool(vbr, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 14)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 16)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateFlutterCodecConfigSetVbrConstMeta,
+      constMeta: kCrateTypesCodecConfigSetVbrConstMeta,
       argValues: [that, vbr],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateFlutterCodecConfigSetVbrConstMeta =>
+  TaskConstMeta get kCrateTypesCodecConfigSetVbrConstMeta =>
       const TaskConstMeta(
         debugName: 'CodecConfig_set_vbr',
         argNames: ['that', 'vbr'],
       );
 
   @override
-  (bool, bool, double) crateFlutterCodecConfigToValues(
+  (bool, bool, double) crateTypesCodecConfigToValues(
       {required CodecConfig that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCodecConfig(
             that, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 15)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 17)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_record_bool_bool_f_32,
         decodeErrorData: null,
       ),
-      constMeta: kCrateFlutterCodecConfigToValuesConstMeta,
+      constMeta: kCrateTypesCodecConfigToValuesConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateFlutterCodecConfigToValuesConstMeta =>
+  TaskConstMeta get kCrateTypesCodecConfigToValuesConstMeta =>
       const TaskConstMeta(
         debugName: 'CodecConfig_to_values',
         argNames: ['that'],
       );
 
   @override
-  Contact crateFlutterContactFromParts(
+  Contact crateTypesContactFromParts(
       {required String id, required String nickname, required String peerId}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
@@ -889,151 +953,101 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_String(id, serializer);
         sse_encode_String(nickname, serializer);
         sse_encode_String(peerId, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 16)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 18)!;
       },
       codec: SseCodec(
         decodeSuccessData:
             sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerContact,
         decodeErrorData: sse_decode_dart_error,
       ),
-      constMeta: kCrateFlutterContactFromPartsConstMeta,
+      constMeta: kCrateTypesContactFromPartsConstMeta,
       argValues: [id, nickname, peerId],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateFlutterContactFromPartsConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCrateTypesContactFromPartsConstMeta => const TaskConstMeta(
         debugName: 'Contact_from_parts',
         argNames: ['id', 'nickname', 'peerId'],
       );
 
   @override
-  String crateFlutterContactId({required Contact that}) {
+  String crateTypesContactId({required Contact that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerContact(
             that, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 17)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 19)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_String,
         decodeErrorData: null,
       ),
-      constMeta: kCrateFlutterContactIdConstMeta,
+      constMeta: kCrateTypesContactIdConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateFlutterContactIdConstMeta => const TaskConstMeta(
+  TaskConstMeta get kCrateTypesContactIdConstMeta => const TaskConstMeta(
         debugName: 'Contact_id',
         argNames: ['that'],
       );
 
   @override
-  bool crateFlutterContactIdEq({required Contact that, required List<int> id}) {
+  bool crateTypesContactIdEq({required Contact that, required List<int> id}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerContact(
             that, serializer);
         sse_encode_list_prim_u_8_loose(id, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 18)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 20)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_bool,
         decodeErrorData: null,
       ),
-      constMeta: kCrateFlutterContactIdEqConstMeta,
+      constMeta: kCrateTypesContactIdEqConstMeta,
       argValues: [that, id],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateFlutterContactIdEqConstMeta => const TaskConstMeta(
+  TaskConstMeta get kCrateTypesContactIdEqConstMeta => const TaskConstMeta(
         debugName: 'Contact_id_eq',
         argNames: ['that', 'id'],
       );
 
   @override
-  Contact crateFlutterContactNew(
+  Contact crateTypesContactNew(
       {required String nickname, required String peerId}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_String(nickname, serializer);
         sse_encode_String(peerId, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 19)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 21)!;
       },
       codec: SseCodec(
         decodeSuccessData:
             sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerContact,
         decodeErrorData: sse_decode_dart_error,
       ),
-      constMeta: kCrateFlutterContactNewConstMeta,
+      constMeta: kCrateTypesContactNewConstMeta,
       argValues: [nickname, peerId],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateFlutterContactNewConstMeta => const TaskConstMeta(
+  TaskConstMeta get kCrateTypesContactNewConstMeta => const TaskConstMeta(
         debugName: 'Contact_new',
         argNames: ['nickname', 'peerId'],
       );
 
   @override
-  String crateFlutterContactNickname({required Contact that}) {
-    return handler.executeSync(SyncTask(
-      callFfi: () {
-        final serializer = SseSerializer(generalizedFrbRustBinding);
-        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerContact(
-            that, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 20)!;
-      },
-      codec: SseCodec(
-        decodeSuccessData: sse_decode_String,
-        decodeErrorData: null,
-      ),
-      constMeta: kCrateFlutterContactNicknameConstMeta,
-      argValues: [that],
-      apiImpl: this,
-    ));
-  }
-
-  TaskConstMeta get kCrateFlutterContactNicknameConstMeta =>
-      const TaskConstMeta(
-        debugName: 'Contact_nickname',
-        argNames: ['that'],
-      );
-
-  @override
-  String crateFlutterContactPeerId({required Contact that}) {
-    return handler.executeSync(SyncTask(
-      callFfi: () {
-        final serializer = SseSerializer(generalizedFrbRustBinding);
-        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerContact(
-            that, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 21)!;
-      },
-      codec: SseCodec(
-        decodeSuccessData: sse_decode_String,
-        decodeErrorData: null,
-      ),
-      constMeta: kCrateFlutterContactPeerIdConstMeta,
-      argValues: [that],
-      apiImpl: this,
-    ));
-  }
-
-  TaskConstMeta get kCrateFlutterContactPeerIdConstMeta => const TaskConstMeta(
-        debugName: 'Contact_peer_id',
-        argNames: ['that'],
-      );
-
-  @override
-  Contact crateFlutterContactPubClone({required Contact that}) {
+  String crateTypesContactNickname({required Contact that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -1042,24 +1056,71 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 22)!;
       },
       codec: SseCodec(
-        decodeSuccessData:
-            sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerContact,
+        decodeSuccessData: sse_decode_String,
         decodeErrorData: null,
       ),
-      constMeta: kCrateFlutterContactPubCloneConstMeta,
+      constMeta: kCrateTypesContactNicknameConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateFlutterContactPubCloneConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCrateTypesContactNicknameConstMeta => const TaskConstMeta(
+        debugName: 'Contact_nickname',
+        argNames: ['that'],
+      );
+
+  @override
+  String crateTypesContactPeerId({required Contact that}) {
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerContact(
+            that, serializer);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 23)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_String,
+        decodeErrorData: null,
+      ),
+      constMeta: kCrateTypesContactPeerIdConstMeta,
+      argValues: [that],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateTypesContactPeerIdConstMeta => const TaskConstMeta(
+        debugName: 'Contact_peer_id',
+        argNames: ['that'],
+      );
+
+  @override
+  Contact crateTypesContactPubClone({required Contact that}) {
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerContact(
+            that, serializer);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 24)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData:
+            sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerContact,
+        decodeErrorData: null,
+      ),
+      constMeta: kCrateTypesContactPubCloneConstMeta,
+      argValues: [that],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateTypesContactPubCloneConstMeta => const TaskConstMeta(
         debugName: 'Contact_pub_clone',
         argNames: ['that'],
       );
 
   @override
-  void crateFlutterContactSetNickname(
+  void crateTypesContactSetNickname(
       {required Contact that, required String nickname}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
@@ -1067,78 +1128,27 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerContact(
             that, serializer);
         sse_encode_String(nickname, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 23)!;
-      },
-      codec: SseCodec(
-        decodeSuccessData: sse_decode_unit,
-        decodeErrorData: null,
-      ),
-      constMeta: kCrateFlutterContactSetNicknameConstMeta,
-      argValues: [that, nickname],
-      apiImpl: this,
-    ));
-  }
-
-  TaskConstMeta get kCrateFlutterContactSetNicknameConstMeta =>
-      const TaskConstMeta(
-        debugName: 'Contact_set_nickname',
-        argNames: ['that', 'nickname'],
-      );
-
-  @override
-  Future<void> crateFlutterDartNotifyNotified({required DartNotify that}) {
-    return handler.executeNormal(NormalTask(
-      callFfi: (port_) {
-        final serializer = SseSerializer(generalizedFrbRustBinding);
-        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDartNotify(
-            that, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 24, port: port_);
-      },
-      codec: SseCodec(
-        decodeSuccessData: sse_decode_unit,
-        decodeErrorData: null,
-      ),
-      constMeta: kCrateFlutterDartNotifyNotifiedConstMeta,
-      argValues: [that],
-      apiImpl: this,
-    ));
-  }
-
-  TaskConstMeta get kCrateFlutterDartNotifyNotifiedConstMeta =>
-      const TaskConstMeta(
-        debugName: 'DartNotify_notified',
-        argNames: ['that'],
-      );
-
-  @override
-  void crateFlutterDartNotifyNotify({required DartNotify that}) {
-    return handler.executeSync(SyncTask(
-      callFfi: () {
-        final serializer = SseSerializer(generalizedFrbRustBinding);
-        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDartNotify(
-            that, serializer);
         return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 25)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateFlutterDartNotifyNotifyConstMeta,
-      argValues: [that],
+      constMeta: kCrateTypesContactSetNicknameConstMeta,
+      argValues: [that, nickname],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateFlutterDartNotifyNotifyConstMeta =>
+  TaskConstMeta get kCrateTypesContactSetNicknameConstMeta =>
       const TaskConstMeta(
-        debugName: 'DartNotify_notify',
-        argNames: ['that'],
+        debugName: 'Contact_set_nickname',
+        argNames: ['that', 'nickname'],
       );
 
   @override
   FlutterCallbacks crateFlutterFlutterCallbacksNew(
-      {required FutureOr<bool> Function((String, Uint8List?, DartNotify))
+      {required FutureOr<bool> Function((String, Uint8List?, FrontendNotify))
           acceptCall,
       required FutureOr<Contact?> Function(Uint8List) getContact,
       required FutureOr<void> Function(CallState) callState,
@@ -1147,12 +1157,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       required FutureOr<void> Function(Statistics) statistics,
       required FutureOr<void> Function(ChatMessage) messageReceived,
       required FutureOr<void> Function((bool, bool)) managerActive,
-      required FutureOr<void> Function((DartNotify, bool))
+      required FutureOr<void> Function((FrontendNotify, bool))
           screenshareStarted}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
-        sse_encode_DartFn_Inputs_record_string_opt_list_prim_u_8_strict_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_dart_notify_Output_bool_AnyhowException(
+        sse_encode_DartFn_Inputs_record_string_opt_list_prim_u_8_strict_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_Output_bool_AnyhowException(
             acceptCall, serializer);
         sse_encode_DartFn_Inputs_list_prim_u_8_strict_Output_opt_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerContact_AnyhowException(
             getContact, serializer);
@@ -1168,7 +1178,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             messageReceived, serializer);
         sse_encode_DartFn_Inputs_record_bool_bool_Output_unit_AnyhowException(
             managerActive, serializer);
-        sse_encode_DartFn_Inputs_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_dart_notify_bool_Output_unit_AnyhowException(
+        sse_encode_DartFn_Inputs_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_bool_Output_unit_AnyhowException(
             screenshareStarted, serializer);
         return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 26)!;
       },
@@ -1210,8 +1220,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  void crateAudioPlayerFlutterSoundHandleCancel(
-      {required FlutterSoundHandle that}) {
+  void cratePlayerFlutterSoundHandleCancel({required FlutterSoundHandle that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -1223,45 +1232,97 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateAudioPlayerFlutterSoundHandleCancelConstMeta,
+      constMeta: kCratePlayerFlutterSoundHandleCancelConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateAudioPlayerFlutterSoundHandleCancelConstMeta =>
+  TaskConstMeta get kCratePlayerFlutterSoundHandleCancelConstMeta =>
       const TaskConstMeta(
         debugName: 'FlutterSoundHandle_cancel',
         argNames: ['that'],
       );
 
   @override
-  Future<NetworkConfig> crateFlutterNetworkConfigDefault() {
+  Future<void> crateTypesFrontendNotifyNotified(
+      {required FrontendNotify that}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFrontendNotify(
+            that, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 28, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_unit,
+        decodeErrorData: null,
+      ),
+      constMeta: kCrateTypesFrontendNotifyNotifiedConstMeta,
+      argValues: [that],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateTypesFrontendNotifyNotifiedConstMeta =>
+      const TaskConstMeta(
+        debugName: 'FrontendNotify_notified',
+        argNames: ['that'],
+      );
+
+  @override
+  void crateTypesFrontendNotifyNotify({required FrontendNotify that}) {
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFrontendNotify(
+            that, serializer);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 29)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_unit,
+        decodeErrorData: null,
+      ),
+      constMeta: kCrateTypesFrontendNotifyNotifyConstMeta,
+      argValues: [that],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateTypesFrontendNotifyNotifyConstMeta =>
+      const TaskConstMeta(
+        debugName: 'FrontendNotify_notify',
+        argNames: ['that'],
+      );
+
+  @override
+  Future<NetworkConfig> crateTypesNetworkConfigDefault() {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 28, port: port_);
+            funcId: 30, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData:
             sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerNetworkConfig,
         decodeErrorData: null,
       ),
-      constMeta: kCrateFlutterNetworkConfigDefaultConstMeta,
+      constMeta: kCrateTypesNetworkConfigDefaultConstMeta,
       argValues: [],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateFlutterNetworkConfigDefaultConstMeta =>
+  TaskConstMeta get kCrateTypesNetworkConfigDefaultConstMeta =>
       const TaskConstMeta(
         debugName: 'NetworkConfig_default',
         argNames: [],
       );
 
   @override
-  Future<String> crateFlutterNetworkConfigGetRelayAddress(
+  Future<String> crateTypesNetworkConfigGetRelayAddress(
       {required NetworkConfig that}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
@@ -1269,26 +1330,26 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerNetworkConfig(
             that, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 29, port: port_);
+            funcId: 31, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_String,
         decodeErrorData: null,
       ),
-      constMeta: kCrateFlutterNetworkConfigGetRelayAddressConstMeta,
+      constMeta: kCrateTypesNetworkConfigGetRelayAddressConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateFlutterNetworkConfigGetRelayAddressConstMeta =>
+  TaskConstMeta get kCrateTypesNetworkConfigGetRelayAddressConstMeta =>
       const TaskConstMeta(
         debugName: 'NetworkConfig_get_relay_address',
         argNames: ['that'],
       );
 
   @override
-  Future<String> crateFlutterNetworkConfigGetRelayId(
+  Future<String> crateTypesNetworkConfigGetRelayId(
       {required NetworkConfig that}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
@@ -1296,53 +1357,52 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerNetworkConfig(
             that, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 30, port: port_);
+            funcId: 32, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_String,
         decodeErrorData: null,
       ),
-      constMeta: kCrateFlutterNetworkConfigGetRelayIdConstMeta,
+      constMeta: kCrateTypesNetworkConfigGetRelayIdConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateFlutterNetworkConfigGetRelayIdConstMeta =>
+  TaskConstMeta get kCrateTypesNetworkConfigGetRelayIdConstMeta =>
       const TaskConstMeta(
         debugName: 'NetworkConfig_get_relay_id',
         argNames: ['that'],
       );
 
   @override
-  NetworkConfig crateFlutterNetworkConfigNew(
+  NetworkConfig crateTypesNetworkConfigNew(
       {required String relayAddress, required String relayId}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_String(relayAddress, serializer);
         sse_encode_String(relayId, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 31)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 33)!;
       },
       codec: SseCodec(
         decodeSuccessData:
             sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerNetworkConfig,
         decodeErrorData: sse_decode_dart_error,
       ),
-      constMeta: kCrateFlutterNetworkConfigNewConstMeta,
+      constMeta: kCrateTypesNetworkConfigNewConstMeta,
       argValues: [relayAddress, relayId],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateFlutterNetworkConfigNewConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCrateTypesNetworkConfigNewConstMeta => const TaskConstMeta(
         debugName: 'NetworkConfig_new',
         argNames: ['relayAddress', 'relayId'],
       );
 
   @override
-  Future<void> crateFlutterNetworkConfigSetRelayAddress(
+  Future<void> crateTypesNetworkConfigSetRelayAddress(
       {required NetworkConfig that, required String relayAddress}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
@@ -1351,26 +1411,26 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that, serializer);
         sse_encode_String(relayAddress, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 32, port: port_);
+            funcId: 34, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: sse_decode_dart_error,
       ),
-      constMeta: kCrateFlutterNetworkConfigSetRelayAddressConstMeta,
+      constMeta: kCrateTypesNetworkConfigSetRelayAddressConstMeta,
       argValues: [that, relayAddress],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateFlutterNetworkConfigSetRelayAddressConstMeta =>
+  TaskConstMeta get kCrateTypesNetworkConfigSetRelayAddressConstMeta =>
       const TaskConstMeta(
         debugName: 'NetworkConfig_set_relay_address',
         argNames: ['that', 'relayAddress'],
       );
 
   @override
-  Future<void> crateFlutterNetworkConfigSetRelayId(
+  Future<void> crateTypesNetworkConfigSetRelayId(
       {required NetworkConfig that, required String relayId}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
@@ -1379,103 +1439,50 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that, serializer);
         sse_encode_String(relayId, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 33, port: port_);
+            funcId: 35, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: sse_decode_dart_error,
       ),
-      constMeta: kCrateFlutterNetworkConfigSetRelayIdConstMeta,
+      constMeta: kCrateTypesNetworkConfigSetRelayIdConstMeta,
       argValues: [that, relayId],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateFlutterNetworkConfigSetRelayIdConstMeta =>
+  TaskConstMeta get kCrateTypesNetworkConfigSetRelayIdConstMeta =>
       const TaskConstMeta(
         debugName: 'NetworkConfig_set_relay_id',
         argNames: ['that', 'relayId'],
       );
 
   @override
-  Future<Overlay> crateOverlayOverlayOverlayDefault() {
+  Future<Overlay> crateOverlayOverlayDefault() {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 34, port: port_);
+            funcId: 36, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData:
             sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerOverlay,
         decodeErrorData: null,
       ),
-      constMeta: kCrateOverlayOverlayOverlayDefaultConstMeta,
+      constMeta: kCrateOverlayOverlayDefaultConstMeta,
       argValues: [],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateOverlayOverlayOverlayDefaultConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCrateOverlayOverlayDefaultConstMeta => const TaskConstMeta(
         debugName: 'Overlay_default',
         argNames: [],
       );
 
   @override
-  Future<void> crateOverlayOverlayOverlayDisable({required Overlay that}) {
-    return handler.executeNormal(NormalTask(
-      callFfi: (port_) {
-        final serializer = SseSerializer(generalizedFrbRustBinding);
-        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerOverlay(
-            that, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 35, port: port_);
-      },
-      codec: SseCodec(
-        decodeSuccessData: sse_decode_unit,
-        decodeErrorData: null,
-      ),
-      constMeta: kCrateOverlayOverlayOverlayDisableConstMeta,
-      argValues: [that],
-      apiImpl: this,
-    ));
-  }
-
-  TaskConstMeta get kCrateOverlayOverlayOverlayDisableConstMeta =>
-      const TaskConstMeta(
-        debugName: 'Overlay_disable',
-        argNames: ['that'],
-      );
-
-  @override
-  Future<void> crateOverlayOverlayOverlayEnable({required Overlay that}) {
-    return handler.executeNormal(NormalTask(
-      callFfi: (port_) {
-        final serializer = SseSerializer(generalizedFrbRustBinding);
-        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerOverlay(
-            that, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 36, port: port_);
-      },
-      codec: SseCodec(
-        decodeSuccessData: sse_decode_unit,
-        decodeErrorData: null,
-      ),
-      constMeta: kCrateOverlayOverlayOverlayEnableConstMeta,
-      argValues: [that],
-      apiImpl: this,
-    ));
-  }
-
-  TaskConstMeta get kCrateOverlayOverlayOverlayEnableConstMeta =>
-      const TaskConstMeta(
-        debugName: 'Overlay_enable',
-        argNames: ['that'],
-      );
-
-  @override
-  Future<void> crateOverlayOverlayOverlayHide({required Overlay that}) {
+  Future<void> crateOverlayOverlayDisable({required Overlay that}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -1488,20 +1495,69 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateOverlayOverlayOverlayHideConstMeta,
+      constMeta: kCrateOverlayOverlayDisableConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateOverlayOverlayOverlayHideConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCrateOverlayOverlayDisableConstMeta => const TaskConstMeta(
+        debugName: 'Overlay_disable',
+        argNames: ['that'],
+      );
+
+  @override
+  Future<void> crateOverlayOverlayEnable({required Overlay that}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerOverlay(
+            that, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 38, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_unit,
+        decodeErrorData: null,
+      ),
+      constMeta: kCrateOverlayOverlayEnableConstMeta,
+      argValues: [that],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateOverlayOverlayEnableConstMeta => const TaskConstMeta(
+        debugName: 'Overlay_enable',
+        argNames: ['that'],
+      );
+
+  @override
+  Future<void> crateOverlayOverlayHide({required Overlay that}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerOverlay(
+            that, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 39, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_unit,
+        decodeErrorData: null,
+      ),
+      constMeta: kCrateOverlayOverlayHideConstMeta,
+      argValues: [that],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateOverlayOverlayHideConstMeta => const TaskConstMeta(
         debugName: 'Overlay_hide',
         argNames: ['that'],
       );
 
   @override
-  Future<void> crateOverlayOverlayOverlayMoveOverlay(
+  Future<void> crateOverlayOverlayMoveOverlay(
       {required Overlay that,
       required int x,
       required int y,
@@ -1517,26 +1573,26 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_i_32(width, serializer);
         sse_encode_i_32(height, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 38, port: port_);
+            funcId: 40, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateOverlayOverlayOverlayMoveOverlayConstMeta,
+      constMeta: kCrateOverlayOverlayMoveOverlayConstMeta,
       argValues: [that, x, y, width, height],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateOverlayOverlayOverlayMoveOverlayConstMeta =>
+  TaskConstMeta get kCrateOverlayOverlayMoveOverlayConstMeta =>
       const TaskConstMeta(
         debugName: 'Overlay_move_overlay',
         argNames: ['that', 'x', 'y', 'width', 'height'],
       );
 
   @override
-  Future<Overlay> crateOverlayOverlayOverlayNew(
+  Future<Overlay> crateOverlayOverlayNew(
       {required bool enabled,
       required int x,
       required int y,
@@ -1557,14 +1613,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_u_32(backgroundColor, serializer);
         sse_encode_u_32(fontColor, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 39, port: port_);
+            funcId: 41, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData:
             sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerOverlay,
         decodeErrorData: null,
       ),
-      constMeta: kCrateOverlayOverlayOverlayNewConstMeta,
+      constMeta: kCrateOverlayOverlayNewConstMeta,
       argValues: [
         enabled,
         x,
@@ -1579,8 +1635,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     ));
   }
 
-  TaskConstMeta get kCrateOverlayOverlayOverlayNewConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCrateOverlayOverlayNewConstMeta => const TaskConstMeta(
         debugName: 'Overlay_new',
         argNames: [
           'enabled',
@@ -1595,33 +1650,32 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  (int, int) crateOverlayOverlayOverlayScreenResolution(
-      {required Overlay that}) {
+  (int, int) crateOverlayOverlayScreenResolution({required Overlay that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerOverlay(
             that, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 40)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 42)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_record_i_32_i_32,
         decodeErrorData: null,
       ),
-      constMeta: kCrateOverlayOverlayOverlayScreenResolutionConstMeta,
+      constMeta: kCrateOverlayOverlayScreenResolutionConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateOverlayOverlayOverlayScreenResolutionConstMeta =>
+  TaskConstMeta get kCrateOverlayOverlayScreenResolutionConstMeta =>
       const TaskConstMeta(
         debugName: 'Overlay_screen_resolution',
         argNames: ['that'],
       );
 
   @override
-  Future<void> crateOverlayOverlayOverlaySetBackgroundColor(
+  Future<void> crateOverlayOverlaySetBackgroundColor(
       {required Overlay that, required int backgroundColor}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
@@ -1630,26 +1684,26 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that, serializer);
         sse_encode_u_32(backgroundColor, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 41, port: port_);
+            funcId: 43, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateOverlayOverlayOverlaySetBackgroundColorConstMeta,
+      constMeta: kCrateOverlayOverlaySetBackgroundColorConstMeta,
       argValues: [that, backgroundColor],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateOverlayOverlayOverlaySetBackgroundColorConstMeta =>
+  TaskConstMeta get kCrateOverlayOverlaySetBackgroundColorConstMeta =>
       const TaskConstMeta(
         debugName: 'Overlay_set_background_color',
         argNames: ['that', 'backgroundColor'],
       );
 
   @override
-  Future<void> crateOverlayOverlayOverlaySetFontColor(
+  Future<void> crateOverlayOverlaySetFontColor(
       {required Overlay that, required int fontColor}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
@@ -1658,26 +1712,26 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that, serializer);
         sse_encode_u_32(fontColor, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 42, port: port_);
+            funcId: 44, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateOverlayOverlayOverlaySetFontColorConstMeta,
+      constMeta: kCrateOverlayOverlaySetFontColorConstMeta,
       argValues: [that, fontColor],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateOverlayOverlayOverlaySetFontColorConstMeta =>
+  TaskConstMeta get kCrateOverlayOverlaySetFontColorConstMeta =>
       const TaskConstMeta(
         debugName: 'Overlay_set_font_color',
         argNames: ['that', 'fontColor'],
       );
 
   @override
-  Future<void> crateOverlayOverlayOverlaySetFontHeight(
+  Future<void> crateOverlayOverlaySetFontHeight(
       {required Overlay that, required int height}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
@@ -1686,102 +1740,51 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that, serializer);
         sse_encode_i_32(height, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 43, port: port_);
+            funcId: 45, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateOverlayOverlayOverlaySetFontHeightConstMeta,
+      constMeta: kCrateOverlayOverlaySetFontHeightConstMeta,
       argValues: [that, height],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateOverlayOverlayOverlaySetFontHeightConstMeta =>
+  TaskConstMeta get kCrateOverlayOverlaySetFontHeightConstMeta =>
       const TaskConstMeta(
         debugName: 'Overlay_set_font_height',
         argNames: ['that', 'height'],
       );
 
   @override
-  Future<void> crateOverlayOverlayOverlayShow({required Overlay that}) {
+  Future<void> crateOverlayOverlayShow({required Overlay that}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerOverlay(
             that, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 44, port: port_);
+            funcId: 46, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateOverlayOverlayOverlayShowConstMeta,
+      constMeta: kCrateOverlayOverlayShowConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateOverlayOverlayOverlayShowConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCrateOverlayOverlayShowConstMeta => const TaskConstMeta(
         debugName: 'Overlay_show',
         argNames: ['that'],
       );
 
   @override
-  int crateFlutterRecordingConfigBitrate({required RecordingConfig that}) {
-    return handler.executeSync(SyncTask(
-      callFfi: () {
-        final serializer = SseSerializer(generalizedFrbRustBinding);
-        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRecordingConfig(
-            that, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 45)!;
-      },
-      codec: SseCodec(
-        decodeSuccessData: sse_decode_u_32,
-        decodeErrorData: null,
-      ),
-      constMeta: kCrateFlutterRecordingConfigBitrateConstMeta,
-      argValues: [that],
-      apiImpl: this,
-    ));
-  }
-
-  TaskConstMeta get kCrateFlutterRecordingConfigBitrateConstMeta =>
-      const TaskConstMeta(
-        debugName: 'RecordingConfig_bitrate',
-        argNames: ['that'],
-      );
-
-  @override
-  String crateFlutterRecordingConfigDevice({required RecordingConfig that}) {
-    return handler.executeSync(SyncTask(
-      callFfi: () {
-        final serializer = SseSerializer(generalizedFrbRustBinding);
-        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRecordingConfig(
-            that, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 46)!;
-      },
-      codec: SseCodec(
-        decodeSuccessData: sse_decode_String,
-        decodeErrorData: null,
-      ),
-      constMeta: kCrateFlutterRecordingConfigDeviceConstMeta,
-      argValues: [that],
-      apiImpl: this,
-    ));
-  }
-
-  TaskConstMeta get kCrateFlutterRecordingConfigDeviceConstMeta =>
-      const TaskConstMeta(
-        debugName: 'RecordingConfig_device',
-        argNames: ['that'],
-      );
-
-  @override
-  String crateFlutterRecordingConfigEncoder({required RecordingConfig that}) {
+  int crateTypesRecordingConfigBitrate({required RecordingConfig that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -1790,23 +1793,23 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 47)!;
       },
       codec: SseCodec(
-        decodeSuccessData: sse_decode_String,
+        decodeSuccessData: sse_decode_u_32,
         decodeErrorData: null,
       ),
-      constMeta: kCrateFlutterRecordingConfigEncoderConstMeta,
+      constMeta: kCrateTypesRecordingConfigBitrateConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateFlutterRecordingConfigEncoderConstMeta =>
+  TaskConstMeta get kCrateTypesRecordingConfigBitrateConstMeta =>
       const TaskConstMeta(
-        debugName: 'RecordingConfig_encoder',
+        debugName: 'RecordingConfig_bitrate',
         argNames: ['that'],
       );
 
   @override
-  int crateFlutterRecordingConfigFramerate({required RecordingConfig that}) {
+  String crateTypesRecordingConfigDevice({required RecordingConfig that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -1815,23 +1818,23 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 48)!;
       },
       codec: SseCodec(
-        decodeSuccessData: sse_decode_u_32,
+        decodeSuccessData: sse_decode_String,
         decodeErrorData: null,
       ),
-      constMeta: kCrateFlutterRecordingConfigFramerateConstMeta,
+      constMeta: kCrateTypesRecordingConfigDeviceConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateFlutterRecordingConfigFramerateConstMeta =>
+  TaskConstMeta get kCrateTypesRecordingConfigDeviceConstMeta =>
       const TaskConstMeta(
-        debugName: 'RecordingConfig_framerate',
+        debugName: 'RecordingConfig_device',
         argNames: ['that'],
       );
 
   @override
-  int? crateFlutterRecordingConfigHeight({required RecordingConfig that}) {
+  String crateTypesRecordingConfigEncoder({required RecordingConfig that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -1840,23 +1843,73 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 49)!;
       },
       codec: SseCodec(
-        decodeSuccessData: sse_decode_opt_box_autoadd_u_32,
+        decodeSuccessData: sse_decode_String,
         decodeErrorData: null,
       ),
-      constMeta: kCrateFlutterRecordingConfigHeightConstMeta,
+      constMeta: kCrateTypesRecordingConfigEncoderConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateFlutterRecordingConfigHeightConstMeta =>
+  TaskConstMeta get kCrateTypesRecordingConfigEncoderConstMeta =>
+      const TaskConstMeta(
+        debugName: 'RecordingConfig_encoder',
+        argNames: ['that'],
+      );
+
+  @override
+  int crateTypesRecordingConfigFramerate({required RecordingConfig that}) {
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRecordingConfig(
+            that, serializer);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 50)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_u_32,
+        decodeErrorData: null,
+      ),
+      constMeta: kCrateTypesRecordingConfigFramerateConstMeta,
+      argValues: [that],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateTypesRecordingConfigFramerateConstMeta =>
+      const TaskConstMeta(
+        debugName: 'RecordingConfig_framerate',
+        argNames: ['that'],
+      );
+
+  @override
+  int? crateTypesRecordingConfigHeight({required RecordingConfig that}) {
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRecordingConfig(
+            that, serializer);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 51)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_opt_box_autoadd_u_32,
+        decodeErrorData: null,
+      ),
+      constMeta: kCrateTypesRecordingConfigHeightConstMeta,
+      argValues: [that],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateTypesRecordingConfigHeightConstMeta =>
       const TaskConstMeta(
         debugName: 'RecordingConfig_height',
         argNames: ['that'],
       );
 
   @override
-  Future<Capabilities> crateFlutterScreenshareConfigCapabilities(
+  Future<Capabilities> crateTypesScreenshareConfigCapabilities(
       {required ScreenshareConfig that}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
@@ -1864,79 +1917,79 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerScreenshareConfig(
             that, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 50, port: port_);
+            funcId: 52, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData:
             sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCapabilities,
         decodeErrorData: null,
       ),
-      constMeta: kCrateFlutterScreenshareConfigCapabilitiesConstMeta,
+      constMeta: kCrateTypesScreenshareConfigCapabilitiesConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateFlutterScreenshareConfigCapabilitiesConstMeta =>
+  TaskConstMeta get kCrateTypesScreenshareConfigCapabilitiesConstMeta =>
       const TaskConstMeta(
         debugName: 'ScreenshareConfig_capabilities',
         argNames: ['that'],
       );
 
   @override
-  Future<ScreenshareConfig> crateFlutterScreenshareConfigDefault() {
+  Future<ScreenshareConfig> crateTypesScreenshareConfigDefault() {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 51, port: port_);
+            funcId: 53, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData:
             sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerScreenshareConfig,
         decodeErrorData: null,
       ),
-      constMeta: kCrateFlutterScreenshareConfigDefaultConstMeta,
+      constMeta: kCrateTypesScreenshareConfigDefaultConstMeta,
       argValues: [],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateFlutterScreenshareConfigDefaultConstMeta =>
+  TaskConstMeta get kCrateTypesScreenshareConfigDefaultConstMeta =>
       const TaskConstMeta(
         debugName: 'ScreenshareConfig_default',
         argNames: [],
       );
 
   @override
-  Future<ScreenshareConfig> crateFlutterScreenshareConfigNew(
+  Future<ScreenshareConfig> crateTypesScreenshareConfigNew(
       {required List<int> buffer}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_list_prim_u_8_loose(buffer, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 52, port: port_);
+            funcId: 54, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData:
             sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerScreenshareConfig,
         decodeErrorData: null,
       ),
-      constMeta: kCrateFlutterScreenshareConfigNewConstMeta,
+      constMeta: kCrateTypesScreenshareConfigNewConstMeta,
       argValues: [buffer],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateFlutterScreenshareConfigNewConstMeta =>
+  TaskConstMeta get kCrateTypesScreenshareConfigNewConstMeta =>
       const TaskConstMeta(
         debugName: 'ScreenshareConfig_new',
         argNames: ['buffer'],
       );
 
   @override
-  Future<RecordingConfig?> crateFlutterScreenshareConfigRecordingConfig(
+  Future<RecordingConfig?> crateTypesScreenshareConfigRecordingConfig(
       {required ScreenshareConfig that}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
@@ -1944,53 +1997,53 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerScreenshareConfig(
             that, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 53, port: port_);
+            funcId: 55, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData:
             sse_decode_opt_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRecordingConfig,
         decodeErrorData: null,
       ),
-      constMeta: kCrateFlutterScreenshareConfigRecordingConfigConstMeta,
+      constMeta: kCrateTypesScreenshareConfigRecordingConfigConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateFlutterScreenshareConfigRecordingConfigConstMeta =>
+  TaskConstMeta get kCrateTypesScreenshareConfigRecordingConfigConstMeta =>
       const TaskConstMeta(
         debugName: 'ScreenshareConfig_recording_config',
         argNames: ['that'],
       );
 
   @override
-  Uint8List crateFlutterScreenshareConfigToBytes(
+  Uint8List crateTypesScreenshareConfigToBytes(
       {required ScreenshareConfig that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerScreenshareConfig(
             that, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 54)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 56)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_list_prim_u_8_strict,
         decodeErrorData: sse_decode_dart_error,
       ),
-      constMeta: kCrateFlutterScreenshareConfigToBytesConstMeta,
+      constMeta: kCrateTypesScreenshareConfigToBytesConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateFlutterScreenshareConfigToBytesConstMeta =>
+  TaskConstMeta get kCrateTypesScreenshareConfigToBytesConstMeta =>
       const TaskConstMeta(
         debugName: 'ScreenshareConfig_to_bytes',
         argNames: ['that'],
       );
 
   @override
-  Future<void> crateFlutterScreenshareConfigUpdateRecordingConfig(
+  Future<void> crateTypesScreenshareConfigUpdateRecordingConfig(
       {required ScreenshareConfig that,
       required String encoder,
       required String device,
@@ -2008,20 +2061,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_u_32(framerate, serializer);
         sse_encode_opt_box_autoadd_u_32(height, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 55, port: port_);
+            funcId: 57, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: sse_decode_dart_error,
       ),
-      constMeta: kCrateFlutterScreenshareConfigUpdateRecordingConfigConstMeta,
+      constMeta: kCrateTypesScreenshareConfigUpdateRecordingConfigConstMeta,
       argValues: [that, encoder, device, bitrate, framerate, height],
       apiImpl: this,
     ));
   }
 
   TaskConstMeta
-      get kCrateFlutterScreenshareConfigUpdateRecordingConfigConstMeta =>
+      get kCrateTypesScreenshareConfigUpdateRecordingConfigConstMeta =>
           const TaskConstMeta(
             debugName: 'ScreenshareConfig_update_recording_config',
             argNames: [
@@ -2035,58 +2088,56 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           );
 
   @override
-  ArcHost crateAudioPlayerSoundPlayerHost({required SoundPlayer that}) {
+  ArcHost cratePlayerSoundPlayerHost({required SoundPlayer that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSoundPlayer(
             that, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 56)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 58)!;
       },
       codec: SseCodec(
         decodeSuccessData:
             sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerArcHost,
         decodeErrorData: null,
       ),
-      constMeta: kCrateAudioPlayerSoundPlayerHostConstMeta,
+      constMeta: kCratePlayerSoundPlayerHostConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateAudioPlayerSoundPlayerHostConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCratePlayerSoundPlayerHostConstMeta => const TaskConstMeta(
         debugName: 'SoundPlayer_host',
         argNames: ['that'],
       );
 
   @override
-  SoundPlayer crateAudioPlayerSoundPlayerNew({required double outputVolume}) {
+  SoundPlayer cratePlayerSoundPlayerNew({required double outputVolume}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_f_32(outputVolume, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 57)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 59)!;
       },
       codec: SseCodec(
         decodeSuccessData:
             sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSoundPlayer,
         decodeErrorData: null,
       ),
-      constMeta: kCrateAudioPlayerSoundPlayerNewConstMeta,
+      constMeta: kCratePlayerSoundPlayerNewConstMeta,
       argValues: [outputVolume],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateAudioPlayerSoundPlayerNewConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCratePlayerSoundPlayerNewConstMeta => const TaskConstMeta(
         debugName: 'SoundPlayer_new',
         argNames: ['outputVolume'],
       );
 
   @override
-  Future<FlutterSoundHandle> crateAudioPlayerSoundPlayerPlay(
+  Future<FlutterSoundHandle> cratePlayerSoundPlayerPlay(
       {required SoundPlayer that, required List<int> bytes}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
@@ -2095,27 +2146,26 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that, serializer);
         sse_encode_list_prim_u_8_loose(bytes, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 58, port: port_);
+            funcId: 60, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData:
             sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFlutterSoundHandle,
         decodeErrorData: sse_decode_dart_error,
       ),
-      constMeta: kCrateAudioPlayerSoundPlayerPlayConstMeta,
+      constMeta: kCratePlayerSoundPlayerPlayConstMeta,
       argValues: [that, bytes],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateAudioPlayerSoundPlayerPlayConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCratePlayerSoundPlayerPlayConstMeta => const TaskConstMeta(
         debugName: 'SoundPlayer_play',
         argNames: ['that', 'bytes'],
       );
 
   @override
-  Future<void> crateAudioPlayerSoundPlayerUpdateOutputDevice(
+  Future<void> cratePlayerSoundPlayerUpdateOutputDevice(
       {required SoundPlayer that, String? deviceId}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
@@ -2124,26 +2174,26 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that, serializer);
         sse_encode_opt_String(deviceId, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 59, port: port_);
+            funcId: 61, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateAudioPlayerSoundPlayerUpdateOutputDeviceConstMeta,
+      constMeta: kCratePlayerSoundPlayerUpdateOutputDeviceConstMeta,
       argValues: [that, deviceId],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateAudioPlayerSoundPlayerUpdateOutputDeviceConstMeta =>
+  TaskConstMeta get kCratePlayerSoundPlayerUpdateOutputDeviceConstMeta =>
       const TaskConstMeta(
         debugName: 'SoundPlayer_update_output_device',
         argNames: ['that', 'deviceId'],
       );
 
   @override
-  void crateAudioPlayerSoundPlayerUpdateOutputVolume(
+  void cratePlayerSoundPlayerUpdateOutputVolume(
       {required SoundPlayer that, required double volume}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
@@ -2151,52 +2201,52 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSoundPlayer(
             that, serializer);
         sse_encode_f_32(volume, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 60)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 62)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateAudioPlayerSoundPlayerUpdateOutputVolumeConstMeta,
+      constMeta: kCratePlayerSoundPlayerUpdateOutputVolumeConstMeta,
       argValues: [that, volume],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateAudioPlayerSoundPlayerUpdateOutputVolumeConstMeta =>
+  TaskConstMeta get kCratePlayerSoundPlayerUpdateOutputVolumeConstMeta =>
       const TaskConstMeta(
         debugName: 'SoundPlayer_update_output_volume',
         argNames: ['that', 'volume'],
       );
 
   @override
-  Future<void> crateInternalTelepathyAudioTest({required Telepathy that}) {
+  Future<void> crateFlutterTelepathyAudioTest({required Telepathy that}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
             that, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 61, port: port_);
+            funcId: 63, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: sse_decode_dart_error,
       ),
-      constMeta: kCrateInternalTelepathyAudioTestConstMeta,
+      constMeta: kCrateFlutterTelepathyAudioTestConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathyAudioTestConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathyAudioTestConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_audio_test',
         argNames: ['that'],
       );
 
   @override
-  ChatMessage crateInternalTelepathyBuildChat(
+  ChatMessage crateFlutterTelepathyBuildChat(
       {required Telepathy that,
       required Contact contact,
       required String text,
@@ -2211,82 +2261,27 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_String(text, serializer);
         sse_encode_list_record_string_list_prim_u_8_strict(
             attachments, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 62)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 64)!;
       },
       codec: SseCodec(
         decodeSuccessData:
             sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerChatMessage,
         decodeErrorData: null,
       ),
-      constMeta: kCrateInternalTelepathyBuildChatConstMeta,
+      constMeta: kCrateFlutterTelepathyBuildChatConstMeta,
       argValues: [that, contact, text, attachments],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathyBuildChatConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathyBuildChatConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_build_chat',
         argNames: ['that', 'contact', 'text', 'attachments'],
       );
 
   @override
-  Future<void> crateInternalTelepathyEndCall({required Telepathy that}) {
-    return handler.executeNormal(NormalTask(
-      callFfi: (port_) {
-        final serializer = SseSerializer(generalizedFrbRustBinding);
-        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
-            that, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 63, port: port_);
-      },
-      codec: SseCodec(
-        decodeSuccessData: sse_decode_unit,
-        decodeErrorData: null,
-      ),
-      constMeta: kCrateInternalTelepathyEndCallConstMeta,
-      argValues: [that],
-      apiImpl: this,
-    ));
-  }
-
-  TaskConstMeta get kCrateInternalTelepathyEndCallConstMeta =>
-      const TaskConstMeta(
-        debugName: 'Telepathy_end_call',
-        argNames: ['that'],
-      );
-
-  @override
-  Future<void> crateInternalTelepathyJoinRoom(
-      {required Telepathy that, required List<String> memberStrings}) {
-    return handler.executeNormal(NormalTask(
-      callFfi: (port_) {
-        final serializer = SseSerializer(generalizedFrbRustBinding);
-        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
-            that, serializer);
-        sse_encode_list_String(memberStrings, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 64, port: port_);
-      },
-      codec: SseCodec(
-        decodeSuccessData: sse_decode_unit,
-        decodeErrorData: sse_decode_dart_error,
-      ),
-      constMeta: kCrateInternalTelepathyJoinRoomConstMeta,
-      argValues: [that, memberStrings],
-      apiImpl: this,
-    ));
-  }
-
-  TaskConstMeta get kCrateInternalTelepathyJoinRoomConstMeta =>
-      const TaskConstMeta(
-        debugName: 'Telepathy_join_room',
-        argNames: ['that', 'memberStrings'],
-      );
-
-  @override
-  Future<(List<AudioDevice>, List<AudioDevice>)>
-      crateInternalTelepathyListDevices({required Telepathy that}) {
+  Future<void> crateFlutterTelepathyEndCall({required Telepathy that}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -2296,24 +2291,79 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             funcId: 65, port: port_);
       },
       codec: SseCodec(
-        decodeSuccessData:
-            sse_decode_record_list_audio_device_list_audio_device,
-        decodeErrorData: sse_decode_dart_error,
+        decodeSuccessData: sse_decode_unit,
+        decodeErrorData: null,
       ),
-      constMeta: kCrateInternalTelepathyListDevicesConstMeta,
+      constMeta: kCrateFlutterTelepathyEndCallConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathyListDevicesConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathyEndCallConstMeta =>
+      const TaskConstMeta(
+        debugName: 'Telepathy_end_call',
+        argNames: ['that'],
+      );
+
+  @override
+  Future<void> crateFlutterTelepathyJoinRoom(
+      {required Telepathy that, required List<String> memberStrings}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
+            that, serializer);
+        sse_encode_list_String(memberStrings, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 66, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_unit,
+        decodeErrorData: sse_decode_dart_error,
+      ),
+      constMeta: kCrateFlutterTelepathyJoinRoomConstMeta,
+      argValues: [that, memberStrings],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateFlutterTelepathyJoinRoomConstMeta =>
+      const TaskConstMeta(
+        debugName: 'Telepathy_join_room',
+        argNames: ['that', 'memberStrings'],
+      );
+
+  @override
+  Future<(List<AudioDevice>, List<AudioDevice>)>
+      crateFlutterTelepathyListDevices({required Telepathy that}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
+            that, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 67, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData:
+            sse_decode_record_list_audio_device_list_audio_device,
+        decodeErrorData: sse_decode_dart_error,
+      ),
+      constMeta: kCrateFlutterTelepathyListDevicesConstMeta,
+      argValues: [that],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateFlutterTelepathyListDevicesConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_list_devices',
         argNames: ['that'],
       );
 
   @override
-  Telepathy crateInternalTelepathyNew(
+  Telepathy crateFlutterTelepathyNew(
       {required ArcHost host,
       required NetworkConfig networkConfig,
       required ScreenshareConfig screenshareConfig,
@@ -2335,14 +2385,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             codecConfig, serializer);
         sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFlutterCallbacks(
             callbacks, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 66)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 68)!;
       },
       codec: SseCodec(
         decodeSuccessData:
             sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy,
         decodeErrorData: null,
       ),
-      constMeta: kCrateInternalTelepathyNewConstMeta,
+      constMeta: kCrateFlutterTelepathyNewConstMeta,
       argValues: [
         host,
         networkConfig,
@@ -2355,7 +2405,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathyNewConstMeta => const TaskConstMeta(
+  TaskConstMeta get kCrateFlutterTelepathyNewConstMeta => const TaskConstMeta(
         debugName: 'Telepathy_new',
         argNames: [
           'host',
@@ -2368,58 +2418,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  void crateInternalTelepathyPauseStatistics({required Telepathy that}) {
-    return handler.executeSync(SyncTask(
-      callFfi: () {
-        final serializer = SseSerializer(generalizedFrbRustBinding);
-        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
-            that, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 67)!;
-      },
-      codec: SseCodec(
-        decodeSuccessData: sse_decode_unit,
-        decodeErrorData: null,
-      ),
-      constMeta: kCrateInternalTelepathyPauseStatisticsConstMeta,
-      argValues: [that],
-      apiImpl: this,
-    ));
-  }
-
-  TaskConstMeta get kCrateInternalTelepathyPauseStatisticsConstMeta =>
-      const TaskConstMeta(
-        debugName: 'Telepathy_pause_statistics',
-        argNames: ['that'],
-      );
-
-  @override
-  Future<void> crateInternalTelepathyRestartManager({required Telepathy that}) {
-    return handler.executeNormal(NormalTask(
-      callFfi: (port_) {
-        final serializer = SseSerializer(generalizedFrbRustBinding);
-        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
-            that, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 68, port: port_);
-      },
-      codec: SseCodec(
-        decodeSuccessData: sse_decode_unit,
-        decodeErrorData: sse_decode_dart_error,
-      ),
-      constMeta: kCrateInternalTelepathyRestartManagerConstMeta,
-      argValues: [that],
-      apiImpl: this,
-    ));
-  }
-
-  TaskConstMeta get kCrateInternalTelepathyRestartManagerConstMeta =>
-      const TaskConstMeta(
-        debugName: 'Telepathy_restart_manager',
-        argNames: ['that'],
-      );
-
-  @override
-  void crateInternalTelepathyResumeStatistics({required Telepathy that}) {
+  void crateFlutterTelepathyPauseStatistics({required Telepathy that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -2431,20 +2430,71 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateInternalTelepathyResumeStatisticsConstMeta,
+      constMeta: kCrateFlutterTelepathyPauseStatisticsConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathyResumeStatisticsConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathyPauseStatisticsConstMeta =>
+      const TaskConstMeta(
+        debugName: 'Telepathy_pause_statistics',
+        argNames: ['that'],
+      );
+
+  @override
+  Future<void> crateFlutterTelepathyRestartManager({required Telepathy that}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
+            that, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 70, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_unit,
+        decodeErrorData: sse_decode_dart_error,
+      ),
+      constMeta: kCrateFlutterTelepathyRestartManagerConstMeta,
+      argValues: [that],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateFlutterTelepathyRestartManagerConstMeta =>
+      const TaskConstMeta(
+        debugName: 'Telepathy_restart_manager',
+        argNames: ['that'],
+      );
+
+  @override
+  void crateFlutterTelepathyResumeStatistics({required Telepathy that}) {
+    return handler.executeSync(SyncTask(
+      callFfi: () {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
+            that, serializer);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 71)!;
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_unit,
+        decodeErrorData: null,
+      ),
+      constMeta: kCrateFlutterTelepathyResumeStatisticsConstMeta,
+      argValues: [that],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateFlutterTelepathyResumeStatisticsConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_resume_statistics',
         argNames: ['that'],
       );
 
   @override
-  Future<void> crateInternalTelepathySendChat(
+  Future<void> crateFlutterTelepathySendChat(
       {required Telepathy that, required ChatMessage message}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
@@ -2454,26 +2504,26 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerChatMessage(
             message, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 70, port: port_);
+            funcId: 72, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: sse_decode_dart_error,
       ),
-      constMeta: kCrateInternalTelepathySendChatConstMeta,
+      constMeta: kCrateFlutterTelepathySendChatConstMeta,
       argValues: [that, message],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathySendChatConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathySendChatConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_send_chat',
         argNames: ['that', 'message'],
       );
 
   @override
-  void crateInternalTelepathySetDeafened(
+  void crateFlutterTelepathySetDeafened(
       {required Telepathy that, required bool deafened}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
@@ -2481,26 +2531,26 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
             that, serializer);
         sse_encode_bool(deafened, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 71)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 73)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateInternalTelepathySetDeafenedConstMeta,
+      constMeta: kCrateFlutterTelepathySetDeafenedConstMeta,
       argValues: [that, deafened],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathySetDeafenedConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathySetDeafenedConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_set_deafened',
         argNames: ['that', 'deafened'],
       );
 
   @override
-  void crateInternalTelepathySetDenoise(
+  void crateFlutterTelepathySetDenoise(
       {required Telepathy that, required bool denoise}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
@@ -2508,26 +2558,26 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
             that, serializer);
         sse_encode_bool(denoise, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 72)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 74)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateInternalTelepathySetDenoiseConstMeta,
+      constMeta: kCrateFlutterTelepathySetDenoiseConstMeta,
       argValues: [that, denoise],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathySetDenoiseConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathySetDenoiseConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_set_denoise',
         argNames: ['that', 'denoise'],
       );
 
   @override
-  void crateInternalTelepathySetEfficiencyMode(
+  void crateFlutterTelepathySetEfficiencyMode(
       {required Telepathy that, required bool enabled}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
@@ -2535,26 +2585,26 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
             that, serializer);
         sse_encode_bool(enabled, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 73)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 75)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateInternalTelepathySetEfficiencyModeConstMeta,
+      constMeta: kCrateFlutterTelepathySetEfficiencyModeConstMeta,
       argValues: [that, enabled],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathySetEfficiencyModeConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathySetEfficiencyModeConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_set_efficiency_mode',
         argNames: ['that', 'enabled'],
       );
 
   @override
-  Future<void> crateInternalTelepathySetIdentity(
+  Future<void> crateFlutterTelepathySetIdentity(
       {required Telepathy that, required List<int> key}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
@@ -2563,26 +2613,26 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that, serializer);
         sse_encode_list_prim_u_8_loose(key, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 74, port: port_);
+            funcId: 76, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: sse_decode_dart_error,
       ),
-      constMeta: kCrateInternalTelepathySetIdentityConstMeta,
+      constMeta: kCrateFlutterTelepathySetIdentityConstMeta,
       argValues: [that, key],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathySetIdentityConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathySetIdentityConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_set_identity',
         argNames: ['that', 'key'],
       );
 
   @override
-  Future<void> crateInternalTelepathySetInputDevice(
+  Future<void> crateFlutterTelepathySetInputDevice(
       {required Telepathy that, String? deviceId}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
@@ -2591,26 +2641,26 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that, serializer);
         sse_encode_opt_String(deviceId, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 75, port: port_);
+            funcId: 77, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateInternalTelepathySetInputDeviceConstMeta,
+      constMeta: kCrateFlutterTelepathySetInputDeviceConstMeta,
       argValues: [that, deviceId],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathySetInputDeviceConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathySetInputDeviceConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_set_input_device',
         argNames: ['that', 'deviceId'],
       );
 
   @override
-  void crateInternalTelepathySetInputVolume(
+  void crateFlutterTelepathySetInputVolume(
       {required Telepathy that, required double decibel}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
@@ -2618,26 +2668,26 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
             that, serializer);
         sse_encode_f_32(decibel, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 76)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 78)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateInternalTelepathySetInputVolumeConstMeta,
+      constMeta: kCrateFlutterTelepathySetInputVolumeConstMeta,
       argValues: [that, decibel],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathySetInputVolumeConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathySetInputVolumeConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_set_input_volume',
         argNames: ['that', 'decibel'],
       );
 
   @override
-  Future<void> crateInternalTelepathySetModel(
+  Future<void> crateFlutterTelepathySetModel(
       {required Telepathy that, Uint8List? model}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
@@ -2646,26 +2696,26 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that, serializer);
         sse_encode_opt_list_prim_u_8_strict(model, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 77, port: port_);
+            funcId: 79, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: sse_decode_dart_error,
       ),
-      constMeta: kCrateInternalTelepathySetModelConstMeta,
+      constMeta: kCrateFlutterTelepathySetModelConstMeta,
       argValues: [that, model],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathySetModelConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathySetModelConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_set_model',
         argNames: ['that', 'model'],
       );
 
   @override
-  void crateInternalTelepathySetMuted(
+  void crateFlutterTelepathySetMuted(
       {required Telepathy that, required bool muted}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
@@ -2673,26 +2723,26 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
             that, serializer);
         sse_encode_bool(muted, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 78)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 80)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateInternalTelepathySetMutedConstMeta,
+      constMeta: kCrateFlutterTelepathySetMutedConstMeta,
       argValues: [that, muted],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathySetMutedConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathySetMutedConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_set_muted',
         argNames: ['that', 'muted'],
       );
 
   @override
-  Future<void> crateInternalTelepathySetOutputDevice(
+  Future<void> crateFlutterTelepathySetOutputDevice(
       {required Telepathy that, String? deviceId}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
@@ -2701,26 +2751,26 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that, serializer);
         sse_encode_opt_String(deviceId, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 79, port: port_);
+            funcId: 81, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateInternalTelepathySetOutputDeviceConstMeta,
+      constMeta: kCrateFlutterTelepathySetOutputDeviceConstMeta,
       argValues: [that, deviceId],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathySetOutputDeviceConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathySetOutputDeviceConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_set_output_device',
         argNames: ['that', 'deviceId'],
       );
 
   @override
-  void crateInternalTelepathySetOutputVolume(
+  void crateFlutterTelepathySetOutputVolume(
       {required Telepathy that, required double decibel}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
@@ -2728,26 +2778,26 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
             that, serializer);
         sse_encode_f_32(decibel, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 80)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 82)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateInternalTelepathySetOutputVolumeConstMeta,
+      constMeta: kCrateFlutterTelepathySetOutputVolumeConstMeta,
       argValues: [that, decibel],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathySetOutputVolumeConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathySetOutputVolumeConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_set_output_volume',
         argNames: ['that', 'decibel'],
       );
 
   @override
-  void crateInternalTelepathySetPlayCustomRingtones(
+  void crateFlutterTelepathySetPlayCustomRingtones(
       {required Telepathy that, required bool play}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
@@ -2755,26 +2805,26 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
             that, serializer);
         sse_encode_bool(play, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 81)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 83)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateInternalTelepathySetPlayCustomRingtonesConstMeta,
+      constMeta: kCrateFlutterTelepathySetPlayCustomRingtonesConstMeta,
       argValues: [that, play],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathySetPlayCustomRingtonesConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathySetPlayCustomRingtonesConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_set_play_custom_ringtones',
         argNames: ['that', 'play'],
       );
 
   @override
-  void crateInternalTelepathySetRmsThreshold(
+  void crateFlutterTelepathySetRmsThreshold(
       {required Telepathy that, required double decimal}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
@@ -2782,26 +2832,26 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
             that, serializer);
         sse_encode_f_32(decimal, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 82)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 84)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateInternalTelepathySetRmsThresholdConstMeta,
+      constMeta: kCrateFlutterTelepathySetRmsThresholdConstMeta,
       argValues: [that, decimal],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathySetRmsThresholdConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathySetRmsThresholdConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_set_rms_threshold',
         argNames: ['that', 'decimal'],
       );
 
   @override
-  void crateInternalTelepathySetSendCustomRingtone(
+  void crateFlutterTelepathySetSendCustomRingtone(
       {required Telepathy that, required bool send}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
@@ -2809,85 +2859,30 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
             that, serializer);
         sse_encode_bool(send, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 83)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 85)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateInternalTelepathySetSendCustomRingtoneConstMeta,
+      constMeta: kCrateFlutterTelepathySetSendCustomRingtoneConstMeta,
       argValues: [that, send],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathySetSendCustomRingtoneConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathySetSendCustomRingtoneConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_set_send_custom_ringtone',
         argNames: ['that', 'send'],
       );
 
   @override
-  Future<void> crateInternalTelepathyShutdown({required Telepathy that}) {
+  Future<void> crateFlutterTelepathyShutdown({required Telepathy that}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
-            that, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 84, port: port_);
-      },
-      codec: SseCodec(
-        decodeSuccessData: sse_decode_unit,
-        decodeErrorData: null,
-      ),
-      constMeta: kCrateInternalTelepathyShutdownConstMeta,
-      argValues: [that],
-      apiImpl: this,
-    ));
-  }
-
-  TaskConstMeta get kCrateInternalTelepathyShutdownConstMeta =>
-      const TaskConstMeta(
-        debugName: 'Telepathy_shutdown',
-        argNames: ['that'],
-      );
-
-  @override
-  Future<void> crateInternalTelepathyStartCall(
-      {required Telepathy that, required Contact contact}) {
-    return handler.executeNormal(NormalTask(
-      callFfi: (port_) {
-        final serializer = SseSerializer(generalizedFrbRustBinding);
-        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
-            that, serializer);
-        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerContact(
-            contact, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 85, port: port_);
-      },
-      codec: SseCodec(
-        decodeSuccessData: sse_decode_unit,
-        decodeErrorData: sse_decode_dart_error,
-      ),
-      constMeta: kCrateInternalTelepathyStartCallConstMeta,
-      argValues: [that, contact],
-      apiImpl: this,
-    ));
-  }
-
-  TaskConstMeta get kCrateInternalTelepathyStartCallConstMeta =>
-      const TaskConstMeta(
-        debugName: 'Telepathy_start_call',
-        argNames: ['that', 'contact'],
-      );
-
-  @override
-  Future<void> crateInternalTelepathyStartManager({required Telepathy that}) {
-    return handler.executeNormal(NormalTask(
-      callFfi: (port_) {
-        final serializer = SseSerializer(generalizedFrbRustBinding);
-        sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
             that, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
             funcId: 86, port: port_);
@@ -2896,20 +2891,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateInternalTelepathyStartManagerConstMeta,
+      constMeta: kCrateFlutterTelepathyShutdownConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathyStartManagerConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathyShutdownConstMeta =>
       const TaskConstMeta(
-        debugName: 'Telepathy_start_manager',
+        debugName: 'Telepathy_shutdown',
         argNames: ['that'],
       );
 
   @override
-  Future<void> crateInternalTelepathyStartScreenshare(
+  Future<void> crateFlutterTelepathyStartCall(
       {required Telepathy that, required Contact contact}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
@@ -2923,30 +2918,27 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
-        decodeErrorData: null,
+        decodeErrorData: sse_decode_dart_error,
       ),
-      constMeta: kCrateInternalTelepathyStartScreenshareConstMeta,
+      constMeta: kCrateFlutterTelepathyStartCallConstMeta,
       argValues: [that, contact],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathyStartScreenshareConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathyStartCallConstMeta =>
       const TaskConstMeta(
-        debugName: 'Telepathy_start_screenshare',
+        debugName: 'Telepathy_start_call',
         argNames: ['that', 'contact'],
       );
 
   @override
-  Future<void> crateInternalTelepathyStartSession(
-      {required Telepathy that, required Contact contact}) {
+  Future<void> crateFlutterTelepathyStartManager({required Telepathy that}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
-        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
+        sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
             that, serializer);
-        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerContact(
-            contact, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
             funcId: 88, port: port_);
       },
@@ -2954,20 +2946,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateInternalTelepathyStartSessionConstMeta,
-      argValues: [that, contact],
+      constMeta: kCrateFlutterTelepathyStartManagerConstMeta,
+      argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathyStartSessionConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathyStartManagerConstMeta =>
       const TaskConstMeta(
-        debugName: 'Telepathy_start_session',
-        argNames: ['that', 'contact'],
+        debugName: 'Telepathy_start_manager',
+        argNames: ['that'],
       );
 
   @override
-  Future<void> crateInternalTelepathyStopSession(
+  Future<void> crateFlutterTelepathyStartScreenshare(
       {required Telepathy that, required Contact contact}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
@@ -2983,189 +2975,197 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateInternalTelepathyStopSessionConstMeta,
+      constMeta: kCrateFlutterTelepathyStartScreenshareConstMeta,
       argValues: [that, contact],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateInternalTelepathyStopSessionConstMeta =>
+  TaskConstMeta get kCrateFlutterTelepathyStartScreenshareConstMeta =>
+      const TaskConstMeta(
+        debugName: 'Telepathy_start_screenshare',
+        argNames: ['that', 'contact'],
+      );
+
+  @override
+  Future<void> crateFlutterTelepathyStartSession(
+      {required Telepathy that, required Contact contact}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
+            that, serializer);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerContact(
+            contact, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 90, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_unit,
+        decodeErrorData: null,
+      ),
+      constMeta: kCrateFlutterTelepathyStartSessionConstMeta,
+      argValues: [that, contact],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateFlutterTelepathyStartSessionConstMeta =>
+      const TaskConstMeta(
+        debugName: 'Telepathy_start_session',
+        argNames: ['that', 'contact'],
+      );
+
+  @override
+  Future<void> crateFlutterTelepathyStopSession(
+      {required Telepathy that, required Contact contact}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
+            that, serializer);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerContact(
+            contact, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 91, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_unit,
+        decodeErrorData: null,
+      ),
+      constMeta: kCrateFlutterTelepathyStopSessionConstMeta,
+      argValues: [that, contact],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateFlutterTelepathyStopSessionConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_stop_session',
         argNames: ['that', 'contact'],
       );
 
   @override
-  Stream<String> crateFlutterCreateLogStream() {
+  Stream<String> crateFlutterLoggingCreateLogStream() {
     final s = RustStreamSink<String>();
     handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_StreamSink_String_Sse(s, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 90)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 92)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateFlutterCreateLogStreamConstMeta,
+      constMeta: kCrateFlutterLoggingCreateLogStreamConstMeta,
       argValues: [s],
       apiImpl: this,
     ));
     return s.stream;
   }
 
-  TaskConstMeta get kCrateFlutterCreateLogStreamConstMeta =>
+  TaskConstMeta get kCrateFlutterLoggingCreateLogStreamConstMeta =>
       const TaskConstMeta(
         debugName: 'create_log_stream',
         argNames: ['s'],
       );
 
   @override
-  (String, Uint8List) crateFlutterGenerateKeys() {
+  (String, Uint8List) crateFlutterUtilsGenerateKeys() {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 91)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 93)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_record_string_list_prim_u_8_strict,
         decodeErrorData: sse_decode_dart_error,
       ),
-      constMeta: kCrateFlutterGenerateKeysConstMeta,
+      constMeta: kCrateFlutterUtilsGenerateKeysConstMeta,
       argValues: [],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateFlutterGenerateKeysConstMeta => const TaskConstMeta(
+  TaskConstMeta get kCrateFlutterUtilsGenerateKeysConstMeta =>
+      const TaskConstMeta(
         debugName: 'generate_keys',
         argNames: [],
       );
 
   @override
-  Future<void> crateAudioPlayerLoadRingtone({required String path}) {
+  Future<void> cratePlayerLoadRingtone({required String path}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_String(path, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 92, port: port_);
+            funcId: 94, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: sse_decode_dart_error,
       ),
-      constMeta: kCrateAudioPlayerLoadRingtoneConstMeta,
+      constMeta: kCratePlayerLoadRingtoneConstMeta,
       argValues: [path],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateAudioPlayerLoadRingtoneConstMeta =>
-      const TaskConstMeta(
+  TaskConstMeta get kCratePlayerLoadRingtoneConstMeta => const TaskConstMeta(
         debugName: 'load_ringtone',
         argNames: ['path'],
       );
 
   @override
-  String crateFlutterRoomHash({required List<String> peers}) {
+  String crateFlutterUtilsRoomHash({required List<String> peers}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_list_String(peers, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 93)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 95)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_String,
         decodeErrorData: sse_decode_dart_error,
       ),
-      constMeta: kCrateFlutterRoomHashConstMeta,
+      constMeta: kCrateFlutterUtilsRoomHashConstMeta,
       argValues: [peers],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateFlutterRoomHashConstMeta => const TaskConstMeta(
+  TaskConstMeta get kCrateFlutterUtilsRoomHashConstMeta => const TaskConstMeta(
         debugName: 'room_hash',
         argNames: ['peers'],
       );
 
   @override
-  void crateFlutterRustSetUp() {
+  void crateFlutterLoggingRustSetUp() {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 94)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 96)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: null,
       ),
-      constMeta: kCrateFlutterRustSetUpConstMeta,
+      constMeta: kCrateFlutterLoggingRustSetUpConstMeta,
       argValues: [],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateFlutterRustSetUpConstMeta => const TaskConstMeta(
+  TaskConstMeta get kCrateFlutterLoggingRustSetUpConstMeta =>
+      const TaskConstMeta(
         debugName: 'rust_set_up',
         argNames: [],
       );
 
   @override
-  Future<bool> crateFlutterScreenshareAvailable() {
-    return handler.executeNormal(NormalTask(
-      callFfi: (port_) {
-        final serializer = SseSerializer(generalizedFrbRustBinding);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 95, port: port_);
-      },
-      codec: SseCodec(
-        decodeSuccessData: sse_decode_bool,
-        decodeErrorData: null,
-      ),
-      constMeta: kCrateFlutterScreenshareAvailableConstMeta,
-      argValues: [],
-      apiImpl: this,
-    ));
-  }
-
-  TaskConstMeta get kCrateFlutterScreenshareAvailableConstMeta =>
-      const TaskConstMeta(
-        debugName: 'screenshare_available',
-        argNames: [],
-      );
-
-  @override
-  Stream<String> crateFlutterSendToDartLoggerSetStreamSink() {
-    final streamSink = RustStreamSink<String>();
-    unawaited(handler.executeNormal(NormalTask(
-      callFfi: (port_) {
-        final serializer = SseSerializer(generalizedFrbRustBinding);
-        sse_encode_StreamSink_String_Sse(streamSink, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 96, port: port_);
-      },
-      codec: SseCodec(
-        decodeSuccessData: sse_decode_unit,
-        decodeErrorData: null,
-      ),
-      constMeta: kCrateFlutterSendToDartLoggerSetStreamSinkConstMeta,
-      argValues: [streamSink],
-      apiImpl: this,
-    )));
-    return streamSink.stream;
-  }
-
-  TaskConstMeta get kCrateFlutterSendToDartLoggerSetStreamSinkConstMeta =>
-      const TaskConstMeta(
-        debugName: 'send_to_dart_logger_set_stream_sink',
-        argNames: ['streamSink'],
-      );
-
-  @override
-  Future<Statistics> crateFlutterStatisticsDefault() {
+  Future<bool> crateFlutterUtilsScreenshareAvailable() {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -3173,40 +3173,65 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             funcId: 97, port: port_);
       },
       codec: SseCodec(
-        decodeSuccessData: sse_decode_statistics,
+        decodeSuccessData: sse_decode_bool,
         decodeErrorData: null,
       ),
-      constMeta: kCrateFlutterStatisticsDefaultConstMeta,
+      constMeta: kCrateFlutterUtilsScreenshareAvailableConstMeta,
       argValues: [],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateFlutterStatisticsDefaultConstMeta =>
+  TaskConstMeta get kCrateFlutterUtilsScreenshareAvailableConstMeta =>
+      const TaskConstMeta(
+        debugName: 'screenshare_available',
+        argNames: [],
+      );
+
+  @override
+  Future<Statistics> crateTypesStatisticsDefault() {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 98, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_statistics,
+        decodeErrorData: null,
+      ),
+      constMeta: kCrateTypesStatisticsDefaultConstMeta,
+      argValues: [],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateTypesStatisticsDefaultConstMeta =>
       const TaskConstMeta(
         debugName: 'statistics_default',
         argNames: [],
       );
 
   @override
-  bool crateFlutterValidatePeerId({required String peerId}) {
+  bool crateFlutterUtilsValidatePeerId({required String peerId}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_String(peerId, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 98)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 99)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_bool,
         decodeErrorData: null,
       ),
-      constMeta: kCrateFlutterValidatePeerIdConstMeta,
+      constMeta: kCrateFlutterUtilsValidatePeerIdConstMeta,
       argValues: [peerId],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateFlutterValidatePeerIdConstMeta => const TaskConstMeta(
+  TaskConstMeta get kCrateFlutterUtilsValidatePeerIdConstMeta =>
+      const TaskConstMeta(
         debugName: 'validate_peer_id',
         argNames: ['peerId'],
       );
@@ -3314,11 +3339,11 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   Future<void> Function(int, dynamic)
-      encode_DartFn_Inputs_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_dart_notify_bool_Output_unit_AnyhowException(
-          FutureOr<void> Function((DartNotify, bool)) raw) {
+      encode_DartFn_Inputs_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_bool_Output_unit_AnyhowException(
+          FutureOr<void> Function((FrontendNotify, bool)) raw) {
     return (callId, rawArg0) async {
       final arg0 =
-          dco_decode_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_dart_notify_bool(
+          dco_decode_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_bool(
               rawArg0);
 
       Box<void>? rawOutput;
@@ -3382,11 +3407,11 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   Future<void> Function(int, dynamic)
-      encode_DartFn_Inputs_record_string_opt_list_prim_u_8_strict_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_dart_notify_Output_bool_AnyhowException(
-          FutureOr<bool> Function((String, Uint8List?, DartNotify)) raw) {
+      encode_DartFn_Inputs_record_string_opt_list_prim_u_8_strict_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_Output_bool_AnyhowException(
+          FutureOr<bool> Function((String, Uint8List?, FrontendNotify)) raw) {
     return (callId, rawArg0) async {
       final arg0 =
-          dco_decode_record_string_opt_list_prim_u_8_strict_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_dart_notify(
+          dco_decode_record_string_opt_list_prim_u_8_strict_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify(
               rawArg0);
 
       Box<bool>? rawOutput;
@@ -3557,14 +3582,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerContact;
 
   RustArcIncrementStrongCountFnType
-      get rust_arc_increment_strong_count_DartNotify => wire
-          .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDartNotify;
-
-  RustArcDecrementStrongCountFnType
-      get rust_arc_decrement_strong_count_DartNotify => wire
-          .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDartNotify;
-
-  RustArcIncrementStrongCountFnType
       get rust_arc_increment_strong_count_FlutterCallbacks => wire
           .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFlutterCallbacks;
 
@@ -3581,6 +3598,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFlutterSoundHandle;
 
   RustArcIncrementStrongCountFnType
+      get rust_arc_increment_strong_count_FrontendNotify => wire
+          .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFrontendNotify;
+
+  RustArcDecrementStrongCountFnType
+      get rust_arc_decrement_strong_count_FrontendNotify => wire
+          .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFrontendNotify;
+
+  RustArcIncrementStrongCountFnType
       get rust_arc_increment_strong_count_NetworkConfig => wire
           .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerNetworkConfig;
 
@@ -3595,6 +3620,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   RustArcDecrementStrongCountFnType
       get rust_arc_decrement_strong_count_Overlay => wire
           .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerOverlay;
+
+  RustArcIncrementStrongCountFnType
+      get rust_arc_increment_strong_count_PeerId => wire
+          .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerId;
+
+  RustArcDecrementStrongCountFnType
+      get rust_arc_decrement_strong_count_PeerId => wire
+          .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerId;
 
   RustArcIncrementStrongCountFnType
       get rust_arc_increment_strong_count_RecordingConfig => wire
@@ -3675,14 +3708,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  DartNotify
-      dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDartNotify(
-          dynamic raw) {
-    // Codec=Dco (DartCObject based), see doc to use other codecs
-    return DartNotifyImpl.frbInternalDcoDecode(raw as List<dynamic>);
-  }
-
-  @protected
   FlutterCallbacks
       dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFlutterCallbacks(
           dynamic raw) {
@@ -3699,6 +3724,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  FrontendNotify
+      dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFrontendNotify(
+          dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return FrontendNotifyImpl.frbInternalDcoDecode(raw as List<dynamic>);
+  }
+
+  @protected
   NetworkConfig
       dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerNetworkConfig(
           dynamic raw) {
@@ -3712,6 +3745,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return OverlayImpl.frbInternalDcoDecode(raw as List<dynamic>);
+  }
+
+  @protected
+  PeerId
+      dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerId(
+          dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return PeerIdImpl.frbInternalDcoDecode(raw as List<dynamic>);
   }
 
   @protected
@@ -3803,19 +3844,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  DartNotify
-      dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDartNotify(
-          dynamic raw) {
-    // Codec=Dco (DartCObject based), see doc to use other codecs
-    return DartNotifyImpl.frbInternalDcoDecode(raw as List<dynamic>);
-  }
-
-  @protected
   FlutterSoundHandle
       dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFlutterSoundHandle(
           dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return FlutterSoundHandleImpl.frbInternalDcoDecode(raw as List<dynamic>);
+  }
+
+  @protected
+  FrontendNotify
+      dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFrontendNotify(
+          dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return FrontendNotifyImpl.frbInternalDcoDecode(raw as List<dynamic>);
   }
 
   @protected
@@ -3891,8 +3932,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  FutureOr<void> Function((DartNotify, bool))
-      dco_decode_DartFn_Inputs_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_dart_notify_bool_Output_unit_AnyhowException(
+  FutureOr<void> Function((FrontendNotify, bool))
+      dco_decode_DartFn_Inputs_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_bool_Output_unit_AnyhowException(
           dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     throw UnimplementedError('');
@@ -3907,8 +3948,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  FutureOr<bool> Function((String, Uint8List?, DartNotify))
-      dco_decode_DartFn_Inputs_record_string_opt_list_prim_u_8_strict_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_dart_notify_Output_bool_AnyhowException(
+  FutureOr<bool> Function((String, Uint8List?, FrontendNotify))
+      dco_decode_DartFn_Inputs_record_string_opt_list_prim_u_8_strict_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_Output_bool_AnyhowException(
           dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     throw UnimplementedError('');
@@ -3985,14 +4026,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  DartNotify
-      dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDartNotify(
-          dynamic raw) {
-    // Codec=Dco (DartCObject based), see doc to use other codecs
-    return DartNotifyImpl.frbInternalDcoDecode(raw as List<dynamic>);
-  }
-
-  @protected
   FlutterCallbacks
       dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFlutterCallbacks(
           dynamic raw) {
@@ -4009,6 +4042,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  FrontendNotify
+      dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFrontendNotify(
+          dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return FrontendNotifyImpl.frbInternalDcoDecode(raw as List<dynamic>);
+  }
+
+  @protected
   NetworkConfig
       dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerNetworkConfig(
           dynamic raw) {
@@ -4022,6 +4063,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return OverlayImpl.frbInternalDcoDecode(raw as List<dynamic>);
+  }
+
+  @protected
+  PeerId
+      dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerId(
+          dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return PeerIdImpl.frbInternalDcoDecode(raw as List<dynamic>);
   }
 
   @protected
@@ -4251,9 +4300,9 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   (
-    DartNotify,
+    FrontendNotify,
     bool
-  ) dco_decode_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_dart_notify_bool(
+  ) dco_decode_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_bool(
       dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
@@ -4261,7 +4310,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       throw Exception('Expected 2 elements, got ${arr.length}');
     }
     return (
-      dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDartNotify(
+      dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFrontendNotify(
           arr[0]),
       dco_decode_bool(arr[1]),
     );
@@ -4339,8 +4388,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   (
     String,
     Uint8List?,
-    DartNotify
-  ) dco_decode_record_string_opt_list_prim_u_8_strict_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_dart_notify(
+    FrontendNotify
+  ) dco_decode_record_string_opt_list_prim_u_8_strict_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify(
       dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
@@ -4350,7 +4399,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     return (
       dco_decode_String(arr[0]),
       dco_decode_opt_list_prim_u_8_strict(arr[1]),
-      dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDartNotify(
+      dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFrontendNotify(
           arr[2]),
     );
   }
@@ -4366,15 +4415,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       dco_decode_String(arr[0]),
       dco_decode_session_status(arr[1]),
     );
-  }
-
-  @protected
-  SendToDartLogger dco_decode_send_to_dart_logger(dynamic raw) {
-    // Codec=Dco (DartCObject based), see doc to use other codecs
-    final arr = raw as List<dynamic>;
-    if (arr.isNotEmpty)
-      throw Exception('unexpected arr length: expect 0 but see ${arr.length}');
-    return const SendToDartLogger();
   }
 
   @protected
@@ -4490,15 +4530,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  DartNotify
-      sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDartNotify(
-          SseDeserializer deserializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    return DartNotifyImpl.frbInternalSseDecode(
-        sse_decode_usize(deserializer), sse_decode_i_32(deserializer));
-  }
-
-  @protected
   FlutterCallbacks
       sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFlutterCallbacks(
           SseDeserializer deserializer) {
@@ -4517,6 +4548,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  FrontendNotify
+      sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFrontendNotify(
+          SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return FrontendNotifyImpl.frbInternalSseDecode(
+        sse_decode_usize(deserializer), sse_decode_i_32(deserializer));
+  }
+
+  @protected
   NetworkConfig
       sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerNetworkConfig(
           SseDeserializer deserializer) {
@@ -4531,6 +4571,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return OverlayImpl.frbInternalSseDecode(
+        sse_decode_usize(deserializer), sse_decode_i_32(deserializer));
+  }
+
+  @protected
+  PeerId
+      sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerId(
+          SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return PeerIdImpl.frbInternalSseDecode(
         sse_decode_usize(deserializer), sse_decode_i_32(deserializer));
   }
 
@@ -4634,20 +4683,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  DartNotify
-      sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDartNotify(
-          SseDeserializer deserializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    return DartNotifyImpl.frbInternalSseDecode(
-        sse_decode_usize(deserializer), sse_decode_i_32(deserializer));
-  }
-
-  @protected
   FlutterSoundHandle
       sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFlutterSoundHandle(
           SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return FlutterSoundHandleImpl.frbInternalSseDecode(
+        sse_decode_usize(deserializer), sse_decode_i_32(deserializer));
+  }
+
+  @protected
+  FrontendNotify
+      sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFrontendNotify(
+          SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return FrontendNotifyImpl.frbInternalSseDecode(
         sse_decode_usize(deserializer), sse_decode_i_32(deserializer));
   }
 
@@ -4758,15 +4807,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  DartNotify
-      sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDartNotify(
-          SseDeserializer deserializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    return DartNotifyImpl.frbInternalSseDecode(
-        sse_decode_usize(deserializer), sse_decode_i_32(deserializer));
-  }
-
-  @protected
   FlutterCallbacks
       sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFlutterCallbacks(
           SseDeserializer deserializer) {
@@ -4785,6 +4825,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  FrontendNotify
+      sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFrontendNotify(
+          SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return FrontendNotifyImpl.frbInternalSseDecode(
+        sse_decode_usize(deserializer), sse_decode_i_32(deserializer));
+  }
+
+  @protected
   NetworkConfig
       sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerNetworkConfig(
           SseDeserializer deserializer) {
@@ -4799,6 +4848,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return OverlayImpl.frbInternalSseDecode(
+        sse_decode_usize(deserializer), sse_decode_i_32(deserializer));
+  }
+
+  @protected
+  PeerId
+      sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerId(
+          SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return PeerIdImpl.frbInternalSseDecode(
         sse_decode_usize(deserializer), sse_decode_i_32(deserializer));
   }
 
@@ -5070,13 +5128,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   (
-    DartNotify,
+    FrontendNotify,
     bool
-  ) sse_decode_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_dart_notify_bool(
+  ) sse_decode_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_bool(
       SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_field0 =
-        sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDartNotify(
+        sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFrontendNotify(
             deserializer);
     var var_field1 = sse_decode_bool(deserializer);
     return (var_field0, var_field1);
@@ -5131,14 +5189,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   (
     String,
     Uint8List?,
-    DartNotify
-  ) sse_decode_record_string_opt_list_prim_u_8_strict_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_dart_notify(
+    FrontendNotify
+  ) sse_decode_record_string_opt_list_prim_u_8_strict_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify(
       SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_field0 = sse_decode_String(deserializer);
     var var_field1 = sse_decode_opt_list_prim_u_8_strict(deserializer);
     var var_field2 =
-        sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDartNotify(
+        sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFrontendNotify(
             deserializer);
     return (var_field0, var_field1, var_field2);
   }
@@ -5150,13 +5208,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_field0 = sse_decode_String(deserializer);
     var var_field1 = sse_decode_session_status(deserializer);
     return (var_field0, var_field1);
-  }
-
-  @protected
-  SendToDartLogger sse_decode_send_to_dart_logger(
-      SseDeserializer deserializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    return const SendToDartLogger();
   }
 
   @protected
@@ -5277,15 +5328,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void
-      sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDartNotify(
-          DartNotify self, SseSerializer serializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_usize(
-        (self as DartNotifyImpl).frbInternalSseEncode(move: true), serializer);
-  }
-
-  @protected
-  void
       sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFlutterCallbacks(
           FlutterCallbacks self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
@@ -5306,6 +5348,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void
+      sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFrontendNotify(
+          FrontendNotify self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_usize(
+        (self as FrontendNotifyImpl).frbInternalSseEncode(move: true),
+        serializer);
+  }
+
+  @protected
+  void
       sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerNetworkConfig(
           NetworkConfig self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
@@ -5321,6 +5373,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_usize(
         (self as OverlayImpl).frbInternalSseEncode(move: true), serializer);
+  }
+
+  @protected
+  void
+      sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerId(
+          PeerId self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_usize(
+        (self as PeerIdImpl).frbInternalSseEncode(move: true), serializer);
   }
 
   @protected
@@ -5430,20 +5491,21 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void
-      sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDartNotify(
-          DartNotify self, SseSerializer serializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_usize(
-        (self as DartNotifyImpl).frbInternalSseEncode(move: false), serializer);
-  }
-
-  @protected
-  void
       sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFlutterSoundHandle(
           FlutterSoundHandle self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_usize(
         (self as FlutterSoundHandleImpl).frbInternalSseEncode(move: false),
+        serializer);
+  }
+
+  @protected
+  void
+      sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFrontendNotify(
+          FrontendNotify self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_usize(
+        (self as FrontendNotifyImpl).frbInternalSseEncode(move: false),
         serializer);
   }
 
@@ -5539,12 +5601,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void
-      sse_encode_DartFn_Inputs_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_dart_notify_bool_Output_unit_AnyhowException(
-          FutureOr<void> Function((DartNotify, bool)) self,
+      sse_encode_DartFn_Inputs_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_bool_Output_unit_AnyhowException(
+          FutureOr<void> Function((FrontendNotify, bool)) self,
           SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_DartOpaque(
-        encode_DartFn_Inputs_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_dart_notify_bool_Output_unit_AnyhowException(
+        encode_DartFn_Inputs_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_bool_Output_unit_AnyhowException(
             self),
         serializer);
   }
@@ -5560,12 +5622,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void
-      sse_encode_DartFn_Inputs_record_string_opt_list_prim_u_8_strict_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_dart_notify_Output_bool_AnyhowException(
-          FutureOr<bool> Function((String, Uint8List?, DartNotify)) self,
+      sse_encode_DartFn_Inputs_record_string_opt_list_prim_u_8_strict_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_Output_bool_AnyhowException(
+          FutureOr<bool> Function((String, Uint8List?, FrontendNotify)) self,
           SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_DartOpaque(
-        encode_DartFn_Inputs_record_string_opt_list_prim_u_8_strict_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_dart_notify_Output_bool_AnyhowException(
+        encode_DartFn_Inputs_record_string_opt_list_prim_u_8_strict_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_Output_bool_AnyhowException(
             self),
         serializer);
   }
@@ -5660,15 +5722,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void
-      sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDartNotify(
-          DartNotify self, SseSerializer serializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_usize(
-        (self as DartNotifyImpl).frbInternalSseEncode(move: null), serializer);
-  }
-
-  @protected
-  void
       sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFlutterCallbacks(
           FlutterCallbacks self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
@@ -5689,6 +5742,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void
+      sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFrontendNotify(
+          FrontendNotify self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_usize(
+        (self as FrontendNotifyImpl).frbInternalSseEncode(move: null),
+        serializer);
+  }
+
+  @protected
+  void
       sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerNetworkConfig(
           NetworkConfig self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
@@ -5704,6 +5767,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_usize(
         (self as OverlayImpl).frbInternalSseEncode(move: null), serializer);
+  }
+
+  @protected
+  void
+      sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerId(
+          PeerId self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_usize(
+        (self as PeerIdImpl).frbInternalSseEncode(move: null), serializer);
   }
 
   @protected
@@ -5962,10 +6034,10 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void
-      sse_encode_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_dart_notify_bool(
-          (DartNotify, bool) self, SseSerializer serializer) {
+      sse_encode_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_bool(
+          (FrontendNotify, bool) self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDartNotify(
+    sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFrontendNotify(
         self.$1, serializer);
     sse_encode_bool(self.$2, serializer);
   }
@@ -6012,12 +6084,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void
-      sse_encode_record_string_opt_list_prim_u_8_strict_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_dart_notify(
-          (String, Uint8List?, DartNotify) self, SseSerializer serializer) {
+      sse_encode_record_string_opt_list_prim_u_8_strict_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify(
+          (String, Uint8List?, FrontendNotify) self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.$1, serializer);
     sse_encode_opt_list_prim_u_8_strict(self.$2, serializer);
-    sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerDartNotify(
+    sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFrontendNotify(
         self.$3, serializer);
   }
 
@@ -6027,12 +6099,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.$1, serializer);
     sse_encode_session_status(self.$2, serializer);
-  }
-
-  @protected
-  void sse_encode_send_to_dart_logger(
-      SendToDartLogger self, SseSerializer serializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
   }
 
   @protected
@@ -6129,13 +6195,12 @@ class CapabilitiesImpl extends RustOpaque implements Capabilities {
         RustLib.instance.api.rust_arc_decrement_strong_count_CapabilitiesPtr,
   );
 
-  List<String> devices() =>
-      RustLib.instance.api.crateFlutterCapabilitiesDevices(
+  List<String> devices() => RustLib.instance.api.crateTypesCapabilitiesDevices(
         that: this,
       );
 
   List<String> encoders() =>
-      RustLib.instance.api.crateFlutterCapabilitiesEncoders(
+      RustLib.instance.api.crateTypesCapabilitiesEncoders(
         that: this,
       );
 }
@@ -6160,27 +6225,36 @@ class ChatMessageImpl extends RustOpaque implements ChatMessage {
   );
 
   List<(String, Uint8List)> attachments() =>
-      RustLib.instance.api.crateFlutterChatMessageAttachments(
+      RustLib.instance.api.crateTypesChatMessageAttachments(
+        that: this,
+      );
+
+  PeerId get receiver =>
+      RustLib.instance.api.crateTypesChatMessageAutoAccessorGetReceiver(
         that: this,
       );
 
   String get text =>
-      RustLib.instance.api.crateFlutterChatMessageAutoAccessorGetText(
+      RustLib.instance.api.crateTypesChatMessageAutoAccessorGetText(
         that: this,
       );
 
+  set receiver(PeerId receiver) =>
+      RustLib.instance.api.crateTypesChatMessageAutoAccessorSetReceiver(
+          that: this, receiver: receiver);
+
   set text(String text) => RustLib.instance.api
-      .crateFlutterChatMessageAutoAccessorSetText(that: this, text: text);
+      .crateTypesChatMessageAutoAccessorSetText(that: this, text: text);
 
   void clearAttachments() =>
-      RustLib.instance.api.crateFlutterChatMessageClearAttachments(
+      RustLib.instance.api.crateTypesChatMessageClearAttachments(
         that: this,
       );
 
   bool isSender({required String identity}) => RustLib.instance.api
-      .crateFlutterChatMessageIsSender(that: this, identity: identity);
+      .crateTypesChatMessageIsSender(that: this, identity: identity);
 
-  String time() => RustLib.instance.api.crateFlutterChatMessageTime(
+  String time() => RustLib.instance.api.crateTypesChatMessageTime(
         that: this,
       );
 }
@@ -6205,17 +6279,17 @@ class CodecConfigImpl extends RustOpaque implements CodecConfig {
   );
 
   void setEnabled({required bool enabled}) => RustLib.instance.api
-      .crateFlutterCodecConfigSetEnabled(that: this, enabled: enabled);
+      .crateTypesCodecConfigSetEnabled(that: this, enabled: enabled);
 
   void setResidualBits({required double residualBits}) =>
-      RustLib.instance.api.crateFlutterCodecConfigSetResidualBits(
+      RustLib.instance.api.crateTypesCodecConfigSetResidualBits(
           that: this, residualBits: residualBits);
 
   void setVbr({required bool vbr}) =>
-      RustLib.instance.api.crateFlutterCodecConfigSetVbr(that: this, vbr: vbr);
+      RustLib.instance.api.crateTypesCodecConfigSetVbr(that: this, vbr: vbr);
 
   (bool, bool, double) toValues() =>
-      RustLib.instance.api.crateFlutterCodecConfigToValues(
+      RustLib.instance.api.crateTypesCodecConfigToValues(
         that: this,
       );
 }
@@ -6239,58 +6313,27 @@ class ContactImpl extends RustOpaque implements Contact {
         RustLib.instance.api.rust_arc_decrement_strong_count_ContactPtr,
   );
 
-  String id() => RustLib.instance.api.crateFlutterContactId(
+  String id() => RustLib.instance.api.crateTypesContactId(
         that: this,
       );
 
   bool idEq({required List<int> id}) =>
-      RustLib.instance.api.crateFlutterContactIdEq(that: this, id: id);
+      RustLib.instance.api.crateTypesContactIdEq(that: this, id: id);
 
-  String nickname() => RustLib.instance.api.crateFlutterContactNickname(
+  String nickname() => RustLib.instance.api.crateTypesContactNickname(
         that: this,
       );
 
-  String peerId() => RustLib.instance.api.crateFlutterContactPeerId(
+  String peerId() => RustLib.instance.api.crateTypesContactPeerId(
         that: this,
       );
 
-  Contact pubClone() => RustLib.instance.api.crateFlutterContactPubClone(
+  Contact pubClone() => RustLib.instance.api.crateTypesContactPubClone(
         that: this,
       );
 
   void setNickname({required String nickname}) => RustLib.instance.api
-      .crateFlutterContactSetNickname(that: this, nickname: nickname);
-}
-
-@sealed
-class DartNotifyImpl extends RustOpaque implements DartNotify {
-  // Not to be used by end users
-  DartNotifyImpl.frbInternalDcoDecode(List<dynamic> wire)
-      : super.frbInternalDcoDecode(wire, _kStaticData);
-
-  // Not to be used by end users
-  DartNotifyImpl.frbInternalSseDecode(BigInt ptr, int externalSizeOnNative)
-      : super.frbInternalSseDecode(ptr, externalSizeOnNative, _kStaticData);
-
-  static final _kStaticData = RustArcStaticData(
-    rustArcIncrementStrongCount:
-        RustLib.instance.api.rust_arc_increment_strong_count_DartNotify,
-    rustArcDecrementStrongCount:
-        RustLib.instance.api.rust_arc_decrement_strong_count_DartNotify,
-    rustArcDecrementStrongCountPtr:
-        RustLib.instance.api.rust_arc_decrement_strong_count_DartNotifyPtr,
-  );
-
-  /// public notified function for dart
-  Future<void> notified() =>
-      RustLib.instance.api.crateFlutterDartNotifyNotified(
-        that: this,
-      );
-
-  /// notifies one waiter
-  void notify() => RustLib.instance.api.crateFlutterDartNotifyNotify(
-        that: this,
-      );
+      .crateTypesContactSetNickname(that: this, nickname: nickname);
 }
 
 @sealed
@@ -6337,8 +6380,38 @@ class FlutterSoundHandleImpl extends RustOpaque implements FlutterSoundHandle {
   /// Cancels the sound playback.
   ///
   /// This triggers a graceful fade-out to prevent audio pops/clicks.
-  void cancel() =>
-      RustLib.instance.api.crateAudioPlayerFlutterSoundHandleCancel(
+  void cancel() => RustLib.instance.api.cratePlayerFlutterSoundHandleCancel(
+        that: this,
+      );
+}
+
+@sealed
+class FrontendNotifyImpl extends RustOpaque implements FrontendNotify {
+  // Not to be used by end users
+  FrontendNotifyImpl.frbInternalDcoDecode(List<dynamic> wire)
+      : super.frbInternalDcoDecode(wire, _kStaticData);
+
+  // Not to be used by end users
+  FrontendNotifyImpl.frbInternalSseDecode(BigInt ptr, int externalSizeOnNative)
+      : super.frbInternalSseDecode(ptr, externalSizeOnNative, _kStaticData);
+
+  static final _kStaticData = RustArcStaticData(
+    rustArcIncrementStrongCount:
+        RustLib.instance.api.rust_arc_increment_strong_count_FrontendNotify,
+    rustArcDecrementStrongCount:
+        RustLib.instance.api.rust_arc_decrement_strong_count_FrontendNotify,
+    rustArcDecrementStrongCountPtr:
+        RustLib.instance.api.rust_arc_decrement_strong_count_FrontendNotifyPtr,
+  );
+
+  /// public notified function for dart
+  Future<void> notified() =>
+      RustLib.instance.api.crateTypesFrontendNotifyNotified(
+        that: this,
+      );
+
+  /// notifies one waiter
+  void notify() => RustLib.instance.api.crateTypesFrontendNotifyNotify(
         that: this,
       );
 }
@@ -6363,21 +6436,21 @@ class NetworkConfigImpl extends RustOpaque implements NetworkConfig {
   );
 
   Future<String> getRelayAddress() =>
-      RustLib.instance.api.crateFlutterNetworkConfigGetRelayAddress(
+      RustLib.instance.api.crateTypesNetworkConfigGetRelayAddress(
         that: this,
       );
 
   Future<String> getRelayId() =>
-      RustLib.instance.api.crateFlutterNetworkConfigGetRelayId(
+      RustLib.instance.api.crateTypesNetworkConfigGetRelayId(
         that: this,
       );
 
   Future<void> setRelayAddress({required String relayAddress}) =>
-      RustLib.instance.api.crateFlutterNetworkConfigSetRelayAddress(
+      RustLib.instance.api.crateTypesNetworkConfigSetRelayAddress(
           that: this, relayAddress: relayAddress);
 
   Future<void> setRelayId({required String relayId}) => RustLib.instance.api
-      .crateFlutterNetworkConfigSetRelayId(that: this, relayId: relayId);
+      .crateTypesNetworkConfigSetRelayId(that: this, relayId: relayId);
 }
 
 @sealed
@@ -6400,19 +6473,17 @@ class OverlayImpl extends RustOpaque implements Overlay {
   );
 
   /// disable the overlay
-  Future<void> disable() =>
-      RustLib.instance.api.crateOverlayOverlayOverlayDisable(
+  Future<void> disable() => RustLib.instance.api.crateOverlayOverlayDisable(
         that: this,
       );
 
   /// enable the overlay
-  Future<void> enable() =>
-      RustLib.instance.api.crateOverlayOverlayOverlayEnable(
+  Future<void> enable() => RustLib.instance.api.crateOverlayOverlayEnable(
         that: this,
       );
 
   /// hide the overlay window irrespective of platform
-  Future<void> hide_() => RustLib.instance.api.crateOverlayOverlayOverlayHide(
+  Future<void> hide_() => RustLib.instance.api.crateOverlayOverlayHide(
         that: this,
       );
 
@@ -6422,32 +6493,52 @@ class OverlayImpl extends RustOpaque implements Overlay {
           required int y,
           required int width,
           required int height}) =>
-      RustLib.instance.api.crateOverlayOverlayOverlayMoveOverlay(
+      RustLib.instance.api.crateOverlayOverlayMoveOverlay(
           that: this, x: x, y: y, width: width, height: height);
 
-  /// non-windows platforms don't have an overlay
+  /// access the screen resolution for overlay positioning in the front end
   (int, int) screenResolution() =>
-      RustLib.instance.api.crateOverlayOverlayOverlayScreenResolution(
+      RustLib.instance.api.crateOverlayOverlayScreenResolution(
         that: this,
       );
 
   /// change the background color of the overlay
   Future<void> setBackgroundColor({required int backgroundColor}) =>
-      RustLib.instance.api.crateOverlayOverlayOverlaySetBackgroundColor(
+      RustLib.instance.api.crateOverlayOverlaySetBackgroundColor(
           that: this, backgroundColor: backgroundColor);
 
   /// change the font color of the overlay
   Future<void> setFontColor({required int fontColor}) => RustLib.instance.api
-      .crateOverlayOverlayOverlaySetFontColor(that: this, fontColor: fontColor);
+      .crateOverlayOverlaySetFontColor(that: this, fontColor: fontColor);
 
   /// change the font height (size) of the overlay
   Future<void> setFontHeight({required int height}) => RustLib.instance.api
-      .crateOverlayOverlayOverlaySetFontHeight(that: this, height: height);
+      .crateOverlayOverlaySetFontHeight(that: this, height: height);
 
   /// show the overlay window irrespective of platform
-  Future<void> show_() => RustLib.instance.api.crateOverlayOverlayOverlayShow(
+  Future<void> show_() => RustLib.instance.api.crateOverlayOverlayShow(
         that: this,
       );
+}
+
+@sealed
+class PeerIdImpl extends RustOpaque implements PeerId {
+  // Not to be used by end users
+  PeerIdImpl.frbInternalDcoDecode(List<dynamic> wire)
+      : super.frbInternalDcoDecode(wire, _kStaticData);
+
+  // Not to be used by end users
+  PeerIdImpl.frbInternalSseDecode(BigInt ptr, int externalSizeOnNative)
+      : super.frbInternalSseDecode(ptr, externalSizeOnNative, _kStaticData);
+
+  static final _kStaticData = RustArcStaticData(
+    rustArcIncrementStrongCount:
+        RustLib.instance.api.rust_arc_increment_strong_count_PeerId,
+    rustArcDecrementStrongCount:
+        RustLib.instance.api.rust_arc_decrement_strong_count_PeerId,
+    rustArcDecrementStrongCountPtr:
+        RustLib.instance.api.rust_arc_decrement_strong_count_PeerIdPtr,
+  );
 }
 
 @sealed
@@ -6469,23 +6560,23 @@ class RecordingConfigImpl extends RustOpaque implements RecordingConfig {
         RustLib.instance.api.rust_arc_decrement_strong_count_RecordingConfigPtr,
   );
 
-  int bitrate() => RustLib.instance.api.crateFlutterRecordingConfigBitrate(
+  int bitrate() => RustLib.instance.api.crateTypesRecordingConfigBitrate(
         that: this,
       );
 
-  String device() => RustLib.instance.api.crateFlutterRecordingConfigDevice(
+  String device() => RustLib.instance.api.crateTypesRecordingConfigDevice(
         that: this,
       );
 
-  String encoder() => RustLib.instance.api.crateFlutterRecordingConfigEncoder(
+  String encoder() => RustLib.instance.api.crateTypesRecordingConfigEncoder(
         that: this,
       );
 
-  int framerate() => RustLib.instance.api.crateFlutterRecordingConfigFramerate(
+  int framerate() => RustLib.instance.api.crateTypesRecordingConfigFramerate(
         that: this,
       );
 
-  int? height() => RustLib.instance.api.crateFlutterRecordingConfigHeight(
+  int? height() => RustLib.instance.api.crateTypesRecordingConfigHeight(
         that: this,
       );
 }
@@ -6511,17 +6602,17 @@ class ScreenshareConfigImpl extends RustOpaque implements ScreenshareConfig {
   );
 
   Future<Capabilities> capabilities() =>
-      RustLib.instance.api.crateFlutterScreenshareConfigCapabilities(
+      RustLib.instance.api.crateTypesScreenshareConfigCapabilities(
         that: this,
       );
 
   Future<RecordingConfig?> recordingConfig() =>
-      RustLib.instance.api.crateFlutterScreenshareConfigRecordingConfig(
+      RustLib.instance.api.crateTypesScreenshareConfigRecordingConfig(
         that: this,
       );
 
   Uint8List toBytes() =>
-      RustLib.instance.api.crateFlutterScreenshareConfigToBytes(
+      RustLib.instance.api.crateTypesScreenshareConfigToBytes(
         that: this,
       );
 
@@ -6531,7 +6622,7 @@ class ScreenshareConfigImpl extends RustOpaque implements ScreenshareConfig {
           required int bitrate,
           required int framerate,
           int? height}) =>
-      RustLib.instance.api.crateFlutterScreenshareConfigUpdateRecordingConfig(
+      RustLib.instance.api.crateTypesScreenshareConfigUpdateRecordingConfig(
           that: this,
           encoder: encoder,
           device: device,
@@ -6562,7 +6653,7 @@ class SoundPlayerImpl extends RustOpaque implements SoundPlayer {
   /// Returns a reference to the audio host.
   ///
   /// This can be used to enumerate devices or access other host functionality.
-  ArcHost host() => RustLib.instance.api.crateAudioPlayerSoundPlayerHost(
+  ArcHost host() => RustLib.instance.api.cratePlayerSoundPlayerHost(
         that: this,
       );
 
@@ -6587,26 +6678,23 @@ class SoundPlayerImpl extends RustOpaque implements SoundPlayer {
   /// - Stream configuration cannot be obtained
   /// - Stream creation fails
   Future<FlutterSoundHandle> play({required List<int> bytes}) =>
-      RustLib.instance.api
-          .crateAudioPlayerSoundPlayerPlay(that: this, bytes: bytes);
+      RustLib.instance.api.cratePlayerSoundPlayerPlay(that: this, bytes: bytes);
 
   /// Sets the output device.
   ///
   /// # Arguments
   ///
   /// * `device_id` - The device ID string to use, or `None` for the default device.
-  Future<void> updateOutputDevice({String? deviceId}) =>
-      RustLib.instance.api.crateAudioPlayerSoundPlayerUpdateOutputDevice(
-          that: this, deviceId: deviceId);
+  Future<void> updateOutputDevice({String? deviceId}) => RustLib.instance.api
+      .cratePlayerSoundPlayerUpdateOutputDevice(that: this, deviceId: deviceId);
 
   /// Updates the output volume.
   ///
   /// # Arguments
   ///
   /// * `volume` - New volume in decibels.
-  void updateOutputVolume({required double volume}) =>
-      RustLib.instance.api.crateAudioPlayerSoundPlayerUpdateOutputVolume(
-          that: this, volume: volume);
+  void updateOutputVolume({required double volume}) => RustLib.instance.api
+      .cratePlayerSoundPlayerUpdateOutputVolume(that: this, volume: volume);
 }
 
 @sealed
@@ -6630,7 +6718,7 @@ class TelepathyImpl extends RustOpaque implements Telepathy {
 
   /// Blocks while an audio test is running
   Future<void> audioTest() =>
-      RustLib.instance.api.crateInternalTelepathyAudioTest(
+      RustLib.instance.api.crateFlutterTelepathyAudioTest(
         that: this,
       );
 
@@ -6638,110 +6726,109 @@ class TelepathyImpl extends RustOpaque implements Telepathy {
           {required Contact contact,
           required String text,
           required List<(String, Uint8List)> attachments}) =>
-      RustLib.instance.api.crateInternalTelepathyBuildChat(
+      RustLib.instance.api.crateFlutterTelepathyBuildChat(
           that: this, contact: contact, text: text, attachments: attachments);
 
   /// Ends the current audio test, room, or call in that order
-  Future<void> endCall() => RustLib.instance.api.crateInternalTelepathyEndCall(
+  Future<void> endCall() => RustLib.instance.api.crateFlutterTelepathyEndCall(
         that: this,
       );
 
   /// The only entry point into participating in a room
   Future<void> joinRoom({required List<String> memberStrings}) => RustLib
       .instance.api
-      .crateInternalTelepathyJoinRoom(that: this, memberStrings: memberStrings);
+      .crateFlutterTelepathyJoinRoom(that: this, memberStrings: memberStrings);
 
   /// Lists the input and output devices
   Future<(List<AudioDevice>, List<AudioDevice>)> listDevices() =>
-      RustLib.instance.api.crateInternalTelepathyListDevices(
+      RustLib.instance.api.crateFlutterTelepathyListDevices(
         that: this,
       );
 
   void pauseStatistics() =>
-      RustLib.instance.api.crateInternalTelepathyPauseStatistics(
+      RustLib.instance.api.crateFlutterTelepathyPauseStatistics(
         that: this,
       );
 
   /// Restarts the session manager
   Future<void> restartManager() =>
-      RustLib.instance.api.crateInternalTelepathyRestartManager(
+      RustLib.instance.api.crateFlutterTelepathyRestartManager(
         that: this,
       );
 
   void resumeStatistics() =>
-      RustLib.instance.api.crateInternalTelepathyResumeStatistics(
+      RustLib.instance.api.crateFlutterTelepathyResumeStatistics(
         that: this,
       );
 
   /// Sends a chat message
   Future<void> sendChat({required ChatMessage message}) => RustLib.instance.api
-      .crateInternalTelepathySendChat(that: this, message: message);
+      .crateFlutterTelepathySendChat(that: this, message: message);
 
   void setDeafened({required bool deafened}) => RustLib.instance.api
-      .crateInternalTelepathySetDeafened(that: this, deafened: deafened);
+      .crateFlutterTelepathySetDeafened(that: this, deafened: deafened);
 
   /// Changing the denoise flag will not affect the current call
   void setDenoise({required bool denoise}) => RustLib.instance.api
-      .crateInternalTelepathySetDenoise(that: this, denoise: denoise);
+      .crateFlutterTelepathySetDenoise(that: this, denoise: denoise);
 
   void setEfficiencyMode({required bool enabled}) => RustLib.instance.api
-      .crateInternalTelepathySetEfficiencyMode(that: this, enabled: enabled);
+      .crateFlutterTelepathySetEfficiencyMode(that: this, enabled: enabled);
 
   /// Sets the signing key (called when the profile changes)
   Future<void> setIdentity({required List<int> key}) => RustLib.instance.api
-      .crateInternalTelepathySetIdentity(that: this, key: key);
+      .crateFlutterTelepathySetIdentity(that: this, key: key);
 
   Future<void> setInputDevice({String? deviceId}) => RustLib.instance.api
-      .crateInternalTelepathySetInputDevice(that: this, deviceId: deviceId);
+      .crateFlutterTelepathySetInputDevice(that: this, deviceId: deviceId);
 
   void setInputVolume({required double decibel}) => RustLib.instance.api
-      .crateInternalTelepathySetInputVolume(that: this, decibel: decibel);
+      .crateFlutterTelepathySetInputVolume(that: this, decibel: decibel);
 
   Future<void> setModel({Uint8List? model}) => RustLib.instance.api
-      .crateInternalTelepathySetModel(that: this, model: model);
+      .crateFlutterTelepathySetModel(that: this, model: model);
 
   void setMuted({required bool muted}) => RustLib.instance.api
-      .crateInternalTelepathySetMuted(that: this, muted: muted);
+      .crateFlutterTelepathySetMuted(that: this, muted: muted);
 
   Future<void> setOutputDevice({String? deviceId}) => RustLib.instance.api
-      .crateInternalTelepathySetOutputDevice(that: this, deviceId: deviceId);
+      .crateFlutterTelepathySetOutputDevice(that: this, deviceId: deviceId);
 
   void setOutputVolume({required double decibel}) => RustLib.instance.api
-      .crateInternalTelepathySetOutputVolume(that: this, decibel: decibel);
+      .crateFlutterTelepathySetOutputVolume(that: this, decibel: decibel);
 
   void setPlayCustomRingtones({required bool play}) => RustLib.instance.api
-      .crateInternalTelepathySetPlayCustomRingtones(that: this, play: play);
+      .crateFlutterTelepathySetPlayCustomRingtones(that: this, play: play);
 
   void setRmsThreshold({required double decimal}) => RustLib.instance.api
-      .crateInternalTelepathySetRmsThreshold(that: this, decimal: decimal);
+      .crateFlutterTelepathySetRmsThreshold(that: this, decimal: decimal);
 
   void setSendCustomRingtone({required bool send}) => RustLib.instance.api
-      .crateInternalTelepathySetSendCustomRingtone(that: this, send: send);
+      .crateFlutterTelepathySetSendCustomRingtone(that: this, send: send);
 
   /// shuts down the entire rust backend
-  Future<void> shutdown() =>
-      RustLib.instance.api.crateInternalTelepathyShutdown(
+  Future<void> shutdown() => RustLib.instance.api.crateFlutterTelepathyShutdown(
         that: this,
       );
 
   /// Attempts to start a call through an existing session
   Future<void> startCall({required Contact contact}) => RustLib.instance.api
-      .crateInternalTelepathyStartCall(that: this, contact: contact);
+      .crateFlutterTelepathyStartCall(that: this, contact: contact);
 
   Future<void> startManager() =>
-      RustLib.instance.api.crateInternalTelepathyStartManager(
+      RustLib.instance.api.crateFlutterTelepathyStartManager(
         that: this,
       );
 
   Future<void> startScreenshare({required Contact contact}) =>
       RustLib.instance.api
-          .crateInternalTelepathyStartScreenshare(that: this, contact: contact);
+          .crateFlutterTelepathyStartScreenshare(that: this, contact: contact);
 
   /// Tries to start a session for a contact
   Future<void> startSession({required Contact contact}) => RustLib.instance.api
-      .crateInternalTelepathyStartSession(that: this, contact: contact);
+      .crateFlutterTelepathyStartSession(that: this, contact: contact);
 
   /// Stops a specific session (called when a contact is deleted)
   Future<void> stopSession({required Contact contact}) => RustLib.instance.api
-      .crateInternalTelepathyStopSession(that: this, contact: contact);
+      .crateFlutterTelepathyStopSession(that: this, contact: contact);
 }

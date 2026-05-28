@@ -1,0 +1,45 @@
+name: smoke_session
+steps:
+  - actor: alice
+    expect_event:
+      type: ready
+      timeout: 10.0
+      match:
+        version: "*"
+  - actor: bob
+    expect_event:
+      type: ready
+      timeout: 10.0
+      match:
+        version: "*"
+  - actor: alice
+    send:
+      cmd: add_contact
+      args:
+        contact_id: bob
+        peer_id: ${bob.peer_id}
+    expect_ack:
+      ok: true
+  - actor: bob
+    send:
+      cmd: add_contact
+      args:
+        contact_id: alice
+        peer_id: ${alice.peer_id}
+    expect_ack:
+      ok: true
+  - actor: alice
+    send:
+      cmd: start_session
+      args:
+        contact_id: bob
+    expect_ack:
+      ok: true
+  - actor: alice
+    expect_event:
+      type: session_status
+      timeout: 15.0
+      match:
+        status:
+          - Connecting
+          - Connected
