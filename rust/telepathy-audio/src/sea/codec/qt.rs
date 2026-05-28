@@ -81,7 +81,8 @@ mod tests {
             let quant_offset = quant.offsets[bits] as i32 + clamp_limit;
 
             let reciprocal = dequant.get_scalefactor_reciprocals(bits)[0] as i64;
-            let dqt_row = &dequant.get_dqt(bits)[0];
+            let (dqt, stride) = dequant.get_dqt(bits);
+            let dqt_row = &dqt[..stride];
 
             for expected in dqt_row {
                 let scaled = sea_div(*expected, reciprocal);

@@ -236,7 +236,7 @@ mod tests {
                 .map(|i| (((i * 37) as u32 + bits as u32) & mask) as u8)
                 .collect();
 
-            let mut packer = BitPacker::new();
+            let mut packer = BitPacker::default();
             for value in &values {
                 packer.push(*value as u32, bits);
             }
@@ -247,10 +247,13 @@ mod tests {
             unpacker.process_bytes(&encoded[..split]);
             unpacker.process_bytes(&encoded[split..]);
 
-            let mut decoded = unpacker.finish();
-            decoded.truncate(values.len());
+            let decoded = unpacker.finish();
 
-            assert_eq!(decoded, values, "mismatch for bit width {bits}");
+            assert_eq!(
+                &decoded[..values.len()],
+                values,
+                "mismatch for bit width {bits}"
+            );
         }
     }
 }

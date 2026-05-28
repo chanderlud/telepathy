@@ -101,11 +101,20 @@ mod tests {
         let mut encoder = CbrEncoder::new(&header, &settings);
         let input = synthetic_frame();
 
-        let encoded = encoder.encode(&input);
-        assert_eq!(encoded.residuals.len(), input.len());
-        assert_eq!(encoded.residual_bits.len(), 0);
+        let mut scale_factors = Vec::new();
+        let mut residuals = Vec::new();
+        let mut residual_bits = Vec::new();
+        encoder.encode_into(
+            &input,
+            &mut scale_factors,
+            &mut residuals,
+            &mut residual_bits,
+        );
+
+        assert_eq!(residuals.len(), input.len());
+        assert_eq!(residual_bits.len(), 0);
         assert_eq!(
-            encoded.scale_factors.len(),
+            scale_factors.len(),
             (input.len() / header.channels as usize)
                 .div_ceil(settings.scale_factor_frames as usize)
                 * header.channels as usize
@@ -125,14 +134,10 @@ mod tests {
         let input = synthetic_frame();
 
         let mut encoder_file = SeaFile::new(header, &settings).unwrap();
-        let encoded_frame = encoder_file.make_chunk(&input).unwrap();
+        let mut encoded_frame = Vec::new();
+        encoder_file.make_chunk(&input, &mut encoded_frame).unwrap();
 
-        let mut decoder_file = SeaFile {
-            header: encoder_file.header.clone(),
-            decoder: None,
-            encoder: None,
-            encoder_settings: None,
-        };
+        let mut decoder_file = SeaFile::new_for_decoding(encoder_file.header.clone()).unwrap();
         let mut decoded = [0i16; 480];
         decoder_file
             .samples_from_frame(&encoded_frame, &mut decoded)

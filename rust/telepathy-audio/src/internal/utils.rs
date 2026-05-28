@@ -163,6 +163,7 @@ mod tests {
         assert!(result.is_err());
     }
 
+    #[cfg(not(feature = "mock-audio"))]
     #[test]
     fn hann_fade_in_starts_near_zero() {
         let len = 64;
@@ -170,24 +171,28 @@ mod tests {
         approx_eq(hann_fade_in(0, len), expected, f32::EPSILON * 4.0);
     }
 
+    #[cfg(not(feature = "mock-audio"))]
     #[test]
     fn hann_fade_in_ends_at_one() {
         let len = 64;
         approx_eq(hann_fade_in(len - 1, len), 1.0, f32::EPSILON * 4.0);
     }
 
+    #[cfg(not(feature = "mock-audio"))]
     #[test]
     fn hann_fade_out_starts_near_one() {
         let len = 64;
         approx_eq(hann_fade_out(0, len), 1.0, 0.001);
     }
 
+    #[cfg(not(feature = "mock-audio"))]
     #[test]
     fn hann_fade_out_ends_near_zero() {
         let len = 64;
         approx_eq(hann_fade_out(len - 1, len), 0.0, f32::EPSILON * 4.0);
     }
 
+    #[cfg(not(feature = "mock-audio"))]
     #[test]
     fn hann_fade_in_is_monotonically_increasing() {
         let len = 64;
@@ -196,6 +201,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(feature = "mock-audio"))]
     #[test]
     fn hann_fade_out_is_monotonically_decreasing() {
         let len = 64;
@@ -204,6 +210,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(feature = "mock-audio"))]
     #[test]
     fn hann_fade_in_plus_fade_out_equals_one() {
         let len = 64;
