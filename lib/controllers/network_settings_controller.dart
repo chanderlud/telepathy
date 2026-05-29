@@ -37,21 +37,23 @@ class NetworkSettingsController with ChangeNotifier {
   Future<NetworkConfig> loadNetworkConfig() async {
     try {
       return NetworkConfig(
-        relayAddress:
-            await options.getString('relayAddress') ?? defaultRelayAddress,
-        relayId: await options.getString('relayId') ?? defaultRelayId,
+        listenPort: await options.getInt('listenPort') ?? defaultListenPort,
+        bindAddresses: await options.getStringList('bindAddresses') ??
+            defaultBindAddresses,
       );
     } on DartError catch (e) {
       DebugConsole.warn('invalid network config values: $e');
       return NetworkConfig(
-          relayAddress: defaultRelayAddress, relayId: defaultRelayId);
+        listenPort: defaultListenPort,
+        bindAddresses: defaultBindAddresses,
+      );
     }
   }
 
   Future<void> saveNetworkConfig() async {
-    await options.setString(
-        'relayAddress', await networkConfig.getRelayAddress());
-    await options.setString('relayId', await networkConfig.getRelayId());
+    await options.setInt('listenPort', networkConfig.getListenPort());
+    await options.setStringList(
+        'bindAddresses', networkConfig.getBindAddresses());
   }
 
   Future<ScreenshareConfig> loadScreenshareConfig() async {

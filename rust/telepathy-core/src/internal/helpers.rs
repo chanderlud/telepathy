@@ -14,6 +14,7 @@ use iroh::endpoint::presets;
 use iroh::{Endpoint, PublicKey, SecretKey};
 use rustls::crypto::aws_lc_rs::{self, kx_group};
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
@@ -57,14 +58,28 @@ where
             kx_group::SECP384R1,
         ];
 
-        // the N0 present configures the relay mode & address lookup
-        // we then override the crypto provider to prefer post-quantum key exchange
-        let endpoint = Endpoint::builder(presets::N0)
+        let listen_port = self.core_state.network_config.listen_port.load(Relaxed);
+        let bind_addresses = self
+            .core_state
+            .network_config
+            .bind_addresses
+            .read()
+            .expect("bind_addresses lock poisoned")
+            .clone();
+
+        let mut endpoint_builder = Endpoint::builder(presets::N0)
             .crypto_provider(Arc::new(provider))
             .secret_key(identity)
             .alpns(vec![ALPN.to_vec()])
-            .bind()
-            .await?;
+            .clear_ip_transports();
+
+        for ip in bind_addresses {
+            endpoint_builder = endpoint_builder
+                .bind_addr(SocketAddr::new(ip, listen_port))
+                .expect("validated bind address must produce a valid socket address");
+        }
+
+        let endpoint = endpoint_builder.bind().await?;
 
         select! {
             _ = self.restart_manager.notified() => {

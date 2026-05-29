@@ -152,14 +152,14 @@ async def cli_pair(
     alice = CliProcess(
         binary_path=binaries["cli"],
         namespace=alice_namespace,
-        relay_addr=topology.relay_addr(alice_namespace),
-        relay_peer=relay.peer_id,
+        listen_port=0,
+        bind_addresses=["0.0.0.0"],
     )
     bob = CliProcess(
         binary_path=binaries["cli"],
         namespace=bob_namespace,
-        relay_addr=topology.relay_addr(bob_namespace),
-        relay_peer=relay.peer_id,
+        listen_port=0,
+        bind_addresses=["0.0.0.0"],
     )
     await alice.start()
     await bob.start()

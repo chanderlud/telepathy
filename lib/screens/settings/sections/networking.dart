@@ -16,15 +16,15 @@ class NetworkSettings extends StatefulWidget {
 }
 
 class NetworkSettingsState extends State<NetworkSettings> {
-  late String _relayAddress;
-  late String _relayPeerId;
+  late int _listenPort;
+  late List<String> _bindAddresses;
   bool unsavedChanges = false;
 
-  final TextEditingController _relayAddressInput = TextEditingController();
-  String? _relayAddressError;
+  final TextEditingController _listenPortInput = TextEditingController();
+  String? _listenPortError;
 
-  final TextEditingController _relayPeerIdInput = TextEditingController();
-  String? _relayPeerIdError;
+  final TextEditingController _bindAddressesInput = TextEditingController();
+  String? _bindAddressesError;
 
   @override
   void initState() {
@@ -34,12 +34,18 @@ class NetworkSettingsState extends State<NetworkSettings> {
 
   Future<void> _initialize() async {
     final networkSettingsController = context.read<NetworkSettingsController>();
-    _relayAddress =
-        await networkSettingsController.networkConfig.getRelayAddress();
-    _relayPeerId = await networkSettingsController.networkConfig.getRelayId();
+    _listenPort = networkSettingsController.networkConfig.getListenPort();
+    _bindAddresses = networkSettingsController.networkConfig.getBindAddresses();
 
-    _relayAddressInput.text = _relayAddress;
-    _relayPeerIdInput.text = _relayPeerId;
+    _listenPortInput.text = _listenPort.toString();
+    _bindAddressesInput.text = _formatBindAddresses(_bindAddresses);
+  }
+
+  @override
+  void dispose() {
+    _listenPortInput.dispose();
+    _bindAddressesInput.dispose();
+    super.dispose();
   }
 
   @override
@@ -60,35 +66,24 @@ class NetworkSettingsState extends State<NetworkSettings> {
               SizedBox(
                   width: width,
                   child: TextInput(
-                    labelText: 'Relay Address',
-                    controller: _relayAddressInput,
-                    onChanged: (String value) {
-                      if (value != _relayAddress) {
-                        setState(() {
-                          unsavedChanges = true;
-                        });
-                      }
-                    },
-                    error: _relayAddressError == null
+                    labelText: 'Bind Addresses',
+                    hintText: '0.0.0.0, 127.0.0.1',
+                    controller: _bindAddressesInput,
+                    onChanged: (_) => _updateUnsavedChanges(),
+                    error: _bindAddressesError == null
                         ? null
-                        : Text(_relayAddressError!,
+                        : Text(_bindAddressesError!,
                             style: const TextStyle(color: Colors.red)),
                   )),
               SizedBox(
                   width: width,
                   child: TextInput(
-                    labelText: 'Relay Peer ID',
-                    controller: _relayPeerIdInput,
-                    onChanged: (String value) {
-                      if (value != _relayPeerId) {
-                        setState(() {
-                          unsavedChanges = true;
-                        });
-                      }
-                    },
-                    error: _relayPeerIdError == null
+                    labelText: 'Listen Port',
+                    controller: _listenPortInput,
+                    onChanged: (_) => _updateUnsavedChanges(),
+                    error: _listenPortError == null
                         ? null
-                        : Text(_relayPeerIdError!,
+                        : Text(_listenPortError!,
                             style: const TextStyle(color: Colors.red)),
                   )),
             ],
@@ -105,50 +100,138 @@ class NetworkSettingsState extends State<NetworkSettings> {
     );
   }
 
+  String _formatBindAddresses(List<String> addresses) {
+    return addresses.join(', ');
+  }
+
+  List<String> _parseBindAddresses(String value) {
+    return value
+        .split(',')
+        .map((address) => address.trim())
+        .where((address) => address.isNotEmpty)
+        .toList();
+  }
+
+  bool _sameBindAddresses(List<String> first, List<String> second) {
+    if (first.length != second.length) return false;
+
+    for (int i = 0; i < first.length; i++) {
+      if (first[i] != second[i]) return false;
+    }
+
+    return true;
+  }
+
+  void _updateUnsavedChanges() {
+    final int? listenPort = int.tryParse(_listenPortInput.text.trim());
+    final List<String> bindAddresses =
+        _parseBindAddresses(_bindAddressesInput.text);
+
+    setState(() {
+      unsavedChanges = listenPort != _listenPort ||
+          !_sameBindAddresses(bindAddresses, _bindAddresses);
+    });
+  }
+
   Future<void> saveChanges() async {
-    String relayAddress = _relayAddressInput.text;
-    String relayId = _relayPeerIdInput.text;
+    final String listenPortText = _listenPortInput.text.trim();
+    final int? listenPort = int.tryParse(listenPortText);
+    final List<String> bindAddresses =
+        _parseBindAddresses(_bindAddressesInput.text);
+
+    String? listenPortError;
+    String? bindAddressesError;
+
+    if (listenPort == null) {
+      listenPortError = 'Listen port must be a number';
+    } else if (listenPort < 0 || listenPort > 65535) {
+      listenPortError = 'Listen port must be between 0 and 65535';
+    }
+
+    if (bindAddresses.isEmpty) {
+      bindAddressesError = 'Enter at least one bind address';
+    }
+
+    if (listenPortError == null && bindAddressesError == null) {
+      try {
+        NetworkConfig(
+          listenPort: listenPort!,
+          bindAddresses: bindAddresses,
+        );
+      } on DartError catch (error) {
+        bindAddressesError = error.message;
+      }
+    }
+
+    if (listenPortError != null || bindAddressesError != null) {
+      setState(() {
+        _listenPortError = listenPortError;
+        _bindAddressesError = bindAddressesError;
+        unsavedChanges = true;
+      });
+
+      return;
+    }
+
+    final int newListenPort = listenPort!;
 
     final networkSettingsController = context.read<NetworkSettingsController>();
     final telepathy = context.read<Telepathy>();
 
-    bool changed = false;
+    final bool listenPortChanged = newListenPort != _listenPort;
+    final bool bindAddressesChanged =
+        !_sameBindAddresses(bindAddresses, _bindAddresses);
 
-    try {
-      // this will raise an error if the relay ID isn't formatted right
-      await networkSettingsController.networkConfig
-          .setRelayId(relayId: relayId);
-      _relayPeerId = relayId;
-      changed = true;
+    if (!listenPortChanged && !bindAddressesChanged) {
       setState(() {
-        _relayPeerIdError = null;
+        _listenPortError = null;
+        _bindAddressesError = null;
+        unsavedChanges = false;
       });
-    } on DartError catch (error) {
-      setState(() {
-        _relayPeerIdError = error.message;
-      });
+
+      return;
     }
 
     try {
-      // this will raise an error if the relay address isn't a valid socket address
-      await networkSettingsController.networkConfig
-          .setRelayAddress(relayAddress: relayAddress);
-      _relayAddress = relayAddress;
-      changed = true;
-      setState(() {
-        _relayAddressError = null;
-      });
+      networkSettingsController.networkConfig
+          .setListenPort(listenPort: newListenPort);
     } on DartError catch (error) {
       setState(() {
-        _relayAddressError = error.message;
+        _listenPortError = error.message;
+        _bindAddressesError = null;
+        unsavedChanges = true;
       });
+
+      return;
     }
 
-    unsavedChanges = _relayAddressError != null || _relayPeerIdError != null;
+    try {
+      networkSettingsController.networkConfig
+          .setBindAddresses(bindAddresses: bindAddresses);
+    } on DartError catch (error) {
+      setState(() {
+        _listenPortError = null;
+        _bindAddressesError = error.message;
+        unsavedChanges = true;
+      });
 
-    if (changed) {
-      networkSettingsController.saveNetworkConfig();
-      telepathy.restartManager();
+      if (listenPortChanged) {
+        networkSettingsController.networkConfig
+            .setListenPort(listenPort: _listenPort);
+      }
+
+      return;
     }
+
+    await networkSettingsController.saveNetworkConfig();
+    await telepathy.restartManager();
+
+    setState(() {
+      _listenPort = newListenPort;
+      _bindAddresses = bindAddresses;
+      _listenPortError = null;
+      _bindAddressesError = null;
+      unsavedChanges = false;
+    });
   }
 }

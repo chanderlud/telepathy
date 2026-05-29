@@ -93,24 +93,23 @@ class ContactsList extends StatelessWidget {
                       Tooltip(
                         message: switch (managerState) {
                           ManagerState.active => 'Session Manager Connected',
-                          ManagerState.starting =>
-                            'Session Manager Starting…',
+                          ManagerState.starting => 'Session Manager Starting…',
                           ManagerState.failed => 'Session Manager Failed',
                           ManagerState.stopped => 'Session Manager Inactive',
                         },
                         child: switch (managerState) {
                           ManagerState.active => const Icon(
-                                Icons.language,
-                                color: Color(0xFF16a34a),
-                                size: 20,
-                              ),
+                              Icons.language,
+                              color: Color(0xFF16a34a),
+                              size: 20,
+                            ),
                           ManagerState.starting => const SizedBox(
-                                width: 20,
-                                height: 20,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 3,
-                                ),
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 3,
                               ),
+                            ),
                           ManagerState.failed ||
                           ManagerState.stopped =>
                             const Icon(
@@ -120,28 +119,27 @@ class ContactsList extends StatelessWidget {
                             ),
                         },
                       ),
-                      if (managerState == ManagerState.failed)
-                        ...[
-                          const SizedBox(width: 10),
-                          IconButton(
-                              onPressed: () {
-                                telepathy.restartManager();
-                              },
-                              constraints: const BoxConstraints(
-                                maxWidth: 36,
-                                maxHeight: 36,
-                              ),
-                              padding: const EdgeInsetsDirectional.only(
-                                start: 1,
-                                top: 1,
-                                end: 1,
-                                bottom: 1,
-                              ),
-                              icon: SvgPicture.asset('assets/icons/Restart.svg',
-                                  colorFilter: const ColorFilter.mode(
-                                      Color(0xFFdc2626), BlendMode.srcIn),
-                                  semanticsLabel: 'Restart session manager')),
-                        ]
+                      if (managerState == ManagerState.failed) ...[
+                        const SizedBox(width: 10),
+                        IconButton(
+                            onPressed: () {
+                              telepathy.restartManager();
+                            },
+                            constraints: const BoxConstraints(
+                              maxWidth: 36,
+                              maxHeight: 36,
+                            ),
+                            padding: const EdgeInsetsDirectional.only(
+                              start: 1,
+                              top: 1,
+                              end: 1,
+                              bottom: 1,
+                            ),
+                            icon: SvgPicture.asset('assets/icons/Restart.svg',
+                                colorFilter: const ColorFilter.mode(
+                                    Color(0xFFdc2626), BlendMode.srcIn),
+                                semanticsLabel: 'Restart session manager')),
+                      ]
                     ],
                   ),
                 ],

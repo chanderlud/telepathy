@@ -8,12 +8,12 @@ Each line is a complete JSON object.
 
 ## Startup
 
-Startup relay configuration can be provided in two ways:
+Startup networking configuration can be provided in two ways:
 
-- CLI flags: `--relay <socket-addr>` and `--relay-peer <peer-id>`
-- Environment variables: `TELEPATHY_RELAY_ADDR` and `TELEPATHY_RELAY_PEER`
+- CLI flags: `--listen-port <port>` and one or more `--bind-address <ip-address>` flags
+- Environment variables: `TELEPATHY_LISTEN_PORT` and `TELEPATHY_BIND_ADDRESSES`
 
-`--relay` / `TELEPATHY_RELAY_ADDR` must be a socket address string accepted by Rust `SocketAddr` parsing (for example: `203.0.113.10:4001` or `[2001:db8::1]:4001`).
+`--listen-port` / `TELEPATHY_LISTEN_PORT` must be a port number from `0` to `65535`. Invalid values are startup failures; if neither a flag nor `TELEPATHY_LISTEN_PORT` is set, the listen port defaults to `0`. `--bind-address` accepts one IP address per flag. `TELEPATHY_BIND_ADDRESSES` accepts a comma-separated list of IP addresses.
 
 Precedence:
 

@@ -74,7 +74,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => 1872176494;
+  int get rustContentHash => 1883563961;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -170,20 +170,19 @@ abstract class RustLibApi extends BaseApi {
 
   Future<NetworkConfig> crateTypesNetworkConfigDefault();
 
-  Future<String> crateTypesNetworkConfigGetRelayAddress(
+  List<String> crateTypesNetworkConfigGetBindAddresses(
       {required NetworkConfig that});
 
-  Future<String> crateTypesNetworkConfigGetRelayId(
-      {required NetworkConfig that});
+  int crateTypesNetworkConfigGetListenPort({required NetworkConfig that});
 
   NetworkConfig crateTypesNetworkConfigNew(
-      {required String relayAddress, required String relayId});
+      {required int listenPort, required List<String> bindAddresses});
 
-  Future<void> crateTypesNetworkConfigSetRelayAddress(
-      {required NetworkConfig that, required String relayAddress});
+  void crateTypesNetworkConfigSetBindAddresses(
+      {required NetworkConfig that, required List<String> bindAddresses});
 
-  Future<void> crateTypesNetworkConfigSetRelayId(
-      {required NetworkConfig that, required String relayId});
+  void crateTypesNetworkConfigSetListenPort(
+      {required NetworkConfig that, required int listenPort});
 
   Future<Overlay> crateOverlayOverlayDefault();
 
@@ -1324,67 +1323,64 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<String> crateTypesNetworkConfigGetRelayAddress(
+  List<String> crateTypesNetworkConfigGetBindAddresses(
       {required NetworkConfig that}) {
-    return handler.executeNormal(NormalTask(
-      callFfi: (port_) {
+    return handler.executeSync(SyncTask(
+      callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerNetworkConfig(
             that, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 31, port: port_);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 31)!;
       },
       codec: SseCodec(
-        decodeSuccessData: sse_decode_String,
+        decodeSuccessData: sse_decode_list_String,
         decodeErrorData: null,
       ),
-      constMeta: kCrateTypesNetworkConfigGetRelayAddressConstMeta,
+      constMeta: kCrateTypesNetworkConfigGetBindAddressesConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateTypesNetworkConfigGetRelayAddressConstMeta =>
+  TaskConstMeta get kCrateTypesNetworkConfigGetBindAddressesConstMeta =>
       const TaskConstMeta(
-        debugName: 'NetworkConfig_get_relay_address',
+        debugName: 'NetworkConfig_get_bind_addresses',
         argNames: ['that'],
       );
 
   @override
-  Future<String> crateTypesNetworkConfigGetRelayId(
-      {required NetworkConfig that}) {
-    return handler.executeNormal(NormalTask(
-      callFfi: (port_) {
+  int crateTypesNetworkConfigGetListenPort({required NetworkConfig that}) {
+    return handler.executeSync(SyncTask(
+      callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerNetworkConfig(
             that, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 32, port: port_);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 32)!;
       },
       codec: SseCodec(
-        decodeSuccessData: sse_decode_String,
+        decodeSuccessData: sse_decode_u_16,
         decodeErrorData: null,
       ),
-      constMeta: kCrateTypesNetworkConfigGetRelayIdConstMeta,
+      constMeta: kCrateTypesNetworkConfigGetListenPortConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateTypesNetworkConfigGetRelayIdConstMeta =>
+  TaskConstMeta get kCrateTypesNetworkConfigGetListenPortConstMeta =>
       const TaskConstMeta(
-        debugName: 'NetworkConfig_get_relay_id',
+        debugName: 'NetworkConfig_get_listen_port',
         argNames: ['that'],
       );
 
   @override
   NetworkConfig crateTypesNetworkConfigNew(
-      {required String relayAddress, required String relayId}) {
+      {required int listenPort, required List<String> bindAddresses}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
-        sse_encode_String(relayAddress, serializer);
-        sse_encode_String(relayId, serializer);
+        sse_encode_u_16(listenPort, serializer);
+        sse_encode_list_String(bindAddresses, serializer);
         return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 33)!;
       },
       codec: SseCodec(
@@ -1393,70 +1389,68 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeErrorData: sse_decode_dart_error,
       ),
       constMeta: kCrateTypesNetworkConfigNewConstMeta,
-      argValues: [relayAddress, relayId],
+      argValues: [listenPort, bindAddresses],
       apiImpl: this,
     ));
   }
 
   TaskConstMeta get kCrateTypesNetworkConfigNewConstMeta => const TaskConstMeta(
         debugName: 'NetworkConfig_new',
-        argNames: ['relayAddress', 'relayId'],
+        argNames: ['listenPort', 'bindAddresses'],
       );
 
   @override
-  Future<void> crateTypesNetworkConfigSetRelayAddress(
-      {required NetworkConfig that, required String relayAddress}) {
-    return handler.executeNormal(NormalTask(
-      callFfi: (port_) {
+  void crateTypesNetworkConfigSetBindAddresses(
+      {required NetworkConfig that, required List<String> bindAddresses}) {
+    return handler.executeSync(SyncTask(
+      callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerNetworkConfig(
             that, serializer);
-        sse_encode_String(relayAddress, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 34, port: port_);
+        sse_encode_list_String(bindAddresses, serializer);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 34)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
         decodeErrorData: sse_decode_dart_error,
       ),
-      constMeta: kCrateTypesNetworkConfigSetRelayAddressConstMeta,
-      argValues: [that, relayAddress],
+      constMeta: kCrateTypesNetworkConfigSetBindAddressesConstMeta,
+      argValues: [that, bindAddresses],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateTypesNetworkConfigSetRelayAddressConstMeta =>
+  TaskConstMeta get kCrateTypesNetworkConfigSetBindAddressesConstMeta =>
       const TaskConstMeta(
-        debugName: 'NetworkConfig_set_relay_address',
-        argNames: ['that', 'relayAddress'],
+        debugName: 'NetworkConfig_set_bind_addresses',
+        argNames: ['that', 'bindAddresses'],
       );
 
   @override
-  Future<void> crateTypesNetworkConfigSetRelayId(
-      {required NetworkConfig that, required String relayId}) {
-    return handler.executeNormal(NormalTask(
-      callFfi: (port_) {
+  void crateTypesNetworkConfigSetListenPort(
+      {required NetworkConfig that, required int listenPort}) {
+    return handler.executeSync(SyncTask(
+      callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerNetworkConfig(
             that, serializer);
-        sse_encode_String(relayId, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 35, port: port_);
+        sse_encode_u_16(listenPort, serializer);
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 35)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
-        decodeErrorData: sse_decode_dart_error,
+        decodeErrorData: null,
       ),
-      constMeta: kCrateTypesNetworkConfigSetRelayIdConstMeta,
-      argValues: [that, relayId],
+      constMeta: kCrateTypesNetworkConfigSetListenPortConstMeta,
+      argValues: [that, listenPort],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateTypesNetworkConfigSetRelayIdConstMeta =>
+  TaskConstMeta get kCrateTypesNetworkConfigSetListenPortConstMeta =>
       const TaskConstMeta(
-        debugName: 'NetworkConfig_set_relay_id',
-        argNames: ['that', 'relayId'],
+        debugName: 'NetworkConfig_set_listen_port',
+        argNames: ['that', 'listenPort'],
       );
 
   @override
@@ -4449,6 +4443,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  int dco_decode_u_16(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw as int;
+  }
+
+  @protected
   int dco_decode_u_32(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as int;
@@ -5242,6 +5242,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         uploadBandwidth: var_uploadBandwidth,
         downloadBandwidth: var_downloadBandwidth,
         loss: var_loss);
+  }
+
+  @protected
+  int sse_decode_u_16(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return deserializer.buffer.getUint16();
   }
 
   @protected
@@ -6125,6 +6131,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_u_16(int self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    serializer.buffer.putUint16(self);
+  }
+
+  @protected
   void sse_encode_u_32(int self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     serializer.buffer.putUint32(self);
@@ -6427,22 +6439,22 @@ class NetworkConfigImpl extends RustOpaque implements NetworkConfig {
         RustLib.instance.api.rust_arc_decrement_strong_count_NetworkConfigPtr,
   );
 
-  Future<String> getRelayAddress() =>
-      RustLib.instance.api.crateTypesNetworkConfigGetRelayAddress(
+  List<String> getBindAddresses() =>
+      RustLib.instance.api.crateTypesNetworkConfigGetBindAddresses(
         that: this,
       );
 
-  Future<String> getRelayId() =>
-      RustLib.instance.api.crateTypesNetworkConfigGetRelayId(
+  int getListenPort() =>
+      RustLib.instance.api.crateTypesNetworkConfigGetListenPort(
         that: this,
       );
 
-  Future<void> setRelayAddress({required String relayAddress}) =>
-      RustLib.instance.api.crateTypesNetworkConfigSetRelayAddress(
-          that: this, relayAddress: relayAddress);
+  void setBindAddresses({required List<String> bindAddresses}) =>
+      RustLib.instance.api.crateTypesNetworkConfigSetBindAddresses(
+          that: this, bindAddresses: bindAddresses);
 
-  Future<void> setRelayId({required String relayId}) => RustLib.instance.api
-      .crateTypesNetworkConfigSetRelayId(that: this, relayId: relayId);
+  void setListenPort({required int listenPort}) => RustLib.instance.api
+      .crateTypesNetworkConfigSetListenPort(that: this, listenPort: listenPort);
 }
 
 @sealed

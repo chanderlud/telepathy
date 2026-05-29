@@ -13,8 +13,8 @@ const MAX_PARSE_LINE_LEN: usize = 240;
 
 #[derive(Debug, Clone)]
 pub struct RunOptions {
-    pub relay: String,
-    pub relay_peer: String,
+    pub listen_port: u16,
+    pub bind_addresses: Vec<String>,
 }
 
 pub async fn run(opts: RunOptions) -> Result<()> {
@@ -24,7 +24,7 @@ pub async fn run(opts: RunOptions) -> Result<()> {
     let hub = Hub::new(event_tx);
     let callbacks = hub.build_callbacks();
 
-    let network_config = match NetworkConfig::new(opts.relay, opts.relay_peer) {
+    let network_config = match NetworkConfig::new(opts.listen_port, opts.bind_addresses) {
         Ok(config) => config,
         Err(err) => {
             let message = err.message;

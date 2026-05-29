@@ -52,3 +52,4 @@ Podfile.lock
 .codegraph
 .cursor/rules
 telepathy-trace.log.*
+.omo

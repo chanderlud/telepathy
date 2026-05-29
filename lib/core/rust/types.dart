@@ -9,8 +9,8 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'types.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `new`, `serialize_timestamp_rfc3339_utc`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `minimum_bytes_needed`, `read_from`, `write_to`
+// These functions are ignored because they are not marked as `pub`: `new`, `parse_bind_addresses`, `serialize_timestamp_rfc3339_utc`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `minimum_bytes_needed`, `read_from`, `write_to`
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Capabilities>>
 abstract class Capabilities implements RustOpaqueInterface {
@@ -102,18 +102,18 @@ abstract class NetworkConfig implements RustOpaqueInterface {
   static Future<NetworkConfig> default_() =>
       RustLib.instance.api.crateTypesNetworkConfigDefault();
 
-  Future<String> getRelayAddress();
+  List<String> getBindAddresses();
 
-  Future<String> getRelayId();
+  int getListenPort();
 
   factory NetworkConfig(
-          {required String relayAddress, required String relayId}) =>
+          {required int listenPort, required List<String> bindAddresses}) =>
       RustLib.instance.api.crateTypesNetworkConfigNew(
-          relayAddress: relayAddress, relayId: relayId);
+          listenPort: listenPort, bindAddresses: bindAddresses);
 
-  Future<void> setRelayAddress({required String relayAddress});
+  void setBindAddresses({required List<String> bindAddresses});
 
-  Future<void> setRelayId({required String relayId});
+  void setListenPort({required int listenPort});
 }
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<RecordingConfig>>

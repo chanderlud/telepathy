@@ -190,13 +190,13 @@ class CliProcess:
         self,
         binary_path: str,
         namespace: str,
-        relay_addr: str,
-        relay_peer: str,
+        listen_port: int,
+        bind_addresses: list[str],
     ) -> None:
         self.binary_path = binary_path
         self.namespace = namespace
-        self.relay_addr = relay_addr
-        self.relay_peer = relay_peer
+        self.listen_port = listen_port
+        self.bind_addresses = bind_addresses
 
         self._proc: asyncio.subprocess.Process | None = None
         self._stderr_task: asyncio.Task[None] | None = None
@@ -209,12 +209,9 @@ class CliProcess:
         self._events: asyncio.Queue[dict] = asyncio.Queue()
 
     async def start(self) -> None:
-        args = [
-            "--relay",
-            self.relay_addr,
-            "--relay-peer",
-            self.relay_peer,
-        ]
+        args = ["--listen-port", str(self.listen_port)]
+        for bind_address in self.bind_addresses:
+            args.extend(["--bind-address", bind_address])
         exec_args = _build_exec_args(self.namespace, self.binary_path, args)
         self._proc = await asyncio.create_subprocess_exec(
             *exec_args,

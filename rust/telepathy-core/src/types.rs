@@ -8,15 +8,14 @@ use crate::internal::spawn_task;
 use atomic_float::AtomicF32;
 use chrono::{DateTime, Local, SecondsFormat, Utc};
 pub use iroh::{PublicKey, SecretKey};
-use serde::{Deserialize, Serialize, Serializer};
+use serde::{Serialize, Serializer};
 use speedy::{Readable, Writable};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::net::{IpAddr, Ipv4Addr};
 use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::RwLock as StdRwLock;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32};
-#[cfg(not(target_family = "wasm"))]
-use tokio::net::lookup_host;
 use tokio::sync::{Notify, RwLock};
 use uuid::Uuid;
 
@@ -197,101 +196,77 @@ impl FrontendNotify {
     }
 }
 
+// TODO extend NetworkConfig with relay, address discovery, nat traversal, timeouts
 #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(opaque))]
 #[derive(Clone)]
 pub struct NetworkConfig {
-    /// the relay server's address
-    pub(crate) relay_address: Arc<RwLock<SocketAddr>>,
-
-    /// the relay server's peer id
-    pub(crate) relay_id: Arc<RwLock<PublicKey>>,
-
-    /// the libp2p port for the swarm
     pub(crate) listen_port: Arc<AtomicU16>,
 
-    /// the addresses libp2p will listen on
-    pub(crate) bind_addresses: Vec<IpAddr>,
+    pub(crate) bind_addresses: Arc<StdRwLock<Vec<IpAddr>>>,
 }
 
 impl NetworkConfig {
     #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
-    pub fn new(relay_address: String, relay_id: String) -> Result<Self, DartError> {
-        // Ok(Self {
-        //     relay_address: Arc::new(RwLock::new(relay_address.parse().map_err(Error::from)?)),
-        //     relay_id: Arc::new(RwLock::new(
-        //         PublicKey::from_str(&relay_id).map_err(Error::from)?,
-        //     )),
-        //     listen_port: Arc::new(AtomicU16::new(0)),
-        //     bind_addresses: vec![
-        //         IpAddr::V4(Ipv4Addr::UNSPECIFIED),
-        //         IpAddr::V6(Ipv6Addr::UNSPECIFIED),
-        //     ],
-        // })
-
-        // TODO rework the network config
-        Ok(Self::default())
+    pub fn new(listen_port: u16, bind_addresses: Vec<String>) -> Result<Self, DartError> {
+        Ok(Self {
+            listen_port: Arc::new(AtomicU16::new(listen_port)),
+            bind_addresses: Arc::new(StdRwLock::new(Self::parse_bind_addresses(bind_addresses)?)),
+        })
     }
 
     #[cfg(test)]
-    pub(crate) fn mock(
-        relay_address: SocketAddr,
-        relay_id: PublicKey,
-        port: u16,
-        bind_addresses: Vec<IpAddr>,
-    ) -> Self {
+    pub(crate) fn mock(port: u16, bind_addresses: Vec<IpAddr>) -> Self {
         Self {
-            relay_address: Arc::new(RwLock::new(relay_address)),
-            relay_id: Arc::new(RwLock::new(relay_id)),
             listen_port: Arc::new(AtomicU16::new(port)),
-            bind_addresses,
+            bind_addresses: Arc::new(StdRwLock::new(bind_addresses)),
         }
     }
 
-    #[cfg(not(target_family = "wasm"))]
-    pub async fn set_relay_address(&self, relay_address: String) -> Result<(), DartError> {
-        if let Some(address) = lookup_host(&relay_address)
-            .await
-            .map_err(Error::from)?
-            .next()
-        {
-            *self.relay_address.write().await = address;
-            Ok(())
-        } else {
-            Err("Failed to resolve address".to_string().into())
-        }
+    fn parse_bind_addresses(bind_addresses: Vec<String>) -> Result<Vec<IpAddr>, DartError> {
+        bind_addresses
+            .into_iter()
+            .map(|address| {
+                IpAddr::from_str(&address).map_err(|error| DartError::from(error.to_string()))
+            })
+            .collect()
     }
 
-    #[cfg(target_family = "wasm")]
-    pub async fn set_relay_address(&self, relay_address: String) -> Result<(), DartError> {
-        *self.relay_address.write().await = SocketAddr::from_str(&relay_address)
-            .map_err(|error| DartError::from(error.to_string()))?;
+    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
+    pub fn get_listen_port(&self) -> u16 {
+        self.listen_port.load(Relaxed)
+    }
+
+    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
+    pub fn set_listen_port(&self, listen_port: u16) {
+        self.listen_port.store(listen_port, Relaxed);
+    }
+
+    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
+    pub fn get_bind_addresses(&self) -> Vec<String> {
+        self.bind_addresses
+            .read()
+            .expect("bind_addresses lock poisoned")
+            .iter()
+            .map(ToString::to_string)
+            .collect()
+    }
+
+    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
+    pub fn set_bind_addresses(&self, bind_addresses: Vec<String>) -> Result<(), DartError> {
+        *self
+            .bind_addresses
+            .write()
+            .map_err(|error| DartError::from(error.to_string()))? =
+            Self::parse_bind_addresses(bind_addresses)?;
         Ok(())
-    }
-
-    pub async fn get_relay_address(&self) -> String {
-        self.relay_address.read().await.to_string()
-    }
-
-    pub async fn set_relay_id(&self, relay_id: String) -> Result<(), DartError> {
-        *self.relay_id.write().await = PublicKey::from_str(&relay_id).map_err(Error::from)?;
-        Ok(())
-    }
-
-    pub async fn get_relay_id(&self) -> String {
-        self.relay_id.read().await.to_string()
     }
 }
 
 impl Default for NetworkConfig {
     fn default() -> Self {
         Self {
-            relay_address: Arc::new(RwLock::new(SocketAddr::V4(SocketAddrV4::new(
-                Ipv4Addr::UNSPECIFIED,
-                0,
-            )))),
-            relay_id: Arc::new(RwLock::new(SecretKey::generate().public())),
             listen_port: Arc::new(Default::default()),
-            bind_addresses: vec![IpAddr::V4(Ipv4Addr::UNSPECIFIED)],
+            bind_addresses: Arc::new(StdRwLock::new(vec![IpAddr::V4(Ipv4Addr::UNSPECIFIED)])),
         }
     }
 }
@@ -576,4 +551,41 @@ where
             .with_timezone(&Utc)
             .to_rfc3339_opts(SecondsFormat::Millis, true),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::NetworkConfig;
+
+    #[tokio::test]
+    async fn network_config_defaults_and_mutation_work() {
+        let config = NetworkConfig::default();
+        assert_eq!(config.get_listen_port(), 0);
+        assert_eq!(config.get_bind_addresses(), vec!["0.0.0.0".to_string()]);
+
+        config.set_listen_port(7777);
+        assert_eq!(config.get_listen_port(), 7777);
+
+        config
+            .set_bind_addresses(vec!["127.0.0.1".to_string(), "::1".to_string()])
+            .expect("valid addresses should be accepted");
+        assert_eq!(
+            config.get_bind_addresses(),
+            vec!["127.0.0.1".to_string(), "::1".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn network_config_new_and_validation_work() {
+        let config = NetworkConfig::new(40142, vec!["0.0.0.0".to_string(), "::".to_string()])
+            .expect("valid constructor input should succeed");
+        assert_eq!(config.get_listen_port(), 40142);
+        assert_eq!(
+            config.get_bind_addresses(),
+            vec!["0.0.0.0".to_string(), "::".to_string()]
+        );
+
+        let result = config.set_bind_addresses(vec!["not-an-ip".to_string()]);
+        assert!(result.is_err());
+    }
 }
