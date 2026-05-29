@@ -60,6 +60,46 @@ void main() {
     expect(find.text('Button Profile'), findsOneWidget);
     expect(profilesController.createdNames, <String>['Button Profile']);
   });
+
+  testWidgets('Create button rejects empty profile names', (
+    WidgetTester tester,
+  ) async {
+    final profilesController = FakeProfilesController();
+
+    await tester.pumpProfileSettings(profilesController);
+    await tester.openCreateProfileDialog();
+
+    await tester.enterText(find.byType(TextField), '   ');
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Create'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Create Profile'), findsOneWidget);
+    expect(find.text('Profile name is required.'), findsOneWidget);
+    expect(profilesController.createdNames, isEmpty);
+  });
+
+  testWidgets('create dialog rejects duplicate profile names', (
+    WidgetTester tester,
+  ) async {
+    final profilesController = FakeProfilesController();
+
+    await profilesController.createProfile('Existing Profile');
+    profilesController.createdNames.clear();
+
+    await tester.pumpProfileSettings(profilesController);
+    await tester.openCreateProfileDialog();
+
+    await tester.enterText(find.byType(TextField), '  existing profile  ');
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Create Profile'), findsOneWidget);
+    expect(
+      find.text('A profile named "existing profile" already exists.'),
+      findsOneWidget,
+    );
+    expect(profilesController.createdNames, isEmpty);
+  });
 }
 
 extension on WidgetTester {
@@ -155,6 +195,9 @@ class FakeTelepathy implements Telepathy {
 
   @override
   Future<void> sendChat({required ChatMessage message}) async {}
+
+  @override
+  void setContactOutputVolume({required Contact contact}) {}
 
   @override
   void setDeafened({required bool deafened}) {}
