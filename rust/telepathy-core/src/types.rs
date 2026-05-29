@@ -621,8 +621,8 @@ where
 #[cfg(test)]
 mod contact_output_volume_tests {
     use super::{
-        clamp_contact_output_volume, contact_output_volume_from_parts,
-        MAX_CONTACT_OUTPUT_VOLUME_DB, MIN_CONTACT_OUTPUT_VOLUME_DB,
+        MAX_CONTACT_OUTPUT_VOLUME_DB, MIN_CONTACT_OUTPUT_VOLUME_DB, clamp_contact_output_volume,
+        contact_output_volume_from_parts,
     };
 
     #[test]
@@ -648,7 +648,10 @@ mod contact_output_volume_tests {
 
     #[test]
     fn set_output_volume_clamps_to_supported_range() {
-        assert_eq!(clamp_contact_output_volume(20.0), MAX_CONTACT_OUTPUT_VOLUME_DB);
+        assert_eq!(
+            clamp_contact_output_volume(20.0),
+            MAX_CONTACT_OUTPUT_VOLUME_DB
+        );
         assert_eq!(
             clamp_contact_output_volume(-20.0),
             MIN_CONTACT_OUTPUT_VOLUME_DB

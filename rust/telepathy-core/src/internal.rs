@@ -256,7 +256,9 @@ where
     /// Stops a specific session (called when a contact is deleted)
     pub async fn stop_session(&self, contact: &Contact) {
         // clear volume cache entry for contact
-        self.inner.core_state.reset_peer_output_volume(&contact.peer_id);
+        self.inner
+            .core_state
+            .reset_peer_output_volume(&contact.peer_id);
         if let Some(state) = self
             .inner
             .session_states
