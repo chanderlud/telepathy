@@ -30,6 +30,21 @@ class ProfileSettingsState extends State<ProfileSettings> {
     return InputDecoration(
       labelText: 'Name',
       errorText: _profileNameError,
+      labelStyle: WidgetStateTextStyle.resolveWith((Set<WidgetState> states) {
+        return TextStyle(
+          color: states.contains(WidgetState.hovered)
+              ? errorHoverColor
+              : errorColor,
+        );
+      }),
+      floatingLabelStyle:
+          WidgetStateTextStyle.resolveWith((Set<WidgetState> states) {
+        return TextStyle(
+          color: states.contains(WidgetState.hovered)
+              ? errorHoverColor
+              : errorColor,
+        );
+      }),
       border: WidgetStateInputBorder.resolveWith((Set<WidgetState> states) {
         final hovered = states.contains(WidgetState.hovered);
         final focused = states.contains(WidgetState.focused);
