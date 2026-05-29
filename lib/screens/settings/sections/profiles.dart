@@ -19,6 +19,31 @@ class ProfileSettingsState extends State<ProfileSettings> {
   final TextEditingController _profileNameInput = TextEditingController();
   String? _profileNameError;
 
+  InputDecoration _profileNameInputDecoration(BuildContext context) {
+    if (_profileNameError == null) {
+      return const InputDecoration(labelText: 'Name');
+    }
+
+    final errorColor = Theme.of(context).colorScheme.error;
+    final errorHoverColor = Color.lerp(errorColor, Colors.black, 0.16)!;
+
+    return InputDecoration(
+      labelText: 'Name',
+      errorText: _profileNameError,
+      border: WidgetStateInputBorder.resolveWith((Set<WidgetState> states) {
+        final hovered = states.contains(WidgetState.hovered);
+        final focused = states.contains(WidgetState.focused);
+
+        return UnderlineInputBorder(
+          borderSide: BorderSide(
+            color: hovered ? errorHoverColor : errorColor,
+            width: focused ? 2 : 1,
+          ),
+        );
+      }),
+    );
+  }
+
   void _createProfile(
     BuildContext dialogContext,
     ProfilesController profilesController,
@@ -202,10 +227,8 @@ class ProfileSettingsState extends State<ProfileSettings> {
                                   top: 25, left: 25, right: 25, bottom: 15),
                               children: [
                                 TextField(
-                                  decoration: InputDecoration(
-                                    labelText: 'Name',
-                                    errorText: _profileNameError,
-                                  ),
+                                  decoration:
+                                      _profileNameInputDecoration(context),
                                   controller: _profileNameInput,
                                   onChanged: (_) {
                                     if (_profileNameError == null) return;
