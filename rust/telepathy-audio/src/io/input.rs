@@ -72,6 +72,7 @@ use crate::internal::thread::{self, JoinHandle};
 use crate::internal::traits::AudioInput;
 #[cfg(all(not(target_family = "wasm"), not(feature = "mock-audio")))]
 use crate::internal::traits::{CHANNEL_SIZE, RingBufferInput};
+use crate::io::StreamErrorCallback;
 use crate::io::traits::AudioDataSink;
 #[cfg(all(not(target_family = "wasm"), feature = "mock-audio"))]
 use crate::mock::MockAudioInput;
@@ -92,7 +93,6 @@ use std::sync::Arc;
 #[cfg(all(not(target_family = "wasm"), not(feature = "mock-audio")))]
 use std::sync::Condvar;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
-use tokio::sync::Notify;
 use tracing::{debug, error};
 
 /// Configuration for audio input processing.
@@ -107,7 +107,6 @@ use tracing::{debug, error};
 /// rate). When `denoise_enabled` is `false`, the processor passes through at
 /// the device's native sample rate. The encoder sample rate automatically
 /// matches the processor's output rate.
-#[derive(Clone)]
 pub struct AudioInputConfig {
     /// Device ID for input device selection.
     ///
@@ -140,12 +139,11 @@ pub struct AudioInputConfig {
     ///
     /// Higher values provide better quality but larger encoded size.
     pub codec_residual_bits: f32,
-    /// Optional notify handle for stream errors.
+    /// Optional callback for stream errors.
     ///
-    /// When set, the notify is triggered via `notify_one()` whenever a
-    /// stream error occurs, in addition to logging the error. Useful for
-    /// async error handling and reconnection logic.
-    pub error_notify: Option<Arc<Notify>>,
+    /// When set, the callback receives the underlying CPAL stream error.
+    /// When unset, stream errors are logged by default.
+    pub error_callback: Option<StreamErrorCallback>,
     /// Optional output sample rate override (only used when denoise is disabled).
     ///
     /// When set and `denoise_enabled` is `false`, the processor will resample
@@ -168,7 +166,7 @@ impl Default for AudioInputConfig {
             codec_enabled: false,
             codec_mode: CodecBitrateMode::Cbr,
             codec_residual_bits: 5.0,
-            error_notify: None,
+            error_callback: None,
             output_sample_rate: None,
         }
     }
@@ -331,12 +329,14 @@ where
         self
     }
 
-    /// Sets a notify handle to be triggered on stream errors.
+    /// Sets a callback to be triggered on stream errors.
     ///
-    /// When set, the notify will be triggered via `notify_one()` whenever
-    /// a stream error occurs, in addition to logging the error.
-    pub fn on_error(mut self, notify: &Arc<Notify>) -> Self {
-        self.config.error_notify = Some(notify.clone());
+    /// When set, the callback receives the underlying CPAL stream error.
+    pub fn on_error<F>(mut self, callback: F) -> Self
+    where
+        F: FnMut(cpal::StreamError) + Send + 'static,
+    {
+        self.config.error_callback = Some(Box::new(callback));
         self
     }
 
@@ -548,7 +548,7 @@ where
     /// - The stream cannot be created
     /// - The device uses an unsupported sample format
     #[cfg(all(not(target_family = "wasm"), not(feature = "mock-audio")))]
-    pub fn build(self, host: &impl AudioHost) -> Result<AudioInputHandle, Error> {
+    pub fn build(mut self, host: &impl AudioHost) -> Result<AudioInputHandle, Error> {
         if self.sink.is_none() {
             return Err(Error::Config(
                 "a data sink must be set via callback() or sink()".to_string(),
@@ -574,9 +574,9 @@ where
             producer: input_producer,
             notify: input_notify.clone(),
         };
-        // Create processor input and extract error_notify before consuming self
+        // Create processor input and extract error callback before consuming self
         let processor_input = RingBufferInput::new(input_consumer, input_notify);
-        let error_notify = self.config.error_notify.clone();
+        let error_callback = self.config.error_callback.take();
         // Build common components (channels, threads, state)
         let context = self.build_common(processor_input, device_sample_rate)?;
 
@@ -587,70 +587,70 @@ where
                 &config.into(),
                 input_sender,
                 input_channels,
-                error_notify,
+                error_callback,
             )?,
             SampleFormat::I16 => build_input_stream_with_format::<i16>(
                 device,
                 &config.into(),
                 input_sender,
                 input_channels,
-                error_notify,
+                error_callback,
             )?,
             SampleFormat::I32 => build_input_stream_with_format::<i32>(
                 device,
                 &config.into(),
                 input_sender,
                 input_channels,
-                error_notify,
+                error_callback,
             )?,
             SampleFormat::I64 => build_input_stream_with_format_64::<i64>(
                 device,
                 &config.into(),
                 input_sender,
                 input_channels,
-                error_notify,
+                error_callback,
             )?,
             SampleFormat::U8 => build_input_stream_with_format::<u8>(
                 device,
                 &config.into(),
                 input_sender,
                 input_channels,
-                error_notify,
+                error_callback,
             )?,
             SampleFormat::U16 => build_input_stream_with_format::<u16>(
                 device,
                 &config.into(),
                 input_sender,
                 input_channels,
-                error_notify,
+                error_callback,
             )?,
             SampleFormat::U32 => build_input_stream_with_format::<u32>(
                 device,
                 &config.into(),
                 input_sender,
                 input_channels,
-                error_notify,
+                error_callback,
             )?,
             SampleFormat::U64 => build_input_stream_with_format_64::<u64>(
                 device,
                 &config.into(),
                 input_sender,
                 input_channels,
-                error_notify,
+                error_callback,
             )?,
             SampleFormat::F32 => build_input_stream_with_format::<f32>(
                 device,
                 &config.into(),
                 input_sender,
                 input_channels,
-                error_notify,
+                error_callback,
             )?,
             SampleFormat::F64 => build_input_stream_with_format_64::<f64>(
                 device,
                 &config.into(),
                 input_sender,
                 input_channels,
-                error_notify,
+                error_callback,
             )?,
             _ => return Err(Error::Config("Unsupported sample format".to_string())),
         };
@@ -873,14 +873,14 @@ impl Drop for RingBufferSender {
 /// * `config` - Stream configuration (sample rate, channels, etc.)
 /// * `input_producer` - Ring buffer producer for f32 samples to the processor
 /// * `input_channels` - Number of input channels
-/// * `error_notify` - Optional notify handle for stream errors
+/// * `error_callback` - Optional callback for stream errors
 #[cfg(all(not(target_family = "wasm"), not(feature = "mock-audio")))]
 fn build_input_stream_with_format<T>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
     mut input_sender: RingBufferSender,
     input_channels: usize,
-    error_notify: Option<Arc<Notify>>,
+    mut error_callback: Option<StreamErrorCallback>,
 ) -> Result<cpal::Stream, Error>
 where
     T: Sample<Float = f32> + cpal::SizedSample + Send + 'static,
@@ -901,9 +901,10 @@ where
             );
         },
         move |err| {
-            error!(error = %err, "input_stream_error");
-            if let Some(ref notify) = error_notify {
-                notify.notify_one();
+            if let Some(callback) = error_callback.as_mut() {
+                callback(err);
+            } else {
+                error!(error = %err, "input_stream_error");
             }
         },
         None,
@@ -922,7 +923,7 @@ fn build_input_stream_with_format_64<T>(
     config: &cpal::StreamConfig,
     mut input_sender: RingBufferSender,
     input_channels: usize,
-    error_notify: Option<Arc<Notify>>,
+    mut error_callback: Option<StreamErrorCallback>,
 ) -> Result<cpal::Stream, Error>
 where
     T: Sample<Float = f64> + cpal::SizedSample + Send + 'static,
@@ -944,9 +945,10 @@ where
             );
         },
         move |err| {
-            error!(error = %err, "input_stream_error");
-            if let Some(ref notify) = error_notify {
-                notify.notify_one();
+            if let Some(callback) = error_callback.as_mut() {
+                callback(err);
+            } else {
+                error!(error = %err, "input_stream_error");
             }
         },
         None,

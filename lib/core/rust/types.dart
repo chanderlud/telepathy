@@ -4,12 +4,13 @@
 // ignore_for_file: invalid_use_of_internal_member, unused_import, unnecessary_import
 
 import 'frb_generated.dart';
+import 'lib.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'types.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `new`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `minimum_bytes_needed`, `read_from`, `write_to`
+// These functions are ignored because they are not marked as `pub`: `new`, `serialize_peer_id`, `serialize_timestamp_rfc3339_utc`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `minimum_bytes_needed`, `read_from`, `write_to`
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Capabilities>>
 abstract class Capabilities implements RustOpaqueInterface {
@@ -66,9 +67,13 @@ abstract class Contact implements RustOpaqueInterface {
   static Contact fromParts(
           {required String id,
           required String nickname,
-          required String peerId}) =>
+          required String peerId,
+          required double outputVolume}) =>
       RustLib.instance.api.crateTypesContactFromParts(
-          id: id, nickname: nickname, peerId: peerId);
+          id: id,
+          nickname: nickname,
+          peerId: peerId,
+          outputVolume: outputVolume);
 
   String id();
 
@@ -80,11 +85,15 @@ abstract class Contact implements RustOpaqueInterface {
 
   String nickname();
 
+  double outputVolume();
+
   String peerId();
 
   Contact pubClone();
 
   void setNickname({required String nickname});
+
+  void setOutputVolume({required double decibel});
 }
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<FrontendNotify>>
@@ -114,9 +123,6 @@ abstract class NetworkConfig implements RustOpaqueInterface {
 
   Future<void> setRelayId({required String relayId});
 }
-
-// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<PeerId>>
-abstract class PeerId implements RustOpaqueInterface {}
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<RecordingConfig>>
 abstract class RecordingConfig implements RustOpaqueInterface {

@@ -64,99 +64,125 @@ class ContactWidgetState extends State<ContactWidget> {
         });
       },
       onTap: () {
+        double contactOutputVolume = widget.contact.outputVolume();
+
         showDialog(
             barrierDismissible: false,
             context: context,
             builder: (BuildContext context) {
-              return SimpleDialog(
-                title: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              return StatefulBuilder(
+                  builder: (BuildContext context, StateSetter setDialogState) {
+                return SimpleDialog(
+                  title: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text('Edit Contact'),
+                      IconButton(
+                        onPressed: () async {
+                          if (!stateController
+                              .isActiveContact(widget.contact)) {
+                            bool confirm = await showDialog<bool>(
+                                    context: context,
+                                    builder: (BuildContext context) {
+                                      return SimpleDialog(
+                                        title: const Text('Warning'),
+                                        contentPadding: const EdgeInsets.only(
+                                            bottom: 25, left: 25, right: 25),
+                                        titlePadding: const EdgeInsets.only(
+                                            top: 25,
+                                            left: 25,
+                                            right: 25,
+                                            bottom: 20),
+                                        children: [
+                                          const Text(
+                                              'Are you sure you want to delete this contact?'),
+                                          const SizedBox(height: 20),
+                                          Row(
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.end,
+                                            children: [
+                                              Button(
+                                                text: 'Cancel',
+                                                onPressed: () {
+                                                  Navigator.pop(context, false);
+                                                },
+                                              ),
+                                              const SizedBox(width: 10),
+                                              Button(
+                                                text: 'Delete',
+                                                onPressed: () {
+                                                  Navigator.pop(context, true);
+                                                },
+                                              ),
+                                            ],
+                                          ),
+                                        ],
+                                      );
+                                    }) ??
+                                false;
+
+                            if (confirm) {
+                              profilesController.removeContact(widget.contact);
+                              telepathy.stopSession(contact: widget.contact);
+                              profilesController.saveContacts();
+                            }
+
+                            if (context.mounted) {
+                              Navigator.pop(context);
+                            }
+                          } else {
+                            showErrorDialog(context, 'Warning',
+                                'Cannot delete a contact while in an active call');
+                          }
+                        },
+                        icon: SvgPicture.asset('assets/icons/Trash.svg',
+                            semanticsLabel: 'Delete contact icon'),
+                      ),
+                    ],
+                  ),
+                  contentPadding:
+                      const EdgeInsets.only(bottom: 25, left: 25, right: 25),
+                  titlePadding: const EdgeInsets.only(
+                      top: 25, left: 25, right: 25, bottom: 20),
                   children: [
-                    const Text('Edit Contact'),
-                    IconButton(
-                      onPressed: () async {
-                        if (!stateController.isActiveContact(widget.contact)) {
-                          bool confirm = await showDialog<bool>(
-                                  context: context,
-                                  builder: (BuildContext context) {
-                                    return SimpleDialog(
-                                      title: const Text('Warning'),
-                                      contentPadding: const EdgeInsets.only(
-                                          bottom: 25, left: 25, right: 25),
-                                      titlePadding: const EdgeInsets.only(
-                                          top: 25,
-                                          left: 25,
-                                          right: 25,
-                                          bottom: 20),
-                                      children: [
-                                        const Text(
-                                            'Are you sure you want to delete this contact?'),
-                                        const SizedBox(height: 20),
-                                        Row(
-                                          mainAxisAlignment:
-                                              MainAxisAlignment.end,
-                                          children: [
-                                            Button(
-                                              text: 'Cancel',
-                                              onPressed: () {
-                                                Navigator.pop(context, false);
-                                              },
-                                            ),
-                                            const SizedBox(width: 10),
-                                            Button(
-                                              text: 'Delete',
-                                              onPressed: () {
-                                                Navigator.pop(context, true);
-                                              },
-                                            ),
-                                          ],
-                                        ),
-                                      ],
-                                    );
-                                  }) ??
-                              false;
-
-                          if (confirm) {
-                            profilesController.removeContact(widget.contact);
-                            telepathy.stopSession(contact: widget.contact);
-                            profilesController.saveContacts();
-                          }
-
-                          if (context.mounted) {
-                            Navigator.pop(context);
-                          }
-                        } else {
-                          showErrorDialog(context, 'Warning',
-                              'Cannot delete a contact while in an active call');
-                        }
+                    TextInput(
+                        enabled:
+                            !stateController.isActiveContact(widget.contact),
+                        controller: _nicknameInput,
+                        labelText: 'Nickname',
+                        onChanged: (value) {
+                          widget.contact.setNickname(nickname: value);
+                        }),
+                    const SizedBox(height: 20),
+                    const Text('Output Volume', style: TextStyle(fontSize: 15)),
+                    Slider(
+                        value: contactOutputVolume,
+                        onChanged: (value) {
+                          setDialogState(() {
+                            contactOutputVolume = value;
+                          });
+                          widget.contact.setOutputVolume(decibel: value);
+                          telepathy.setContactOutputVolume(
+                            contact: widget.contact,
+                          );
+                        },
+                        onChangeEnd: (_) {
+                          profilesController.saveContacts();
+                        },
+                        min: -15,
+                        max: 15,
+                        label: '${contactOutputVolume.toStringAsFixed(2)} db'),
+                    const SizedBox(height: 20),
+                    Button(
+                      text: 'Save',
+                      onPressed: () {
+                        profilesController.saveContacts();
+                        Navigator.pop(context);
                       },
-                      icon: SvgPicture.asset('assets/icons/Trash.svg',
-                          semanticsLabel: 'Delete contact icon'),
                     ),
                   ],
-                ),
-                contentPadding:
-                    const EdgeInsets.only(bottom: 25, left: 25, right: 25),
-                titlePadding: const EdgeInsets.only(
-                    top: 25, left: 25, right: 25, bottom: 20),
-                children: [
-                  TextInput(
-                      enabled: !stateController.isActiveContact(widget.contact),
-                      controller: _nicknameInput,
-                      labelText: 'Nickname',
-                      onChanged: (value) {
-                        widget.contact.setNickname(nickname: value);
-                      }),
-                  const SizedBox(height: 20),
-                  Button(
-                    text: 'Save',
-                    onPressed: () {
-                      profilesController.saveContacts();
-                      Navigator.pop(context);
-                    },
-                  ),
-                ],
-              );
+                );
+              });
             });
       },
       hoverColor: Colors.transparent,

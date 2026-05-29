@@ -18,6 +18,15 @@ class ProfileSettings extends StatefulWidget {
 class ProfileSettingsState extends State<ProfileSettings> {
   final TextEditingController _profileNameInput = TextEditingController();
 
+  void _createProfile(
+    BuildContext dialogContext,
+    ProfilesController profilesController,
+  ) {
+    profilesController.createProfile(_profileNameInput.text);
+    _profileNameInput.clear();
+    Navigator.of(dialogContext).pop();
+  }
+
   @override
   Widget build(BuildContext context) {
     final profilesController = context.watch<ProfilesController>();
@@ -151,30 +160,34 @@ class ProfileSettingsState extends State<ProfileSettings> {
                 showDialog(
                     context: context,
                     builder: (BuildContext context) {
-                      return SimpleDialog(
-                        title: const Text('Create Profile'),
-                        contentPadding: const EdgeInsets.only(
-                            bottom: 25, left: 25, right: 25),
-                        titlePadding: const EdgeInsets.only(
-                            top: 25, left: 25, right: 25, bottom: 15),
-                        children: [
-                          TextField(
-                            decoration: const InputDecoration(
-                              labelText: 'Name',
+                      return CallbackShortcuts(
+                        bindings: <ShortcutActivator, VoidCallback>{
+                          const SingleActivator(LogicalKeyboardKey.enter): () =>
+                              _createProfile(context, profilesController),
+                        },
+                        child: SimpleDialog(
+                          title: const Text('Create Profile'),
+                          contentPadding: const EdgeInsets.only(
+                              bottom: 25, left: 25, right: 25),
+                          titlePadding: const EdgeInsets.only(
+                              top: 25, left: 25, right: 25, bottom: 15),
+                          children: [
+                            TextField(
+                              decoration: const InputDecoration(
+                                labelText: 'Name',
+                              ),
+                              controller: _profileNameInput,
+                              onSubmitted: (_) =>
+                                  _createProfile(context, profilesController),
                             ),
-                            controller: _profileNameInput,
-                          ),
-                          const SizedBox(height: 20),
-                          Button(
-                            text: 'Create',
-                            onPressed: () {
-                              profilesController
-                                  .createProfile(_profileNameInput.text);
-                              _profileNameInput.clear();
-                              Navigator.of(context).pop();
-                            },
-                          )
-                        ],
+                            const SizedBox(height: 20),
+                            Button(
+                              text: 'Create',
+                              onPressed: () =>
+                                  _createProfile(context, profilesController),
+                            )
+                          ],
+                        ),
                       );
                     });
               },
