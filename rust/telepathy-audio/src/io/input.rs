@@ -69,13 +69,10 @@ use crate::internal::buffer_pool::{DEFAULT_POOL_CAPACITY, PooledBuffer};
 use crate::internal::processor::input_processor;
 use crate::internal::state::InputProcessorState;
 use crate::internal::thread::{self, JoinHandle};
-use crate::internal::traits::AudioInput;
-#[cfg(all(not(target_family = "wasm"), not(feature = "mock-audio")))]
-use crate::internal::traits::{CHANNEL_SIZE, RingBufferInput};
+#[cfg(not(target_family = "wasm"))]
+use crate::internal::traits::CHANNEL_SIZE;
 use crate::io::StreamErrorCallback;
 use crate::io::traits::AudioDataSink;
-#[cfg(all(not(target_family = "wasm"), feature = "mock-audio"))]
-use crate::mock::MockAudioInput;
 #[cfg(target_family = "wasm")]
 use crate::platform::web_audio::WebAudioWrapper;
 use crate::sea::encoder::{EncoderSettings, SeaEncoder};
@@ -87,10 +84,10 @@ use cpal::SampleFormat;
 #[cfg(all(not(target_family = "wasm"), not(feature = "mock-audio")))]
 use cpal::traits::{DeviceTrait, StreamTrait};
 use nnnoiseless::{DenoiseState, RnnModel};
-#[cfg(all(not(target_family = "wasm"), not(feature = "mock-audio")))]
+#[cfg(not(target_family = "wasm"))]
 use rtrb::RingBuffer;
 use std::sync::Arc;
-#[cfg(all(not(target_family = "wasm"), not(feature = "mock-audio")))]
+#[cfg(not(target_family = "wasm"))]
 use std::sync::Condvar;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use tracing::{debug, error};
@@ -201,6 +198,7 @@ struct InputBuildContext {
     rms_threshold: Arc<AtomicF32>,
     muted: Arc<AtomicBool>,
     processor_handle: JoinHandle<()>,
+    input_sender: RingBufferSender,
 }
 
 impl AudioInputBuilder<Box<dyn Fn(PooledBuffer) + Send + 'static>> {
@@ -460,9 +458,9 @@ where
     ///
     /// Returns `Result<InputBuildContext, AudioError>` containing handles and state for the created threads,
     /// or an error if codec initialization fails.
-    fn build_common<I: AudioInput + Send + 'static>(
+    fn build_common(
         self,
-        processor_input: I,
+        host: &impl AudioHost,
         input_rate: u32,
     ) -> Result<InputBuildContext, Error> {
         // Create shared atomic state (use provided shared atomics or create new ones)
@@ -511,6 +509,17 @@ where
             None
         };
 
+        // Create ring buffer for cpal stream to processor
+        let (input_producer, input_consumer) = RingBuffer::<f32>::new(CHANNEL_SIZE);
+        // Create condvar to wake input processor when the ring buffer changes
+        let input_notify = Arc::new(Condvar::new());
+        // Create sender for input stream to input processor
+        let input_sender = RingBufferSender {
+            producer: input_producer,
+            notify: input_notify.clone(),
+        };
+        let processor_input = host.get_input(input_consumer, input_notify);
+
         // spawn processor thread
         let processor_handle = thread::safe_spawn(move || {
             if let Err(e) = input_processor(
@@ -532,6 +541,7 @@ where
             rms_threshold,
             muted,
             processor_handle,
+            input_sender,
         })
     }
 
@@ -565,20 +575,10 @@ where
         let device_sample_rate = config.sample_rate();
         let sample_format = config.sample_format();
 
-        // Create ring buffer for cpal stream to processor
-        let (input_producer, input_consumer) = RingBuffer::<f32>::new(CHANNEL_SIZE);
-        // Create condvar to wake input processor when the ring buffer changes
-        let input_notify = Arc::new(Condvar::new());
-        // Create sender for input stream to input processor
-        let input_sender = RingBufferSender {
-            producer: input_producer,
-            notify: input_notify.clone(),
-        };
-        // Create processor input and extract error callback before consuming self
-        let processor_input = RingBufferInput::new(input_consumer, input_notify);
         let error_callback = self.config.error_callback.take();
         // Build common components (channels, threads, state)
-        let context = self.build_common(processor_input, device_sample_rate)?;
+        let context = self.build_common(host, device_sample_rate)?;
+        let input_sender = context.input_sender;
 
         // Build the audio stream with the appropriate sample format
         let stream = match sample_format {
@@ -668,14 +668,14 @@ where
 
     /// Builds and starts the audio input stream using in-process mock audio.
     #[cfg(all(not(target_family = "wasm"), feature = "mock-audio"))]
-    pub fn build(self, _host: &impl AudioHost) -> Result<AudioInputHandle, Error> {
+    pub fn build(self, host: &impl AudioHost) -> Result<AudioInputHandle, Error> {
         if self.sink.is_none() {
             return Err(Error::Config(
                 "a data sink must be set via callback() or sink()".to_string(),
             ));
         }
 
-        let context = self.build_common(MockAudioInput::new(48_000), 48_000)?;
+        let context = self.build_common(host, 48_000)?;
 
         Ok(AudioInputHandle {
             _stream: None,
@@ -721,7 +721,7 @@ where
     /// # }
     /// ```
     #[cfg(target_family = "wasm")]
-    pub fn build(mut self, _host: &impl AudioHost) -> Result<AudioInputHandle, Error> {
+    pub fn build(mut self, host: &impl AudioHost) -> Result<AudioInputHandle, Error> {
         if self.sink.is_none() {
             return Err(Error::Config(
                 "a data sink must be set via callback() or sink()".to_string(),
@@ -738,7 +738,7 @@ where
         let processor_input = web_audio.get_input();
 
         // Build common components (channels, threads, state)
-        let context = self.build_common(processor_input, input_sample_rate)?;
+        let context = self.build_common(host, input_sample_rate)?;
 
         // Resume the audio context
         web_audio.resume();
@@ -844,13 +844,13 @@ pub enum CodecBitrateMode {
 /// Lock free sender for native targets
 ///
 /// Crucially, when the sender is dropped, the input processor is woken up
-#[cfg(all(not(target_family = "wasm"), not(feature = "mock-audio")))]
+#[cfg(not(target_family = "wasm"))]
 struct RingBufferSender {
     producer: rtrb::Producer<f32>,
     notify: Arc<Condvar>,
 }
 
-#[cfg(all(not(target_family = "wasm"), not(feature = "mock-audio")))]
+#[cfg(not(target_family = "wasm"))]
 impl Drop for RingBufferSender {
     fn drop(&mut self) {
         self.notify.notify_one();

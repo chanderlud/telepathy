@@ -255,7 +255,7 @@ pub use constants::FRAME_SIZE;
 pub use error::Error;
 
 #[cfg(feature = "mock-audio")]
-pub use mock::MockAudioHost;
+pub use mock::{MockAudioHost, MockAudioInput, MockAudioOutput};
 
 // Re-export web audio wrapper for WASM consumers
 #[cfg(target_family = "wasm")]

@@ -326,7 +326,7 @@ impl CoreState {
         }
     }
 
-    pub(crate) fn set_input_volume(&self, decibel: f32) {
+    pub fn set_input_volume(&self, decibel: f32) {
         self.input_multiplier
             .store(db_to_multiplier(decibel), Relaxed);
     }

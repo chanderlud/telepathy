@@ -5,8 +5,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::{Arc, Once, OnceLock};
 use std::time::Duration;
-use telepathy_audio::MockAudioHost;
-use telepathy_audio::devices::AudioHost;
+use telepathy_audio::{MockAudioHost, MockAudioInput, MockAudioOutput};
 use telepathy_core::internal::callbacks::{MockCoreCallbacks, MockCoreStatisticsCallback};
 use telepathy_core::internal::core::TelepathyCore;
 use telepathy_core::overlay::Overlay;
@@ -37,9 +36,7 @@ async fn session_collision_doesnt_fail() {
     RELAY_INIT.call_once(|| {
         tokio::spawn(async move {
             let server = iroh::test_utils::run_relay_server().await.unwrap();
-            RELAY_DETAILS.get_or_init(|| {
-                server.0
-            });
+            RELAY_DETAILS.get_or_init(|| server.0);
             // keep the relay server running forever
             sleep(Duration::from_secs(u64::MAX)).await;
         });
@@ -73,14 +70,15 @@ async fn session_collision_doesnt_fail() {
         a_is_active.clone(),
         a_is_relayed.clone(),
     );
-    let mut telepathy_a: TelepathyCore<_, _, MockAudioHost> = TelepathyCore::new(
-        MockAudioHost::new(),
-        &network_config_a,
-        &screenshare,
-        &overlay,
-        &codec_config,
-        mock_a,
-    );
+    let mut telepathy_a: TelepathyCore<_, _, MockAudioHost<MockAudioInput, MockAudioOutput>> =
+        TelepathyCore::new(
+            MockAudioHost::new(MockAudioInput, MockAudioOutput),
+            &network_config_a,
+            &screenshare,
+            &overlay,
+            &codec_config,
+            mock_a,
+        );
     *telepathy_a.core_state.identity.write().await = Some(key_a);
     let handle_a = telepathy_a.start_manager().await;
     telepathy_a.core_state.manager_active.notified().await;
@@ -93,14 +91,15 @@ async fn session_collision_doesnt_fail() {
         b_is_active.clone(),
         b_is_relayed.clone(),
     );
-    let mut telepathy_b: TelepathyCore<_, _, MockAudioHost> = TelepathyCore::new(
-        MockAudioHost::new(),
-        &network_config_b,
-        &screenshare,
-        &overlay,
-        &codec_config,
-        mock_b,
-    );
+    let mut telepathy_b: TelepathyCore<_, _, MockAudioHost<MockAudioInput, MockAudioOutput>> =
+        TelepathyCore::new(
+            MockAudioHost::new(MockAudioInput, MockAudioOutput),
+            &network_config_b,
+            &screenshare,
+            &overlay,
+            &codec_config,
+            mock_b,
+        );
     *telepathy_b.core_state.identity.write().await = Some(key_b);
     let handle_b = telepathy_b.start_manager().await;
     telepathy_b.core_state.manager_active.notified().await;

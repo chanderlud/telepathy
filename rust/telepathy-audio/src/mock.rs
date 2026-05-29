@@ -3,6 +3,8 @@ use crate::devices::{
 };
 use crate::error::Error;
 use crate::internal::traits::{AudioInput, AudioOutput};
+use rtrb::{Consumer, Producer};
+use std::sync::{Arc, Condvar};
 use std::thread;
 use std::time::Duration;
 
@@ -10,7 +12,7 @@ const DEFAULT_SAMPLE_RATE: u32 = 48_000;
 const MOCK_DEVICE_ID: &str = "mock";
 
 /// In-process audio input that emits silence at real-time pace.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MockAudioInput {
     sample_rate: u32,
 }
@@ -39,7 +41,7 @@ impl AudioInput for MockAudioInput {
 }
 
 /// In-process audio output that discards all samples.
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct MockAudioOutput;
 
 impl AudioOutput for MockAudioOutput {
@@ -53,16 +55,22 @@ impl AudioOutput for MockAudioOutput {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct MockAudioHost;
+pub struct MockAudioHost<I, O> {
+    input: I,
+    output: O,
+}
 
-impl AudioHost for MockAudioHost {
-    fn new() -> Self
-    where
-        Self: Sized,
-    {
-        Self
+impl<I, O> MockAudioHost<I, O> {
+    pub fn new(input: I, output: O) -> Self {
+        Self { input, output }
     }
+}
 
+impl<I, O> AudioHost for MockAudioHost<I, O>
+where
+    I: AudioInput + Send + Clone + 'static,
+    O: AudioOutput + Send + Clone + 'static,
+{
     fn list_input_devices(&self) -> Result<Vec<AudioDeviceInfo>, DeviceError> {
         Ok(vec![AudioDeviceInfo {
             name: "Mock Input".to_string(),
@@ -104,5 +112,13 @@ impl AudioHost for MockAudioHost {
 
     fn get_default_output_device(&self) -> Result<DeviceHandle, DeviceError> {
         self.get_output_device(None)
+    }
+
+    fn get_input(&self, _: Consumer<f32>, _: Arc<Condvar>) -> impl AudioInput + Send + 'static {
+        self.input.clone()
+    }
+
+    fn get_output(&self, _: Producer<f32>) -> impl AudioOutput + Send + 'static {
+        self.output.clone()
     }
 }

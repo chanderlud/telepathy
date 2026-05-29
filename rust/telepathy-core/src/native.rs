@@ -25,7 +25,11 @@ type NativeAcceptCall = Arc<
 #[cfg(not(feature = "integration-testing"))]
 type NativeHandle = TelepathyHandle<NativeCallbacks, NativeStatisticsCallback, CpalAudioHost>;
 #[cfg(feature = "integration-testing")]
-type NativeHandle = TelepathyHandle<NativeCallbacks, NativeStatisticsCallback, MockAudioHost>;
+type NativeHandle = TelepathyHandle<
+    NativeCallbacks,
+    NativeStatisticsCallback,
+    MockAudioHost<telepathy_audio::MockAudioInput, telepathy_audio::MockAudioOutput>,
+>;
 
 /// Rust-native runtime client for `telepathy-core`.
 ///

@@ -7,6 +7,7 @@ use crate::internal::screenshare::{Decoder, Device, Encoder, ScreenshareConfigDi
 use crate::internal::spawn_task;
 use atomic_float::AtomicF32;
 use chrono::{DateTime, Local, SecondsFormat, Utc};
+use iroh::RelayMap;
 pub use iroh::{PublicKey, SecretKey};
 use serde::{Serialize, Serializer};
 use speedy::{Readable, Writable};
@@ -16,7 +17,6 @@ use std::sync::Arc;
 use std::sync::RwLock as StdRwLock;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32};
-use iroh::RelayMap;
 use tokio::sync::{Notify, RwLock};
 use url::Url;
 use uuid::Uuid;
@@ -270,7 +270,11 @@ impl NetworkConfig {
     }
 
     #[cfg(feature = "integration-testing")]
-    pub fn mock(relay_map: &RelayMap, dns_endpoint: Option<&str>, pkarr_relay: Option<Url>) -> Self {
+    pub fn mock(
+        relay_map: &RelayMap,
+        dns_endpoint: Option<&str>,
+        pkarr_relay: Option<Url>,
+    ) -> Self {
         Self {
             listen_port: Arc::new(AtomicU16::new(0)),
             bind_addresses: Arc::new(StdRwLock::new(vec![IpAddr::V4(Ipv4Addr::UNSPECIFIED)])),

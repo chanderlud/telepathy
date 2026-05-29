@@ -10,6 +10,8 @@ use crate::internal::utils::{KanalSink, KanalSource};
 use crate::internal::{ALPN, Result};
 use crate::types::FrontendNotify;
 use bytes::Bytes;
+use cfg_if::cfg_if;
+use iroh::address_lookup::{DnsAddressLookup, PkarrPublisher};
 use iroh::endpoint::{default_relay_mode, presets};
 use iroh::{Endpoint, PublicKey, RelayMode, SecretKey};
 use rustls::crypto::aws_lc_rs::{self, kx_group};
@@ -18,8 +20,6 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
-use cfg_if::cfg_if;
-use iroh::address_lookup::{DnsAddressLookup, PkarrPublisher};
 #[cfg(target_family = "wasm")]
 use telepathy_audio::WebAudioWrapper;
 use telepathy_audio::devices::AudioHost;
@@ -83,7 +83,8 @@ where
         }
 
         if let Some(ref relay) = self.core_state.network_config.pkarr_relay {
-            endpoint_builder = endpoint_builder.address_lookup(PkarrPublisher::builder(relay.clone()));
+            endpoint_builder =
+                endpoint_builder.address_lookup(PkarrPublisher::builder(relay.clone()));
         } else {
             endpoint_builder = endpoint_builder.address_lookup(PkarrPublisher::n0_dns());
         }
@@ -111,7 +112,8 @@ where
 
         #[cfg(feature = "integration-testing")]
         {
-            endpoint_builder = endpoint_builder.ca_roots_config(iroh::tls::CaRootsConfig::insecure_skip_verify());
+            endpoint_builder =
+                endpoint_builder.ca_roots_config(iroh::tls::CaRootsConfig::insecure_skip_verify());
         }
 
         let endpoint = endpoint_builder.bind().await?;

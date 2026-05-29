@@ -3,10 +3,13 @@
 //! This module provides types and functions for enumerating and selecting
 //! audio input/output devices across platforms.
 
+use crate::internal::traits::{AudioInput, AudioOutput, RingBufferInput, RingBufferOutput};
 use cpal::traits::{DeviceTrait, HostTrait};
 use cpal::{DefaultStreamConfigError, DeviceId, DeviceIdError};
+use rtrb::{Consumer, Producer};
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Condvar};
+use cfg_if::cfg_if;
 
 /// Error type for device operations.
 #[derive(Debug, Clone)]
@@ -171,25 +174,6 @@ pub enum DeviceType {
 /// listing devices and resolving input/output handles from optional IDs.
 /// Implementations may wrap platform APIs directly or provide test doubles.
 pub trait AudioHost {
-    /// Creates a new host with platform-appropriate initialization.
-    ///
-    /// # Errors
-    ///
-    /// This constructor does not return a `Result`; backend initialization
-    /// fallback behavior is implementation-defined.
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// use telepathy_audio::devices::{AudioHost, CpalAudioHost};
-    ///
-    /// let host = CpalAudioHost::new();
-    /// let _ = host.list_all_devices();
-    /// ```
-    fn new() -> Self
-    where
-        Self: Sized;
-
     /// Lists all available input (recording) devices.
     ///
     /// # Errors
@@ -334,6 +318,14 @@ pub trait AudioHost {
     /// println!("Default output: {}", device.name().unwrap());
     /// ```
     fn get_default_output_device(&self) -> Result<DeviceHandle, DeviceError>;
+
+    fn get_input(
+        &self,
+        consumer: Consumer<f32>,
+        notify: Arc<Condvar>,
+    ) -> impl AudioInput + Send + 'static;
+
+    fn get_output(&self, producer: Producer<f32>) -> impl AudioOutput + Send + 'static;
 }
 
 /// CPAL-backed audio host for device management.
@@ -405,13 +397,6 @@ impl fmt::Debug for CpalAudioHost {
 }
 
 impl AudioHost for CpalAudioHost {
-    fn new() -> Self
-    where
-        Self: Sized,
-    {
-        CpalAudioHost::new()
-    }
-
     fn list_input_devices(&self) -> Result<Vec<AudioDeviceInfo>, DeviceError> {
         let devices = self
             .inner()
@@ -509,6 +494,25 @@ impl AudioHost for CpalAudioHost {
 
     fn get_default_output_device(&self) -> Result<DeviceHandle, DeviceError> {
         self.get_output_device(None)
+    }
+
+    fn get_input(
+        &self,
+        consumer: Consumer<f32>,
+        notify: Arc<Condvar>,
+    ) -> impl AudioInput + Send + 'static {
+        cfg_if! {
+            if #[cfg(target_family = "wasm")] {
+                 // TODO get a web input here
+                todo!();
+            } else {
+                 RingBufferInput::new(consumer, notify)
+            }
+        }
+    }
+
+    fn get_output(&self, producer: Producer<f32>) -> impl AudioOutput + Send + 'static {
+        RingBufferOutput::new(producer)
     }
 }
 

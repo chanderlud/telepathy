@@ -35,17 +35,11 @@ use crate::internal::NETWORK_FRAME;
 use crate::internal::processor::output_processor;
 use crate::internal::state::OutputProcessorState;
 use crate::internal::thread::{self, JoinHandle};
-use crate::internal::traits::AudioOutput;
-#[cfg(not(feature = "mock-audio"))]
 use crate::internal::traits::CHANNEL_SIZE;
-#[cfg(not(feature = "mock-audio"))]
-use crate::internal::traits::RingBufferOutput;
 #[cfg(not(feature = "mock-audio"))]
 use crate::internal::utils::{hann_fade_in, hann_fade_out};
 use crate::io::traits::AudioDataSource;
 use crate::io::{SendStream, StreamErrorCallback};
-#[cfg(feature = "mock-audio")]
-use crate::mock::MockAudioOutput;
 use crate::sea::codec::file::SeaFileHeader;
 use crate::sea::decoder::SeaDecoder;
 use atomic_float::AtomicF32;
@@ -58,6 +52,7 @@ use cpal::traits::{DeviceTrait, StreamTrait};
 use nnnoiseless::FRAME_SIZE;
 #[cfg(not(feature = "mock-audio"))]
 use rtrb::chunks::ChunkError;
+use rtrb::{Consumer, RingBuffer};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
 use tracing::{debug, error};
@@ -127,6 +122,7 @@ struct OutputBuildContext {
     deafened: Arc<AtomicBool>,
     loss_sender: Arc<AtomicUsize>,
     processor_handle: JoinHandle<()>,
+    output_consumer: Consumer<f32>,
 }
 
 impl AudioOutputBuilder<Box<dyn AudioDataSource>> {
@@ -270,9 +266,9 @@ where
     ///
     /// Returns `Result<OutputBuildContext, AudioError>` containing handles and state for the created threads,
     /// or an error if codec initialization fails.
-    fn build_common<O: AudioOutput + Send + 'static>(
+    fn build_common(
         self,
-        processor_output: O,
+        host: &impl AudioHost,
         output_rate: u32,
     ) -> Result<OutputBuildContext, Error> {
         // Create shared atomic state (use provided shared atomics or create new ones)
@@ -302,6 +298,10 @@ where
             None
         };
 
+        // Create ring buffer for lock-free producer/consumer communication
+        let (output_producer, output_consumer) = RingBuffer::<f32>::new(CHANNEL_SIZE * 4);
+        let processor_output = host.get_output(output_producer);
+
         // Spawn processor thread (safe_spawn catches panics on WASM when threading is unavailable)
         let processor_handle = thread::safe_spawn(move || {
             if let Err(e) = output_processor(
@@ -322,6 +322,7 @@ where
             deafened,
             loss_sender,
             processor_handle,
+            output_consumer,
         })
     }
 
@@ -338,7 +339,6 @@ where
     /// - The device uses an unsupported sample format
     #[cfg(not(feature = "mock-audio"))]
     pub fn build(mut self, host: &impl AudioHost) -> Result<AudioOutputHandle, Error> {
-        use rtrb::RingBuffer;
         if self.source.is_none() {
             return Err(Error::Config(
                 "a data source must be set via source()".to_string(),
@@ -355,13 +355,9 @@ where
         let output_sample_rate = config.sample_rate();
         let sample_format = config.sample_format();
 
-        // Create ring buffer for lock-free producer/consumer communication
-        let (output_producer, output_consumer) = RingBuffer::<f32>::new(CHANNEL_SIZE * 4);
-
-        // Create processor output and build common components
-        let processor_output = RingBufferOutput::new(output_producer);
         let error_callback = self.config.error_callback.take();
-        let context = self.build_common(processor_output, output_sample_rate)?;
+        let context = self.build_common(host, output_sample_rate)?;
+        let output_consumer = context.output_consumer;
 
         // Build the audio stream with the appropriate sample format
         let stream = match sample_format {
@@ -450,14 +446,14 @@ where
     }
 
     #[cfg(feature = "mock-audio")]
-    pub fn build(self, _host: &impl AudioHost) -> Result<AudioOutputHandle, Error> {
+    pub fn build(self, host: &impl AudioHost) -> Result<AudioOutputHandle, Error> {
         if self.source.is_none() {
             return Err(Error::Config(
                 "a data source must be set via source()".to_string(),
             ));
         }
 
-        let context = self.build_common(MockAudioOutput, 48_000)?;
+        let context = self.build_common(host, 48_000)?;
 
         Ok(AudioOutputHandle {
             _stream: None,
