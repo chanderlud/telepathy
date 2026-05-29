@@ -212,4 +212,7 @@ class FakeTelepathy implements Telepathy {
 
   @override
   Future<void> stopSession({required Contact contact}) async {}
+
+  @override
+  void setContactOutputVolume({required Contact contact}) {}
 }

@@ -62,6 +62,27 @@ jobs:
       - name: Lint with flutter analyze
         run: flutter analyze --fatal-infos --fatal-warnings
 
+  test_flutter:
+    needs: lint_flutter
+    runs-on: ubuntu-latest
+    name: Test Flutter
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Flutter SDK
+        uses: flutter-actions/setup-flutter@v4
+        with:
+          channel: stable
+          version: 3.35.7
+
+      - name: Get Packages
+        run: flutter pub get
+
+      - name: Run Flutter tests
+        run: flutter test test
+
   test_rust:
     needs: lint_rust
     runs-on: ubuntu-latest
@@ -640,4 +661,3 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: pages deploy web-artifact/telepathy --project-name=telepathy --branch=main
-

@@ -57,6 +57,23 @@ pub struct PatternAudioInput {
     position: usize,
 }
 
+pub struct SineSource {
+    state: Mutex<SineSourceState>,
+}
+
+impl SineSource {
+    pub fn new(frames: usize, sample_rate: usize, frequency_hz: f64, amplitude: f32) -> Self {
+        Self {
+            state: Mutex::new(SineSourceState {
+                frames_remaining: frames,
+                phase: 0.0,
+                phase_step: 2.0 * std::f64::consts::PI * frequency_hz / sample_rate as f64,
+                amplitude,
+            }),
+        }
+    }
+}
+
 impl PatternAudioInput {
     pub fn new(samples: Vec<f32>) -> Self {
         Self {
@@ -77,6 +94,37 @@ impl AudioInput for PatternAudioInput {
         self.position += to_read;
         Ok(to_read)
     }
+}
+
+impl AudioDataSource for SineSource {
+    fn recv(&self) -> Result<Bytes, ClosedOrFailed> {
+        self.try_recv()?.ok_or(ClosedOrFailed::Closed)
+    }
+
+    fn try_recv(&self) -> Result<Option<Bytes>, ClosedOrFailed> {
+        let mut state = self.state.lock().unwrap();
+        if state.frames_remaining == 0 {
+            return Ok(None);
+        }
+
+        let mut frame = Vec::with_capacity(FRAME_SIZE * 2);
+        for _ in 0..FRAME_SIZE {
+            let sample = (state.phase.sin() as f32 * state.amplitude * i16::MAX as f32)
+                .round()
+                .clamp(i16::MIN as f32, i16::MAX as f32) as i16;
+            frame.extend_from_slice(&sample.to_ne_bytes());
+            state.phase += state.phase_step;
+        }
+        state.frames_remaining -= 1;
+        Ok(Some(Bytes::from(frame)))
+    }
+}
+
+struct SineSourceState {
+    frames_remaining: usize,
+    phase: f64,
+    phase_step: f64,
+    amplitude: f32,
 }
 
 impl TestAudioInput {
@@ -188,6 +236,84 @@ impl AudioOutput for FullAudioOutput {
 
     fn write_samples(&mut self, _samples: &[f32]) -> Result<usize, Error> {
         Ok(0)
+    }
+}
+
+#[derive(Clone)]
+pub struct PartiallyFullOutput {
+    toggle: Arc<AtomicBool>,
+    dropped_frames: Arc<AtomicUsize>,
+    written_frames: Arc<AtomicUsize>,
+    recorded: Arc<Mutex<Vec<Vec<f32>>>>,
+}
+
+impl PartiallyFullOutput {
+    pub fn new(starts_full: bool) -> (Self, Arc<AtomicUsize>, Arc<AtomicUsize>, Arc<Mutex<Vec<Vec<f32>>>>) {
+        let dropped_frames = Arc::new(AtomicUsize::new(0));
+        let written_frames = Arc::new(AtomicUsize::new(0));
+        let recorded = Arc::new(Mutex::new(Vec::new()));
+        (
+            Self {
+                toggle: Arc::new(AtomicBool::new(starts_full)),
+                dropped_frames: dropped_frames.clone(),
+                written_frames: written_frames.clone(),
+                recorded: recorded.clone(),
+            },
+            dropped_frames,
+            written_frames,
+            recorded,
+        )
+    }
+}
+
+impl AudioOutput for PartiallyFullOutput {
+    fn is_full(&self) -> bool {
+        let current = self.toggle.load(Ordering::Relaxed);
+        self.toggle.store(!current, Ordering::Relaxed);
+        if current {
+            self.dropped_frames.fetch_add(1, Ordering::Relaxed);
+        }
+        current
+    }
+
+    fn write_samples(&mut self, samples: &[f32]) -> Result<usize, Error> {
+        self.written_frames.fetch_add(1, Ordering::Relaxed);
+        self.recorded.lock().unwrap().push(samples.to_vec());
+        Ok(0)
+    }
+}
+
+pub struct PartialWriteOutput {
+    loss_per_write: usize,
+    writes: Arc<AtomicUsize>,
+    recorded: Arc<Mutex<Vec<Vec<f32>>>>,
+}
+
+impl PartialWriteOutput {
+    pub fn new(loss_per_write: usize) -> (Self, Arc<AtomicUsize>, Arc<Mutex<Vec<Vec<f32>>>>) {
+        let writes = Arc::new(AtomicUsize::new(0));
+        let recorded = Arc::new(Mutex::new(Vec::new()));
+        (
+            Self {
+                loss_per_write,
+                writes: writes.clone(),
+                recorded: recorded.clone(),
+            },
+            writes,
+            recorded,
+        )
+    }
+}
+
+impl AudioOutput for PartialWriteOutput {
+    fn is_full(&self) -> bool {
+        false
+    }
+
+    fn write_samples(&mut self, samples: &[f32]) -> Result<usize, Error> {
+        self.writes.fetch_add(1, Ordering::Relaxed);
+        self.recorded.lock().unwrap().push(samples.to_vec());
+        Ok(self.loss_per_write)
     }
 }
 
