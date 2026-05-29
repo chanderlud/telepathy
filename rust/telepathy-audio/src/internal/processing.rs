@@ -613,6 +613,7 @@ mod tests {
     }
 
     /// Creates a test frame of i16 samples.
+    #[cfg(target_arch = "x86_64")]
     fn dummy_int_frame() -> [i16; FRAME_SIZE] {
         let mut frame = [0_i16; FRAME_SIZE];
         for (i, sample) in frame.iter_mut().enumerate() {

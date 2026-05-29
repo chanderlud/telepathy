@@ -126,16 +126,36 @@ mod tests {
     struct EnvVarGuard {
         _lock: MutexGuard<'static, ()>,
         key: &'static str,
+        previous: Option<String>,
     }
 
     impl EnvVarGuard {
         fn set(key: &'static str, value: &str) -> Self {
             let lock = ENV_LOCK.lock().expect("env lock poisoned");
+            let previous = std::env::var(key).ok();
             // SAFETY: guarded by ENV_LOCK so only one test mutates process env at a time.
             unsafe {
                 std::env::set_var(key, value);
             }
-            Self { _lock: lock, key }
+            Self {
+                _lock: lock,
+                key,
+                previous,
+            }
+        }
+
+        fn clear(key: &'static str) -> Self {
+            let lock = ENV_LOCK.lock().expect("env lock poisoned");
+            let previous = std::env::var(key).ok();
+            // SAFETY: guarded by ENV_LOCK so only one test mutates process env at a time.
+            unsafe {
+                std::env::remove_var(key);
+            }
+            Self {
+                _lock: lock,
+                key,
+                previous,
+            }
         }
     }
 
@@ -143,7 +163,10 @@ mod tests {
         fn drop(&mut self) {
             // SAFETY: guarded by ENV_LOCK so only one test mutates process env at a time.
             unsafe {
-                std::env::remove_var(self.key);
+                match &self.previous {
+                    Some(value) => std::env::set_var(self.key, value),
+                    None => std::env::remove_var(self.key),
+                }
             }
         }
     }
@@ -154,6 +177,7 @@ mod tests {
 
     #[test]
     fn missing_listen_port_flag_value_fails() {
+        let _guard = EnvVarGuard::clear("TELEPATHY_LISTEN_PORT");
         let err = parse_args(vec![
             "telepathy-cli".to_string(),
             "--listen-port".to_string(),
@@ -164,6 +188,7 @@ mod tests {
 
     #[test]
     fn invalid_listen_port_flag_value_fails() {
+        let _guard = EnvVarGuard::clear("TELEPATHY_LISTEN_PORT");
         let err = parse_args(vec![
             "telepathy-cli".to_string(),
             "--listen-port".to_string(),

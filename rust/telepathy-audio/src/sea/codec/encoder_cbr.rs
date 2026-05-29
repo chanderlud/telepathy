@@ -68,3 +68,87 @@ impl SeaEncoderTrait for CbrEncoder {
         residual_bits.clear();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::CbrEncoder;
+    use crate::sea::codec::{
+        common::SeaEncoderTrait,
+        file::{SeaFile, SeaFileHeader},
+    };
+    use crate::sea::encoder::EncoderSettings;
+
+    fn synthetic_frame() -> [i16; 480] {
+        let mut frame = [0i16; 480];
+        for (i, sample) in frame.iter_mut().enumerate() {
+            let a = ((i as i32 * 61) % 1800) - 900;
+            let b = ((i as i32 * 17) % 300) - 150;
+            *sample = (a * 14 + b * 7) as i16;
+        }
+        frame
+    }
+
+    #[test]
+    fn cbr_encoder_emits_expected_shapes() {
+        let header = SeaFileHeader {
+            version: 1,
+            channels: 1,
+            chunk_size: 0,
+            frames_per_chunk: 480,
+            sample_rate: 16_000,
+        };
+        let settings = EncoderSettings::default();
+        let mut encoder = CbrEncoder::new(&header, &settings);
+        let input = synthetic_frame();
+
+        let mut scale_factors = Vec::new();
+        let mut residuals = Vec::new();
+        let mut residual_bits = Vec::new();
+        encoder.encode_into(
+            &input,
+            &mut scale_factors,
+            &mut residuals,
+            &mut residual_bits,
+        );
+
+        assert_eq!(residuals.len(), input.len());
+        assert_eq!(residual_bits.len(), 0);
+        assert_eq!(
+            scale_factors.len(),
+            (input.len() / header.channels as usize)
+                .div_ceil(settings.scale_factor_frames as usize)
+                * header.channels as usize
+        );
+    }
+
+    #[test]
+    fn cbr_end_to_end_frame_round_trip() {
+        let header = SeaFileHeader {
+            version: 1,
+            channels: 1,
+            chunk_size: 0,
+            frames_per_chunk: 480,
+            sample_rate: 16_000,
+        };
+        let settings = EncoderSettings::default();
+        let input = synthetic_frame();
+
+        let mut encoder_file = SeaFile::new(header, &settings).unwrap();
+        let mut encoded_frame = Vec::new();
+        encoder_file.make_chunk(&input, &mut encoded_frame).unwrap();
+
+        let mut decoder_file = SeaFile::new_for_decoding(encoder_file.header.clone()).unwrap();
+        let mut decoded = [0i16; 480];
+        decoder_file
+            .samples_from_frame(&encoded_frame, &mut decoded)
+            .unwrap();
+
+        let mae = input
+            .iter()
+            .zip(decoded.iter())
+            .map(|(a, b)| (*a as i32 - *b as i32).unsigned_abs() as u64)
+            .sum::<u64>()
+            / input.len() as u64;
+        assert!(mae <= 2500, "mae too high: {mae}");
+    }
+}

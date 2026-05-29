@@ -17,6 +17,79 @@ class ProfileSettings extends StatefulWidget {
 
 class ProfileSettingsState extends State<ProfileSettings> {
   final TextEditingController _profileNameInput = TextEditingController();
+  String? _profileNameError;
+
+  InputDecoration _profileNameInputDecoration(BuildContext context) {
+    if (_profileNameError == null) {
+      return const InputDecoration(labelText: 'Name');
+    }
+
+    final errorColor = Theme.of(context).colorScheme.error;
+    final errorHoverColor = Color.lerp(errorColor, Colors.black, 0.16)!;
+
+    return InputDecoration(
+      labelText: 'Name',
+      errorText: _profileNameError,
+      labelStyle: WidgetStateTextStyle.resolveWith((Set<WidgetState> states) {
+        return TextStyle(
+          color: states.contains(WidgetState.hovered)
+              ? errorHoverColor
+              : errorColor,
+        );
+      }),
+      floatingLabelStyle:
+          WidgetStateTextStyle.resolveWith((Set<WidgetState> states) {
+        return TextStyle(
+          color: states.contains(WidgetState.hovered)
+              ? errorHoverColor
+              : errorColor,
+        );
+      }),
+      border: WidgetStateInputBorder.resolveWith((Set<WidgetState> states) {
+        final hovered = states.contains(WidgetState.hovered);
+        final focused = states.contains(WidgetState.focused);
+
+        return UnderlineInputBorder(
+          borderSide: BorderSide(
+            color: hovered ? errorHoverColor : errorColor,
+            width: focused ? 2 : 1,
+          ),
+        );
+      }),
+    );
+  }
+
+  void _createProfile(
+    BuildContext dialogContext,
+    ProfilesController profilesController,
+    StateSetter setDialogState,
+  ) {
+    final profileName = _profileNameInput.text.trim();
+
+    if (profileName.isEmpty) {
+      setDialogState(() {
+        _profileNameError = 'Profile name is required.';
+      });
+      return;
+    }
+
+    final profileNameExists = profilesController.profiles.values.any(
+      (Profile profile) =>
+          profile.nickname.trim().toLowerCase() == profileName.toLowerCase(),
+    );
+
+    if (profileNameExists) {
+      setDialogState(() {
+        _profileNameError = 'A profile named "$profileName" already exists.';
+      });
+      return;
+    }
+
+    profilesController.createProfile(profileName);
+    _profileNameInput.clear();
+    _profileNameError = null;
+    Navigator.of(dialogContext).pop();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -148,33 +221,50 @@ class ProfileSettingsState extends State<ProfileSettings> {
             padding: const EdgeInsets.symmetric(vertical: 5, horizontal: 20),
             child: IconButton(
               onPressed: () {
+                _profileNameError = null;
                 showDialog(
                     context: context,
                     builder: (BuildContext context) {
-                      return SimpleDialog(
-                        title: const Text('Create Profile'),
-                        contentPadding: const EdgeInsets.only(
-                            bottom: 25, left: 25, right: 25),
-                        titlePadding: const EdgeInsets.only(
-                            top: 25, left: 25, right: 25, bottom: 15),
-                        children: [
-                          TextField(
-                            decoration: const InputDecoration(
-                              labelText: 'Name',
-                            ),
-                            controller: _profileNameInput,
-                          ),
-                          const SizedBox(height: 20),
-                          Button(
-                            text: 'Create',
-                            onPressed: () {
-                              profilesController
-                                  .createProfile(_profileNameInput.text);
-                              _profileNameInput.clear();
-                              Navigator.of(context).pop();
+                      return StatefulBuilder(
+                        builder:
+                            (BuildContext context, StateSetter setDialogState) {
+                          return CallbackShortcuts(
+                            bindings: <ShortcutActivator, VoidCallback>{
+                              const SingleActivator(LogicalKeyboardKey.enter):
+                                  () => _createProfile(context,
+                                      profilesController, setDialogState),
                             },
-                          )
-                        ],
+                            child: SimpleDialog(
+                              title: const Text('Create Profile'),
+                              contentPadding: const EdgeInsets.only(
+                                  bottom: 25, left: 25, right: 25),
+                              titlePadding: const EdgeInsets.only(
+                                  top: 25, left: 25, right: 25, bottom: 15),
+                              children: [
+                                TextField(
+                                  decoration:
+                                      _profileNameInputDecoration(context),
+                                  controller: _profileNameInput,
+                                  onChanged: (_) {
+                                    if (_profileNameError == null) return;
+
+                                    setDialogState(() {
+                                      _profileNameError = null;
+                                    });
+                                  },
+                                  onSubmitted: (_) => _createProfile(context,
+                                      profilesController, setDialogState),
+                                ),
+                                const SizedBox(height: 20),
+                                Button(
+                                  text: 'Create',
+                                  onPressed: () => _createProfile(context,
+                                      profilesController, setDialogState),
+                                )
+                              ],
+                            ),
+                          );
+                        },
                       );
                     });
               },

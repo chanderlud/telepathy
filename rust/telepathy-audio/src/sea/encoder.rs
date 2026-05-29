@@ -64,14 +64,24 @@ pub struct SeaEncoder {
 }
 
 impl SeaEncoder {
+    fn validate_parameters(
+        channels: u8,
+        sample_rate: u32,
+        settings: &EncoderSettings,
+    ) -> Result<(), SeaError> {
+        if sample_rate == 0 || !is_valid_geometry(channels, settings.frames_per_chunk) {
+            return Err(SeaError::InvalidParameters);
+        }
+
+        Ok(())
+    }
+
     pub fn new(
         channels: u8,
         sample_rate: u32,
         settings: EncoderSettings,
     ) -> Result<Self, SeaError> {
-        if !is_valid_geometry(channels, settings.frames_per_chunk) {
-            return Err(SeaError::InvalidParameters);
-        }
+        Self::validate_parameters(channels, sample_rate, &settings)?;
 
         let header = SeaFileHeader {
             version: 1,
@@ -111,5 +121,23 @@ impl SeaEncoder {
 
     pub fn chunk_size(&self) -> u16 {
         self.file.header.chunk_size
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{EncoderSettings, SeaEncoder};
+    use crate::sea::codec::common::SeaError;
+
+    #[test]
+    fn new_rejects_zero_channels() {
+        let result = SeaEncoder::new(0, 48_000, EncoderSettings::default());
+        assert!(matches!(result, Err(SeaError::InvalidParameters)));
+    }
+
+    #[test]
+    fn new_rejects_zero_sample_rate() {
+        let result = SeaEncoder::new(1, 0, EncoderSettings::default());
+        assert!(matches!(result, Err(SeaError::InvalidParameters)));
     }
 }

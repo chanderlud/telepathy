@@ -85,6 +85,8 @@ abstract class Telepathy implements RustOpaqueInterface {
   /// Sends a chat message
   Future<void> sendChat({required ChatMessage message});
 
+  void setContactOutputVolume({required Contact contact});
+
   void setDeafened({required bool deafened});
 
   /// Changing the denoise flag will not affect the current call

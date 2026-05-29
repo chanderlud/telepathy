@@ -315,3 +315,116 @@ impl SeaChunk {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::SeaChunk;
+    use crate::sea::{
+        codec::{
+            bits::BitUnpacker,
+            common::{SeaError, SeaResidualSize},
+            file::{SeaFile, SeaFileHeader},
+            lms::SeaLMS,
+        },
+        encoder::EncoderSettings,
+    };
+
+    fn synthetic_frame() -> [i16; 480] {
+        let mut frame = [0i16; 480];
+        for (i, sample) in frame.iter_mut().enumerate() {
+            let a = ((i as i32 * 97) % 2000) - 1000;
+            let b = ((i as i32 * 31) % 400) - 200;
+            *sample = (a * 12 + b * 6) as i16;
+        }
+        frame
+    }
+
+    fn mean_abs_error(a: &[i16], b: &[i16]) -> u64 {
+        a.iter()
+            .zip(b.iter())
+            .map(|(x, y)| (*x as i32 - *y as i32).unsigned_abs() as u64)
+            .sum::<u64>()
+            / a.len() as u64
+    }
+
+    #[test]
+    fn cbr_chunk_encode_decode_within_error_bounds() {
+        let header = SeaFileHeader {
+            version: 1,
+            channels: 1,
+            chunk_size: 0,
+            frames_per_chunk: 480,
+            sample_rate: 16_000,
+        };
+        let settings = EncoderSettings::default();
+        let input = synthetic_frame();
+
+        let mut file = SeaFile::new(header, &settings).unwrap();
+        let mut encoded = Vec::new();
+        file.make_chunk(&input, &mut encoded).unwrap();
+
+        let mut decoder_file = SeaFile::new_for_decoding(file.header.clone()).unwrap();
+        let mut decoded = [0i16; 480];
+        decoder_file
+            .samples_from_frame(&encoded, &mut decoded)
+            .unwrap();
+
+        let mae = mean_abs_error(&input, &decoded);
+        assert!(mae <= 2500, "mae too high: {mae}");
+    }
+
+    #[test]
+    fn from_slice_rejects_malformed_chunk_headers() {
+        let header = SeaFileHeader {
+            version: 1,
+            channels: 1,
+            chunk_size: 128,
+            frames_per_chunk: 480,
+            sample_rate: 16_000,
+        };
+
+        let invalid_type = [0xFF, 0x31, 20, 0x5A];
+        assert!(matches!(
+            parse_chunk(&invalid_type, &header),
+            Err(SeaError::InvalidFrame)
+        ));
+
+        let invalid_scalefactor_bits = [0x01, 0x01, 20, 0x5A];
+        assert!(matches!(
+            parse_chunk(&invalid_scalefactor_bits, &header),
+            Err(SeaError::InvalidFrame)
+        ));
+    }
+
+    fn parse_chunk(encoded: &[u8], header: &SeaFileHeader) -> Result<(), SeaError> {
+        let mut lms = Vec::<SeaLMS>::new();
+        let mut scale_factors = Vec::new();
+        let mut vbr_residual_sizes = Vec::new();
+        let mut residuals = Vec::new();
+        let mut vbr_bitlengths = Vec::new();
+        let mut unpacker = BitUnpacker::new_const_bits(1);
+
+        SeaChunk::parse_into(
+            encoded,
+            header,
+            &mut lms,
+            &mut scale_factors,
+            &mut vbr_residual_sizes,
+            &mut residuals,
+            &mut vbr_bitlengths,
+            &mut unpacker,
+        )
+        .map(|_| ())
+    }
+
+    #[test]
+    fn residual_size_try_from_u8_boundaries() {
+        assert_eq!(SeaResidualSize::try_from_u8(0), None);
+        assert_eq!(SeaResidualSize::try_from_u8(1), Some(SeaResidualSize::One));
+        assert_eq!(
+            SeaResidualSize::try_from_u8(8),
+            Some(SeaResidualSize::Eight)
+        );
+        assert_eq!(SeaResidualSize::try_from_u8(9), None);
+    }
+}

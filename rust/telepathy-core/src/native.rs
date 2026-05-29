@@ -137,6 +137,10 @@ impl NativeTelepathy {
         self.handle.set_output_volume(decibel);
     }
 
+    pub fn set_contact_output_volume(&self, contact: &Contact) {
+        self.handle.set_contact_output_volume(contact);
+    }
+
     pub fn set_deafened(&self, deafened: bool) {
         self.handle.set_deafened(deafened);
     }

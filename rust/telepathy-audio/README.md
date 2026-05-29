@@ -190,7 +190,7 @@ let _ = tx;
 ### Codec vs. No-Codec Paths
 
 The library supports two distinct processing paths:
-- When codec is **disabled**, audio is transmitted as raw `Bytes` (i16 samples converted to bytes). 
+- When codec is **disabled**, audio is transmitted as raw `Bytes` (i16 samples converted to bytes).
 - Every network frame is 960 bytes when the codec is disabled.
 - When codec is **enabled**, audio is compressed using the SEA codec before transmission.
 - Every network frame is < 960 bytes when codec is enabled, different codec options will result in different size frames.

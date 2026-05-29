@@ -184,14 +184,18 @@ where
         let (codec_enabled, vbr, residual_bits) = codec_options;
         // Channel for receiving processed audio data
         let (sender, receiver) = kanal::unbounded_async();
+        let input_end_call = end_call.clone();
 
         let mut builder = AudioInputBuilder::new()
             .device(self.core_state.input_device.lock().await.clone())
-            .input_volume_shared(&self.core_state.input_volume)
-            .rms_threshold_shared(&self.core_state.rms_threshold)
+            .input_volume_shared(self.core_state.get_input_volume())
+            .rms_threshold_shared(self.core_state.get_rms_threshold())
             .muted_shared(&self.core_state.muted)
             .rms_shared(&statistics_state.input_rms)
-            .on_error(end_call)
+            .on_error(move |error| {
+                error!(error = %error, "input_stream_error");
+                input_end_call.notify_one();
+            })
             .sink(KanalSink::new(sender));
 
         if codec_enabled {
@@ -227,6 +231,7 @@ where
     /// helper method to set up audio output stack using the telepathy-audio library
     pub(crate) async fn setup_output(
         &self,
+        peer: PublicKey,
         remote_sample_rate: f64,
         codec_enabled: bool,
         statistics_state: &StatisticsCollectorState,
@@ -236,17 +241,22 @@ where
         let device_id = self.core_state.output_device.lock().await.clone();
         // Create the input channel
         let (sender, receiver) = kanal::unbounded();
+        // Get the shared volume multiplier
+        let output_volume = self.core_state.output_volume_for_peer(peer);
         // Create the audio output using the builder
         let handle = AudioOutputBuilder::new()
             .source(KanalSource::new(receiver))
             .device(device_id)
             .sample_rate(remote_sample_rate as u32)
-            .output_volume_shared(&self.core_state.output_volume)
+            .output_volume_shared(&output_volume)
             .deafened_shared(&self.core_state.deafened)
             .rms_shared(&statistics_state.output_rms)
             .loss_shared(&statistics_state.loss)
             .codec(codec_enabled)
-            .on_error(end_call)
+            .on_error(move |error| {
+                error!(error = %error, "output_stream_error");
+                end_call.notify_one();
+            })
             .build(&self.host)?;
 
         Ok(OutputHelper::new(handle, sender))

@@ -160,7 +160,7 @@ async fn handle_command(
             id,
             nickname,
             peer_id,
-        } => match Contact::from_parts(id.clone(), nickname, peer_id) {
+        } => match Contact::from_parts(id.clone(), nickname, peer_id, 0_f32) {
             Ok(contact) => {
                 hub.contacts.write().await.insert(id, contact);
                 CommandOutcome::AckOk

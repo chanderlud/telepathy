@@ -1,14 +1,16 @@
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::messages::{AudioHeader, ProtocolMessage, RoomMessage};
-use crate::types::{CodecConfig, NetworkConfig, ScreenshareConfig, SessionStatus};
+use crate::types::{CodecConfig, Contact, NetworkConfig, ScreenshareConfig, SessionStatus};
 use atomic_float::AtomicF32;
 use iroh::endpoint::{Connection, Path};
 use iroh::{PublicKey, SecretKey, TransportAddr};
-use std::sync::Arc;
+use std::collections::HashMap;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 use telepathy_audio::RnnModel;
+use telepathy_audio::internal::utils::db_to_multiplier;
 use tokio::select;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::{Mutex, Notify, RwLock};
@@ -24,15 +26,6 @@ type SharedDeviceId = Arc<Mutex<Option<String>>>;
 
 #[derive(Clone, Default)]
 pub(crate) struct CoreState {
-    /// Controls the threshold for silence detection
-    pub(crate) rms_threshold: Arc<AtomicF32>,
-
-    /// The factor to adjust the input volume by
-    pub(crate) input_volume: Arc<AtomicF32>,
-
-    /// The factor to adjust the output volume by
-    pub(crate) output_volume: Arc<AtomicF32>,
-
     /// Enables rnnoise denoising
     pub(crate) denoise: Arc<AtomicBool>,
 
@@ -87,6 +80,112 @@ pub(crate) struct CoreState {
 
     /// configuration for audio codec, or lack thereof
     pub(crate) codec_config: CodecConfig,
+
+    /// Controls the threshold for silence detection
+    rms_threshold: Arc<AtomicF32>,
+
+    /// Every input sample is multiplied by this number
+    input_multiplier: Arc<AtomicF32>,
+
+    /// The output volume in decibels
+    output_volume: Arc<AtomicF32>,
+
+    /// Output samples are multiplied by this number, per-peer
+    peer_output_volumes: Arc<StdMutex<HashMap<PublicKey, PeerVolume>>>,
+
+    /// serializes access to shared volume state
+    output_lock: Arc<StdMutex<()>>,
+}
+
+impl CoreState {
+    pub(crate) fn new(
+        network_config: &NetworkConfig,
+        screenshare_config: &ScreenshareConfig,
+        codec_config: &CodecConfig,
+    ) -> Self {
+        Self {
+            network_config: network_config.clone(),
+            screenshare_config: screenshare_config.clone(),
+            codec_config: codec_config.clone(),
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn set_input_volume(&self, decibel: f32) {
+        self.input_multiplier
+            .store(db_to_multiplier(decibel), Relaxed);
+    }
+
+    pub(crate) fn get_input_volume(&self) -> &Arc<AtomicF32> {
+        &self.input_multiplier
+    }
+
+    pub(crate) fn set_rms_threshold(&self, decibel: f32) {
+        self.rms_threshold.store(db_to_multiplier(decibel), Relaxed);
+    }
+
+    pub(crate) fn get_rms_threshold(&self) -> &Arc<AtomicF32> {
+        &self.rms_threshold
+    }
+
+    /// returns the volume multiplier to share with the output processor
+    pub(crate) fn output_volume_for_peer(&self, peer: PublicKey) -> Arc<AtomicF32> {
+        self.get_peer_volume(peer).multiplier
+    }
+
+    /// updates the base output volume in decibels
+    /// all peer output volumes are updated with the new base
+    pub(crate) fn set_output_volume(&self, decibel: f32) {
+        let lock = self.output_lock.lock();
+        let peer_volume_lock = self
+            .peer_output_volumes
+            .lock()
+            .expect("peer output volume mutex poisoned");
+        let old_decibel = self.output_volume.swap(decibel, Relaxed);
+        let offset = decibel - old_decibel;
+        for peer in peer_volume_lock.values() {
+            let new_volume = peer.volume.fetch_add(offset, Relaxed) + offset;
+            peer.multiplier.store(db_to_multiplier(new_volume), Relaxed);
+        }
+        drop(lock);
+    }
+
+    /// updates the peer output volume for a contact
+    pub(crate) fn set_peer_output_volume(&self, contact: &Contact) {
+        let lock = self.output_lock.lock();
+        let global_volume = self.output_volume.load(Relaxed);
+        let peer_volume = self.get_peer_volume(contact.peer_id);
+        let new_volume = global_volume + contact.output_volume;
+        peer_volume.volume.store(new_volume, Relaxed);
+        peer_volume
+            .multiplier
+            .store(db_to_multiplier(new_volume), Relaxed);
+        drop(lock);
+    }
+
+    pub(crate) fn reset_peer_output_volumes(&self) {
+        self.peer_output_volumes
+            .lock()
+            .expect("peer output volume mutex poisoned")
+            .clear();
+    }
+
+    pub(crate) fn reset_peer_output_volume(&self, peer: &PublicKey) {
+        self.peer_output_volumes
+            .lock()
+            .expect("peer output volume mutex poisoned")
+            .remove(peer);
+    }
+
+    fn get_peer_volume(&self, peer: PublicKey) -> PeerVolume {
+        self.peer_output_volumes
+            .lock()
+            .expect("peer output volume mutex poisoned")
+            .entry(peer)
+            // peers from rooms will not have a cached output volume
+            .or_insert_with(|| PeerVolume::new(self.output_volume.load(Relaxed)))
+            .clone()
+    }
 }
 
 pub(crate) struct RoomState {
@@ -278,5 +377,23 @@ impl SessionState {
 impl Drop for SessionState {
     fn drop(&mut self) {
         self.stop_session.cancel();
+    }
+}
+
+#[derive(Clone, Default)]
+struct PeerVolume {
+    /// the volume is stored for updating the multiplier
+    volume: Arc<AtomicF32>,
+
+    /// multiplier is shared with the output processor thread
+    multiplier: Arc<AtomicF32>,
+}
+
+impl PeerVolume {
+    fn new(decibel: f32) -> Self {
+        Self {
+            volume: Arc::new(AtomicF32::new(decibel)),
+            multiplier: Arc::new(AtomicF32::new(db_to_multiplier(decibel))),
+        }
     }
 }

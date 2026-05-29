@@ -154,6 +154,11 @@ impl Telepathy {
     }
 
     #[frb(sync)]
+    pub fn set_contact_output_volume(&self, contact: &Contact) {
+        self.handle.set_contact_output_volume(contact)
+    }
+
+    #[frb(sync)]
     pub fn set_deafened(&self, deafened: bool) {
         self.handle.set_deafened(deafened)
     }

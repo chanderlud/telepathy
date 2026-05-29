@@ -391,15 +391,15 @@ mod tests {
         let pool = Arc::new(BufferPool::new(64, 960));
         let mut handles = vec![];
 
-        for _ in 0..8 {
+        for thread_idx in 0..8 {
             let pool_clone = pool.clone();
             handles.push(thread::spawn(move || {
-                for _ in 0..100 {
+                for iteration in 0..100 {
                     let mut pooled = BufferPool::acquire(&pool_clone);
                     // Simulate some work
-                    pooled.inner_mut()[0] = 42;
+                    pooled.inner_mut()[0] = (thread_idx + iteration) as u8;
                     // Sometimes freeze (returns on drop), sometimes return directly
-                    if pooled.inner_mut()[0] % 2 == 0 {
+                    if pooled.inner_mut()[0].is_multiple_of(2) {
                         let bytes = pooled.freeze();
                         // PooledBytes will return buffer to pool when dropped
                         drop(bytes);
@@ -415,6 +415,7 @@ mod tests {
 
         // After all threads complete, pool should be back to full capacity
         // (all buffers returned, though some may have been fallback allocations)
+        assert_eq!(pool.queue.len(), 64);
     }
 
     #[test]

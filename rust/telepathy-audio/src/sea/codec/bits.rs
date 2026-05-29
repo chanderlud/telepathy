@@ -223,3 +223,37 @@ impl BitPacker {
         self.output.reserve(MAX_PACKED_BYTES);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{BitPacker, BitUnpacker};
+
+    #[test]
+    fn bit_packing_round_trip_for_all_widths() {
+        for bits in 1u8..=8 {
+            let mask = (1u32 << bits) - 1;
+            let values: Vec<u8> = (0..257)
+                .map(|i| (((i * 37) as u32 + bits as u32) & mask) as u8)
+                .collect();
+
+            let mut packer = BitPacker::default();
+            for value in &values {
+                packer.push(*value as u32, bits);
+            }
+            let encoded = packer.finish();
+
+            let split = encoded.len() / 2;
+            let mut unpacker = BitUnpacker::new_const_bits(bits);
+            unpacker.process_bytes(&encoded[..split]);
+            unpacker.process_bytes(&encoded[split..]);
+
+            let decoded = unpacker.finish();
+
+            assert_eq!(
+                &decoded[..values.len()],
+                values,
+                "mismatch for bit width {bits}"
+            );
+        }
+    }
+}

@@ -19,6 +19,31 @@ use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32};
 use tokio::sync::{Notify, RwLock};
 use uuid::Uuid;
 
+/// Contact output gain range in decibels; keep in sync with the contact volume slider.
+const MIN_CONTACT_OUTPUT_VOLUME_DB: f32 = -15.0;
+const MAX_CONTACT_OUTPUT_VOLUME_DB: f32 = 15.0;
+
+fn contact_output_volume_in_range(decibel: f32) -> bool {
+    decibel.is_finite()
+        && (MIN_CONTACT_OUTPUT_VOLUME_DB..=MAX_CONTACT_OUTPUT_VOLUME_DB).contains(&decibel)
+}
+
+fn contact_output_volume_from_parts(decibel: f32) -> f32 {
+    if contact_output_volume_in_range(decibel) {
+        decibel
+    } else {
+        0.0
+    }
+}
+
+fn clamp_contact_output_volume(decibel: f32) -> f32 {
+    if !decibel.is_finite() {
+        0.0
+    } else {
+        decibel.clamp(MIN_CONTACT_OUTPUT_VOLUME_DB, MAX_CONTACT_OUTPUT_VOLUME_DB)
+    }
+}
+
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(opaque))]
 pub struct Contact {
@@ -31,6 +56,8 @@ pub struct Contact {
     /// The public/verifying key for the contact
     pub(crate) peer_id: PublicKey,
 
+    pub(crate) output_volume: f32,
+
     /// In rooms, some contacts are dummy representing unknown peers
     pub(crate) is_room_only: bool,
 }
@@ -42,16 +69,23 @@ impl Contact {
             id: Uuid::new_v4().to_string(),
             nickname,
             peer_id: PublicKey::from_str(&peer_id).map_err(|_| ErrorKind::InvalidContactFormat)?,
+            output_volume: 0.0,
             is_room_only: false,
         })
     }
 
     #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
-    pub fn from_parts(id: String, nickname: String, peer_id: String) -> Result<Contact, DartError> {
+    pub fn from_parts(
+        id: String,
+        nickname: String,
+        peer_id: String,
+        output_volume: f32,
+    ) -> Result<Contact, DartError> {
         Ok(Self {
             id,
             nickname,
             peer_id: PublicKey::from_str(&peer_id).map_err(|_| ErrorKind::InvalidContactFormat)?,
+            output_volume: contact_output_volume_from_parts(output_volume),
             is_room_only: false,
         })
     }
@@ -74,6 +108,16 @@ impl Contact {
     #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
     pub fn set_nickname(&mut self, nickname: String) {
         self.nickname = nickname;
+    }
+
+    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
+    pub fn output_volume(&self) -> f32 {
+        self.output_volume
+    }
+
+    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
+    pub fn set_output_volume(&mut self, decibel: f32) {
+        self.output_volume = clamp_contact_output_volume(decibel);
     }
 
     #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
@@ -587,5 +631,45 @@ mod tests {
 
         let result = config.set_bind_addresses(vec!["not-an-ip".to_string()]);
         assert!(result.is_err());
+    }
+
+    use super::{
+        MAX_CONTACT_OUTPUT_VOLUME_DB, MIN_CONTACT_OUTPUT_VOLUME_DB, clamp_contact_output_volume,
+        contact_output_volume_from_parts,
+    };
+
+    #[test]
+    fn from_parts_accepts_in_range_values() {
+        assert_eq!(contact_output_volume_from_parts(0.0), 0.0);
+        assert_eq!(
+            contact_output_volume_from_parts(MIN_CONTACT_OUTPUT_VOLUME_DB),
+            MIN_CONTACT_OUTPUT_VOLUME_DB
+        );
+        assert_eq!(
+            contact_output_volume_from_parts(MAX_CONTACT_OUTPUT_VOLUME_DB),
+            MAX_CONTACT_OUTPUT_VOLUME_DB
+        );
+    }
+
+    #[test]
+    fn from_parts_rejects_out_of_range_and_non_finite_values() {
+        assert_eq!(contact_output_volume_from_parts(20.0), 0.0);
+        assert_eq!(contact_output_volume_from_parts(-20.0), 0.0);
+        assert_eq!(contact_output_volume_from_parts(f32::NAN), 0.0);
+        assert_eq!(contact_output_volume_from_parts(f32::INFINITY), 0.0);
+    }
+
+    #[test]
+    fn set_output_volume_clamps_to_supported_range() {
+        assert_eq!(
+            clamp_contact_output_volume(20.0),
+            MAX_CONTACT_OUTPUT_VOLUME_DB
+        );
+        assert_eq!(
+            clamp_contact_output_volume(-20.0),
+            MIN_CONTACT_OUTPUT_VOLUME_DB
+        );
+        assert_eq!(clamp_contact_output_volume(f32::NAN), 0.0);
+        assert_eq!(clamp_contact_output_volume(5.0), 5.0);
     }
 }

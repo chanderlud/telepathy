@@ -61,18 +61,18 @@
 //! ### Device Enumeration
 //!
 //! ```rust,no_run
-//! use telepathy_audio::devices::{CpalAudioHost, list_all_devices, get_default_input_device};
+//! use telepathy_audio::devices::{CpalAudioHost, AudioHost};
 //!
 //! // Create an audio host
 //! let host = CpalAudioHost::new();
 //!
 //! // List all available devices
-//! let devices = list_all_devices(&host).unwrap();
+//! let devices = host.list_all_devices().unwrap();
 //! println!("Input devices: {:?}", devices.input_devices);
 //! println!("Output devices: {:?}", devices.output_devices);
 //!
 //! // Get the default input device
-//! let input_device = get_default_input_device(&host).unwrap();
+//! let input_device = host.get_default_input_device().unwrap();
 //! ```
 //!
 //! ### Audio Input
@@ -253,6 +253,9 @@ mod platform;
 
 pub use constants::FRAME_SIZE;
 pub use error::Error;
+
+#[cfg(any(test, feature = "test-internals"))]
+pub use constants::MINIMUM_SILENCE_LENGTH;
 
 #[cfg(feature = "mock-audio")]
 pub use mock::MockAudioHost;

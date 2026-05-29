@@ -42,8 +42,8 @@ use crate::internal::traits::CHANNEL_SIZE;
 use crate::internal::traits::RingBufferOutput;
 #[cfg(not(feature = "mock-audio"))]
 use crate::internal::utils::{hann_fade_in, hann_fade_out};
-use crate::io::SendStream;
 use crate::io::traits::AudioDataSource;
+use crate::io::{SendStream, StreamErrorCallback};
 #[cfg(feature = "mock-audio")]
 use crate::mock::MockAudioOutput;
 use crate::sea::codec::file::SeaFileHeader;
@@ -60,7 +60,6 @@ use nnnoiseless::FRAME_SIZE;
 use rtrb::chunks::ChunkError;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
-use tokio::sync::Notify;
 use tracing::{debug, error};
 
 /// Configuration for audio output processing.
@@ -85,12 +84,11 @@ pub struct AudioOutputConfig {
     pub volume: f32,
     /// Set to true when codec is enabled
     pub codec_enabled: bool,
-    /// Optional notify handle for stream errors.
+    /// Optional callback for stream errors.
     ///
-    /// When set, the notify is triggered via `notify_one()` whenever a
-    /// stream error occurs, in addition to logging the error. Useful for
-    /// async error handling and reconnection logic.
-    pub error_notify: Option<Arc<Notify>>,
+    /// When set, the callback receives the underlying CPAL stream error.
+    /// When unset, stream errors are logged by default.
+    pub error_callback: Option<StreamErrorCallback>,
 }
 
 impl Default for AudioOutputConfig {
@@ -100,7 +98,7 @@ impl Default for AudioOutputConfig {
             sample_rate: 48_000,
             volume: 1.0,
             codec_enabled: false,
-            error_notify: None,
+            error_callback: None,
         }
     }
 }
@@ -232,12 +230,14 @@ where
         self
     }
 
-    /// Sets a notify handle to be triggered on stream errors.
+    /// Sets a callback to be triggered on stream errors.
     ///
-    /// When set, the notify will be triggered via `notify_one()` whenever
-    /// a stream error occurs, in addition to logging the error.
-    pub fn on_error(mut self, notify: Arc<Notify>) -> Self {
-        self.config.error_notify = Some(notify);
+    /// When set, the callback receives the underlying CPAL stream error.
+    pub fn on_error<F>(mut self, callback: F) -> Self
+    where
+        F: FnMut(cpal::StreamError) + Send + 'static,
+    {
+        self.config.error_callback = Some(Box::new(callback));
         self
     }
 
@@ -337,7 +337,7 @@ where
     /// - The stream cannot be created
     /// - The device uses an unsupported sample format
     #[cfg(not(feature = "mock-audio"))]
-    pub fn build(self, host: &impl AudioHost) -> Result<AudioOutputHandle, Error> {
+    pub fn build(mut self, host: &impl AudioHost) -> Result<AudioOutputHandle, Error> {
         use rtrb::RingBuffer;
         if self.source.is_none() {
             return Err(Error::Config(
@@ -360,7 +360,7 @@ where
 
         // Create processor output and build common components
         let processor_output = RingBufferOutput::new(output_producer);
-        let error_notify = self.config.error_notify.clone();
+        let error_callback = self.config.error_callback.take();
         let context = self.build_common(processor_output, output_sample_rate)?;
 
         // Build the audio stream with the appropriate sample format
@@ -370,70 +370,70 @@ where
                 &config.into(),
                 output_consumer,
                 output_channels,
-                error_notify,
+                error_callback,
             )?,
             SampleFormat::I16 => build_output_stream_with_format::<i16>(
                 device,
                 &config.into(),
                 output_consumer,
                 output_channels,
-                error_notify,
+                error_callback,
             )?,
             SampleFormat::I32 => build_output_stream_with_format::<i32>(
                 device,
                 &config.into(),
                 output_consumer,
                 output_channels,
-                error_notify,
+                error_callback,
             )?,
             SampleFormat::I64 => build_output_stream_with_format::<i64>(
                 device,
                 &config.into(),
                 output_consumer,
                 output_channels,
-                error_notify,
+                error_callback,
             )?,
             SampleFormat::U8 => build_output_stream_with_format::<u8>(
                 device,
                 &config.into(),
                 output_consumer,
                 output_channels,
-                error_notify,
+                error_callback,
             )?,
             SampleFormat::U16 => build_output_stream_with_format::<u16>(
                 device,
                 &config.into(),
                 output_consumer,
                 output_channels,
-                error_notify,
+                error_callback,
             )?,
             SampleFormat::U32 => build_output_stream_with_format::<u32>(
                 device,
                 &config.into(),
                 output_consumer,
                 output_channels,
-                error_notify,
+                error_callback,
             )?,
             SampleFormat::U64 => build_output_stream_with_format::<u64>(
                 device,
                 &config.into(),
                 output_consumer,
                 output_channels,
-                error_notify,
+                error_callback,
             )?,
             SampleFormat::F32 => build_output_stream_with_format::<f32>(
                 device,
                 &config.into(),
                 output_consumer,
                 output_channels,
-                error_notify,
+                error_callback,
             )?,
             SampleFormat::F64 => build_output_stream_with_format::<f64>(
                 device,
                 &config.into(),
                 output_consumer,
                 output_channels,
-                error_notify,
+                error_callback,
             )?,
             _ => return Err(Error::Config("Unsupported sample format".to_string())),
         };
@@ -546,14 +546,14 @@ impl AudioOutputHandle {
 /// * `config` - Stream configuration (sample rate, channels, etc.)
 /// * `output_consumer` - Ring buffer consumer for f32 samples from the processor
 /// * `output_channels` - Number of output channels
-/// * `error_notify` - Optional notify handle for stream errors
+/// * `error_callback` - Optional callback for stream errors
 #[cfg(not(feature = "mock-audio"))]
 fn build_output_stream_with_format<T>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
     mut output_consumer: rtrb::Consumer<f32>,
     output_channels: usize,
-    error_notify: Option<Arc<Notify>>,
+    mut error_callback: Option<StreamErrorCallback>,
 ) -> Result<SendStream, Error>
 where
     T: Sample + cpal::SizedSample + cpal::FromSample<f32> + Send + 'static,
@@ -658,9 +658,10 @@ where
             }
         },
         move |err| {
-            error!(error = %err, "output_stream_error");
-            if let Some(ref notify) = error_notify {
-                notify.notify_one();
+            if let Some(callback) = error_callback.as_mut() {
+                callback(err);
+            } else {
+                error!(error = %err, "output_stream_error");
             }
         },
         None,

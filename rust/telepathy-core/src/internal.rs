@@ -29,7 +29,6 @@ use std::sync::atomic::Ordering::Relaxed;
 use std::time::Duration;
 use telepathy_audio::RnnModel;
 use telepathy_audio::devices::AudioHost;
-use telepathy_audio::internal::utils::db_to_multiplier;
 use tokio::sync::mpsc::channel;
 use tokio::sync::{Mutex, Notify};
 use tokio_util::sync::CancellationToken;
@@ -224,6 +223,8 @@ where
             self.inner.restart_manager.notify_one();
             // wait for a new manager to start
             self.inner.core_state.manager_active.notified().await;
+            // ensure volume cache resets fully
+            self.inner.core_state.reset_peer_output_volumes();
             // start a session for all contacts
             for contact in self.inner.callbacks.get_contacts().await {
                 self.start_session(&contact).await;
@@ -251,6 +252,10 @@ where
 
     /// Stops a specific session (called when a contact is deleted)
     pub async fn stop_session(&self, contact: &Contact) {
+        // clear volume cache entry for contact
+        self.inner
+            .core_state
+            .reset_peer_output_volume(&contact.peer_id);
         if let Some(state) = self
             .inner
             .session_states
@@ -281,7 +286,8 @@ where
             return Err(error);
         }
 
-        let result = match self.inner.setup_call(SecretKey::generate().public()).await {
+        let peer_id = SecretKey::generate().public();
+        let result = match self.inner.setup_call(peer_id).await {
             Ok(mut audio_config) => {
                 audio_config.remote_configuration = audio_config.local_configuration.clone();
                 let stop_io = CancellationToken::new();
@@ -303,6 +309,7 @@ where
             Err(error) => Err(error),
         };
 
+        self.inner.core_state.reset_peer_output_volume(&peer_id);
         self.inner.core_state.end_audio_test.lock().await.take();
         self.inner.core_state.in_call.store(false, Relaxed);
         result
@@ -383,27 +390,19 @@ where
     }
 
     pub fn set_rms_threshold(&self, decimal: f32) {
-        let threshold = db_to_multiplier(decimal);
-        self.inner
-            .core_state
-            .rms_threshold
-            .store(threshold, Relaxed);
+        self.inner.core_state.set_rms_threshold(decimal);
     }
 
     pub fn set_input_volume(&self, decibel: f32) {
-        let multiplier = db_to_multiplier(decibel);
-        self.inner
-            .core_state
-            .input_volume
-            .store(multiplier, Relaxed);
+        self.inner.core_state.set_input_volume(decibel)
     }
 
     pub fn set_output_volume(&self, decibel: f32) {
-        let multiplier = db_to_multiplier(decibel);
-        self.inner
-            .core_state
-            .output_volume
-            .store(multiplier, Relaxed);
+        self.inner.core_state.set_output_volume(decibel);
+    }
+
+    pub fn set_contact_output_volume(&self, contact: &Contact) {
+        self.inner.core_state.set_peer_output_volume(contact);
     }
 
     pub fn set_deafened(&self, deafened: bool) {

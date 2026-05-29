@@ -108,12 +108,7 @@ where
     ) -> TelepathyCore<C, S, H> {
         Self {
             host,
-            core_state: CoreState {
-                network_config: network_config.clone(),
-                screenshare_config: screenshare_config.clone(),
-                codec_config: codec_config.clone(),
-                ..CoreState::default()
-            },
+            core_state: CoreState::new(network_config, screenshare_config, codec_config),
             room_state: Default::default(),
             session_states: Default::default(),
             start_session: None,
@@ -168,7 +163,7 @@ where
                             select! {
                                 _ = manager_clone.restart_manager.notified() => (),
                                 _ = sleep_until(next_launch) => (),
-                            };
+                            }
                         }
                     } else {
                         Span::current().record("restart_count", retries);
@@ -414,9 +409,13 @@ where
                 id: Uuid::new_v4().to_string(),
                 nickname: String::from("GroupContact"),
                 peer_id: peer,
+                output_volume: 0_f32,
                 is_room_only: true,
             }
         });
+
+        // seed the initial per-contact output volume
+        self.core_state.set_peer_output_volume(&contact);
 
         self.session_outer(peer, &connection, &state, &contact, message_channel)
             .await;
@@ -429,6 +428,8 @@ where
         let mut states = self.session_states.write().await;
         if states.get(&peer).map(|s| s.id == state.id).unwrap_or(false) {
             states.remove(&peer);
+            // clean up output volume state
+            self.core_state.reset_peer_output_volume(&contact.peer_id);
         }
         drop(states);
 
@@ -908,6 +909,7 @@ where
         // Setup output (stream is managed internally)
         let mut output_helper = self
             .setup_output(
+                call_state.peer,
                 call_state.remote_configuration.sample_rate as f64,
                 codec_config.0,
                 &statistics_state,
@@ -1232,6 +1234,7 @@ where
                             // setup output stack
                             let mut helper = self
                                 .setup_output(
+                                    state.peer,
                                     state.remote_configuration.sample_rate as f64,
                                     true,
                                     &statistics_state,
