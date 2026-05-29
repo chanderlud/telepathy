@@ -42,6 +42,7 @@ pub(crate) enum ErrorKind {
     NoEncoderAvailable,
     NoIdentityAvailable,
     CallAlreadyActive,
+    SessionStopped,
     NoSessionForContact,
     ManagerRestartDuringCall,
     AttachmentsTooLarge,
@@ -209,6 +210,7 @@ impl Display for Error {
                 ErrorKind::NoEncoderAvailable => "No encoder available".to_string(),
                 ErrorKind::NoIdentityAvailable => "No identity available".to_string(),
                 ErrorKind::CallAlreadyActive => "A call is already active".to_string(),
+                ErrorKind::SessionStopped => "Session stopped".to_string(),
                 ErrorKind::NoSessionForContact => "No session found for contact".to_string(),
                 ErrorKind::ManagerRestartDuringCall =>
                     "Cannot restart manager while a call is active".to_string(),
@@ -226,6 +228,10 @@ impl Error {
             self.kind,
             ErrorKind::KanalReceive(_) | ErrorKind::TransportRecv | ErrorKind::TransportSend
         )
+    }
+
+    pub(crate) fn is_session_stopped(&self) -> bool {
+        matches!(self.kind, ErrorKind::SessionStopped)
     }
 
     pub(crate) fn is_audio_error(&self) -> bool {

@@ -17,7 +17,7 @@ use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::core::TelepathyCore;
 use crate::internal::error::{Error, ErrorKind};
 use crate::internal::messages::{Attachment, ProtocolMessage};
-use crate::internal::state::{EarlyCallState, RoomState, SessionState};
+use crate::internal::state::{CallSlotState, EarlyCallState, RoomState, SessionState};
 pub(crate) use crate::internal::utils::{JoinHandle, spawn_task};
 use crate::overlay::Overlay;
 use crate::types::{ChatMessage, CodecConfig, Contact, NetworkConfig, ScreenshareConfig};
@@ -107,19 +107,35 @@ where
 
     /// Attempts to start a call through an existing session
     pub async fn start_call(&self, contact: &Contact) -> Result<()> {
-        if self.inner.is_call_active().await {
+        if !self
+            .inner
+            .core_state
+            .call_slot
+            .try_acquire(CallSlotState::PendingOutgoing, Some(contact.peer_id))
+        {
             return Err(ErrorKind::CallAlreadyActive.into());
         }
 
-        if let Some(state) = self.inner.session_states.read().await.get(&contact.peer_id) {
-            #[cfg(target_family = "wasm")]
-            self.inner.init_web_audio().await?;
+        let Some(state) = self
+            .inner
+            .session_states
+            .read()
+            .await
+            .get(&contact.peer_id)
+            .cloned()
+        else {
+            self.inner.core_state.call_slot.release();
+            return Err(ErrorKind::NoSessionForContact.into());
+        };
 
-            state.start_call.notify_one();
-            Ok(())
-        } else {
-            Err(ErrorKind::NoSessionForContact.into())
+        #[cfg(target_family = "wasm")]
+        if let Err(error) = self.inner.init_web_audio().await {
+            self.inner.core_state.call_slot.release();
+            return Err(error);
         }
+
+        state.start_call.notify_one();
+        Ok(())
     }
 
     /// Ends the current audio test, room, or call in that order
@@ -130,13 +146,8 @@ where
         } else if let Some(room_state) = self.inner.room_state.read().await.as_ref() {
             debug!("ending room");
             room_state.end_call.notify_one();
-        } else if let Some(session_state) = self
-            .inner
-            .session_states
-            .read()
-            .await
-            .values()
-            .find(|s| s.in_call.load(Relaxed))
+        } else if let Some(peer) = self.inner.core_state.call_slot.direct_peer()
+            && let Some(session_state) = self.inner.session_states.read().await.get(&peer)
         {
             debug!("ending call");
             session_state.end_call.notify_one();
@@ -147,12 +158,20 @@ where
 
     /// The only entry point into participating in a room
     pub async fn join_room(&self, member_strings: Vec<String>) -> Result<()> {
-        if self.inner.is_call_active().await {
+        if !self
+            .inner
+            .core_state
+            .call_slot
+            .try_acquire(CallSlotState::RoomCall, None)
+        {
             return Err(ErrorKind::CallAlreadyActive.into());
         }
 
         #[cfg(target_family = "wasm")]
-        self.inner.init_web_audio().await?;
+        if let Err(error) = self.inner.init_web_audio().await {
+            self.inner.core_state.call_slot.release();
+            return Err(error);
+        }
 
         // parse members
         let members: Vec<_> = member_strings
@@ -166,10 +185,13 @@ where
         // gracefully ends the room call
         let end_call = Arc::new(Notify::new());
         // the same early call state is used throughout the room, the real peer ids are set later
-        let call_state = self
-            .inner
-            .setup_call(SecretKey::generate().public())
-            .await?;
+        let call_state = match self.inner.setup_call(SecretKey::generate().public()).await {
+            Ok(state) => state,
+            Err(error) => {
+                self.inner.core_state.call_slot.release();
+                return Err(error);
+            }
+        };
         // set room state
         let old_state_option = self.inner.room_state.write().await.replace(RoomState {
             peers: members.clone(),
@@ -214,7 +236,7 @@ where
 
     /// Restarts the session manager
     pub async fn restart_manager(&self) -> Result<()> {
-        if self.inner.is_call_active().await {
+        if self.inner.core_state.call_slot.occupied() {
             Err(ErrorKind::ManagerRestartDuringCall.into())
         } else {
             // reset sessions so manager can clean up
@@ -256,6 +278,10 @@ where
         self.inner
             .core_state
             .reset_peer_output_volume(&contact.peer_id);
+        self.inner
+            .core_state
+            .call_slot
+            .release_if_pending_for_peer(contact.peer_id);
         if let Some(state) = self
             .inner
             .session_states
@@ -269,20 +295,24 @@ where
 
     /// Blocks while an audio test is running
     pub async fn audio_test(&self) -> Result<()> {
-        if self.inner.is_call_active().await {
+        if !self
+            .inner
+            .core_state
+            .call_slot
+            .try_acquire(CallSlotState::AudioTest, None)
+        {
             return Err(ErrorKind::CallAlreadyActive.into());
         }
 
         // update state right away to handle the test being ended quickly
         let end_call = Arc::new(Notify::new());
-        self.inner.core_state.in_call.store(true, Relaxed);
         *self.inner.core_state.end_audio_test.lock().await = Some(end_call.clone());
 
         #[cfg(target_family = "wasm")]
         if let Err(error) = self.inner.init_web_audio().await {
             // clean up state before propagating error
             self.inner.core_state.end_audio_test.lock().await.take();
-            self.inner.core_state.in_call.store(false, Relaxed);
+            self.inner.core_state.call_slot.release();
             return Err(error);
         }
 
@@ -311,7 +341,7 @@ where
 
         self.inner.core_state.reset_peer_output_volume(&peer_id);
         self.inner.core_state.end_audio_test.lock().await.take();
-        self.inner.core_state.in_call.store(false, Relaxed);
+        self.inner.core_state.call_slot.release();
         result
     }
 

@@ -5,6 +5,8 @@ use iroh::endpoint::Connection;
 use serde::Serialize;
 use speedy::{Readable, Writable};
 
+pub(crate) const SESSION_STOPPED_REASON: &str = "session stopped";
+
 #[derive(Readable, Writable, Debug, Clone)]
 pub(crate) enum ProtocolMessage {
     Hello {
@@ -34,7 +36,9 @@ impl ProtocolMessage {
     pub(crate) fn error_goodbye(error: &Error) -> Self {
         Self::Goodbye {
             reason: Some(
-                if error.is_audio_error() {
+                if error.is_session_stopped() {
+                    SESSION_STOPPED_REASON
+                } else if error.is_audio_error() {
                     "audio device error"
                 } else {
                     "an error occurred"

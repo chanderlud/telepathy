@@ -116,7 +116,7 @@ impl WebAudioWrapper {
     /// 2. Requests microphone access via `navigator.mediaDevices.getUserMedia`
     /// 3. Creates inline AudioWorklet processor (embedded JavaScript)
     /// 4. Registers processor via Blob URL
-    /// 5. Connects: MediaStreamSource → AudioWorkletNode
+    /// 5. Connects: MediaStreamSource -> AudioWorkletNode
     /// 6. Sets up message handler for receiving audio data
     ///
     /// # Errors

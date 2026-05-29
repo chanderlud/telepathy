@@ -282,6 +282,40 @@ async def test_call_simultaneous_dial(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("profile", NETWORK_PROFILES, ids=lambda profile: profile.name)
+async def test_call_hello_ack_timeout(
+    topology: TopologyManager,
+    relay: RelayProcess,
+    cli_pair: dict[str, CliProcess],
+    profile: NetworkProfile,
+) -> None:
+    _ = topology, relay, profile
+    await _run_scenario("call_hello_ack_timeout.yaml", cli_pair)
+
+    alice = cli_pair["alice"]
+    alice_lines = alice.stdout_lines()
+
+    def _call_states(messages: list[dict]) -> list[str]:
+        states: list[str] = []
+        for message in messages:
+            if message.get("kind") != "event" or message.get("type") != "call_state":
+                continue
+            state = message.get("state")
+            if isinstance(state, str):
+                states.append(state)
+            elif isinstance(state, dict) and len(state) == 1:
+                only_key = next(iter(state.keys()))
+                if isinstance(only_key, str):
+                    states.append(only_key)
+        return states
+
+    alice_call_states = _call_states(alice_lines)
+    assert (
+        "CallEnded" in alice_call_states
+    ), f"alice did not receive call_state CallEnded; observed {alice_call_states}"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "profile",
     NETWORK_PROFILES,

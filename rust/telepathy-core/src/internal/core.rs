@@ -1,11 +1,19 @@
+//! `TelepathyCore` lifecycle: session manager spawns per-peer sessions, each session
+//! negotiates incoming or outgoing calls, then transitions into direct [`call_handshake`]
+//! or room [`room_handshake`] handling.
+
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::error::ErrorKind;
 use crate::internal::helpers::OutputHelper;
-use crate::internal::messages::{ProtocolMessage, RoomMessage, StartScreenshare};
+use crate::internal::messages::{
+    AudioHeader, ProtocolMessage, RoomMessage, SESSION_STOPPED_REASON, StartScreenshare,
+};
 use crate::internal::sockets::{
     ConstConnection, DynamicConnection, SharedConnections, audio_input, audio_output,
 };
-use crate::internal::state::{CoreState, StatisticsCollectorState};
+use crate::internal::state::{
+    CallSlot, CallSlotAcquireResult, CallSlotState, CoreState, StatisticsCollectorState,
+};
 use crate::internal::utils::{JoinHandle, spawn_task};
 #[cfg(target_os = "ios")]
 use crate::internal::utils::{configure_audio_session, deactivate_audio_session};
@@ -49,9 +57,8 @@ use wasmtimer::std::Instant;
 #[cfg(target_family = "wasm")]
 use wasmtimer::tokio::{Interval, interval, sleep_until, timeout};
 
-fn should_keep_new_session(local_peer: &PublicKey, peer: &PublicKey, new_is_client: bool) -> bool {
-    new_is_client == (local_peer < peer)
-}
+const MANAGER_RETRY_BASE_MS: u64 = 500;
+const MANAGER_RETRY_MAX_MS: u64 = 30_000;
 
 pub(crate) struct TelepathyCore<C, S, H>
 where
@@ -157,7 +164,8 @@ where
                             error = %error
                         );
                         retries += 1;
-                        let next_launch = last_launch + Duration::from_millis((retries ^ 2) * 500);
+                        let next_launch =
+                            last_launch + Duration::from_millis(manager_retry_delay_ms(retries));
                         if next_launch > Instant::now() {
                             // wait for the next launch or restart
                             select! {
@@ -423,6 +431,9 @@ where
         // gracefully close the connection
         connection.close(VarInt::from_u32(0), &[]);
 
+        // release any pending negotiation owned by this session
+        self.core_state.call_slot.release_if_pending_for_peer(peer);
+
         // if the state exists and has the same id, clean it up
         // if a new session state already exists with a new ID, we don't want to clean it up
         let mut states = self.session_states.write().await;
@@ -470,7 +481,7 @@ where
             connection.accept_bi().await
         };
 
-        let (send, recv) = match stream_result {
+        let stream = match stream_result {
             Ok(streams) => streams,
             Err(error) => {
                 error!(event = "session_stream_failure", error = ?error, peer.id = %peer);
@@ -481,32 +492,31 @@ where
         // controls keep alive messages
         let mut keep_alive = interval(KEEP_ALIVE);
         // the length delimited transport used for the session
-        let mut send_transport = LengthDelimitedCodec::builder()
+        let mut send = LengthDelimitedCodec::builder()
             .max_frame_length(SESSION_MAX_FRAME_LENGTH)
             .length_field_type::<u64>()
-            .new_write(send);
-        let mut recv_transport = LengthDelimitedCodec::builder()
+            .new_write(stream.0);
+        let mut recv = LengthDelimitedCodec::builder()
             .max_frame_length(SESSION_MAX_FRAME_LENGTH)
             .length_field_type::<u64>()
-            .new_read(recv);
+            .new_read(stream.1);
 
         // the dialer for room sessions always starts a call
         if self.is_in_room(&peer).await && connection.side().is_client() {
             state.start_call.notify_one();
         }
 
+        let mut io = SessionIo {
+            send: &mut send,
+            recv: &mut recv,
+            connection,
+            state,
+            message_channel: &mut message_channel,
+            keep_alive: &mut keep_alive,
+        };
+
         loop {
-            let result = self
-                .session_inner(
-                    contact,
-                    &mut send_transport,
-                    &mut recv_transport,
-                    connection,
-                    state,
-                    &mut message_channel,
-                    &mut keep_alive,
-                )
-                .await;
+            let result = self.session_inner(contact, &mut io).await;
 
             match (result, contact.is_room_only) {
                 // the session was stopped
@@ -518,20 +528,21 @@ where
                 }
                 // normal session continue
                 (Ok(true), false) => {
-                    // the session is not in a call
                     debug!(event = "session_continuing_after_call");
-                    state.in_call.store(false, Relaxed);
                 }
                 (Err(error), room_only) => {
-                    // if an error occurred during a non-room call, it is ended now
-                    if state.in_call.swap(false, Relaxed)
+                    let peer = contact.peer_id;
+                    let call_slot = &self.core_state.call_slot;
+                    if call_slot.direct_peer() == Some(peer)
+                        && call_slot.current() == CallSlotState::ActiveDirect
                         && !room_only
-                        && !self.is_in_room(&contact.peer_id).await
+                        && !self.is_in_room(&peer).await
                     {
                         warn!(event = "session_error_while_call_active", ?error);
                         self.callbacks
                             .call_state(CallState::CallEnded(error.to_string(), false))
                             .await;
+                        call_slot.release();
                     }
 
                     if room_only || error.is_session_critical() {
@@ -546,6 +557,474 @@ where
         }
     }
 
+    /// Routes a negotiated call into [`room_handshake`] or [`call_handshake`] depending on call kind.
+    ///
+    /// On [`HandshakeDispatch::Completed`] the caller must call [`finalize_handshake_success`].
+    async fn perform_call_handshake_dispatch(
+        &self,
+        io: &mut SessionIo<'_>,
+        pending_slot: &mut Option<PendingDirectCallSlot<'_>>,
+        call_state: EarlyCallState,
+        is_in_room: bool,
+    ) -> Result<HandshakeDispatch> {
+        let call_slot = &self.core_state.call_slot;
+        if is_in_room {
+            debug_assert_eq!(call_slot.current(), CallSlotState::RoomCall);
+            self.room_handshake(io.send, io.recv, io.connection, call_state)
+                .await?;
+            Ok(HandshakeDispatch::Completed)
+        } else if let Some(slot) = pending_slot.take() {
+            slot.into_handshake();
+            match self
+                .call_handshake(
+                    io.send,
+                    io.recv,
+                    io.connection,
+                    &mut io.message_channel.1,
+                    io.state,
+                    call_state,
+                )
+                .await
+            {
+                Ok(()) => Ok(HandshakeDispatch::Completed),
+                Err(error) if error.is_session_stopped() => Ok(HandshakeDispatch::SessionStopped),
+                Err(error) => Err(error),
+            }
+        } else {
+            Ok(HandshakeDispatch::Completed)
+        }
+    }
+
+    /// Decides how to claim the call slot for an incoming `Hello` before accept/reject negotiation.
+    async fn acquire_incoming_call_slot<'a>(
+        &self,
+        send: &mut FramedWrite<SendStream, LengthDelimitedCodec>,
+        call_slot: &'a CallSlot,
+        peer: PublicKey,
+        is_in_room: bool,
+        peer_room_hash: Option<u64>,
+        local_room_hash: Option<u64>,
+    ) -> Result<IncomingSlotDecision<'a>> {
+        // Three cases: matching room call (peer already in our room) -> room handshake;
+        // mismatched room call -> reject; direct call -> try to acquire the direct call slot.
+        if is_in_room && peer_room_hash == local_room_hash {
+            debug_assert_eq!(call_slot.current(), CallSlotState::RoomCall);
+            Ok(IncomingSlotDecision::RoomMatch)
+        } else if peer_room_hash.is_some() {
+            info!(event = "room_call_rejected_not_in_room");
+            write_message(send, &ProtocolMessage::Reject).await?;
+            debug_assert!(!call_slot.occupied() || call_slot.current() == CallSlotState::RoomCall);
+            Ok(IncomingSlotDecision::RejectedNotInRoom)
+        } else {
+            match PendingDirectCallSlot::try_acquire_incoming(call_slot, peer) {
+                Some(slot) => Ok(IncomingSlotDecision::Acquired(slot)),
+                None => {
+                    info!(event = "call_busy_sent_call_already_active");
+                    write_message(send, &ProtocolMessage::Busy).await?;
+                    debug_assert_ne!(call_slot.current(), CallSlotState::PendingIncoming);
+                    Ok(IncomingSlotDecision::Busy)
+                }
+            }
+        }
+    }
+
+    /// Handles one protocol message received while awaiting `HelloAck` on an outgoing call.
+    async fn handle_outgoing_hello_response(
+        &self,
+        io: &mut SessionIo<'_>,
+        args: &OutgoingCallArgs<'_>,
+        call_state: &mut EarlyCallState,
+        pending_slot: &mut Option<PendingDirectCallSlot<'_>>,
+        message: ProtocolMessage,
+    ) -> Result<HelloResponse> {
+        let call_slot = &self.core_state.call_slot;
+        let is_in_room = args.room_hash.is_some();
+        match message {
+            ProtocolMessage::HelloAck { audio_header } => {
+                call_state.remote_configuration = audio_header;
+                match self
+                    .perform_call_handshake_dispatch(
+                        io,
+                        pending_slot,
+                        call_state.clone(),
+                        is_in_room,
+                    )
+                    .await?
+                {
+                    HandshakeDispatch::Completed => {
+                        finalize_handshake_success(io.keep_alive, call_slot);
+                        Ok(HelloResponse::Completed)
+                    }
+                    HandshakeDispatch::SessionStopped => Ok(HelloResponse::SessionStopped),
+                }
+            }
+            ProtocolMessage::Goodbye { reason: Some(m) } => Ok(HelloResponse::EndedWith(format!(
+                "{} did not accept the call because of {m}",
+                args.contact.nickname
+            ))),
+            // In a room, peer-level reject/busy is non-fatal: other peers may still join, so keep waiting.
+            ProtocolMessage::Reject | ProtocolMessage::Busy if is_in_room => {
+                info!(event = "room_peer_rejected_or_busy_ignored");
+                Ok(HelloResponse::Continue)
+            }
+            ProtocolMessage::Goodbye { .. } | ProtocolMessage::Reject => {
+                info!(event = "call_not_accepted");
+                Ok(HelloResponse::EndedWith(format!(
+                    "{} did not accept the call",
+                    args.contact.nickname
+                )))
+            }
+            ProtocolMessage::Busy => {
+                info!(event = "call_peer_busy");
+                Ok(HelloResponse::EndedWith(format!(
+                    "{} is busy",
+                    args.contact.nickname
+                )))
+            }
+            ProtocolMessage::KeepAlive => Ok(HelloResponse::Continue),
+            // Simultaneous dial: both sides sent Hello before receiving the other's. The lower peer-id
+            // yields and accepts the incoming Hello as if it were the callee.
+            ProtocolMessage::Hello { audio_header, .. } => {
+                // We are the lower peer -> we lose the tiebreaker -> accept their Hello here
+                // (mirrors negotiate_incoming_call's HelloAck path). Otherwise, we win and keep
+                // waiting for their HelloAck.
+                if self.peer_id().await < args.contact.peer_id {
+                    info!(event = "simultaneous_dial_detected_yielding");
+                    if !audio_header.is_valid() {
+                        warn!(event = "invalid_audio_header_rejected");
+                        write_message(io.send, &ProtocolMessage::Reject).await?;
+                        Ok(HelloResponse::EndedSilently)
+                    } else {
+                        call_state.remote_configuration = audio_header;
+                        write_message(
+                            io.send,
+                            &ProtocolMessage::HelloAck {
+                                audio_header: call_state.local_configuration.clone(),
+                            },
+                        )
+                        .await?;
+
+                        match self
+                            .perform_call_handshake_dispatch(
+                                io,
+                                pending_slot,
+                                call_state.clone(),
+                                is_in_room,
+                            )
+                            .await?
+                        {
+                            HandshakeDispatch::Completed => {
+                                finalize_handshake_success(io.keep_alive, call_slot);
+                                Ok(HelloResponse::Completed)
+                            }
+                            HandshakeDispatch::SessionStopped => Ok(HelloResponse::SessionStopped),
+                        }
+                    }
+                } else {
+                    info!(event = "simultaneous_dial_detected_winning");
+                    Ok(HelloResponse::Continue)
+                }
+            }
+            message => {
+                warn!(event = "hello_ack_flow_unexpected_message", ?message);
+                Ok(HelloResponse::EndedWith(format!(
+                    "Received an unexpected message from {}",
+                    args.contact.nickname
+                )))
+            }
+        }
+    }
+
+    /// Negotiates an incoming call after `session_inner` has parsed and validated a peer `Hello`.
+    ///
+    /// Handles room vs direct routing, the accept prompt for direct calls, accept/reject/busy
+    /// responses, and on success transitions into [`room_handshake`] or [`call_handshake`].
+    ///
+    /// Pre-condition: the peer `Hello` is already validated by the caller.
+    /// Post-condition: on all returns except [`IncomingNegotiationOutcome::HandshakeComplete`],
+    /// the global call slot is idle or in [`CallSlotState::RoomCall`].
+    async fn negotiate_incoming_call(
+        &self,
+        io: &mut SessionIo<'_>,
+        args: IncomingCallArgs<'_>,
+    ) -> Result<IncomingNegotiationOutcome> {
+        let peer = args.contact.peer_id;
+        let call_slot = &self.core_state.call_slot;
+        let mut pending_slot = None;
+        let mut cancel_prompt = None;
+        let mut accept_handle = None;
+
+        match self
+            .acquire_incoming_call_slot(
+                io.send,
+                call_slot,
+                peer,
+                args.is_in_room,
+                args.peer_room_hash,
+                args.local_room_hash,
+            )
+            .await?
+        {
+            IncomingSlotDecision::RoomMatch => {}
+            IncomingSlotDecision::RejectedNotInRoom | IncomingSlotDecision::Busy => {
+                return Ok(IncomingNegotiationOutcome::ContinueSession);
+            }
+            IncomingSlotDecision::Acquired(slot) => {
+                pending_slot = Some(slot);
+                // Only direct calls show an accept prompt; room calls auto-accept.
+                let cancel = Arc::new(Notify::new());
+                accept_handle = Some(self.callbacks.get_accept_handle(
+                    &args.contact.id,
+                    args.other_ringtone,
+                    &cancel,
+                ));
+                cancel_prompt = Some(cancel);
+            }
+        }
+
+        let cancel_prompt_clone = cancel_prompt.clone();
+        let accept_future = async {
+            if let Some(accept_handle) = accept_handle {
+                select! {
+                    accept_result = accept_handle => accept_result,
+                    _ = io.state.start_call.notified() => {
+                        // Local user pressed "accept" via start_call before the platform prompt resolved;
+                        // cancel the prompt and proceed.
+                        info!(event = "call_started_while_prompting");
+                        if let Some(cancel) = cancel_prompt_clone {
+                            cancel.notify_one();
+                        }
+                        Ok(true)
+                    },
+                }
+            } else {
+                Ok(true)
+            }
+        };
+
+        select! {
+            _ = io.state.stop_session.cancelled() => {
+                info!(event = "session_stopped_during_accept_prompt");
+                if let Some(cancel) = cancel_prompt {
+                    cancel.notify_one();
+                }
+                abort_negotiation_session_stopped(io.send, &mut pending_slot, call_slot).await;
+                Ok(IncomingNegotiationOutcome::SessionStopped)
+            }
+            accept_result = accept_future => {
+                if !accept_result? {
+                    if io.state.stop_session.is_cancelled() {
+                        abort_negotiation_session_stopped(io.send, &mut pending_slot, call_slot)
+                            .await;
+                        return Ok(IncomingNegotiationOutcome::SessionStopped);
+                    }
+                    write_message(io.send, &ProtocolMessage::Reject).await?;
+                    release_pending_and_assert_idle(&mut pending_slot, call_slot);
+                    return Ok(IncomingNegotiationOutcome::ContinueSession);
+                }
+
+                match self.setup_call(peer).await {
+                    Ok(mut call_state) => {
+                        call_state.remote_configuration = args.remote_audio_header;
+                        write_message(
+                            io.send,
+                            &ProtocolMessage::HelloAck {
+                                audio_header: call_state.local_configuration.clone(),
+                            },
+                        )
+                        .await?;
+
+                        match self
+                            .perform_call_handshake_dispatch(
+                                io,
+                                &mut pending_slot,
+                                call_state,
+                                args.is_in_room,
+                            )
+                            .await?
+                        {
+                            HandshakeDispatch::Completed => {
+                                finalize_handshake_success(io.keep_alive, call_slot);
+                                Ok(IncomingNegotiationOutcome::HandshakeComplete)
+                            }
+                            HandshakeDispatch::SessionStopped => {
+                                Ok(IncomingNegotiationOutcome::SessionStopped)
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        error!(event = "setup_call_failed", ?error);
+                        write_message(
+                            io.send,
+                            &ProtocolMessage::Goodbye {
+                                reason: Some("audio device error".to_string()),
+                            },
+                        )
+                        .await?;
+                        release_pending_and_assert_idle(&mut pending_slot, call_slot);
+                        Err(error)
+                    }
+                }
+            }
+            result = read_message(io.recv) => {
+                // Receiving any message during the accept prompt means the caller hung up (Goodbye)
+                // or sent something out-of-protocol; abort negotiation but keep the session alive.
+                if let Some(cancel) = cancel_prompt {
+                    cancel.notify_one();
+                }
+                release_pending_and_assert_idle(&mut pending_slot, call_slot);
+                let message = result?;
+                warn!(event = "accept_prompt_interrupted_by_message", ?message);
+                Ok(IncomingNegotiationOutcome::ContinueSession)
+            }
+        }
+    }
+
+    /// Negotiates an outgoing call when the local user starts a call via [`SessionState::start_call`].
+    ///
+    /// Sends `Hello`, awaits `HelloAck` under a (possibly ringtone-extended) timeout, and resolves
+    /// simultaneous-dial collisions using the peer-id tiebreaker in [`should_keep_new_session`].
+    async fn negotiate_outgoing_call(
+        &self,
+        io: &mut SessionIo<'_>,
+        args: OutgoingCallArgs<'_>,
+    ) -> Result<OutgoingNegotiationOutcome> {
+        let peer = args.contact.peer_id;
+        let call_slot = &self.core_state.call_slot;
+        let is_in_room = args.room_hash.is_some();
+        let mut pending_slot = None;
+
+        if is_in_room {
+            if call_slot.current() != CallSlotState::RoomCall {
+                warn!(event = "outgoing_room_call_without_room_slot");
+                debug_assert_ne!(call_slot.current(), CallSlotState::RoomCall);
+                return Ok(OutgoingNegotiationOutcome::CallEnded);
+            }
+        } else {
+            match PendingDirectCallSlot::try_acquire_outgoing(call_slot, peer) {
+                Some(slot) => pending_slot = Some(slot),
+                None => {
+                    warn!(event = "call_slot_busy_outgoing", peer.id = %peer);
+                    self.callbacks
+                        .call_state(CallState::CallEnded(
+                            "A call is already active".to_string(),
+                            true,
+                        ))
+                        .await;
+                    debug_assert!(
+                        !call_slot.occupied() || call_slot.current() == CallSlotState::RoomCall
+                    );
+                    return Ok(OutgoingNegotiationOutcome::CallEnded);
+                }
+            }
+        }
+
+        let other_ringtone = self.load_ringtone().await;
+        let mut call_state = match self.setup_call(peer).await {
+            Ok(state) => state,
+            Err(error) => {
+                self.callbacks
+                    .call_state(CallState::CallEnded(error.to_string(), false))
+                    .await;
+                release_pending_and_assert_idle(&mut pending_slot, call_slot);
+                return Err(error);
+            }
+        };
+        // Extend the timeout when we're sending a custom ringtone so the callee's device has time
+        // to download and play it before deciding.
+        let hello_timeout = HELLO_TIMEOUT
+            + if other_ringtone.is_some() {
+                Duration::from_secs(10)
+            } else {
+                Default::default()
+            };
+        write_message(
+            io.send,
+            &ProtocolMessage::Hello {
+                ringtone: other_ringtone,
+                audio_header: call_state.local_configuration.clone(),
+                room_hash: args.room_hash,
+            },
+        )
+        .await?;
+
+        loop {
+            select! {
+                _ = io.state.stop_session.cancelled() => {
+                    info!(event = "session_stopped_waiting_hello_ack");
+                    release_pending_and_assert_idle(&mut pending_slot, call_slot);
+                    return Ok(OutgoingNegotiationOutcome::SessionStopped);
+                }
+                _ = io.state.end_call.notified() => {
+                    info!(event = "end_call_notified_waiting_hello_ack");
+                    write_message(io.send, &ProtocolMessage::Goodbye { reason: None }).await?;
+                    release_pending_and_assert_idle(&mut pending_slot, call_slot);
+                    return Ok(OutgoingNegotiationOutcome::CallEnded);
+                }
+                result = timeout(hello_timeout, read_message(io.recv)) => {
+                    match result {
+                        Err(_elapsed) => {
+                            warn!(
+                                event = "hello_ack_timeout",
+                                hello_timeout_ms = hello_timeout.as_millis() as u64,
+                                peer.id = %args.contact.peer_id
+                            );
+                            self.callbacks
+                                .call_state(CallState::CallEnded(
+                                    format!(
+                                        "{} did not respond to the call",
+                                        args.contact.nickname
+                                    ),
+                                    true,
+                                ))
+                                .await;
+                            release_pending_and_assert_idle(&mut pending_slot, call_slot);
+                            return Ok(OutgoingNegotiationOutcome::CallEnded);
+                        }
+                        Ok(Err(error)) => return Err(error),
+                        Ok(Ok(message)) => {
+                            match self
+                                .handle_outgoing_hello_response(
+                                    io,
+                                    &args,
+                                    &mut call_state,
+                                    &mut pending_slot,
+                                    message,
+                                )
+                                .await?
+                            {
+                                HelloResponse::Completed => {
+                                    return Ok(OutgoingNegotiationOutcome::HandshakeComplete);
+                                }
+                                HelloResponse::SessionStopped => {
+                                    return Ok(OutgoingNegotiationOutcome::SessionStopped);
+                                }
+                                HelloResponse::EndedWith(message) => {
+                                    self.callbacks
+                                        .call_state(CallState::CallEnded(message, true))
+                                        .await;
+                                    release_pending_and_assert_idle(
+                                        &mut pending_slot,
+                                        call_slot,
+                                    );
+                                    return Ok(OutgoingNegotiationOutcome::CallEnded);
+                                }
+                                HelloResponse::EndedSilently => {
+                                    release_pending_and_assert_idle(
+                                        &mut pending_slot,
+                                        call_slot,
+                                    );
+                                    return Ok(OutgoingNegotiationOutcome::CallEnded);
+                                }
+                                HelloResponse::Continue => continue,
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// The inner logic of a session that may execute many times
     /// Returns true if the session should continue
     #[instrument(
@@ -553,41 +1032,32 @@ where
         skip_all,
         fields(peer.id = %contact.peer_id, room.hash = field::Empty)
     )]
-    async fn session_inner(
-        &self,
-        contact: &Contact,
-        send: &mut FramedWrite<SendStream, LengthDelimitedCodec>,
-        recv: &mut FramedRead<RecvStream, LengthDelimitedCodec>,
-        connection: &Connection,
-        state: &Arc<SessionState>,
-        message_channel: &mut (Sender<ProtocolMessage>, Receiver<ProtocolMessage>),
-        keep_alive: &mut Interval,
-    ) -> Result<bool> {
-        let room_hash = self.room_hash().await;
-        Span::current().record("room.hash", field::debug(room_hash));
+    async fn session_inner(&self, contact: &Contact, io: &mut SessionIo<'_>) -> Result<bool> {
+        let local_room_hash = self.room_hash().await;
+        Span::current().record("room.hash", field::debug(local_room_hash));
         info!(event = "session_waiting_for_event");
 
         select! {
-            _ = state.stop_session.cancelled() => {
+            _ = io.state.stop_session.cancelled() => {
                 info!(event = "session_stopped");
                 Ok(false)
             },
-            result = read_message(recv) => {
+            result = read_message(io.recv) => {
                 info!(event = "session_message_received", ?result);
                 let mut other_ringtone = None;
                 let remote_audio_header;
-                let room_hash_option;
+                let peer_room_hash;
 
                 match result? {
                     ProtocolMessage::Hello { ringtone, audio_header, room_hash } => {
                         if !audio_header.is_valid() {
                             warn!(event = "invalid_audio_header_rejected");
-                            write_message(send, &ProtocolMessage::Reject).await?;
+                            write_message(io.send, &ProtocolMessage::Reject).await?;
                             return Ok(false);
                         }
 
                         remote_audio_header = audio_header;
-                        room_hash_option = room_hash;
+                        peer_room_hash = room_hash;
                         if self.core_state.play_custom_ringtones.load(Relaxed) {
                             other_ringtone = ringtone;
                         }
@@ -600,217 +1070,36 @@ where
                 }
 
                 let is_in_room = self.is_in_room(&contact.peer_id).await;
-                let mut cancel_prompt = None;
-                let mut accept_handle = None;
-
-                if is_in_room && room_hash_option == room_hash {
-                    // automatically accept calls from member of current room
-                } else if room_hash_option.is_some() {
-                    // the call is part of a room, but the client is not in the room
-                    info!(event = "room_call_rejected_not_in_room");
-                    write_message(send, &ProtocolMessage::Reject).await?;
-                    return Ok(true);
-                } else if self.is_call_active().await {
-                    // do not accept another call if already active
-                    info!(event = "call_busy_sent_call_already_active");
-                    write_message(send, &ProtocolMessage::Busy).await?;
-                    return Ok(true);
-                } else {
-                    let cancel = Arc::new(Notify::new());
-                    accept_handle = Some(self.callbacks.get_accept_handle(&contact.id, other_ringtone, &cancel));
-                    cancel_prompt = Some(cancel);
-                }
-
-                state.in_call.store(true, Relaxed); // blocks the session from being restarted
-
-                let cancel_prompt_clone = cancel_prompt.clone();
-                let accept_future = async {
-                    if let Some(accept_handle) = accept_handle {
-                        select! {
-                            result = accept_handle => result,
-                            _ = state.start_call.notified() => {
-                                info!(event = "call_started_while_prompting");
-                                if let Some(cancel) = cancel_prompt_clone {
-                                    cancel.notify_one();
-                                }
-                                Ok(true)
-                            },
-                        }
-                    } else {
-                        Ok(true)
-                    }
-                };
-
-                select! {
-                    _ = state.stop_session.cancelled() => {
-                        info!(event = "session_stopped_during_accept_prompt");
-                        if let Some(cancel) = cancel_prompt {
-                            cancel.notify_one();
-                        }
-                        return Ok(false);
-                    }
-                    accepted = accept_future => {
-                        if !accepted? {
-                            // reject the call if not accepted
-                            write_message(send, &ProtocolMessage::Reject).await?;
-                            return Ok(true);
-                        }
-
-                        match self.setup_call(contact.peer_id).await {
-                            Ok(mut call_state) => {
-                                // respond with hello ack containing audio header
-                                call_state.remote_configuration = remote_audio_header;
-                                write_message(send, &ProtocolMessage::HelloAck { audio_header: call_state.local_configuration.clone() }).await?;
-
-                                if is_in_room {
-                                    self.room_handshake(send, recv, connection, call_state).await?;
-                                } else {
-                                    // normal call handshake
-                                    self.call_handshake(send, recv, connection, &mut message_channel.1, state, call_state).await?;
-                                }
-
-                                keep_alive.reset(); // start sending normal keep alive messages
-                            }
-                            Err(error) => {
-                                // if the audio input setup fails, other client will be left hanging
-                                error!(event = "setup_call_failed", ?error);
-                                write_message(send, &ProtocolMessage::Goodbye {
-                                    reason: Some("audio device error".to_string())
-                                }).await?;
-                                // still propagate the error
-                                return Err(error);
-                            }
-                        }
-                    }
-                    result = read_message(recv) => {
-                        // always cancel prompt because there is no chance of the call succeeding now
-                        if let Some(cancel) = cancel_prompt {
-                            cancel.notify_one();
-                        }
-                        // propagate errors for handling
-                        let message = result?;
-                        // log message
-                        warn!(event = "accept_prompt_interrupted_by_message", ?message);
-                    }
-                }
-
-                Ok(true)
+                let outcome = self
+                    .negotiate_incoming_call(
+                        io,
+                        IncomingCallArgs {
+                            contact,
+                            remote_audio_header,
+                            peer_room_hash,
+                            other_ringtone,
+                            is_in_room,
+                            local_room_hash,
+                        },
+                    )
+                    .await?;
+                Ok(outcome.to_outcome())
             }
-            _ = state.start_call.notified() => {
-                // limits session restarts
-                state.in_call.store(true, Relaxed);
-
-                let is_in_room = room_hash.is_some();
-                // load custom ringtone if enabled
-                let other_ringtone = self.load_ringtone().await;
-                // initialize call state
-                let mut call_state = self.setup_call(contact.peer_id).await?;
-                // when custom ringtone is used wait longer for a response to account for extra data being sent in Hello
-                let hello_timeout = HELLO_TIMEOUT + if other_ringtone.is_some() { Duration::from_secs(10) } else { Default::default() };
-                // queries the other client for a call
-                write_message(send, &ProtocolMessage::Hello { ringtone: other_ringtone, audio_header: call_state.local_configuration.clone(), room_hash }).await?;
-
-                loop {
-                    select! {
-                        _ = state.stop_session.cancelled() => {
-                            info!(event = "session_stopped_waiting_hello_ack");
-                            return Ok(false);
-                        }
-                        _ = state.end_call.notified() => {
-                            // gracefully end the call & continue the session
-                            info!(event = "end_call_notified_waiting_hello_ack");
-                            write_message(send, &ProtocolMessage::Goodbye { reason: None }).await?;
-                            break;
-                        }
-                        result = timeout(hello_timeout, read_message(recv)) => {
-                            if result.is_err() {
-                                warn!(
-                                    event = "hello_ack_timeout",
-                                    hello_timeout_ms = hello_timeout.as_millis() as u64,
-                                    peer.id = %contact.peer_id
-                                );
-                            }
-                            // handles a variety of outcomes in response to Hello
-                            let message_option = match result?? {
-                                ProtocolMessage::HelloAck { audio_header } => {
-                                    call_state.remote_configuration = audio_header;
-
-                                    if is_in_room {
-                                        self.room_handshake(send, recv, connection, call_state).await?;
-                                    } else {
-                                        // normal call handshake
-                                        self.call_handshake(send, recv, connection, &mut message_channel.1, state, call_state).await?;
-                                    }
-
-                                    keep_alive.reset(); // start sending normal keep alive messages
-                                    None
-                                }
-                                ProtocolMessage::Goodbye { reason: Some(m) } => {
-                                    Some(format!("{} did not accept the call because of {m}", contact.nickname))
-                                }
-                                ProtocolMessage::Reject | ProtocolMessage::Busy if is_in_room => {
-                                    info!(event = "room_peer_rejected_or_busy_ignored");
-                                    None
-                                },
-                                ProtocolMessage::Goodbye { .. } | ProtocolMessage::Reject => {
-                                    info!(event = "call_not_accepted");
-                                    Some(format!("{} did not accept the call", contact.nickname))
-                                },
-                                ProtocolMessage::Busy => {
-                                    info!(event = "call_peer_busy");
-                                    Some(format!("{} is busy", contact.nickname))
-                                },
-                                // keep alive messages are sometimes received here
-                                ProtocolMessage::KeepAlive => continue,
-                                ProtocolMessage::Hello { audio_header, .. } => {
-                                    if self.peer_id().await < contact.peer_id {
-                                        info!(event = "simultaneous_dial_detected_yielding");
-                                        if !audio_header.is_valid() {
-                                            warn!(event = "invalid_audio_header_rejected");
-                                            write_message(send, &ProtocolMessage::Reject).await?;
-                                            None
-                                        } else {
-                                            call_state.remote_configuration = audio_header;
-                                            write_message(send, &ProtocolMessage::HelloAck {
-                                                audio_header: call_state.local_configuration.clone()
-                                            }).await?;
-
-                                            if is_in_room {
-                                                self.room_handshake(send, recv, connection, call_state).await?;
-                                            } else {
-                                                // normal call handshake
-                                                self.call_handshake(send, recv, connection, &mut message_channel.1, state, call_state).await?;
-                                            }
-
-                                            keep_alive.reset(); // start sending normal keep alive messages
-                                            None
-                                        }
-                                    } else {
-                                        info!(event = "simultaneous_dial_detected_winning");
-                                        continue;
-                                    }
-                                }
-                                message => {
-                                    // the front end needs to know that the call ended here
-                                    warn!(event = "hello_ack_flow_unexpected_message", ?message);
-                                    Some(format!("Received an unexpected message from {}", contact.nickname))
-                                }
-                            };
-
-                            if let Some(message) = message_option {
-                                self.callbacks.call_state(CallState::CallEnded(message, true)).await;
-                            }
-
-                            break;
-                        }
-                    }
-                }
-
-                Ok(true)
+            _ = io.state.start_call.notified() => {
+                let outcome = self
+                    .negotiate_outgoing_call(
+                        io,
+                        OutgoingCallArgs {
+                            contact,
+                            room_hash: local_room_hash,
+                        },
+                    )
+                    .await?;
+                Ok(outcome.to_outcome())
             }
-            _ = keep_alive.tick() => {
+            _ = io.keep_alive.tick() => {
                 debug!(event = "session_keep_alive_sent");
-                write_message(send, &ProtocolMessage::KeepAlive).await?;
+                write_message(io.send, &ProtocolMessage::KeepAlive).await?;
                 Ok(true)
             },
         }
@@ -833,8 +1122,29 @@ where
     ) -> Result<()> {
         // stop_io must always cancel, even when the call fails
         let stop_io = CancellationToken::new();
-        // change the app call state
-        self.core_state.in_call.store(true, Relaxed);
+        let call_slot = &self.core_state.call_slot;
+        if !call_slot.transition_pending_to_active_for_peer(call_state.peer) {
+            if state.stop_session.is_cancelled() {
+                info!(
+                    event = "call_handshake_slot_released_session_stopped",
+                    peer.id = %call_state.peer
+                );
+                write_message(
+                    send,
+                    &ProtocolMessage::Goodbye {
+                        reason: Some(SESSION_STOPPED_REASON.to_string()),
+                    },
+                )
+                .await?;
+                return Err(ErrorKind::SessionStopped.into());
+            }
+            error!(
+                event = "call_handshake_slot_transition_failed",
+                peer.id = %call_state.peer
+            );
+            call_slot.release_if_pending_for_peer(call_state.peer);
+            return Err(ErrorKind::CallAlreadyActive.into());
+        }
         // show the overlay
         self.overlay.show();
 
@@ -857,7 +1167,7 @@ where
         // ensure that all background i/o threads are stopped
         stop_io.cancel();
         // the call has ended
-        self.core_state.in_call.store(false, Relaxed);
+        call_slot.release_if_state(CallSlotState::ActiveDirect);
         // hide the overlay
         self.overlay.hide();
         // send a goodbye message on errors
@@ -1299,6 +1609,9 @@ where
         debug!(event = "room_processing_teardown_done");
         // cleanup room state
         self.room_state.write().await.take();
+        self.core_state
+            .call_slot
+            .release_if_state(CallSlotState::RoomCall);
         // cleanup sessions blocked by room
         end_sessions.cancel();
         // join statistics collector
@@ -1344,10 +1657,242 @@ pub(crate) struct OptionalCallArgs<'a> {
     state: &'a Arc<SessionState>,
 }
 
+/// Shared session transport and control handles passed through negotiation and handshake.
+pub(crate) struct SessionIo<'a> {
+    pub(crate) send: &'a mut FramedWrite<SendStream, LengthDelimitedCodec>,
+    pub(crate) recv: &'a mut FramedRead<RecvStream, LengthDelimitedCodec>,
+    pub(crate) connection: &'a Connection,
+    pub(crate) state: &'a Arc<SessionState>,
+    pub(crate) message_channel: &'a mut (Sender<ProtocolMessage>, Receiver<ProtocolMessage>),
+    pub(crate) keep_alive: &'a mut Interval,
+}
+
+/// Per-call inputs for [`TelepathyCore::negotiate_incoming_call`].
+struct IncomingCallArgs<'a> {
+    contact: &'a Contact,
+    remote_audio_header: AudioHeader,
+    /// Room hash advertised by the peer in their `Hello`; `Some` means they intend a room call.
+    peer_room_hash: Option<u64>,
+    other_ringtone: Option<Vec<u8>>,
+    is_in_room: bool,
+    /// Our current room hash from local state; compared against [`IncomingCallArgs::peer_room_hash`].
+    local_room_hash: Option<u64>,
+}
+
+/// Per-call inputs for [`TelepathyCore::negotiate_outgoing_call`].
+struct OutgoingCallArgs<'a> {
+    contact: &'a Contact,
+    /// Our current room hash, sent to the peer in `Hello`; `Some` means a room call.
+    room_hash: Option<u64>,
+}
+
+/// Result of routing a negotiated call into room or direct handshake.
+enum HandshakeDispatch {
+    Completed,
+    SessionStopped,
+}
+
+/// Early slot-acquisition decision for an incoming `Hello`.
+enum IncomingSlotDecision<'a> {
+    /// Peer room hash matches ours; proceed without acquiring a direct-call slot.
+    RoomMatch,
+    /// Peer wants a room call but we are not in that room; `Reject` already sent.
+    RejectedNotInRoom,
+    /// Direct-call slot is busy; `Busy` already sent.
+    Busy,
+    Acquired(PendingDirectCallSlot<'a>),
+}
+
+/// Result of handling one message while awaiting `HelloAck` on an outgoing call.
+enum HelloResponse {
+    Completed,
+    SessionStopped,
+    EndedWith(String),
+    /// End the outgoing negotiation without notifying call ended (slot cleanup only).
+    EndedSilently,
+    /// Keep waiting (e.g. `KeepAlive`, ignored room reject/busy, simultaneous-dial winner).
+    Continue,
+}
+
+/// Owns a direct-call pending slot from acquisition until handshake entry or explicit release.
+///
+/// `release_on_failure` is `false` for an incoming [`CallSlotAcquireResult::Matched`] slot
+/// (the peer already holds the matching outgoing pending slot). Outgoing acquisition sets it
+/// for both `Acquired` and `Matched`. [`Self::into_handshake`] does not release the slot;
+/// handshake code transitions it to active.
+struct PendingDirectCallSlot<'a> {
+    call_slot: &'a CallSlot,
+    peer: PublicKey,
+    release_on_failure: bool,
+}
+
+impl<'a> PendingDirectCallSlot<'a> {
+    /// Acquires or matches an incoming direct-call pending slot for `peer`.
+    fn try_acquire_incoming(call_slot: &'a CallSlot, peer: PublicKey) -> Option<Self> {
+        match call_slot.try_acquire_or_match(CallSlotState::PendingIncoming, peer) {
+            CallSlotAcquireResult::Acquired => Some(Self {
+                call_slot,
+                peer,
+                release_on_failure: true,
+            }),
+            CallSlotAcquireResult::Matched => Some(Self {
+                call_slot,
+                peer,
+                release_on_failure: false,
+            }),
+            CallSlotAcquireResult::Failed => None,
+        }
+    }
+
+    /// Acquires or matches an outgoing direct-call pending slot for `peer`.
+    fn try_acquire_outgoing(call_slot: &'a CallSlot, peer: PublicKey) -> Option<Self> {
+        match call_slot.try_acquire_or_match(CallSlotState::PendingOutgoing, peer) {
+            CallSlotAcquireResult::Acquired | CallSlotAcquireResult::Matched => Some(Self {
+                call_slot,
+                peer,
+                release_on_failure: true,
+            }),
+            CallSlotAcquireResult::Failed => None,
+        }
+    }
+
+    /// Releases the pending slot when negotiation fails before handshake.
+    fn release(self) {
+        // no-op when release_on_failure is false; peer owns the slot in the Matched-incoming case
+        if self.release_on_failure {
+            self.call_slot.release_if_pending_for_peer(self.peer);
+            debug_assert_eq!(self.call_slot.current(), CallSlotState::Idle);
+        }
+    }
+
+    /// Transfers slot ownership to [`call_handshake`] without releasing.
+    fn into_handshake(self) {
+        debug_assert!(matches!(
+            self.call_slot.current(),
+            CallSlotState::PendingIncoming | CallSlotState::PendingOutgoing
+        ));
+        debug_assert_eq!(self.call_slot.direct_peer(), Some(self.peer));
+        let Self {
+            call_slot,
+            peer: _,
+            release_on_failure,
+        } = self;
+        debug_assert!(release_on_failure || call_slot.current() == CallSlotState::PendingOutgoing);
+    }
+}
+
+/// Outcome of [`TelepathyCore::negotiate_incoming_call`], mapped by [`TelepathyCore::session_inner`].
+enum IncomingNegotiationOutcome {
+    /// Handshake finished; session loop continues (`Ok(true)`).
+    HandshakeComplete,
+    /// Negotiation ended without handshake; session loop continues (`Ok(true)`).
+    ContinueSession,
+    /// Session was stopped during negotiation; exit session loop (`Ok(false)`).
+    SessionStopped,
+}
+
+impl IncomingNegotiationOutcome {
+    fn to_outcome(&self) -> bool {
+        !matches!(self, Self::SessionStopped)
+    }
+}
+
+/// Outcome of [`TelepathyCore::negotiate_outgoing_call`], mapped by [`TelepathyCore::session_inner`].
+enum OutgoingNegotiationOutcome {
+    /// Handshake finished; session loop continues (`Ok(true)`).
+    HandshakeComplete,
+    /// Call ended before handshake; session loop continues (`Ok(true)`).
+    CallEnded,
+    /// Session was stopped during negotiation; exit session loop (`Ok(false)`).
+    SessionStopped,
+}
+
+impl OutgoingNegotiationOutcome {
+    fn to_outcome(&self) -> bool {
+        !matches!(self, Self::SessionStopped)
+    }
+}
+
+/// Bounded exponential backoff before restarting the session manager.
+/// Retry `n` waits `BASE * 2^(n-1)` milliseconds, capped at [`MANAGER_RETRY_MAX_MS`].
+fn manager_retry_delay_ms(retries: u32) -> u64 {
+    if retries == 0 {
+        return 0;
+    }
+    let exponent = retries.saturating_sub(1).min(63);
+    let multiplier = 1u64.checked_shl(exponent).unwrap_or(u64::MAX);
+    MANAGER_RETRY_BASE_MS
+        .saturating_mul(multiplier)
+        .min(MANAGER_RETRY_MAX_MS)
+}
+
+/// Tiebreaker for simultaneous-dial collision resolution.
+///
+/// When both peers send `Hello` before receiving the other's, the lower [`PublicKey`] yields
+/// and accepts the incoming `Hello` (see `simultaneous_dial_detected_yielding` in
+/// [`TelepathyCore::negotiate_outgoing_call`]); the higher peer keeps waiting for `HelloAck`.
+fn should_keep_new_session(local_peer: &PublicKey, peer: &PublicKey, new_is_client: bool) -> bool {
+    new_is_client == (local_peer < peer)
+}
+
+/// Releases a pending direct-call slot and asserts the global slot is idle or in a room call.
+fn release_pending_and_assert_idle(
+    pending_slot: &mut Option<PendingDirectCallSlot<'_>>,
+    call_slot: &CallSlot,
+) {
+    if let Some(slot) = pending_slot.take() {
+        slot.release();
+    }
+    debug_assert!(!call_slot.occupied() || call_slot.current() == CallSlotState::RoomCall);
+}
+
+/// Resets the keep-alive timer and asserts the call slot is idle or in a room call after handshake.
+///
+/// Callers must invoke this only after a successful [`perform_call_handshake_dispatch`].
+fn finalize_handshake_success(keep_alive: &mut Interval, call_slot: &CallSlot) {
+    keep_alive.reset();
+    debug_assert!(
+        call_slot.current() == CallSlotState::Idle
+            || call_slot.current() == CallSlotState::RoomCall
+    );
+}
+
+/// Sends a session-stopped `Goodbye`, releases any pending slot, and asserts idle/room post-condition.
+async fn abort_negotiation_session_stopped(
+    send: &mut FramedWrite<SendStream, LengthDelimitedCodec>,
+    pending_slot: &mut Option<PendingDirectCallSlot<'_>>,
+    call_slot: &CallSlot,
+) {
+    _ = write_message(
+        send,
+        &ProtocolMessage::Goodbye {
+            reason: Some(SESSION_STOPPED_REASON.to_string()),
+        },
+    )
+    .await;
+    release_pending_and_assert_idle(pending_slot, call_slot);
+}
+
 #[cfg(test)]
 mod tests {
-    use super::should_keep_new_session;
+    use super::{
+        MANAGER_RETRY_BASE_MS, MANAGER_RETRY_MAX_MS, manager_retry_delay_ms,
+        should_keep_new_session,
+    };
     use iroh::SecretKey;
+
+    #[test]
+    fn manager_retry_delay_schedule_is_bounded_exponential_backoff() {
+        assert_eq!(manager_retry_delay_ms(0), 0);
+        assert_eq!(manager_retry_delay_ms(1), MANAGER_RETRY_BASE_MS);
+        assert_eq!(manager_retry_delay_ms(2), MANAGER_RETRY_BASE_MS * 2);
+        assert_eq!(manager_retry_delay_ms(3), MANAGER_RETRY_BASE_MS * 4);
+        assert_eq!(manager_retry_delay_ms(4), MANAGER_RETRY_BASE_MS * 8);
+        assert_eq!(manager_retry_delay_ms(6), MANAGER_RETRY_BASE_MS * 32);
+        assert_eq!(manager_retry_delay_ms(7), MANAGER_RETRY_MAX_MS);
+        assert_eq!(manager_retry_delay_ms(8), MANAGER_RETRY_MAX_MS);
+        assert_eq!(manager_retry_delay_ms(u32::MAX), MANAGER_RETRY_MAX_MS);
+    }
 
     #[test]
     fn session_collision_lower_peer_keeps_client_connection() {

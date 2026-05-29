@@ -364,12 +364,6 @@ where
         })
     }
 
-    pub(crate) async fn is_call_active(&self) -> bool {
-        self.core_state.in_call.load(Relaxed)
-            || self.room_state.read().await.is_some()
-            || self.core_state.end_audio_test.lock().await.is_some()
-    }
-
     pub(crate) async fn peer_id(&self) -> PublicKey {
         if let Some(keypair) = self.core_state.identity.read().await.as_ref() {
             keypair.public()

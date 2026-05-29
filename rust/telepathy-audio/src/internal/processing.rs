@@ -492,7 +492,7 @@ fn wasm_simd_mul(frame: &mut [f32], factor: f32) {
     }
 }
 
-/// WASM SIMD i16→f32 conversion with scaling: 8 i16 → 8 f32 per iteration.
+/// WASM SIMD i16->f32 conversion with scaling: 8 i16 -> 8 f32 per iteration.
 ///
 /// Converts 16-bit integer samples to 32-bit floats, applies `scale`, and
 /// clamps to [-1.0, 1.0]. Processes 8 samples per loop iteration using two
@@ -512,7 +512,7 @@ fn wasm_simd_i16_to_f32(ints: &[i16], out: &mut [f32], scale: f32) {
         // Load 8 × i16 into a v128
         let v_i16 = unsafe { v128_load(ints.as_ptr().add(i) as *const v128) };
 
-        // Widen lower 4 i16 → 4 i32 → 4 f32
+        // Widen lower 4 i16 -> 4 i32 -> 4 f32
         let lo_i32 = i32x4_extend_low_i16x8(v_i16);
         let mut lo_f32 = f32x4_mul(f32x4_convert_i32x4(lo_i32), scale_vec);
         lo_f32 = f32x4_max(min_vec, f32x4_min(max_vec, lo_f32));
@@ -520,7 +520,7 @@ fn wasm_simd_i16_to_f32(ints: &[i16], out: &mut [f32], scale: f32) {
             v128_store(out.as_mut_ptr().add(i) as *mut v128, lo_f32);
         }
 
-        // Widen upper 4 i16 → 4 i32 → 4 f32
+        // Widen upper 4 i16 -> 4 i32 -> 4 f32
         let hi_i32 = i32x4_extend_high_i16x8(v_i16);
         let mut hi_f32 = f32x4_mul(f32x4_convert_i32x4(hi_i32), scale_vec);
         hi_f32 = f32x4_max(min_vec, f32x4_min(max_vec, hi_f32));
@@ -550,7 +550,7 @@ fn wasm_simd_float_scaler(floats: &mut [f32], scale: f32) {
     while i + 4 <= n {
         let mut v = unsafe { v128_load(floats.as_ptr().add(i) as *const v128) };
         v = f32x4_mul(v, scale_vec);
-        // Truncate toward zero: convert f32→i32 (saturating truncation), then back
+        // Truncate toward zero: convert f32->i32 (saturating truncation), then back
         let vi = i32x4_trunc_sat_f32x4(v);
         let mut vf = f32x4_convert_i32x4(vi);
         unsafe {
@@ -562,7 +562,7 @@ fn wasm_simd_float_scaler(floats: &mut [f32], scale: f32) {
     }
 }
 
-/// WASM SIMD f32→i16 conversion: 4 floats → 4 i16 per iteration.
+/// WASM SIMD f32->i16 conversion: 4 floats -> 4 i16 per iteration.
 ///
 /// Truncates each f32 toward zero and writes the resulting i16 values.
 /// Uses `i32x4_trunc_sat_f32x4` which saturates out-of-range values to
@@ -573,12 +573,12 @@ fn wasm_simd_f32_to_i16(floats: &[f32], output: &mut [i16]) {
     let n = floats.len().min(output.len());
     let mut i = 0;
 
-    // Process 4 f32 → 4 i16 per iteration
+    // Process 4 f32 -> 4 i16 per iteration
     while i + 4 <= n {
         let v = unsafe { v128_load(floats.as_ptr().add(i) as *const v128) };
-        // Truncate f32 → i32 with saturation (matches `as i16` truncation semantics)
+        // Truncate f32 -> i32 with saturation (matches `as i16` truncation semantics)
         let vi32 = i32x4_trunc_sat_f32x4(v);
-        // Narrow i32x4 → i16x8 with signed saturation (upper half is from zeros)
+        // Narrow i32x4 -> i16x8 with signed saturation (upper half is from zeros)
         let zero = i32x4_splat(0);
         let packed = i16x8_narrow_i32x4(vi32, zero);
         // Store the lower 4 i16 (8 bytes) from the v128
@@ -774,7 +774,7 @@ mod tests {
         assert_eq!(scalar_frame, wide_frame);
     }
 
-    /// Verifies WASM SIMD i16→f32 conversion produces identical output to scalar.
+    /// Verifies WASM SIMD i16->f32 conversion produces identical output to scalar.
     #[wasm_bindgen_test::wasm_bindgen_test]
     #[cfg(target_arch = "wasm32")]
     fn WasmIntConversion_DummyFrame_EqualOutputs() {
@@ -816,7 +816,7 @@ mod tests {
         assert_eq!(scalar_frame, wide_frame);
     }
 
-    /// Verifies WASM SIMD f32→i16 conversion produces identical output to scalar.
+    /// Verifies WASM SIMD f32->i16 conversion produces identical output to scalar.
     #[wasm_bindgen_test::wasm_bindgen_test]
     #[cfg(target_arch = "wasm32")]
     fn WasmF32ToI16_DummyFrame_CorrectOutput() {

@@ -245,7 +245,7 @@ where
     ///
     /// This method handles all shared setup steps:
     /// - Creates shared atomic state (output_volume, deafened, rms_sender, loss_sender)
-    /// - Creates unbounded channel for network → processor communication
+    /// - Creates unbounded channel for network -> processor communication
     /// - Calculates resampling ratio: `output_sample_rate / config.sample_rate`
     /// - Creates OutputProcessorState for atomic state management
     /// - Auto-constructs SEA codec header when codec is enabled and no header provided:

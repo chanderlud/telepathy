@@ -5,8 +5,8 @@ use atomic_float::AtomicF32;
 use iroh::endpoint::{Connection, Path};
 use iroh::{PublicKey, SecretKey, TransportAddr};
 use std::collections::HashMap;
-use std::sync::atomic::Ordering::Relaxed;
-use std::sync::atomic::{AtomicBool, AtomicUsize};
+use std::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed, Release};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 use telepathy_audio::RnnModel;
@@ -17,12 +17,227 @@ use tokio::sync::{Mutex, Notify, RwLock};
 #[cfg(not(target_family = "wasm"))]
 use tokio::time::interval;
 use tokio_util::sync::CancellationToken;
-use tracing::info;
+use tracing::{info, warn};
 use uuid::Uuid;
 #[cfg(target_family = "wasm")]
 use wasmtimer::tokio::interval;
 
 type SharedDeviceId = Arc<Mutex<Option<String>>>;
+
+/// Per-state lifecycle for the global call slot. Only one non-idle state may be held at a time.
+#[repr(u8)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum CallSlotState {
+    Idle = 0,
+    PendingIncoming = 1,
+    PendingOutgoing = 2,
+    ActiveDirect = 3,
+    RoomCall = 4,
+    AudioTest = 5,
+}
+
+impl CallSlotState {
+    fn from_u8(value: u8) -> Option<Self> {
+        match value {
+            0 => Some(Self::Idle),
+            1 => Some(Self::PendingIncoming),
+            2 => Some(Self::PendingOutgoing),
+            3 => Some(Self::ActiveDirect),
+            4 => Some(Self::RoomCall),
+            5 => Some(Self::AudioTest),
+            _ => None,
+        }
+    }
+}
+
+/// Result of [`CallSlot::try_acquire_or_match`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum CallSlotAcquireResult {
+    /// The slot was idle and is now `state` for `peer`.
+    Acquired,
+    /// The slot was already in a compatible state for `peer`.
+    Matched,
+    /// The slot is held by another call or peer.
+    Failed,
+}
+
+/// Authoritative global call-slot lifecycle. All transitions must use the atomic helpers on
+/// [`CallSlot`]; do not read [`CallSlot::current`] and then mutate the slot in separate steps.
+#[derive(Clone)]
+pub(crate) struct CallSlot {
+    state: Arc<AtomicU8>,
+    /// Set for direct-call states so `end_call` can route to the active session.
+    direct_peer: Arc<StdMutex<Option<PublicKey>>>,
+}
+
+impl Default for CallSlot {
+    fn default() -> Self {
+        Self {
+            state: Arc::new(AtomicU8::new(CallSlotState::Idle as u8)),
+            direct_peer: Arc::new(StdMutex::new(None)),
+        }
+    }
+}
+
+impl CallSlot {
+    pub(crate) fn occupied(&self) -> bool {
+        self.state.load(Acquire) != CallSlotState::Idle as u8
+    }
+
+    pub(crate) fn current(&self) -> CallSlotState {
+        CallSlotState::from_u8(self.state.load(Acquire)).unwrap_or(CallSlotState::Idle)
+    }
+
+    pub(crate) fn direct_peer(&self) -> Option<PublicKey> {
+        *self
+            .direct_peer
+            .lock()
+            .expect("call slot direct peer mutex poisoned")
+    }
+
+    /// Atomically claims the call slot from idle.
+    pub(crate) fn try_acquire(&self, state: CallSlotState, peer: Option<PublicKey>) -> bool {
+        debug_assert_ne!(state, CallSlotState::Idle);
+        if self
+            .state
+            .compare_exchange(CallSlotState::Idle as u8, state as u8, AcqRel, Acquire)
+            .is_ok()
+        {
+            if let Some(peer) = peer {
+                *self
+                    .direct_peer
+                    .lock()
+                    .expect("call slot direct peer mutex poisoned") = Some(peer);
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Atomically claims the slot from idle, or confirms it is already compatible for `peer`.
+    ///
+    /// Succeeds when:
+    /// - the slot is idle and becomes `state` for `peer`, or
+    /// - the slot is already `state` for `peer`, or
+    /// - `state` is [`CallSlotState::PendingIncoming`] and the slot is
+    ///   [`CallSlotState::PendingOutgoing`] for the same `peer` (simultaneous dial).
+    pub(crate) fn try_acquire_or_match(
+        &self,
+        state: CallSlotState,
+        peer: PublicKey,
+    ) -> CallSlotAcquireResult {
+        debug_assert_ne!(state, CallSlotState::Idle);
+        loop {
+            let direct_peer_snapshot = *self
+                .direct_peer
+                .lock()
+                .expect("call slot direct peer mutex poisoned");
+            let current = self.current();
+            if Self::slot_matches_for_peer(state, current, peer, direct_peer_snapshot) {
+                return CallSlotAcquireResult::Matched;
+            }
+
+            if current == CallSlotState::Idle
+                && self
+                    .state
+                    .compare_exchange(CallSlotState::Idle as u8, state as u8, AcqRel, Acquire)
+                    .is_ok()
+            {
+                *self
+                    .direct_peer
+                    .lock()
+                    .expect("call slot direct peer mutex poisoned") = Some(peer);
+                return CallSlotAcquireResult::Acquired;
+            }
+
+            if self.current() == CallSlotState::Idle {
+                continue;
+            }
+
+            return CallSlotAcquireResult::Failed;
+        }
+    }
+
+    fn slot_matches_for_peer(
+        state: CallSlotState,
+        current: CallSlotState,
+        peer: PublicKey,
+        direct_peer: Option<PublicKey>,
+    ) -> bool {
+        if direct_peer != Some(peer) {
+            return false;
+        }
+
+        if current == state {
+            return true;
+        }
+
+        state == CallSlotState::PendingIncoming && current == CallSlotState::PendingOutgoing
+    }
+
+    pub(crate) fn transition_pending_to_active_for_peer(&self, peer: PublicKey) -> bool {
+        loop {
+            let current = self.current();
+            match current {
+                CallSlotState::PendingIncoming | CallSlotState::PendingOutgoing
+                    if self.direct_peer() == Some(peer) =>
+                {
+                    if self.try_transition(current, CallSlotState::ActiveDirect) {
+                        return true;
+                    }
+                }
+                _ => return false,
+            }
+        }
+    }
+
+    pub(crate) fn try_transition(&self, from: CallSlotState, to: CallSlotState) -> bool {
+        self.state
+            .compare_exchange(from as u8, to as u8, AcqRel, Acquire)
+            .is_ok()
+    }
+
+    pub(crate) fn release(&self) {
+        self.state.store(CallSlotState::Idle as u8, Release);
+        *self
+            .direct_peer
+            .lock()
+            .expect("call slot direct peer mutex poisoned") = None;
+    }
+
+    pub(crate) fn release_if_state(&self, expected: CallSlotState) -> bool {
+        if self.current() == expected {
+            self.release();
+            true
+        } else {
+            warn!(
+                event = "call_slot_release_skipped",
+                ?expected,
+                actual = ?self.current()
+            );
+            false
+        }
+    }
+
+    pub(crate) fn release_if_pending_for_peer(&self, peer: PublicKey) {
+        let current = self.current();
+        if matches!(
+            current,
+            CallSlotState::PendingIncoming | CallSlotState::PendingOutgoing
+        ) {
+            if self.direct_peer() == Some(peer) {
+                self.release();
+            } else {
+                warn!(
+                    event = "call_slot_release_skipped_peer_mismatch",
+                    ?current,
+                    expected_peer.id = %peer
+                );
+            }
+        }
+    }
+}
 
 #[derive(Clone, Default)]
 pub(crate) struct CoreState {
@@ -41,8 +256,8 @@ pub(crate) struct CoreState {
     /// The current iroh secret key
     pub(crate) identity: Arc<RwLock<Option<SecretKey>>>,
 
-    /// Keeps track of whether the user is in a call
-    pub(crate) in_call: Arc<AtomicBool>,
+    /// Authoritative global call-slot guard covering negotiation and active calls.
+    pub(crate) call_slot: CallSlot,
 
     /// used to end an audio test, if there is one
     pub(crate) end_audio_test: Arc<Mutex<Option<Arc<Notify>>>>,
@@ -258,9 +473,6 @@ pub(crate) struct SessionState {
     /// notifies during shutdown & manager restarts
     pub(crate) stop_session: CancellationToken,
 
-    /// if the session is in a call
-    pub(crate) in_call: AtomicBool,
-
     /// a reusable sender for messages while a call is active
     pub(crate) message_sender: Sender<ProtocolMessage>,
 
@@ -286,7 +498,6 @@ impl SessionState {
             id: Uuid::new_v4(),
             start_call: Notify::new(),
             stop_session: Default::default(),
-            in_call: AtomicBool::new(false),
             message_sender: message_sender.clone(),
             latency: Default::default(),
             upload_bandwidth: Default::default(),
@@ -395,5 +606,152 @@ impl PeerVolume {
             volume: Arc::new(AtomicF32::new(decibel)),
             multiplier: Arc::new(AtomicF32::new(db_to_multiplier(decibel))),
         }
+    }
+}
+
+#[cfg(test)]
+mod call_slot_tests {
+    use super::{CallSlot, CallSlotAcquireResult, CallSlotState};
+    use iroh::SecretKey;
+
+    #[test]
+    fn call_slot_acquire_and_release() {
+        let slot = CallSlot::default();
+        let peer = SecretKey::generate().public();
+
+        assert!(slot.try_acquire(CallSlotState::PendingOutgoing, Some(peer)));
+        assert_eq!(slot.current(), CallSlotState::PendingOutgoing);
+        assert_eq!(slot.direct_peer(), Some(peer));
+        assert!(!slot.try_acquire(CallSlotState::PendingIncoming, Some(peer)));
+
+        slot.release();
+        assert_eq!(slot.current(), CallSlotState::Idle);
+        assert_eq!(slot.direct_peer(), None);
+    }
+
+    #[test]
+    fn call_slot_transition_pending_to_active() {
+        let slot = CallSlot::default();
+        let peer = SecretKey::generate().public();
+
+        assert!(slot.try_acquire(CallSlotState::PendingIncoming, Some(peer)));
+        assert!(slot.try_transition(CallSlotState::PendingIncoming, CallSlotState::ActiveDirect));
+        assert_eq!(slot.current(), CallSlotState::ActiveDirect);
+        assert_eq!(slot.direct_peer(), Some(peer));
+    }
+
+    #[test]
+    fn call_slot_release_if_pending_for_peer() {
+        let slot = CallSlot::default();
+        let peer = SecretKey::generate().public();
+        let other = SecretKey::generate().public();
+
+        assert!(slot.try_acquire(CallSlotState::PendingOutgoing, Some(peer)));
+        slot.release_if_pending_for_peer(other);
+        assert_eq!(slot.current(), CallSlotState::PendingOutgoing);
+
+        slot.release_if_pending_for_peer(peer);
+        assert_eq!(slot.current(), CallSlotState::Idle);
+    }
+
+    #[test]
+    fn call_slot_try_acquire_or_match_from_idle() {
+        let slot = CallSlot::default();
+        let peer = SecretKey::generate().public();
+
+        assert_eq!(
+            slot.try_acquire_or_match(CallSlotState::PendingOutgoing, peer),
+            CallSlotAcquireResult::Acquired
+        );
+        assert_eq!(slot.current(), CallSlotState::PendingOutgoing);
+    }
+
+    #[test]
+    fn call_slot_try_acquire_or_match_already_held() {
+        let slot = CallSlot::default();
+        let peer = SecretKey::generate().public();
+
+        assert!(slot.try_acquire(CallSlotState::PendingOutgoing, Some(peer)));
+        assert_eq!(
+            slot.try_acquire_or_match(CallSlotState::PendingOutgoing, peer),
+            CallSlotAcquireResult::Matched
+        );
+    }
+
+    #[test]
+    fn call_slot_try_acquire_or_match_simultaneous_dial() {
+        let slot = CallSlot::default();
+        let peer = SecretKey::generate().public();
+
+        assert!(slot.try_acquire(CallSlotState::PendingOutgoing, Some(peer)));
+        assert_eq!(
+            slot.try_acquire_or_match(CallSlotState::PendingIncoming, peer),
+            CallSlotAcquireResult::Matched
+        );
+        assert_eq!(slot.current(), CallSlotState::PendingOutgoing);
+    }
+
+    #[test]
+    fn call_slot_try_acquire_or_match_fails_when_busy() {
+        let slot = CallSlot::default();
+        let peer = SecretKey::generate().public();
+        let other = SecretKey::generate().public();
+
+        assert!(slot.try_acquire(CallSlotState::PendingOutgoing, Some(peer)));
+        assert_eq!(
+            slot.try_acquire_or_match(CallSlotState::PendingOutgoing, other),
+            CallSlotAcquireResult::Failed
+        );
+    }
+
+    #[test]
+    fn call_slot_transition_pending_to_active_for_peer() {
+        let slot = CallSlot::default();
+        let peer = SecretKey::generate().public();
+
+        assert!(slot.try_acquire(CallSlotState::PendingOutgoing, Some(peer)));
+        assert!(slot.transition_pending_to_active_for_peer(peer));
+        assert_eq!(slot.current(), CallSlotState::ActiveDirect);
+    }
+
+    #[test]
+    fn call_slot_try_acquire_or_match_never_matches_after_ownership_lost() {
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+
+        let slot = Arc::new(CallSlot::default());
+        let peer_a = SecretKey::generate().public();
+        let peer_b = SecretKey::generate().public();
+
+        assert!(slot.try_acquire(CallSlotState::PendingOutgoing, Some(peer_a)));
+
+        let start = Arc::new(Barrier::new(2));
+        let done = Arc::new(Barrier::new(2));
+        let releaser = {
+            let slot = Arc::clone(&slot);
+            let start = Arc::clone(&start);
+            let done = Arc::clone(&done);
+            thread::spawn(move || {
+                for _ in 0..5_000 {
+                    start.wait();
+                    slot.release();
+                    assert!(slot.try_acquire(CallSlotState::PendingOutgoing, Some(peer_b)));
+                    done.wait();
+                }
+            })
+        };
+
+        for _ in 0..5_000 {
+            start.wait();
+            let result = slot.try_acquire_or_match(CallSlotState::PendingOutgoing, peer_a);
+            assert_ne!(
+                result,
+                CallSlotAcquireResult::Matched,
+                "must not match for a peer that lost ownership mid-call"
+            );
+            done.wait();
+        }
+
+        releaser.join().unwrap();
     }
 }
