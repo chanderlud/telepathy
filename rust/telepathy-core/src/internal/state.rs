@@ -549,6 +549,7 @@ impl SessionState {
                     let mut primary_connection: Option<Path> = None;
 
                     for path in paths.iter().filter(|p| p.is_selected()) {
+                        info!(event = "connection_path", path = ?path);
                         let stats = path.stats();
 
                         // the connection with the most bandwidth should be considered primary

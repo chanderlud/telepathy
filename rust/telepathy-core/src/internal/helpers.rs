@@ -10,14 +10,16 @@ use crate::internal::utils::{KanalSink, KanalSource};
 use crate::internal::{ALPN, Result};
 use crate::types::FrontendNotify;
 use bytes::Bytes;
-use iroh::endpoint::presets;
-use iroh::{Endpoint, PublicKey, SecretKey};
+use iroh::endpoint::{default_relay_mode, presets};
+use iroh::{Endpoint, PublicKey, RelayMode, SecretKey};
 use rustls::crypto::aws_lc_rs::{self, kx_group};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
+use cfg_if::cfg_if;
+use iroh::address_lookup::{DnsAddressLookup, PkarrPublisher};
 #[cfg(target_family = "wasm")]
 use telepathy_audio::WebAudioWrapper;
 use telepathy_audio::devices::AudioHost;
@@ -67,16 +69,49 @@ where
             .expect("bind_addresses lock poisoned")
             .clone();
 
-        let mut endpoint_builder = Endpoint::builder(presets::N0)
+        let mut endpoint_builder = Endpoint::builder(presets::Minimal)
             .crypto_provider(Arc::new(provider))
             .secret_key(identity)
             .alpns(vec![ALPN.to_vec()])
-            .clear_ip_transports();
+            .clear_ip_transports()
+            .relay_mode(default_relay_mode());
 
         for ip in bind_addresses {
             endpoint_builder = endpoint_builder
                 .bind_addr(SocketAddr::new(ip, listen_port))
                 .expect("validated bind address must produce a valid socket address");
+        }
+
+        if let Some(ref relay) = self.core_state.network_config.pkarr_relay {
+            endpoint_builder = endpoint_builder.address_lookup(PkarrPublisher::builder(relay.clone()));
+        } else {
+            endpoint_builder = endpoint_builder.address_lookup(PkarrPublisher::n0_dns());
+        }
+
+        cfg_if! {
+            if #[cfg(target_family = "wasm")] {
+                use iroh::address_lookup::PkarrResolver;
+                if let Some(ref relay) = self.core_state.network_config.pkarr_relay {
+                    endpoint_builder = endpoint_builder.address_lookup(PkarrResolver::builder(relay.clone()));
+                } else {
+                    endpoint_builder = endpoint_builder.address_lookup(PkarrResolver::n0_dns());
+                }
+            } else {
+                if let Some(ref endpoint) = self.core_state.network_config.dns_endpoint {
+                    endpoint_builder = endpoint_builder.address_lookup(DnsAddressLookup::builder(endpoint.clone()));
+                } else {
+                    endpoint_builder = endpoint_builder.address_lookup(DnsAddressLookup::n0_dns());
+                }
+            }
+        }
+
+        if let Some(ref relays) = self.core_state.network_config.relays {
+            endpoint_builder = endpoint_builder.relay_mode(RelayMode::Custom(relays.clone()));
+        }
+
+        #[cfg(feature = "integration-testing")]
+        {
+            endpoint_builder = endpoint_builder.ca_roots_config(iroh::tls::CaRootsConfig::insecure_skip_verify());
         }
 
         let endpoint = endpoint_builder.bind().await?;

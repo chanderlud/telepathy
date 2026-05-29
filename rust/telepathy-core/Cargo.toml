@@ -12,7 +12,7 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 [features]
 flutter = ["dep:flutter_rust_bridge"]
 native = []
-integration-testing = ["telepathy-audio/mock-audio", "mockall", "async-trait"]
+integration-testing = ["telepathy-audio/mock-audio", "mockall", "async-trait", "iroh/test-utils"]
 default = ["flutter"]
 
 [dependencies]
@@ -31,6 +31,7 @@ cfg-if = "1"
 bytes = "1"
 serde = { version = "1", features = ["derive"] }
 rustls = "0.23"
+url = "2"
 mockall = { version = "0.14", optional = true }
 async-trait = { version = "0.1", optional = true }
 

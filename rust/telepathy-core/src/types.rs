@@ -16,7 +16,9 @@ use std::sync::Arc;
 use std::sync::RwLock as StdRwLock;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32};
+use iroh::RelayMap;
 use tokio::sync::{Notify, RwLock};
+use url::Url;
 use uuid::Uuid;
 
 /// Contact output gain range in decibels; keep in sync with the contact volume slider.
@@ -240,13 +242,19 @@ impl FrontendNotify {
     }
 }
 
-// TODO extend NetworkConfig with relay, address discovery, nat traversal, timeouts
+// TODO extend frontend to support relays and address discovery options
 #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(opaque))]
 #[derive(Clone)]
 pub struct NetworkConfig {
     pub(crate) listen_port: Arc<AtomicU16>,
 
     pub(crate) bind_addresses: Arc<StdRwLock<Vec<IpAddr>>>,
+
+    pub(crate) relays: Option<RelayMap>,
+
+    pub(crate) dns_endpoint: Option<String>,
+
+    pub(crate) pkarr_relay: Option<Url>,
 }
 
 impl NetworkConfig {
@@ -255,7 +263,21 @@ impl NetworkConfig {
         Ok(Self {
             listen_port: Arc::new(AtomicU16::new(listen_port)),
             bind_addresses: Arc::new(StdRwLock::new(Self::parse_bind_addresses(bind_addresses)?)),
+            relays: None,
+            dns_endpoint: None,
+            pkarr_relay: None,
         })
+    }
+
+    #[cfg(feature = "integration-testing")]
+    pub fn mock(relay_map: &RelayMap, dns_endpoint: Option<&str>, pkarr_relay: Option<Url>) -> Self {
+        Self {
+            listen_port: Arc::new(AtomicU16::new(0)),
+            bind_addresses: Arc::new(StdRwLock::new(vec![IpAddr::V4(Ipv4Addr::UNSPECIFIED)])),
+            relays: Some(relay_map.clone()),
+            dns_endpoint: dns_endpoint.map(String::from),
+            pkarr_relay,
+        }
     }
 
     fn parse_bind_addresses(bind_addresses: Vec<String>) -> Result<Vec<IpAddr>, DartError> {
@@ -303,6 +325,9 @@ impl Default for NetworkConfig {
         Self {
             listen_port: Arc::new(Default::default()),
             bind_addresses: Arc::new(StdRwLock::new(vec![IpAddr::V4(Ipv4Addr::UNSPECIFIED)])),
+            relays: None,
+            dns_endpoint: None,
+            pkarr_relay: None,
         }
     }
 }

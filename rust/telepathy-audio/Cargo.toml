@@ -13,7 +13,6 @@ crate-type = ["lib"]
 
 [features]
 mock-audio = []
-test-internals = []
 
 [dependencies]
 atomic_float = "1"
