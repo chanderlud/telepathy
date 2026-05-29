@@ -50,6 +50,14 @@ mod tests {
         })
     }
 
+    fn max_abs_diff(a: &[i16], b: &[i16]) -> i32 {
+        a.iter()
+            .zip(b.iter())
+            .map(|(lhs, rhs)| (*lhs as i32 - *rhs as i32).abs())
+            .max()
+            .unwrap_or(0)
+    }
+
     #[test]
     fn sea_decoder_new_and_get_header_round_trip() {
         let header = SeaFileHeader {
@@ -120,10 +128,9 @@ mod tests {
         };
         let mut decoder = SeaDecoder::new(header).unwrap();
         let mut output = [0i16; FRAME_SIZE];
-        let result = decoder.decode_frame(&encoded, &mut output);
+        decoder.decode_frame(&encoded, &mut output).unwrap();
 
-        assert!(result.is_ok());
-        assert!(output.iter().any(|&x| x != 0));
+        assert!(max_abs_diff(&input, &output) <= 500);
     }
 
     #[test]
@@ -146,9 +153,8 @@ mod tests {
         };
         let mut decoder = SeaDecoder::new(header).unwrap();
         let mut output = [0i16; FRAME_SIZE];
-        let result = decoder.decode_frame(&encoded, &mut output);
+        decoder.decode_frame(&encoded, &mut output).unwrap();
 
-        assert!(result.is_ok());
-        assert!(output.iter().any(|&x| x != 0));
+        assert!(max_abs_diff(&input, &output) <= 2_000);
     }
 }

@@ -1,4 +1,3 @@
-#![cfg(target_family = "wasm")]
 //! WASM-specific benchmarks for audio processing SIMD operations.
 //!
 //! These benchmarks use wasm-bindgen-test for WASM-specific benchmarking.
@@ -11,80 +10,88 @@
 //! cargo bench --target wasm32-unknown-unknown --bench wasm_processing -Z build-std=std,panic_abort
 //! ```
 
-mod common;
+#[cfg(target_family = "wasm")]
+mod wasm_benches {
 
-use common::{dummy_float_frame, dummy_int_frame};
-use std::hint::black_box;
-use telepathy_audio::internal::processing::*;
-use wasm_bindgen_test::{Criterion, wasm_bindgen_bench};
+    mod common {
+        include!("common.rs");
+    }
 
-/// Benchmarks scalar vs wide (auto-selecting) multiplication.
-#[wasm_bindgen_bench]
-pub fn bench_multiplication(c: &mut Criterion) {
-    let mut frame = dummy_float_frame();
+    use self::common::{dummy_float_frame, dummy_int_frame};
+    use std::hint::black_box;
+    use telepathy_audio::internal::processing::*;
+    use wasm_bindgen_test::{Criterion, wasm_bindgen_bench};
 
-    c.bench_function("scalar_mul", |b| {
-        b.iter(|| scalar_mul(black_box(&mut frame), black_box(2_f32)))
-    });
+    /// Benchmarks scalar vs wide (auto-selecting) multiplication.
+    #[wasm_bindgen_bench]
+    pub fn bench_multiplication(c: &mut Criterion) {
+        let mut frame = dummy_float_frame();
 
-    c.bench_function("wide_mul", |b| {
-        b.iter(|| wide_mul(black_box(&mut frame), black_box(2_f32)))
-    });
-}
+        c.bench_function("scalar_mul", |b| {
+            b.iter(|| scalar_mul(black_box(&mut frame), black_box(2_f32)))
+        });
 
-/// Benchmarks scalar vs wide i16→f32 conversion.
-#[wasm_bindgen_bench]
-pub fn bench_i16_to_f32_conversion(c: &mut Criterion) {
-    let mut pre_buf = [0_f32; 4096];
-    let frame = dummy_int_frame();
-    let scale = 1_f32 / i16::MAX as f32;
+        c.bench_function("wide_mul", |b| {
+            b.iter(|| wide_mul(black_box(&mut frame), black_box(2_f32)))
+        });
+    }
 
-    c.bench_function("i16_to_f32_scalar", |b| {
-        b.iter(|| i16_to_f32_scalar(black_box(&frame), black_box(&mut pre_buf), black_box(scale)))
-    });
+    /// Benchmarks scalar vs wide i16→f32 conversion.
+    #[wasm_bindgen_bench]
+    pub fn bench_i16_to_f32_conversion(c: &mut Criterion) {
+        let mut pre_buf = [0_f32; 4096];
+        let frame = dummy_int_frame();
+        let scale = 1_f32 / i16::MAX as f32;
 
-    c.bench_function("wide_i16_to_f32", |b| {
-        b.iter(|| wide_i16_to_f32(black_box(&frame), black_box(&mut pre_buf), black_box(scale)))
-    });
-}
+        c.bench_function("i16_to_f32_scalar", |b| {
+            b.iter(|| {
+                i16_to_f32_scalar(black_box(&frame), black_box(&mut pre_buf), black_box(scale))
+            })
+        });
 
-/// Benchmarks scalar vs wide float scaling with truncation.
-#[wasm_bindgen_bench]
-pub fn bench_float_scaling(c: &mut Criterion) {
-    let mut pre_buf = dummy_float_frame();
+        c.bench_function("wide_i16_to_f32", |b| {
+            b.iter(|| wide_i16_to_f32(black_box(&frame), black_box(&mut pre_buf), black_box(scale)))
+        });
+    }
 
-    c.bench_function("scalar_float_scaler", |b| {
-        b.iter(|| scalar_float_scaler(black_box(&mut pre_buf), black_box(i16::MAX as f32)))
-    });
+    /// Benchmarks scalar vs wide float scaling with truncation.
+    #[wasm_bindgen_bench]
+    pub fn bench_float_scaling(c: &mut Criterion) {
+        let mut pre_buf = dummy_float_frame();
 
-    c.bench_function("wide_float_scaler", |b| {
-        b.iter(|| wide_float_scaler(black_box(&mut pre_buf), black_box(i16::MAX as f32)))
-    });
-}
+        c.bench_function("scalar_float_scaler", |b| {
+            b.iter(|| scalar_float_scaler(black_box(&mut pre_buf), black_box(i16::MAX as f32)))
+        });
 
-/// Benchmarks scalar vs wide f32→i16 conversion.
-#[wasm_bindgen_bench]
-pub fn bench_f32_to_i16_conversion(c: &mut Criterion) {
-    let float_frame: Vec<f32> = dummy_float_frame()
-        .iter()
-        .map(|x| x * i16::MAX as f32)
-        .collect();
-    let mut output = [0_i16; 4096];
+        c.bench_function("wide_float_scaler", |b| {
+            b.iter(|| wide_float_scaler(black_box(&mut pre_buf), black_box(i16::MAX as f32)))
+        });
+    }
 
-    c.bench_function("f32_to_i16_scalar", |b| {
-        b.iter(|| {
-            for (out, &f) in black_box(&mut output)
-                .iter_mut()
-                .zip(black_box(&float_frame).iter())
-            {
-                *out = f as i16;
-            }
-        })
-    });
+    /// Benchmarks scalar vs wide f32→i16 conversion.
+    #[wasm_bindgen_bench]
+    pub fn bench_f32_to_i16_conversion(c: &mut Criterion) {
+        let float_frame: Vec<f32> = dummy_float_frame()
+            .iter()
+            .map(|x| x * i16::MAX as f32)
+            .collect();
+        let mut output = [0_i16; 4096];
 
-    c.bench_function("wide_f32_to_i16", |b| {
-        b.iter(|| wide_f32_to_i16(black_box(&float_frame), black_box(&mut output)))
-    });
+        c.bench_function("f32_to_i16_scalar", |b| {
+            b.iter(|| {
+                for (out, &f) in black_box(&mut output)
+                    .iter_mut()
+                    .zip(black_box(&float_frame).iter())
+                {
+                    *out = f as i16;
+                }
+            })
+        });
+
+        c.bench_function("wide_f32_to_i16", |b| {
+            b.iter(|| wide_f32_to_i16(black_box(&float_frame), black_box(&mut output)))
+        });
+    }
 }
 
 fn main() {}

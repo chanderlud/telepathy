@@ -104,9 +104,11 @@ mod tests {
     use super::Decoder;
     use crate::sea::{
         codec::{
+            bits::BitUnpacker,
             chunk::SeaChunk,
             common::{SEAC_MAGIC, SeaError, SeaResidualSize},
             file::{SeaFile, SeaFileHeader},
+            lms::SeaLMS,
         },
         encoder::EncoderSettings,
     };
@@ -143,11 +145,20 @@ mod tests {
     fn decode_cbr_round_trip_is_within_error_bounds() {
         let input = synthetic_frame();
         let mut file = SeaFile::new(header(), &EncoderSettings::default()).unwrap();
-        let encoded = file.make_chunk(&input).unwrap();
-        let chunk = SeaChunk::from_slice(&encoded, &file.header).unwrap();
+        let mut encoded = Vec::new();
+        file.make_chunk(&input, &mut encoded).unwrap();
+        let (chunk_info, mut lms, scale_factors, residuals, _) =
+            parse_chunk(&encoded, &file.header).unwrap();
 
-        let decoder = Decoder::init(1, chunk.scale_factor_bits as usize);
-        let decoded = decoder.decode_cbr(&chunk);
+        let mut decoder = Decoder::init(1, chunk_info.scale_factor_bits as usize);
+        let mut decoded = [0i16; 480];
+        decoder.decode_cbr_into(
+            &chunk_info,
+            &mut lms,
+            &scale_factors,
+            &residuals,
+            &mut decoded,
+        );
         assert!(mean_abs_error(&input, &decoded) <= 2500);
     }
 
@@ -159,18 +170,28 @@ mod tests {
             ..EncoderSettings::default()
         };
         let mut file = SeaFile::new(header(), &settings).unwrap();
-        let encoded = file.make_chunk(&input).unwrap();
-        let chunk = SeaChunk::from_slice(&encoded, &file.header).unwrap();
+        let mut encoded = Vec::new();
+        file.make_chunk(&input, &mut encoded).unwrap();
+        let (chunk_info, mut lms, scale_factors, residuals, vbr_residual_sizes) =
+            parse_chunk(&encoded, &file.header).unwrap();
 
-        let decoder = Decoder::init(1, chunk.scale_factor_bits as usize);
-        let decoded = decoder.decode_vbr(&chunk);
+        let mut decoder = Decoder::init(1, chunk_info.scale_factor_bits as usize);
+        let mut decoded = [0i16; 480];
+        decoder.decode_vbr_into(
+            &chunk_info,
+            &mut lms,
+            &scale_factors,
+            &vbr_residual_sizes,
+            &residuals,
+            &mut decoded,
+        );
         assert!(mean_abs_error(&input, &decoded) <= 2500);
     }
 
     #[test]
     fn sea_error_variants_and_residual_size_boundaries() {
         assert!(matches!(
-            SeaChunk::from_slice(&[1, 0, 0], &header()),
+            parse_chunk(&[1, 0, 0], &header()),
             Err(SeaError::InvalidFrame)
         ));
 
@@ -198,5 +219,35 @@ mod tests {
             Some(SeaResidualSize::Eight)
         );
         assert_eq!(SeaResidualSize::try_from_u8(9), None);
+    }
+
+    type ParsedChunk = (super::ChunkInfo, Vec<SeaLMS>, Vec<u8>, Vec<u8>, Vec<u8>);
+
+    fn parse_chunk(encoded: &[u8], header: &SeaFileHeader) -> Result<ParsedChunk, SeaError> {
+        let mut lms = Vec::<SeaLMS>::new();
+        let mut scale_factors = Vec::new();
+        let mut vbr_residual_sizes = Vec::new();
+        let mut residuals = Vec::new();
+        let mut vbr_bitlengths = Vec::new();
+        let mut unpacker = BitUnpacker::new_const_bits(1);
+
+        let chunk_info = SeaChunk::parse_into(
+            encoded,
+            header,
+            &mut lms,
+            &mut scale_factors,
+            &mut vbr_residual_sizes,
+            &mut residuals,
+            &mut vbr_bitlengths,
+            &mut unpacker,
+        )?;
+
+        Ok((
+            chunk_info,
+            lms,
+            scale_factors,
+            residuals,
+            vbr_residual_sizes,
+        ))
     }
 }

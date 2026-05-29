@@ -160,7 +160,8 @@ mod tests {
 
             for scale_factor in scale_factor_indices {
                 let reciprocal = dequant.get_scalefactor_reciprocals(bits)[scale_factor] as i64;
-                let dqt_row = &dequant.get_dqt(bits)[scale_factor];
+                let (dqt, stride) = dequant.get_dqt(bits);
+                let dqt_row = &dqt[scale_factor * stride..(scale_factor + 1) * stride];
 
                 for expected in dqt_row {
                     let scaled = sea_div(*expected, reciprocal);

@@ -123,3 +123,21 @@ impl SeaEncoder {
         self.file.header.chunk_size
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{EncoderSettings, SeaEncoder};
+    use crate::sea::codec::common::SeaError;
+
+    #[test]
+    fn new_rejects_zero_channels() {
+        let result = SeaEncoder::new(0, 48_000, EncoderSettings::default());
+        assert!(matches!(result, Err(SeaError::InvalidParameters)));
+    }
+
+    #[test]
+    fn new_rejects_zero_sample_rate() {
+        let result = SeaEncoder::new(1, 0, EncoderSettings::default());
+        assert!(matches!(result, Err(SeaError::InvalidParameters)));
+    }
+}
