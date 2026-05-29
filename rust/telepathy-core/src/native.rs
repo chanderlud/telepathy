@@ -9,9 +9,9 @@ use iroh::PublicKey;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-#[cfg(feature = "mock-audio")]
+#[cfg(feature = "integration-testing")]
 use telepathy_audio::MockAudioHost;
-#[cfg(not(feature = "mock-audio"))]
+#[cfg(not(feature = "integration-testing"))]
 use telepathy_audio::devices::CpalAudioHost;
 use tokio::sync::{Notify, oneshot, watch};
 
@@ -22,9 +22,9 @@ type NativeAcceptCall = Arc<
     dyn Fn(String, Option<Vec<u8>>, oneshot::Sender<bool>, watch::Receiver<bool>) + Send + Sync,
 >;
 
-#[cfg(not(feature = "mock-audio"))]
+#[cfg(not(feature = "integration-testing"))]
 type NativeHandle = TelepathyHandle<NativeCallbacks, NativeStatisticsCallback, CpalAudioHost>;
-#[cfg(feature = "mock-audio")]
+#[cfg(feature = "integration-testing")]
 type NativeHandle = TelepathyHandle<NativeCallbacks, NativeStatisticsCallback, MockAudioHost>;
 
 /// Rust-native runtime client for `telepathy-core`.

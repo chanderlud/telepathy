@@ -240,7 +240,7 @@ impl CallSlot {
 }
 
 #[derive(Clone, Default)]
-pub(crate) struct CoreState {
+pub struct CoreState {
     /// Enables rnnoise denoising
     pub(crate) denoise: Arc<AtomicBool>,
 
@@ -254,7 +254,7 @@ pub(crate) struct CoreState {
     pub(crate) output_device: SharedDeviceId,
 
     /// The current iroh secret key
-    pub(crate) identity: Arc<RwLock<Option<SecretKey>>>,
+    pub identity: Arc<RwLock<Option<SecretKey>>>,
 
     /// Authoritative global call-slot guard covering negotiation and active calls.
     pub(crate) call_slot: CallSlot,
@@ -284,7 +284,7 @@ pub(crate) struct CoreState {
     pub(crate) stop_manager: Arc<AtomicBool>,
 
     /// notifies when a manager starts
-    pub(crate) manager_active: Arc<Notify>,
+    pub manager_active: Arc<Notify>,
 
     /// Network configuration for p2p connections
     pub(crate) network_config: NetworkConfig,
@@ -463,12 +463,12 @@ impl EarlyCallState {
 
 /// shared values for a single session
 #[derive(Debug)]
-pub(crate) struct SessionState {
+pub struct SessionState {
     /// identifies a unique session state
     pub(crate) id: Uuid,
 
     /// signals the session to initiate a call
-    pub(crate) start_call: Notify,
+    pub start_call: Notify,
 
     /// notifies during shutdown & manager restarts
     pub(crate) stop_session: CancellationToken,

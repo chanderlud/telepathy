@@ -372,7 +372,7 @@ where
         }
     }
 
-    pub(crate) async fn shutdown(&self) {
+    pub async fn shutdown(&self) {
         // guaranteed to end all sessions
         self.reset_sessions().await;
         // the manager will now stop & not run again

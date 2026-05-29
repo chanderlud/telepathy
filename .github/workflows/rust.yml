@@ -103,7 +103,7 @@ jobs:
           cache-workspaces: rust
 
       - name: Run Rust tests
-        run: cd rust && cargo test --all-targets
+        run: cd rust && cargo test --all-targets --features integration-testing
 
   build_rust:
     needs: [lint_rust, test_rust]

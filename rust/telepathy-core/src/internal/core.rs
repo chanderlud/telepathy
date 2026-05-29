@@ -60,7 +60,7 @@ use wasmtimer::tokio::{Interval, interval, sleep_until, timeout};
 const MANAGER_RETRY_BASE_MS: u64 = 500;
 const MANAGER_RETRY_MAX_MS: u64 = 30_000;
 
-pub(crate) struct TelepathyCore<C, S, H>
+pub struct TelepathyCore<C, S, H>
 where
     S: CoreStatisticsCallback + Send + Sync + 'static,
     C: CoreCallbacks<S> + Send + Sync + 'static,
@@ -70,16 +70,16 @@ where
     pub(crate) host: H,
 
     /// Core state for telepathy
-    pub(crate) core_state: CoreState,
+    pub core_state: CoreState,
 
     /// Tracks state for the current room
     pub(crate) room_state: Arc<RwLock<Option<RoomState>>>,
 
     /// Keeps track of and controls the sessions
-    pub(crate) session_states: Arc<RwLock<HashMap<PublicKey, Arc<SessionState>>>>,
+    pub session_states: Arc<RwLock<HashMap<PublicKey, Arc<SessionState>>>>,
 
     /// Signals the session manager to start a new session
-    pub(crate) start_session: Option<Sender<PublicKey>>,
+    pub start_session: Option<Sender<PublicKey>>,
 
     /// Restarts the session manager when needed
     pub(crate) restart_manager: Arc<Notify>,
@@ -108,7 +108,7 @@ where
     C: CoreCallbacks<S> + Send + Sync + 'static,
     H: AudioHost + Send + Sync + Clone + 'static,
 {
-    pub(crate) fn new(
+    pub fn new(
         host: H,
         network_config: &NetworkConfig,
         screenshare_config: &ScreenshareConfig,
@@ -135,7 +135,7 @@ where
 
     /// Spawns the manager & returns the handle if no manager exists yet
     #[instrument(name = "manager.spawn", skip_all)]
-    pub(crate) async fn start_manager(&mut self) -> Option<JoinHandle<()>> {
+    pub async fn start_manager(&mut self) -> Option<JoinHandle<()>> {
         // only allow one manager
         if self.start_session.is_some() {
             return None;

@@ -54,7 +54,7 @@ pub struct Contact {
     pub(crate) nickname: String,
 
     /// The public/verifying key for the contact
-    pub(crate) peer_id: PublicKey,
+    pub peer_id: PublicKey,
 
     pub(crate) output_volume: f32,
 
@@ -256,14 +256,6 @@ impl NetworkConfig {
             listen_port: Arc::new(AtomicU16::new(listen_port)),
             bind_addresses: Arc::new(StdRwLock::new(Self::parse_bind_addresses(bind_addresses)?)),
         })
-    }
-
-    #[cfg(test)]
-    pub(crate) fn mock(port: u16, bind_addresses: Vec<IpAddr>) -> Self {
-        Self {
-            listen_port: Arc::new(AtomicU16::new(port)),
-            bind_addresses: Arc::new(StdRwLock::new(bind_addresses)),
-        }
     }
 
     fn parse_bind_addresses(bind_addresses: Vec<String>) -> Result<Vec<IpAddr>, DartError> {

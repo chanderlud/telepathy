@@ -1,7 +1,7 @@
 /// callback traits shared by FRB and native frontends
-pub(crate) mod callbacks;
+pub mod callbacks;
 /// implementations for core telepathy functionality
-mod core;
+pub mod core;
 pub(crate) mod error;
 /// helper methods used by telepathy core
 mod helpers;
@@ -9,10 +9,7 @@ pub(crate) mod messages;
 pub(crate) mod screenshare;
 /// networking code for live audio streams
 mod sockets;
-mod state;
-#[cfg(test)]
-#[cfg(feature = "mock-audio")]
-mod tests;
+pub mod state;
 mod utils;
 
 use crate::AudioDevice;

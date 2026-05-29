@@ -1,60 +1,27 @@
-use super::*;
-use crate::internal::callbacks::{MockCoreCallbacks, MockCoreStatisticsCallback};
-use crate::types::{ManagerState, SessionStatus};
-use std::net::{IpAddr, Ipv4Addr};
-use std::sync::Once;
+#![cfg(feature = "integration-testing")]
+
+use iroh::SecretKey;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering::Relaxed;
+use std::sync::{Arc, Once};
+use std::time::Duration;
 use telepathy_audio::MockAudioHost;
+use telepathy_audio::devices::AudioHost;
+use telepathy_core::internal::callbacks::{MockCoreCallbacks, MockCoreStatisticsCallback};
+use telepathy_core::internal::core::TelepathyCore;
+use telepathy_core::overlay::Overlay;
+use telepathy_core::types::Contact;
+use telepathy_core::types::{
+    CodecConfig, ManagerState, NetworkConfig, ScreenshareConfig, SessionStatus,
+};
 use tokio::time::interval;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 static TEST_TRACING_INIT: Once = Once::new();
 
-impl Contact {
-    fn mock(is_room_only: bool, nickname: &str) -> (Self, SecretKey) {
-        let key = SecretKey::generate();
-        let peer_id = key.public();
-        (
-            Self {
-                id: peer_id.to_string(),
-                nickname: nickname.to_string(),
-                peer_id,
-                is_room_only,
-                output_volume: 0_f32,
-            },
-            key,
-        )
-    }
-}
-
-impl<C, S, H> TelepathyCore<C, S, H>
-where
-    S: CoreStatisticsCallback + Send + Sync + 'static,
-    C: CoreCallbacks<S> + Send + Sync + 'static,
-    H: AudioHost + Send + Sync + Clone + 'static,
-{
-    fn mock(callbacks: C, network_config: &NetworkConfig, codec_config: &CodecConfig) -> Self {
-        let screenshare_config = ScreenshareConfig::default();
-        let overlay = Overlay::default();
-
-        Self::new(
-            AudioHost::new(),
-            network_config,
-            &screenshare_config,
-            &overlay,
-            codec_config,
-            callbacks,
-        )
-    }
-}
-
 #[tokio::test]
-async fn mock_callbacks() {
-    run_test().await;
-}
-
-async fn run_test() {
+async fn session_collision_doesnt_fail() {
     TEST_TRACING_INIT.call_once(|| {
         let _ = tracing_subscriber::fmt()
             .with_test_writer()
@@ -66,16 +33,24 @@ async fn run_test() {
     });
 
     // craft network config for the test instance
-    let network_config_a = NetworkConfig::mock(40143, vec![IpAddr::V4(Ipv4Addr::LOCALHOST)]);
+    let network_config_a =
+        NetworkConfig::new(0, vec!["0.0.0.0".to_string()]).expect("network a invalid");
+    let network_config_b =
+        NetworkConfig::new(0, vec!["0.0.0.0".to_string()]).expect("network b invalid");
 
-    let network_config_b = NetworkConfig::mock(40144, vec![IpAddr::V4(Ipv4Addr::LOCALHOST)]);
+    let screenshare = ScreenshareConfig::default();
+    let overlay = Overlay::default();
 
     // default codec config
     let codec_config = CodecConfig::new(true, true, 5.0);
 
     // create contacts & identities
-    let (contact_a, key_a) = Contact::mock(false, "client-a");
-    let (contact_b, key_b) = Contact::mock(false, "client-b");
+    let key_a = SecretKey::generate();
+    let key_b = SecretKey::generate();
+    let contact_a = Contact::new("client-a".to_string(), key_a.public().to_string())
+        .expect("contact a invalid");
+    let contact_b = Contact::new("client-b".to_string(), key_b.public().to_string())
+        .expect("contact a invalid");
 
     // set up client a
     let a_is_active = Arc::new(AtomicBool::new(false));
@@ -85,8 +60,14 @@ async fn run_test() {
         a_is_active.clone(),
         a_is_relayed.clone(),
     );
-    let mut telepathy_a: TelepathyCore<_, _, MockAudioHost> =
-        TelepathyCore::mock(mock_a, &network_config_a, &codec_config);
+    let mut telepathy_a: TelepathyCore<_, _, MockAudioHost> = TelepathyCore::new(
+        MockAudioHost::new(),
+        &network_config_a,
+        &screenshare,
+        &overlay,
+        &codec_config,
+        mock_a,
+    );
     *telepathy_a.core_state.identity.write().await = Some(key_a);
     let handle_a = telepathy_a.start_manager().await;
     telepathy_a.core_state.manager_active.notified().await;
@@ -99,8 +80,14 @@ async fn run_test() {
         b_is_active.clone(),
         b_is_relayed.clone(),
     );
-    let mut telepathy_b: TelepathyCore<_, _, MockAudioHost> =
-        TelepathyCore::mock(mock_b, &network_config_b, &codec_config);
+    let mut telepathy_b: TelepathyCore<_, _, MockAudioHost> = TelepathyCore::new(
+        MockAudioHost::new(),
+        &network_config_b,
+        &screenshare,
+        &overlay,
+        &codec_config,
+        mock_b,
+    );
     *telepathy_b.core_state.identity.write().await = Some(key_b);
     let handle_b = telepathy_b.start_manager().await;
     telepathy_b.core_state.manager_active.notified().await;
@@ -161,7 +148,7 @@ async fn run_test() {
     assert!(!a_is_relayed.load(Relaxed));
     assert!(!b_is_relayed.load(Relaxed));
 
-    // a_session.start_call.notify_one();
+    a_session.start_call.notify_one();
 
     tokio::time::sleep(Duration::from_secs(5)).await;
 
@@ -199,8 +186,8 @@ fn construct_mock_callbacks(
 
     // ensure manager activates
     mock.expect_manager_state()
-        .withf(|a| matches!(a, ManagerState::Active))
-        .once()
+        .withf(|a| matches!(a, ManagerState::Active | ManagerState::Starting))
+        .times(2)
         .returning(|_| Box::pin(async move {}));
 
     // ensure manager deactivates
@@ -238,6 +225,15 @@ fn construct_mock_callbacks(
     mock.expect_call_state().returning(|state| {
         info!("got call state: {state:?}");
         Box::pin(async move {})
+    });
+
+    mock.expect_statistics_callback().returning(|| {
+        let mut mock = MockCoreStatisticsCallback::new();
+
+        mock.expect_post()
+            .returning(move |_| Box::pin(async move {}));
+
+        mock
     });
 
     mock

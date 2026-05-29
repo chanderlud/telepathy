@@ -5,7 +5,7 @@ pub mod flutter;
 #[cfg(feature = "flutter")]
 mod frb_generated;
 /// flutter_rust_bridge:ignore
-mod internal;
+pub mod internal;
 #[cfg(feature = "native")]
 pub mod native;
 pub mod overlay;

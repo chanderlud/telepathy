@@ -12,7 +12,7 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 [features]
 flutter = ["dep:flutter_rust_bridge"]
 native = []
-mock-audio = ["telepathy-audio/mock-audio"]
+integration-testing = ["telepathy-audio/mock-audio", "mockall", "async-trait"]
 default = ["flutter"]
 
 [dependencies]
@@ -31,6 +31,8 @@ cfg-if = "1"
 bytes = "1"
 serde = { version = "1", features = ["derive"] }
 rustls = "0.23"
+mockall = { version = "0.14", optional = true }
+async-trait = { version = "0.1", optional = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.22"
@@ -58,7 +60,3 @@ tokio = { version = "1", features = ["time", "io-util", "macros", "process", "ne
 iroh = { version = "1.0.0-rc.1", features = ["tls-aws-lc-rs"] }
 tracing-appender = "0.2"
 tracing-panic = "0.1"
-
-[dev-dependencies]
-mockall = "0.14"
-async-trait = "0.1"
