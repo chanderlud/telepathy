@@ -10,6 +10,9 @@ pub(crate) mod screenshare;
 /// networking code for live audio streams
 mod sockets;
 mod state;
+#[cfg(test)]
+#[cfg(feature = "mock-audio")]
+mod tests;
 mod utils;
 
 use crate::AudioDevice;
