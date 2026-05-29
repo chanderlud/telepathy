@@ -17,13 +17,37 @@ class ProfileSettings extends StatefulWidget {
 
 class ProfileSettingsState extends State<ProfileSettings> {
   final TextEditingController _profileNameInput = TextEditingController();
+  String? _profileNameError;
 
   void _createProfile(
     BuildContext dialogContext,
     ProfilesController profilesController,
+    StateSetter setDialogState,
   ) {
-    profilesController.createProfile(_profileNameInput.text);
+    final profileName = _profileNameInput.text.trim();
+
+    if (profileName.isEmpty) {
+      setDialogState(() {
+        _profileNameError = 'Profile name is required.';
+      });
+      return;
+    }
+
+    final profileNameExists = profilesController.profiles.values.any(
+      (Profile profile) =>
+          profile.nickname.trim().toLowerCase() == profileName.toLowerCase(),
+    );
+
+    if (profileNameExists) {
+      setDialogState(() {
+        _profileNameError = 'A profile named "$profileName" already exists.';
+      });
+      return;
+    }
+
+    profilesController.createProfile(profileName);
     _profileNameInput.clear();
+    _profileNameError = null;
     Navigator.of(dialogContext).pop();
   }
 
@@ -157,37 +181,52 @@ class ProfileSettingsState extends State<ProfileSettings> {
             padding: const EdgeInsets.symmetric(vertical: 5, horizontal: 20),
             child: IconButton(
               onPressed: () {
+                _profileNameError = null;
                 showDialog(
                     context: context,
                     builder: (BuildContext context) {
-                      return CallbackShortcuts(
-                        bindings: <ShortcutActivator, VoidCallback>{
-                          const SingleActivator(LogicalKeyboardKey.enter): () =>
-                              _createProfile(context, profilesController),
-                        },
-                        child: SimpleDialog(
-                          title: const Text('Create Profile'),
-                          contentPadding: const EdgeInsets.only(
-                              bottom: 25, left: 25, right: 25),
-                          titlePadding: const EdgeInsets.only(
-                              top: 25, left: 25, right: 25, bottom: 15),
-                          children: [
-                            TextField(
-                              decoration: const InputDecoration(
-                                labelText: 'Name',
-                              ),
-                              controller: _profileNameInput,
-                              onSubmitted: (_) =>
-                                  _createProfile(context, profilesController),
+                      return StatefulBuilder(
+                        builder:
+                            (BuildContext context, StateSetter setDialogState) {
+                          return CallbackShortcuts(
+                            bindings: <ShortcutActivator, VoidCallback>{
+                              const SingleActivator(LogicalKeyboardKey.enter):
+                                  () => _createProfile(context,
+                                      profilesController, setDialogState),
+                            },
+                            child: SimpleDialog(
+                              title: const Text('Create Profile'),
+                              contentPadding: const EdgeInsets.only(
+                                  bottom: 25, left: 25, right: 25),
+                              titlePadding: const EdgeInsets.only(
+                                  top: 25, left: 25, right: 25, bottom: 15),
+                              children: [
+                                TextField(
+                                  decoration: InputDecoration(
+                                    labelText: 'Name',
+                                    errorText: _profileNameError,
+                                  ),
+                                  controller: _profileNameInput,
+                                  onChanged: (_) {
+                                    if (_profileNameError == null) return;
+
+                                    setDialogState(() {
+                                      _profileNameError = null;
+                                    });
+                                  },
+                                  onSubmitted: (_) => _createProfile(context,
+                                      profilesController, setDialogState),
+                                ),
+                                const SizedBox(height: 20),
+                                Button(
+                                  text: 'Create',
+                                  onPressed: () => _createProfile(context,
+                                      profilesController, setDialogState),
+                                )
+                              ],
                             ),
-                            const SizedBox(height: 20),
-                            Button(
-                              text: 'Create',
-                              onPressed: () =>
-                                  _createProfile(context, profilesController),
-                            )
-                          ],
-                        ),
+                          );
+                        },
                       );
                     });
               },
