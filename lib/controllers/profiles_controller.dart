@@ -16,6 +16,8 @@ class ProfilesController with ChangeNotifier {
   static const String _activeProfileKey = 'activeProfile';
   static const String _defaultProfileNickname = 'Default';
   static const String _unnamedProfileNickname = 'Unnamed Profile';
+  static const double _minContactOutputVolumeDb = -15.0;
+  static const double _maxContactOutputVolumeDb = 15.0;
 
   final FlutterSecureStorage storage;
   final SharedPreferencesAsync options;
@@ -365,6 +367,10 @@ class ProfilesController with ChangeNotifier {
 
       final Object? nickname = contactMap['nickname'];
       final Object? peerId = contactMap['peerId'];
+      final double outputVolume = _normalizeContactOutputVolume(
+        contactMap['outputVolume'],
+        entry.key,
+      );
 
       if (nickname is! String || peerId is! String) {
         DebugConsole.warn(
@@ -377,6 +383,7 @@ class ProfilesController with ChangeNotifier {
           id: entry.key,
           nickname: nickname,
           peerId: peerId,
+          outputVolume: outputVolume,
         );
       } catch (error) {
         DebugConsole.warn('invalid contact format for ${entry.key}: $error');
@@ -472,6 +479,7 @@ class ProfilesController with ChangeNotifier {
         contactsMap[entry.key] = <String, dynamic>{
           'nickname': entry.value.nickname(),
           'peerId': entry.value.peerId(),
+          'outputVolume': entry.value.outputVolume(),
         };
       } catch (error) {
         DebugConsole.warn('skipping contact ${entry.key} during save: $error');
@@ -674,6 +682,29 @@ class ProfilesController with ChangeNotifier {
       );
     }
     return null;
+  }
+
+  double? _asDouble(Object? value) {
+    if (value is num) {
+      return value.toDouble();
+    }
+    return null;
+  }
+
+  double _normalizeContactOutputVolume(Object? raw, String contactKey) {
+    final double? parsed = _asDouble(raw);
+    if (parsed == null) {
+      return 0.0;
+    }
+    if (!parsed.isFinite ||
+        parsed < _minContactOutputVolumeDb ||
+        parsed > _maxContactOutputVolumeDb) {
+      DebugConsole.warn(
+        'invalid outputVolume for $contactKey: $raw; using 0.0',
+      );
+      return 0.0;
+    }
+    return parsed;
   }
 
   List<String> _dedupe(List<String> values) {

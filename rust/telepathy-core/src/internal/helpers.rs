@@ -303,8 +303,8 @@ where
 
         let mut builder = AudioInputBuilder::new()
             .device(self.core_state.input_device.lock().await.clone())
-            .input_volume_shared(&self.core_state.input_volume)
-            .rms_threshold_shared(&self.core_state.rms_threshold)
+            .input_volume_shared(self.core_state.get_input_volume())
+            .rms_threshold_shared(self.core_state.get_rms_threshold())
             .muted_shared(&self.core_state.muted)
             .rms_shared(&statistics_state.input_rms)
             .on_error(end_call)
@@ -343,6 +343,7 @@ where
     /// helper method to set up audio output stack using the telepathy-audio library
     pub(crate) async fn setup_output(
         &self,
+        peer: PeerId,
         remote_sample_rate: f64,
         codec_enabled: bool,
         statistics_state: &StatisticsCollectorState,
@@ -352,12 +353,14 @@ where
         let device_id = self.core_state.output_device.lock().await.clone();
         // Create the input channel
         let (sender, receiver) = kanal::unbounded();
+        // Get the shared volume multiplier
+        let output_volume = self.core_state.output_volume_for_peer(peer);
         // Create the audio output using the builder
         let handle = AudioOutputBuilder::new()
             .source(KanalSource::new(receiver))
             .device(device_id)
             .sample_rate(remote_sample_rate as u32)
-            .output_volume_shared(&self.core_state.output_volume)
+            .output_volume_shared(&output_volume)
             .deafened_shared(&self.core_state.deafened)
             .rms_shared(&statistics_state.output_rms)
             .loss_shared(&statistics_state.loss)
