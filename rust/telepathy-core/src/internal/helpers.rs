@@ -1,4 +1,4 @@
-use crate::flutter::ManagerState;
+use crate::flutter::{ManagerState, SessionStatus};
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::core::TelepathyCore;
 use crate::internal::error::ErrorKind;
@@ -31,7 +31,7 @@ use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 use tokio::select;
 use tokio::sync::Notify;
-use tracing::{error, info, instrument, warn};
+use tracing::{debug, error, info, instrument, warn};
 
 impl<C, S, H> TelepathyCore<C, S, H>
 where
@@ -379,6 +379,96 @@ where
         self.core_state.stop_manager.store(true, Relaxed);
         // end the current manager
         self.restart_manager.notify_one();
+    }
+
+    /// Inserts a new outbound attempt
+    pub(crate) async fn begin_outbound_attempt(&self, peer: PublicKey) -> u64 {
+        let mut attempts = self.outbound_attempts.write().await;
+        let generation = attempts.get(&peer).map(|current| current + 1).unwrap_or(1);
+        attempts.insert(peer, generation);
+        generation
+    }
+
+    /// Returns the current outbound generation
+    pub(crate) async fn get_outbound_generation(&self, peer: PublicKey) -> u64 {
+        self.outbound_attempts
+            .read()
+            .await
+            .get(&peer)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Emits the session status for outbound connections, checks for staleness
+    pub(crate) async fn emit_outbound_status(
+        &self,
+        peer: PublicKey,
+        generation: u64,
+        status: SessionStatus,
+    ) {
+        let is_current_outbound_attempt = self
+            .outbound_attempts
+            .read()
+            .await
+            .get(&peer)
+            .is_some_and(|current| *current == generation);
+
+        if !is_current_outbound_attempt {
+            debug!(
+                event = "outbound_session_status_stale",
+                peer.id = %peer,
+                generation,
+                ?status
+            );
+            return;
+        }
+
+        if matches!(status, SessionStatus::Inactive)
+            && self.session_states.read().await.contains_key(&peer)
+        {
+            debug!(
+                event = "outbound_session_status_suppressed_active_session",
+                peer.id = %peer,
+                generation
+            );
+            return;
+        }
+
+        self.callbacks.session_status(status, peer).await;
+    }
+
+    /// Emits the inactive session status, checking for newer sessions and staleness
+    pub(crate) async fn emit_inactive(&self, peer: PublicKey, session_generation: u64) {
+        let has_newer_outbound_attempt = self
+            .outbound_attempts
+            .read()
+            .await
+            .get(&peer)
+            .copied()
+            .unwrap_or(0)
+            > session_generation;
+
+        if has_newer_outbound_attempt {
+            debug!(
+                event = "session_inactive_stale_outbound_attempt",
+                peer.id = %peer,
+                session_generation
+            );
+            return;
+        }
+
+        if self.session_states.read().await.contains_key(&peer) {
+            debug!(
+                event = "session_inactive_suppressed_active_session",
+                peer.id = %peer,
+                session_generation
+            );
+            return;
+        }
+
+        self.callbacks
+            .session_status(SessionStatus::Inactive, peer)
+            .await;
     }
 
     #[cfg(target_family = "wasm")]

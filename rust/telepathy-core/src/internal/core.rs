@@ -86,6 +86,9 @@ where
 
     pub(crate) cancel_outbound_connections: Arc<Notify>,
 
+    /// Monotonic outbound dial generation per peer; stale attempts must not emit UI status.
+    pub(crate) outbound_attempts: Arc<RwLock<HashMap<PublicKey, u64>>>,
+
     /// A reference to the object that controls the call overlay
     pub(crate) overlay: Overlay,
 
@@ -121,6 +124,7 @@ where
             start_session: None,
             restart_manager: Default::default(),
             cancel_outbound_connections: Default::default(),
+            outbound_attempts: Default::default(),
             overlay: overlay.clone(),
             #[cfg(target_family = "wasm")]
             web_input: Default::default(),
@@ -189,10 +193,10 @@ where
         for (_, session) in self.session_states.write().await.drain() {
             session.teardown().await;
         }
+        self.outbound_attempts.write().await.clear();
     }
 
-    /// Builds the libp2p swarm, handles session start requests, screenshare messages, and libp2p events.
-    /// spawns outgoing sessions & screenshare threads
+    /// Builds the iroh endpoint, handles session start requests and incoming connections
     #[instrument(
         name = "manager.run",
         skip_all,
@@ -239,7 +243,9 @@ where
                         Ok(connection) => {
                             let self_clone = self.clone();
                             handles.push(spawn_task(async move {
-                                self_clone.initialize_session(connection.remote_id(), connection).await;
+                                self_clone
+                                    .initialize_session(connection.remote_id(), connection, None)
+                                    .await;
                             }))
                         }
                         Err(error) => {
@@ -255,11 +261,12 @@ where
                         debug!(event = "dial_ignored_self", peer.id = %peer_id);
                     } else {
                         debug!(event = "dial_initial", peer.id = %peer_id);
-                        self.callbacks.session_status(SessionStatus::Connecting, peer_id).await;
                         let self_clone = self.clone();
                         let endpoint_clone = endpoint.clone();
                         handles.push(spawn_task(async move {
-                            self_clone.open_session(peer_id, endpoint_clone).await;
+                            self_clone
+                                .open_session(peer_id, endpoint_clone)
+                                .await;
                         }));
                     }
                 }
@@ -273,6 +280,7 @@ where
         debug!(event = "manager_teardown_start");
         self.callbacks.manager_state(ManagerState::Stopped).await;
         self.cancel_outbound_connections.notify_waiters();
+        self.outbound_attempts.write().await.clear();
         // reset room state
         if let Some(state) = self.room_state.write().await.take() {
             state.end_call.notify_one();
@@ -296,6 +304,10 @@ where
         fields(peer.id = %peer)
     )]
     async fn open_session(&self, peer: PublicKey, endpoint: Endpoint) {
+        let generation = self.begin_outbound_attempt(peer).await;
+        self.emit_outbound_status(peer, generation, SessionStatus::Connecting)
+            .await;
+
         let connect_future = async {
             let mut retries = 0;
             loop {
@@ -337,13 +349,16 @@ where
             result = connect_future => {
                 if let Some(connection) = result {
                     info!(event = "connect_succeeded", peer.id = %peer);
-                    self.initialize_session(peer, connection)
+                    self.initialize_session(peer, connection, Some(generation))
                         .await;
                 } else {
                     warn!(event = "connect_abandoned", peer.id = %peer);
-                    self.callbacks
-                        .session_status(SessionStatus::Inactive, peer)
-                        .await;
+                    self.emit_outbound_status(
+                        peer,
+                        generation,
+                        SessionStatus::Inactive,
+                    )
+                    .await;
                 }
             }
         }
@@ -351,7 +366,17 @@ where
 
     /// Entry point to a session that sets up state and spawns session outer
     #[instrument(name = "session.init", skip_all, fields(peer.id = %peer, session.id = field::Empty))]
-    async fn initialize_session(&self, peer: PublicKey, connection: Connection) {
+    async fn initialize_session(
+        &self,
+        peer: PublicKey,
+        connection: Connection,
+        outbound_generation: Option<u64>,
+    ) {
+        let session_generation = match outbound_generation {
+            Some(generation) => generation,
+            None => self.get_outbound_generation(peer).await,
+        };
+
         let contact_option = self.callbacks.get_contact(peer.to_vec()).await;
         // sends messages to the session from elsewhere in the program
         let message_channel = channel::<ProtocolMessage>(8);
@@ -446,9 +471,7 @@ where
 
         // avoid sending session statuses for dummy contacts
         if !contact.is_room_only {
-            self.callbacks
-                .session_status(SessionStatus::Inactive, peer)
-                .await;
+            self.emit_inactive(peer, session_generation).await;
         }
 
         info!(event = "session_cleaned_up", session.id = %state.id);
@@ -1635,6 +1658,7 @@ where
             start_session: self.start_session.clone(),
             restart_manager: Arc::clone(&self.restart_manager),
             cancel_outbound_connections: Arc::clone(&self.cancel_outbound_connections),
+            outbound_attempts: Arc::clone(&self.outbound_attempts),
             overlay: self.overlay.clone(),
             #[cfg(target_family = "wasm")]
             web_input: Arc::clone(&self.web_input),
