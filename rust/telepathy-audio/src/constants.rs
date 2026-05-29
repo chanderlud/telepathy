@@ -23,7 +23,7 @@ pub use nnnoiseless::FRAME_SIZE;
 ///
 /// Higher values reduce false positives but delay silence detection.
 /// Lower values are more responsive but may create choppy audio.
-pub(crate) const MINIMUM_SILENCE_LENGTH: u16 = 40;
+pub const MINIMUM_SILENCE_LENGTH: u16 = 40;
 
 /// Number of samples used for silence transitions (fade in/out).
 ///

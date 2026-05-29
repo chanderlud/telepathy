@@ -239,22 +239,66 @@ impl AudioOutput for FullAudioOutput {
     }
 }
 
+/// Output that always reports full and records any `write_samples` calls.
+///
+/// Used to verify the processor skips writes when the sink is full.
+#[derive(Clone)]
+pub struct RecordingFullOutput {
+    recorded: Arc<Mutex<Vec<Vec<f32>>>>,
+}
+
+impl RecordingFullOutput {
+    pub fn new() -> (Self, Arc<Mutex<Vec<Vec<f32>>>>) {
+        let recorded = Arc::new(Mutex::new(Vec::new()));
+        (
+            Self {
+                recorded: recorded.clone(),
+            },
+            recorded,
+        )
+    }
+}
+
+impl AudioOutput for RecordingFullOutput {
+    fn is_full(&self) -> bool {
+        true
+    }
+
+    fn write_samples(&mut self, samples: &[f32]) -> Result<usize, Error> {
+        self.recorded.lock().unwrap().push(samples.to_vec());
+        Ok(0)
+    }
+}
+
+/// Test double whose `is_full()` responses follow a pre-programmed schedule.
+///
+/// Each call to `is_full()` pops the next scheduled value (defaulting to `false`
+/// when the schedule is exhausted). When the popped value is `true`, the
+/// `dropped_frames` counter increments. `write_samples` always records and
+/// increments `written_frames` when invoked.
 #[derive(Clone)]
 pub struct PartiallyFullOutput {
-    toggle: Arc<AtomicBool>,
+    schedule: Arc<Mutex<VecDeque<bool>>>,
     dropped_frames: Arc<AtomicUsize>,
     written_frames: Arc<AtomicUsize>,
     recorded: Arc<Mutex<Vec<Vec<f32>>>>,
 }
 
 impl PartiallyFullOutput {
-    pub fn new(starts_full: bool) -> (Self, Arc<AtomicUsize>, Arc<AtomicUsize>, Arc<Mutex<Vec<Vec<f32>>>>) {
+    pub fn new(
+        fullness_schedule: impl Into<VecDeque<bool>>,
+    ) -> (
+        Self,
+        Arc<AtomicUsize>,
+        Arc<AtomicUsize>,
+        Arc<Mutex<Vec<Vec<f32>>>>,
+    ) {
         let dropped_frames = Arc::new(AtomicUsize::new(0));
         let written_frames = Arc::new(AtomicUsize::new(0));
         let recorded = Arc::new(Mutex::new(Vec::new()));
         (
             Self {
-                toggle: Arc::new(AtomicBool::new(starts_full)),
+                schedule: Arc::new(Mutex::new(fullness_schedule.into())),
                 dropped_frames: dropped_frames.clone(),
                 written_frames: written_frames.clone(),
                 recorded: recorded.clone(),
@@ -268,12 +312,11 @@ impl PartiallyFullOutput {
 
 impl AudioOutput for PartiallyFullOutput {
     fn is_full(&self) -> bool {
-        let current = self.toggle.load(Ordering::Relaxed);
-        self.toggle.store(!current, Ordering::Relaxed);
-        if current {
+        let full = self.schedule.lock().unwrap().pop_front().unwrap_or(false);
+        if full {
             self.dropped_frames.fetch_add(1, Ordering::Relaxed);
         }
-        current
+        full
     }
 
     fn write_samples(&mut self, samples: &[f32]) -> Result<usize, Error> {

@@ -6,18 +6,20 @@ use atomic_float::AtomicF32;
 use bytes::{Bytes, BytesMut};
 use common::{
     FailingAudioOutput, FailingSource, FullAudioOutput, PartialWriteOutput, PartiallyFullOutput,
-    PatternAudioInput, QueueSource, RecordingAudioOutput, SineSource, TEST_SAMPLE_RATE,
-    TestAudioInput, TestAudioOutput, bytes_to_i16_samples, make_input_state, make_output_state,
-    raw_frame_from_i16, raw_frame_with_start,
+    PatternAudioInput, QueueSource, RecordingAudioOutput, RecordingFullOutput, SineSource,
+    TEST_SAMPLE_RATE, TestAudioInput, TestAudioOutput, bytes_to_i16_samples, make_input_state,
+    make_output_state, raw_frame_from_i16, raw_frame_with_start,
 };
 use nnnoiseless::DenoiseState;
-use telepathy_audio::Error;
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
+use telepathy_audio::Error;
 use telepathy_audio::FRAME_SIZE;
 use telepathy_audio::adapters::{MpscSink, MpscSource};
+use telepathy_audio::constants::MINIMUM_SILENCE_LENGTH as PRODUCTION_MINIMUM_SILENCE_LENGTH;
 use telepathy_audio::internal::buffer_pool::PooledBuffer;
 use telepathy_audio::internal::processor::{input_processor, output_processor};
 use telepathy_audio::internal::state::{InputProcessorState, OutputProcessorState};
@@ -25,7 +27,7 @@ use telepathy_audio::sea::codec::file::SeaFileHeader;
 use telepathy_audio::sea::decoder::SeaDecoder;
 use telepathy_audio::sea::encoder::{EncoderSettings, SeaEncoder};
 
-const MINIMUM_SILENCE_LENGTH: usize = 40;
+const MINIMUM_SILENCE_LENGTH: usize = PRODUCTION_MINIMUM_SILENCE_LENGTH as usize;
 const TEST_FRAMES: usize = 100;
 
 fn flatten_recorded(recorded: &Arc<std::sync::Mutex<Vec<Vec<f32>>>>) -> Vec<f32> {
@@ -279,7 +281,10 @@ fn input_processor_volume_halved_halves_rms() {
 
     assert!(rms_a > 1.0, "expected non-zero baseline RMS, got {rms_a}");
     let ratio = rms_b / rms_a;
-    assert!((0.45..=0.55).contains(&ratio), "expected ratio near 0.5, got {ratio}");
+    assert!(
+        (0.45..=0.55).contains(&ratio),
+        "expected ratio near 0.5, got {ratio}"
+    );
 }
 
 #[test]
@@ -512,44 +517,43 @@ fn output_processor_counts_dropped_samples_when_full() {
     .unwrap();
 
     assert_eq!(loss_sender.load(Ordering::Relaxed), FRAME_SIZE * 10);
+}
 
-    struct RecordingFullOutput {
-        recorded: Arc<std::sync::Mutex<Vec<Vec<f32>>>>,
-    }
-    impl telepathy_audio::internal::traits::AudioOutput for RecordingFullOutput {
-        fn is_full(&self) -> bool {
-            true
-        }
-        fn write_samples(&mut self, samples: &[f32]) -> Result<usize, Error> {
-            self.recorded.lock().unwrap().push(samples.to_vec());
-            Ok(0)
-        }
-    }
+#[test]
+fn output_processor_skips_write_samples_when_always_full() {
+    let source = QueueSource::new(
+        (0..3)
+            .map(|_| Bytes::from(vec![0u8; FRAME_SIZE * 2]))
+            .collect(),
+    );
+    let (output, recorded) = RecordingFullOutput::new();
 
-    let source = QueueSource::new((0..3).map(|_| Bytes::from(vec![0u8; FRAME_SIZE * 2])).collect());
-    let recorded = Arc::new(std::sync::Mutex::new(Vec::new()));
     output_processor(
         source,
-        RecordingFullOutput {
-            recorded: recorded.clone(),
-        },
+        output,
         TEST_SAMPLE_RATE,
         TEST_SAMPLE_RATE,
         OutputProcessorState::default(),
         None,
     )
     .unwrap();
+
     assert!(recorded.lock().unwrap().is_empty());
 }
 
 #[test]
 fn output_processor_partial_full_window_counts_only_dropped() {
+    let frame_count = 10;
+    let fullness_schedule: VecDeque<bool> = (0..frame_count).map(|idx| idx % 2 == 0).collect();
+    let expected_dropped = fullness_schedule.iter().filter(|&&full| full).count();
+
     let mut frames = Vec::new();
-    for _ in 0..10 {
+    for _ in 0..frame_count {
         frames.push(Bytes::from(vec![0u8; FRAME_SIZE * 2]));
     }
     let source = QueueSource::new(frames);
-    let (output, dropped_frames, written_frames, _recorded) = PartiallyFullOutput::new(true);
+    let (output, dropped_frames, written_frames, _recorded) =
+        PartiallyFullOutput::new(fullness_schedule);
 
     let output_volume = Arc::new(AtomicF32::new(1.0));
     let rms_sender = Arc::new(AtomicF32::new(0.0));
@@ -567,9 +571,15 @@ fn output_processor_partial_full_window_counts_only_dropped() {
     )
     .unwrap();
 
-    let dropped_count = dropped_frames.load(Ordering::Relaxed);
-    assert_eq!(written_frames.load(Ordering::Relaxed), 5);
-    assert_eq!(loss_sender.load(Ordering::Relaxed), FRAME_SIZE * dropped_count);
+    assert_eq!(dropped_frames.load(Ordering::Relaxed), expected_dropped);
+    assert_eq!(
+        written_frames.load(Ordering::Relaxed),
+        frame_count - expected_dropped
+    );
+    assert_eq!(
+        loss_sender.load(Ordering::Relaxed),
+        FRAME_SIZE * expected_dropped
+    );
 }
 
 #[test]
@@ -843,7 +853,7 @@ fn output_processor_propagates_decoder_error() {
 fn output_processor_records_partial_write_loss() {
     let frames: Vec<Bytes> = (0..7).map(|_| raw_frame_with_start(32)).collect();
     let source = QueueSource::new(frames);
-    let (output, writes, _recorded) = PartialWriteOutput::new(11);
+    let (output, writes, recorded) = PartialWriteOutput::new(11);
 
     let output_volume = Arc::new(AtomicF32::new(1.0));
     let rms_sender = Arc::new(AtomicF32::new(0.0));
@@ -861,7 +871,19 @@ fn output_processor_records_partial_write_loss() {
     )
     .unwrap();
 
-    assert_eq!(loss_sender.load(Ordering::Relaxed), writes.load(Ordering::Relaxed) * 11);
+    assert_eq!(writes.load(Ordering::Relaxed), 7);
+    assert!(
+        recorded
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|frame| frame.len() == FRAME_SIZE),
+        "each write should carry a full converted frame"
+    );
+    assert_eq!(
+        loss_sender.load(Ordering::Relaxed),
+        writes.load(Ordering::Relaxed) * 11
+    );
 }
 
 #[test]

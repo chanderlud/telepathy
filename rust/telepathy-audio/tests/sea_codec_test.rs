@@ -185,9 +185,11 @@ fn silence_round_trip() {
     decoder
         .decode_frame(encoded.as_ref(), &mut decoded_second)
         .unwrap();
-    assert!(decoded_second
-        .iter()
-        .all(|&sample| (sample as i32).abs() <= 500));
+    assert!(
+        decoded_second
+            .iter()
+            .all(|&sample| (sample as i32).abs() <= 500)
+    );
 }
 
 #[test]
@@ -436,7 +438,8 @@ fn invalid_encoder_settings_are_rejected() {
     let res_residual_infinity = SeaEncoder::new(1, SAMPLE_RATE, invalid_residual_bits_infinity);
     let res_residual_negative_infinity =
         SeaEncoder::new(1, SAMPLE_RATE, invalid_residual_bits_negative_infinity);
-    let res_scale_factor_above = SeaEncoder::new(1, SAMPLE_RATE, invalid_scale_factor_bits_above_range);
+    let res_scale_factor_above =
+        SeaEncoder::new(1, SAMPLE_RATE, invalid_scale_factor_bits_above_range);
     let res_sample_rate_zero = SeaEncoder::new(1, 0, EncoderSettings::default());
     let res_channels_zero = SeaEncoder::new(0, SAMPLE_RATE, EncoderSettings::default());
 

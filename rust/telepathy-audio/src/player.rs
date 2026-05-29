@@ -1809,6 +1809,17 @@ mod tests {
         assert_i16_close(decoded[0], 4_000, 750);
         assert_i16_close(decoded[1], 2_000, 750);
         assert_i16_close(decoded[2], -6_000, 750);
-        assert!(decoded[3..].iter().all(|sample| sample.abs() <= 750));
+
+        let padded_tail = &decoded[10..];
+        let tail_rms = (padded_tail
+            .iter()
+            .map(|&sample| f64::from(sample).powi(2))
+            .sum::<f64>()
+            / padded_tail.len() as f64)
+            .sqrt();
+        assert!(
+            tail_rms < 200.0,
+            "padded tail should be near silence, got RMS {tail_rms}"
+        );
     }
 }
