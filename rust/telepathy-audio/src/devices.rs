@@ -4,12 +4,12 @@
 //! audio input/output devices across platforms.
 
 use crate::internal::traits::{AudioInput, AudioOutput, RingBufferInput, RingBufferOutput};
+use cfg_if::cfg_if;
 use cpal::traits::{DeviceTrait, HostTrait};
 use cpal::{DefaultStreamConfigError, DeviceId, DeviceIdError};
 use rtrb::{Consumer, Producer};
 use std::fmt;
 use std::sync::{Arc, Condvar};
-use cfg_if::cfg_if;
 
 /// Error type for device operations.
 #[derive(Debug, Clone)]
