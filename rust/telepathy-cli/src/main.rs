@@ -28,8 +28,9 @@ async fn main() -> Result<()> {
         .with_ansi(false)
         .with_writer(std::io::stderr)
         .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("telepathy_cli=info,telepathy_core=info")),
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                EnvFilter::new("telepathy_cli=info,telepathy_core=info,iroh=info")
+            }),
         )
         .init();
 
@@ -49,6 +50,9 @@ fn parse_args(args: Vec<String>) -> Result<RunOptions> {
                 .collect()
         })
         .unwrap_or_default();
+    let mut relay_url = std::env::var("TELEPATHY_RELAY_URL").ok();
+    let mut dns_endpoint = std::env::var("TELEPATHY_DNS_ENDPOINT").ok();
+    let mut pkarr_relay = std::env::var("TELEPATHY_PKARR_RELAY").ok();
 
     let mut idx = 1usize;
     while idx < args.len() {
@@ -69,6 +73,30 @@ fn parse_args(args: Vec<String>) -> Result<RunOptions> {
                     .ok_or_else(|| startup_failure("missing value for --bind-address"))?;
                 bind_addresses.push(value);
             }
+            "--relay-url" => {
+                idx += 1;
+                relay_url = Some(
+                    args.get(idx)
+                        .cloned()
+                        .ok_or_else(|| startup_failure("missing value for --relay-url"))?,
+                );
+            }
+            "--dns-endpoint" => {
+                idx += 1;
+                dns_endpoint = Some(
+                    args.get(idx)
+                        .cloned()
+                        .ok_or_else(|| startup_failure("missing value for --dns-endpoint"))?,
+                );
+            }
+            "--pkarr-relay" => {
+                idx += 1;
+                pkarr_relay = Some(
+                    args.get(idx)
+                        .cloned()
+                        .ok_or_else(|| startup_failure("missing value for --pkarr-relay"))?,
+                );
+            }
             other => {
                 return Err(startup_failure(format!("unknown argument: {other}")));
             }
@@ -82,6 +110,9 @@ fn parse_args(args: Vec<String>) -> Result<RunOptions> {
     Ok(RunOptions {
         listen_port,
         bind_addresses,
+        relay_url,
+        dns_endpoint,
+        pkarr_relay,
     })
 }
 
@@ -224,5 +255,47 @@ mod tests {
         ])
         .expect("valid flag listen port should succeed");
         assert_eq!(from_flag.listen_port, 7777);
+    }
+
+    #[test]
+    fn missing_relay_url_flag_value_fails() {
+        let _relay = EnvVarGuard::clear("TELEPATHY_RELAY_URL");
+        let err = parse_args(vec!["telepathy-cli".to_string(), "--relay-url".to_string()])
+            .expect_err("missing --relay-url value should fail");
+        assert!(err.to_string().contains("missing value for --relay-url"));
+    }
+
+    #[test]
+    fn discovery_flags_and_env_apply_with_flag_precedence() {
+        let _relay = EnvVarGuard::set("TELEPATHY_RELAY_URL", "http://10.0.0.1:3340");
+        let _dns = EnvVarGuard::set("TELEPATHY_DNS_ENDPOINT", "10.0.0.1:5300");
+        let _pkarr = EnvVarGuard::set("TELEPATHY_PKARR_RELAY", "http://10.0.0.1:8080/pkarr");
+        let from_env = parse_args(base_args()).expect("discovery env vars should succeed");
+        assert_eq!(from_env.relay_url.as_deref(), Some("http://10.0.0.1:3340"));
+        assert_eq!(from_env.dns_endpoint.as_deref(), Some("10.0.0.1:5300"));
+        assert_eq!(
+            from_env.pkarr_relay.as_deref(),
+            Some("http://10.0.0.1:8080/pkarr")
+        );
+
+        let from_flags = parse_args(vec![
+            "telepathy-cli".to_string(),
+            "--relay-url".to_string(),
+            "http://10.0.10.1:3340".to_string(),
+            "--dns-endpoint".to_string(),
+            "10.0.10.1:5300".to_string(),
+            "--pkarr-relay".to_string(),
+            "http://10.0.10.1:8080/pkarr".to_string(),
+        ])
+        .expect("discovery flags should succeed");
+        assert_eq!(
+            from_flags.relay_url.as_deref(),
+            Some("http://10.0.10.1:3340")
+        );
+        assert_eq!(from_flags.dns_endpoint.as_deref(), Some("10.0.10.1:5300"));
+        assert_eq!(
+            from_flags.pkarr_relay.as_deref(),
+            Some("http://10.0.10.1:8080/pkarr")
+        );
     }
 }

@@ -3,3 +3,5 @@ pytest-asyncio
 pytest-xdist
 pytest-rerunfailures
 pyyaml
+z-base-32
+cryptography

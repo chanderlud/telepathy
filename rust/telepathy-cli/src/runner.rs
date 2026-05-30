@@ -15,6 +15,9 @@ const MAX_PARSE_LINE_LEN: usize = 240;
 pub struct RunOptions {
     pub listen_port: u16,
     pub bind_addresses: Vec<String>,
+    pub relay_url: Option<String>,
+    pub dns_endpoint: Option<String>,
+    pub pkarr_relay: Option<String>,
 }
 
 pub async fn run(opts: RunOptions) -> Result<()> {
@@ -24,7 +27,7 @@ pub async fn run(opts: RunOptions) -> Result<()> {
     let hub = Hub::new(event_tx);
     let callbacks = hub.build_callbacks();
 
-    let network_config = match NetworkConfig::new(opts.listen_port, opts.bind_addresses) {
+    let mut network_config = match NetworkConfig::new(opts.listen_port, opts.bind_addresses) {
         Ok(config) => config,
         Err(err) => {
             let message = err.message;
@@ -40,6 +43,37 @@ pub async fn run(opts: RunOptions) -> Result<()> {
             return Err(anyhow::anyhow!(message)).context("failed to build network config");
         }
     };
+    if let Some(relay_url) = opts.relay_url
+        && let Err(err) = network_config.set_relay_url(&relay_url)
+    {
+        let message = err.message;
+        send_event(
+            &output_tx,
+            Event::Error {
+                id: None,
+                message: message.clone(),
+            },
+        );
+        drop(output_tx);
+        let _ = writer.await;
+        return Err(anyhow::anyhow!(message)).context("failed to configure relay url");
+    }
+    network_config.set_dns_endpoint(opts.dns_endpoint);
+    if let Some(pkarr_relay) = opts.pkarr_relay
+        && let Err(err) = network_config.set_pkarr_relay(&pkarr_relay)
+    {
+        let message = err.message;
+        send_event(
+            &output_tx,
+            Event::Error {
+                id: None,
+                message: message.clone(),
+            },
+        );
+        drop(output_tx);
+        let _ = writer.await;
+        return Err(anyhow::anyhow!(message)).context("failed to configure pkarr relay");
+    }
     let codec_config = CodecConfig::new(true, true, 5.0);
     let mut telepathy = NativeTelepathy::new(&network_config, &codec_config, callbacks);
 

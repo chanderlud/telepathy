@@ -1,4 +1,3 @@
-use crate::flutter::{ManagerState, SessionStatus};
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::core::TelepathyCore;
 use crate::internal::error::ErrorKind;
@@ -9,9 +8,11 @@ use crate::internal::state::{EarlyCallState, StatisticsCollectorState};
 use crate::internal::utils::{KanalSink, KanalSource};
 use crate::internal::{ALPN, Result};
 use crate::types::FrontendNotify;
+use crate::types::{ManagerState, SessionStatus};
 use bytes::Bytes;
 use cfg_if::cfg_if;
 use iroh::address_lookup::{DnsAddressLookup, PkarrPublisher};
+use iroh::dns::DnsResolver;
 use iroh::endpoint::{default_relay_mode, presets};
 use iroh::{Endpoint, PublicKey, RelayMode, SecretKey};
 use rustls::crypto::aws_lc_rs::{self, kx_group};
@@ -50,6 +51,7 @@ where
             return Err(ErrorKind::NoIdentityAvailable.into());
         };
 
+        info!(event = "endpoint_launch", config = ?self.core_state.network_config);
         self.callbacks.manager_state(ManagerState::Starting).await;
 
         let mut provider = aws_lc_rs::default_provider();
@@ -69,7 +71,7 @@ where
             .expect("bind_addresses lock poisoned")
             .clone();
 
-        let mut endpoint_builder = Endpoint::builder(presets::Minimal)
+        let mut endpoint_builder = Endpoint::builder(presets::Empty)
             .crypto_provider(Arc::new(provider))
             .secret_key(identity)
             .alpns(vec![ALPN.to_vec()])
@@ -99,7 +101,13 @@ where
                 }
             } else {
                 if let Some(ref endpoint) = self.core_state.network_config.dns_endpoint {
-                    endpoint_builder = endpoint_builder.address_lookup(DnsAddressLookup::builder(endpoint.clone()));
+                    let resolver = DnsResolver::with_nameserver(endpoint.parse()?);
+                    endpoint_builder = endpoint_builder.address_lookup(
+                        // TODO move the origin_domain to network_config instead of hard coding for tests
+                        DnsAddressLookup::builder("dns.iroh.test.".to_string())
+                            .dns_resolver(resolver)
+                            .build()
+                    );
                 } else {
                     endpoint_builder = endpoint_builder.address_lookup(DnsAddressLookup::n0_dns());
                 }
@@ -107,6 +115,8 @@ where
         }
 
         if let Some(ref relays) = self.core_state.network_config.relays {
+            // Keep endpoint relay identity exactly aligned with NetworkConfig so PKARR
+            // advertisements use one canonical relay URL per physical relay service.
             endpoint_builder = endpoint_builder.relay_mode(RelayMode::Custom(relays.clone()));
         }
 

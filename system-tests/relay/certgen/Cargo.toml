@@ -1,0 +1,8 @@
+[package]
+name = "relay-certgen"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+rcgen = "0.14.8"

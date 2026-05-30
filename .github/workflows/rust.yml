@@ -198,13 +198,23 @@ jobs:
       - name: Install system test dependencies
         run: python -m pip install -r system-tests/requirements.txt
 
-      - name: Build relay and CLI binaries
+      - name: Build CLI binary
         run: bash system-tests/build.sh
+
+      - name: Generate relay TLS certificates
+        run: bash system-tests/relay/gen-certs.sh
+
+      - name: Start iroh discovery containers
+        run: docker compose -f system-tests/docker-compose.yml up -d --wait
 
       - name: Run system tests
         run: |
           PYTHON_BIN="$(command -v python)"
           sudo -E "$PYTHON_BIN" -m pytest system-tests/tests --artifacts-dir system-tests/artifacts --save-artifacts failures
+
+      - name: Stop iroh discovery containers
+        if: always()
+        run: docker compose -f system-tests/docker-compose.yml down
 
       - name: Upload system-test artifacts
         if: always()

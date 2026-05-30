@@ -7,7 +7,7 @@ use crate::types::Statistics;
 use bytes::Bytes;
 #[cfg(feature = "flutter")]
 pub use flutter_rust_bridge::JoinHandle;
-use flutter_rust_bridge::for_generated::futures::{SinkExt, StreamExt};
+use futures_util::{SinkExt, StreamExt};
 use iroh::endpoint::{RecvStream, SendStream};
 use kanal::AsyncReceiver;
 use speedy::{Readable, Writable};

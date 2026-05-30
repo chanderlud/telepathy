@@ -5,26 +5,31 @@ import os
 import re
 import subprocess
 import sys
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from harness.process import CliProcess, RelayProcess
+from harness.process import CliProcess
 from harness.topology import TopologyManager
 
 
 SYSTEM_TEST_ROOT = Path(__file__).resolve().parent
 REPO_ROOT = SYSTEM_TEST_ROOT.parent
 BUILD_SCRIPT = SYSTEM_TEST_ROOT / "build.sh"
+GEN_CERTS_SCRIPT = SYSTEM_TEST_ROOT / "relay" / "gen-certs.sh"
+RELAY_CERTS_DIR = SYSTEM_TEST_ROOT / "relay" / "certs"
+RELAY_CERT_FILES = (
+    RELAY_CERTS_DIR / "cert.pem",
+    RELAY_CERTS_DIR / "cert.key.pem",
+)
 RUST_TARGET = REPO_ROOT / "rust" / "target" / "debug"
 
 if str(SYSTEM_TEST_ROOT) not in sys.path:
     sys.path.insert(0, str(SYSTEM_TEST_ROOT))
 
 BINARY_PATHS = {
-    "relay": str(RUST_TARGET / "relay-server"),
     "cli": str(RUST_TARGET / "telepathy-cli"),
 }
 
@@ -46,12 +51,36 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "--test-iterations",
         action="store",
         type=int,
-        default=8,
+        default=1,
         help="Run each collected test this many times.",
     )
 
 
+def _ensure_relay_certs() -> None:
+    if all(path.exists() for path in RELAY_CERT_FILES):
+        return
+
+    result = subprocess.run(
+        ["bash", str(GEN_CERTS_SCRIPT)],
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0 or not all(path.exists() for path in RELAY_CERT_FILES):
+        message = (
+            "relay TLS certificates are missing and could not be generated.\n"
+            f"expected files:\n"
+            + "\n".join(f"  - {path}" for path in RELAY_CERT_FILES)
+            + f"\nstdout:\n{result.stdout}\n"
+            f"stderr:\n{result.stderr}"
+        )
+        raise pytest.UsageError(message)
+
+
 def pytest_configure(config: pytest.Config) -> None:
+    _ensure_relay_certs()
+
     # result = subprocess.run(
     #     ["bash", str(BUILD_SCRIPT)],
     #     cwd=str(REPO_ROOT),
@@ -103,17 +132,16 @@ def _sanitize_nodeid(nodeid: str) -> str:
 
 
 def _serialize_topology(topology: TopologyManager) -> dict[str, Any]:
+    discovery: dict[str, dict[str, str]] = {}
+    for namespace in topology.client_namespaces:
+        discovery[namespace] = {
+            "relay_url": topology.relay_url(namespace),
+            "dns_endpoint": topology.dns_endpoint(namespace),
+            "pkarr_relay": topology.pkarr_relay(namespace),
+        }
     return {
-        "relay_namespace": topology.relay_namespace,
         "client_namespaces": list(topology.client_namespaces),
-    }
-
-
-def _serialize_relay(relay: RelayProcess) -> dict[str, Any]:
-    return {
-        "peer_id": relay.peer_id,
-        "stdout": relay.stdout_lines(),
-        "stderr": relay.stderr_lines(),
+        "discovery": discovery,
     }
 
 
@@ -154,7 +182,7 @@ def record_test_artifacts(request: pytest.FixtureRequest) -> Any:
         return
 
     artifacts_root = getattr(config, "_system_test_artifacts_dir", SYSTEM_TEST_ROOT / "artifacts")
-    timestamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     test_dir = artifacts_root / f"{_sanitize_nodeid(request.node.nodeid)}__{timestamp}"
     test_dir.mkdir(parents=True, exist_ok=True)
 
@@ -171,15 +199,12 @@ def record_test_artifacts(request: pytest.FixtureRequest) -> Any:
     funcargs = getattr(request.node, "funcargs", {})
     profile = funcargs.get("profile")
     topology = funcargs.get("topology")
-    relay = funcargs.get("relay")
     cli_pair = funcargs.get("cli_pair")
 
     if profile is not None:
         payload["profile"] = _serialize_profile(profile)
     if topology is not None:
         payload["topology"] = _serialize_topology(topology)
-    if relay is not None:
-        payload["relay"] = _serialize_relay(relay)
     if cli_pair is not None:
         payload["cli_pair"] = _serialize_cli_pair(cli_pair)
 

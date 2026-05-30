@@ -10,10 +10,12 @@ Each line is a complete JSON object.
 
 Startup networking configuration can be provided in two ways:
 
-- CLI flags: `--listen-port <port>` and one or more `--bind-address <ip-address>` flags
-- Environment variables: `TELEPATHY_LISTEN_PORT` and `TELEPATHY_BIND_ADDRESSES`
+- CLI flags: `--listen-port <port>`, one or more `--bind-address <ip-address>` flags, and optional discovery flags `--relay-url`, `--dns-endpoint`, and `--pkarr-relay`
+- Environment variables: `TELEPATHY_LISTEN_PORT`, `TELEPATHY_BIND_ADDRESSES`, `TELEPATHY_RELAY_URL`, `TELEPATHY_DNS_ENDPOINT`, and `TELEPATHY_PKARR_RELAY`
 
 `--listen-port` / `TELEPATHY_LISTEN_PORT` must be a port number from `0` to `65535`. Invalid values are startup failures; if neither a flag nor `TELEPATHY_LISTEN_PORT` is set, the listen port defaults to `0`. `--bind-address` accepts one IP address per flag. `TELEPATHY_BIND_ADDRESSES` accepts a comma-separated list of IP addresses.
+
+Discovery flags configure the iroh relay, DNS address lookup, and pkarr publisher used for endpoint discovery. `--relay-url` / `TELEPATHY_RELAY_URL` is an HTTP relay URL (for example `http://10.0.10.1:3340`). `--dns-endpoint` / `TELEPATHY_DNS_ENDPOINT` is a host:port DNS resolver address (for example `10.0.10.1:5300`). `--pkarr-relay` / `TELEPATHY_PKARR_RELAY` is an HTTP pkarr relay URL (for example `http://10.0.10.1:8080/pkarr`). Omit any discovery flag to leave that setting unset.
 
 Precedence:
 
@@ -112,11 +114,26 @@ Emitted once at startup:
 
 #### `manager_active`
 
-Emitted when the network manager starts or stops:
+Emitted when the network manager changes state.
+The payload is an externally tagged enum: exactly one of `Stopped`, `Starting`, `Active`, or `Failed` is present with value `null`.
+
+Typical sequence after `start_manager`:
 
 ```json
-{"kind":"event","type":"manager_active","active":true,"restartable":false}
+{"kind":"event","type":"manager_active","Starting":null}
+{"kind":"event","type":"manager_active","Active":null}
 ```
+
+All variants:
+
+```json
+{"kind":"event","type":"manager_active","Stopped":null}
+{"kind":"event","type":"manager_active","Starting":null}
+{"kind":"event","type":"manager_active","Active":null}
+{"kind":"event","type":"manager_active","Failed":null}
+```
+
+`Active` means the iroh endpoint is online (relay reachable). Wait for this state before starting sessions or calls.
 
 #### `session_status`
 
@@ -220,7 +237,8 @@ sequenceDiagram
 
     Host->>CLI: {"id":"1","cmd":"start_manager","args":{}}
     CLI-->>Host: {"kind":"ack","id":"1","ok":true}
-    CLI-->>Host: {"kind":"event","type":"manager_active",...}
+    CLI-->>Host: {"kind":"event","type":"manager_active","Starting":null}
+    CLI-->>Host: {"kind":"event","type":"manager_active","Active":null}
 
     Host->>CLI: {"id":"2","cmd":"list_devices","args":{}}
     CLI-->>Host: {"kind":"result","id":"2","data":{...}}

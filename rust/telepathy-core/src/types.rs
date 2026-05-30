@@ -8,6 +8,7 @@ use crate::internal::spawn_task;
 use atomic_float::AtomicF32;
 use chrono::{DateTime, Local, SecondsFormat, Utc};
 use iroh::RelayMap;
+use iroh::RelayUrl;
 pub use iroh::{PublicKey, SecretKey};
 use serde::{Serialize, Serializer};
 use speedy::{Readable, Writable};
@@ -244,7 +245,7 @@ impl FrontendNotify {
 
 // TODO extend frontend to support relays and address discovery options
 #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(opaque))]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct NetworkConfig {
     pub(crate) listen_port: Arc<AtomicU16>,
 
@@ -320,6 +321,26 @@ impl NetworkConfig {
             .write()
             .map_err(|error| DartError::from(error.to_string()))? =
             Self::parse_bind_addresses(bind_addresses)?;
+        Ok(())
+    }
+
+    #[cfg(any(feature = "native", feature = "integration-testing"))]
+    pub fn set_relay_url(&mut self, relay_url: &str) -> Result<(), DartError> {
+        let url =
+            RelayUrl::from_str(relay_url).map_err(|error| DartError::from(error.to_string()))?;
+        self.relays = Some(RelayMap::from_iter([url]));
+        Ok(())
+    }
+
+    #[cfg(any(feature = "native", feature = "integration-testing"))]
+    pub fn set_dns_endpoint(&mut self, endpoint: Option<String>) {
+        self.dns_endpoint = endpoint;
+    }
+
+    #[cfg(any(feature = "native", feature = "integration-testing"))]
+    pub fn set_pkarr_relay(&mut self, pkarr_relay: &str) -> Result<(), DartError> {
+        let url = Url::parse(pkarr_relay).map_err(|error| DartError::from(error.to_string()))?;
+        self.pkarr_relay = Some(url);
         Ok(())
     }
 }

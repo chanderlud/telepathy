@@ -29,6 +29,7 @@ regex = "1" # TODO consider removing regex dep
 speedy = "=0.8.7"
 cfg-if = "1"
 bytes = "1"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 serde = { version = "1", features = ["derive"] }
 rustls = "0.23"
 url = "2"

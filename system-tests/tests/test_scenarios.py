@@ -2,22 +2,31 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import re
+import urllib.error
+import urllib.request
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 import pytest_asyncio
+import zbase32
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from harness.process import CliProcess, RelayProcess
+from harness.process import CliProcess
 from harness.scenario import ScenarioRunner
 from harness.topology import NetworkProfile, TopologyManager
 
 
 SCENARIOS_ROOT = Path(__file__).resolve().parents[1] / "scenarios"
-_BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
-_TEST_IDENTITY_KEYS_B64 = (
-    "CAESQBWzTWw8yk7ApiUqDgYLm2XvY5tPcRbpLEZKlmLo108QfjxIYLTx1jCi1PoNTRguryhS+EyLw+fELYfAM2Rnk/A=",
-    "CAESQK30hW7xvWg87VbBv3c0x0VdBiK53TAW8oVQUSrhKwh+tkfQ1axxMb3Yv0wRTGlj9imiBq1DukErpytZsRD88tE=",
-)
+
+
+@dataclass(frozen=True)
+class TestIdentity:
+    secret_key_b64: str
+    peer_id_hex: str
 
 NETWORK_PROFILES = [
     NetworkProfile(
@@ -55,39 +64,266 @@ NETWORK_PROFILES = [
 ]
 
 
-def _base58btc_encode(raw: bytes) -> str:
-    value = int.from_bytes(raw, "big")
-    encoded = ""
-    while value > 0:
-        value, remainder = divmod(value, 58)
-        encoded = _BASE58_ALPHABET[remainder] + encoded
-
-    leading_zeroes = len(raw) - len(raw.lstrip(b"\x00"))
-    return ("1" * leading_zeroes) + (encoded or "1")
-
-
-def _peer_id_from_key_b64(key_b64: str) -> str:
-    key_bytes = base64.b64decode(key_b64)
-    if len(key_bytes) != 68 or key_bytes[:4] != b"\x08\x01\x12\x40":
-        raise AssertionError("unexpected protobuf-encoded ed25519 private key format")
-
-    public_key = key_bytes[36:68]
-    protobuf_public_key = b"\x08\x01\x12\x20" + public_key
-    identity_multihash = b"\x00\x24" + protobuf_public_key
-    return _base58btc_encode(identity_multihash)
+def _generate_identity() -> TestIdentity:
+    private_key = Ed25519PrivateKey.generate()
+    secret_key = private_key.private_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PrivateFormat.Raw,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    public_key = private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
+    return TestIdentity(
+        secret_key_b64=base64.b64encode(secret_key).decode("ascii"),
+        peer_id_hex=public_key.hex(),
+    )
 
 
-async def _set_identity(actor: CliProcess, key_b64: str) -> str:
-    response = await actor.send({"cmd": "set_identity", "args": {"key_b64": key_b64}})
+async def _set_identity(actor: CliProcess, identity: TestIdentity) -> str:
+    response = await actor.send(
+        {
+            "cmd": "set_identity",
+            "args": {"key_b64": identity.secret_key_b64},
+        }
+    )
     if not response.get("ok"):
         raise AssertionError(f"set_identity failed: {response}")
-    return _peer_id_from_key_b64(key_b64)
+    return identity.peer_id_hex
 
 
-async def _set_identity_on_actor(actor: CliProcess, key_b64: str) -> str:
-    peer_id = await _set_identity(actor, key_b64)
+async def _set_identity_on_actor(actor: CliProcess, identity: TestIdentity) -> str:
+    peer_id = await _set_identity(actor, identity)
+    actor.identity = identity
     actor.identity_peer_id = peer_id
     return peer_id
+
+
+_MANAGER_STATES = ("Stopped", "Starting", "Active", "Failed")
+
+
+def _manager_state_from_event(message: dict) -> str | None:
+    if message.get("kind") != "event" or message.get("type") != "manager_active":
+        return None
+
+    matched = [state for state in _MANAGER_STATES if state in message]
+    if len(matched) != 1:
+        return None
+    return matched[0]
+
+
+def _peer_id_to_z32(peer_id_hex: str) -> str:
+    return zbase32.encode(bytes.fromhex(peer_id_hex))
+
+
+def _pkarr_record_url(relay_base: str, peer_id_hex: str) -> str:
+    z32_key = _peer_id_to_z32(peer_id_hex)
+    return f"{relay_base.rstrip('/')}/{z32_key}"
+
+
+async def _fetch_http_status(url: str) -> int | None:
+    def _fetch() -> int | None:
+        try:
+            with urllib.request.urlopen(url, timeout=2) as response:
+                return response.status
+        except urllib.error.HTTPError as error:
+            return error.code
+        except urllib.error.URLError:
+            return None
+
+    return await asyncio.to_thread(_fetch)
+
+
+async def wait_for_pkarr_published(
+    peers: list[tuple[CliProcess, str]],
+    topology: TopologyManager,
+    timeout: float = 15.0,
+) -> None:
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+
+    pending: dict[str, tuple[str, str]] = {}
+    for actor, namespace in peers:
+        peer_id = actor.identity_peer_id
+        if not isinstance(peer_id, str):
+            raise AssertionError("cli process missing identity_peer_id before pkarr wait")
+        relay_base = topology.pkarr_relay(namespace)
+        url = _pkarr_record_url(relay_base, peer_id)
+        pending[url] = (namespace, peer_id)
+
+    while loop.time() < deadline and pending:
+        for url in list(pending.keys()):
+            status = await _fetch_http_status(url)
+            if status == 200:
+                del pending[url]
+        if pending:
+            await asyncio.sleep(0.5)
+
+    if not pending:
+        return
+
+    details = "\n".join(
+        f"  namespace={namespace} peer_id={peer_id} url={url}"
+        for url, (namespace, peer_id) in pending.items()
+    )
+    raise AssertionError(
+        f"pkarr records not published within {timeout}s timeout:\n{details}"
+    )
+
+
+def _sanitize_nodeid(nodeid: str) -> str:
+    safe = []
+    for char in nodeid:
+        if char.isalnum() or char in ("-", "_", "."):
+            safe.append(char)
+        else:
+            safe.append("_")
+    return "".join(safe)
+
+
+async def check_dns_resolution(
+    namespace: str,
+    peer_id_hex: str,
+    dns_endpoint: str,
+    timeout: float = 5.0,
+) -> dict:
+    z32_peer_id = _peer_id_to_z32(peer_id_hex)
+    query_name = f"_iroh.{z32_peer_id}.dns.iroh.test."
+
+    dns_ip, separator, dns_port = dns_endpoint.rpartition(":")
+    if separator == "" or not dns_ip or not dns_port:
+        raise AssertionError(f"invalid dns endpoint format: {dns_endpoint!r}")
+
+    process = await asyncio.create_subprocess_exec(
+        "ip",
+        "netns",
+        "exec",
+        namespace,
+        "dig",
+        f"@{dns_ip}",
+        "-p",
+        dns_port,
+        "TXT",
+        query_name,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+
+    try:
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        process.kill()
+        await process.wait()
+        raise AssertionError(
+            f"dns query timed out after {timeout}s for namespace={namespace} "
+            f"query={query_name} endpoint={dns_endpoint}"
+        ) from None
+
+    output = stdout.decode("utf-8", errors="replace")
+    error_output = stderr.decode("utf-8", errors="replace")
+    combined_output = output
+    if error_output:
+        combined_output = f"{output}\n--- stderr ---\n{error_output}"
+
+    status_match = re.search(r"status:\s*([A-Z]+)", output)
+    status = status_match.group(1) if status_match else "UNKNOWN"
+
+    records: list[str] = []
+    for line in output.splitlines():
+        # dig output may use variable whitespace (including tabs), so detect TXT
+        # records with a token-aware regex rather than fixed " TXT " spacing.
+        if not re.search(r"\bTXT\b", line):
+            continue
+        quoted_parts = re.findall(r'"([^"]*)"', line)
+        if quoted_parts:
+            records.append("".join(quoted_parts))
+
+    result = {"status": status, "records": records, "error": None}
+
+    if process.returncode != 0:
+        raise AssertionError(
+            "dns query command failed with non-zero exit code:\n"
+            f"namespace={namespace} endpoint={dns_endpoint} query={query_name}\n"
+            f"{combined_output}"
+        )
+    if status == "NXDOMAIN" or status != "NOERROR":
+        raise AssertionError(
+            "dns query did not return NOERROR status:\n"
+            f"namespace={namespace} endpoint={dns_endpoint} query={query_name} status={status}\n"
+            f"{combined_output}"
+        )
+    if not records:
+        raise AssertionError(
+            "dns query returned NOERROR but no TXT records:\n"
+            f"namespace={namespace} endpoint={dns_endpoint} query={query_name}\n"
+            f"{combined_output}"
+        )
+    if not any("relay=" in record for record in records):
+        raise AssertionError(
+            "dns TXT records missing relay= attribute:\n"
+            f"namespace={namespace} endpoint={dns_endpoint} query={query_name}\n"
+            f"{combined_output}"
+        )
+
+    return result
+
+
+async def check_pkarr_relay(
+    peer_id_hex: str, pkarr_relay_url: str, timeout: float = 5.0
+) -> dict:
+    url = _pkarr_record_url(pkarr_relay_url, peer_id_hex)
+    status = await _fetch_http_status(url)
+    if status != 200:
+        raise AssertionError(
+            f"pkarr relay fetch failed: url={url} expected_status=200 actual_status={status}"
+        )
+
+    def _fetch_packet_size() -> tuple[int | None, int, str | None]:
+        try:
+            with urllib.request.urlopen(url, timeout=timeout) as response:
+                body = response.read()
+                return response.status, len(body), None
+        except urllib.error.HTTPError as error:
+            return error.code, 0, str(error)
+        except urllib.error.URLError as error:
+            return None, 0, str(error)
+
+    response_status, packet_size, error = await asyncio.to_thread(_fetch_packet_size)
+    result = {"status": response_status, "packet_size": packet_size, "error": error}
+
+    if response_status != 200:
+        raise AssertionError(
+            f"pkarr relay packet fetch failed: url={url} status={response_status} error={error}"
+        )
+    if packet_size <= 0:
+        raise AssertionError(
+            f"pkarr relay returned empty packet: url={url} packet_size={packet_size}"
+        )
+
+    return result
+
+
+async def capture_dns_server_logs(timeout: float = 5.0) -> str:
+    process = await asyncio.create_subprocess_exec(
+        "docker",
+        "logs",
+        "iroh-dns-server",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        process.kill()
+        await process.wait()
+        return f"docker logs iroh-dns-server timed out after {timeout}s"
+
+    logs = stdout.decode("utf-8", errors="replace")
+    errors = stderr.decode("utf-8", errors="replace")
+    if errors.strip():
+        return f"{logs}\n--- stderr ---\n{errors}"
+    return logs
 
 
 async def wait_for_relay_ready(actor: CliProcess, timeout: float = 30.0) -> dict:
@@ -95,17 +331,13 @@ async def wait_for_relay_ready(actor: CliProcess, timeout: float = 30.0) -> dict
     deadline = loop.time() + timeout
     while loop.time() < deadline:
         for message in actor.stdout_lines():
-            if (
-                message.get("kind") == "event"
-                and message.get("type") == "manager_active"
-                and message.get("active") is True
-            ):
+            if _manager_state_from_event(message) == "Active":
                 return message
         await asyncio.sleep(0.05)
 
     transcript = "\n".join(str(message) for message in actor.stdout_lines())
     raise AssertionError(
-        "manager_active event not observed within timeout.\n"
+        "manager_active Active event not observed within timeout.\n"
         f"Captured stdout transcript:\n{transcript}"
     )
 
@@ -118,34 +350,22 @@ async def topology(
     manager = TopologyManager(worker_id=worker_tag)
     try:
         await manager.setup(num_clients=2, profile=profile)
+        if not manager.client_namespaces:
+            pytest.skip(
+                "topology setup did not create client namespaces; "
+                "network namespace privileges (CAP_NET_ADMIN / ip netns) are required"
+            )
         yield manager
     finally:
         await manager.teardown()
 
 
 @pytest_asyncio.fixture
-async def relay(topology: TopologyManager, binaries: dict[str, str]) -> RelayProcess:
-    proc = RelayProcess(
-        binary_path=binaries["relay"],
-        namespace=topology.relay_namespace,
-        listen_addr=f"0.0.0.0:{topology.listen_port}",
-    )
-    await proc.start()
-    try:
-        yield proc
-    finally:
-        await proc.terminate()
-
-
-@pytest_asyncio.fixture
 async def cli_pair(
     topology: TopologyManager,
-    relay: RelayProcess,
     binaries: dict[str, str],
+    request: pytest.FixtureRequest,
 ) -> dict[str, CliProcess]:
-    if not relay.peer_id:
-        raise AssertionError("relay peer id missing")
-
     alice_namespace = topology.client_namespaces[0]
     bob_namespace = topology.client_namespaces[1]
 
@@ -154,29 +374,73 @@ async def cli_pair(
         namespace=alice_namespace,
         listen_port=0,
         bind_addresses=["0.0.0.0"],
+        relay_url=topology.relay_url(alice_namespace),
+        dns_endpoint=topology.dns_endpoint(alice_namespace),
+        pkarr_relay=topology.pkarr_relay(alice_namespace),
     )
     bob = CliProcess(
         binary_path=binaries["cli"],
         namespace=bob_namespace,
         listen_port=0,
         bind_addresses=["0.0.0.0"],
+        relay_url=topology.relay_url(bob_namespace),
+        dns_endpoint=topology.dns_endpoint(bob_namespace),
+        pkarr_relay=topology.pkarr_relay(bob_namespace),
     )
-    await alice.start()
-    await bob.start()
-
-    await _set_identity_on_actor(alice, _TEST_IDENTITY_KEYS_B64[0])
-    await _set_identity_on_actor(bob, _TEST_IDENTITY_KEYS_B64[1])
-    alice_manager_start, bob_manager_start = await asyncio.gather(
-        alice.send({"cmd": "start_manager", "args": {}}),
-        bob.send({"cmd": "start_manager", "args": {}}),
-    )
-    assert alice_manager_start.get("ok") is True
-    assert bob_manager_start.get("ok") is True
-    await asyncio.gather(wait_for_relay_ready(alice), wait_for_relay_ready(bob))
-    await asyncio.sleep(1) # TODO implement a better way to wait for peers to connect to relay
+    test_failed = False
     try:
+        await alice.start()
+        await bob.start()
+
+        await _set_identity_on_actor(alice, _generate_identity())
+        await _set_identity_on_actor(bob, _generate_identity())
+        alice_manager_start, bob_manager_start = await asyncio.gather(
+            alice.send({"cmd": "start_manager", "args": {}}),
+            bob.send({"cmd": "start_manager", "args": {}}),
+        )
+        assert alice_manager_start.get("ok") is True
+        assert bob_manager_start.get("ok") is True
+        await asyncio.gather(wait_for_relay_ready(alice), wait_for_relay_ready(bob))
+        await wait_for_pkarr_published(
+            [(alice, alice_namespace), (bob, bob_namespace)],
+            topology,
+            timeout=15.0,
+        )
+
+        # Expected DNS TXT record format for _iroh.<z32-peer-id>.dns.iroh.test.:
+        #   relay=<pkarr-relay-url>
+        #   addr=<socket-addr> [<socket-addr> ...]  (optional)
+        # Example:
+        #   relay=http://10.0.10.1:3340/
+        #   addr=10.0.10.2:12345
+
+        # Verify DNS resolution works from within each client namespace
+        for actor_name, actor in [("alice", alice), ("bob", bob)]:
+            namespace = alice_namespace if actor_name == "alice" else bob_namespace
+            peer_id = actor.identity_peer_id
+            dns_endpoint = topology.dns_endpoint(namespace)
+            await check_dns_resolution(namespace, peer_id, dns_endpoint, timeout=5.0)
+
+        # Verify pkarr relay is accessible and contains valid data
+        for actor_name, actor in [("alice", alice), ("bob", bob)]:
+            namespace = alice_namespace if actor_name == "alice" else bob_namespace
+            peer_id = actor.identity_peer_id
+            pkarr_relay = topology.pkarr_relay(namespace)
+            await check_pkarr_relay(peer_id, pkarr_relay, timeout=5.0)
+
         yield {"alice": alice, "bob": bob}
+    except Exception:
+        test_failed = True
+        raise
     finally:
+        if test_failed:
+            logs = await capture_dns_server_logs()
+            artifacts_root = Path(str(request.config.getoption("artifacts_dir"))).resolve()
+            timestamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+            nodeid = _sanitize_nodeid(request.node.nodeid)
+            artifact_dir = artifacts_root / f"{nodeid}__{timestamp}"
+            artifact_dir.mkdir(parents=True, exist_ok=True)
+            (artifact_dir / "dns-server.log").write_text(logs, encoding="utf-8")
         await bob.terminate()
         await alice.terminate()
 
@@ -196,11 +460,10 @@ async def _run_scenario(name: str, actors: dict[str, CliProcess]) -> None:
 @pytest.mark.parametrize("profile", NETWORK_PROFILES, ids=lambda profile: profile.name)
 async def test_smoke_ready(
     topology: TopologyManager,
-    relay: RelayProcess,
     cli_pair: dict[str, CliProcess],
     profile: NetworkProfile,
 ) -> None:
-    _ = topology, relay, profile
+    _ = topology, profile
     await _run_scenario("smoke_ready.yaml", cli_pair)
 
 
@@ -208,11 +471,10 @@ async def test_smoke_ready(
 @pytest.mark.parametrize("profile", NETWORK_PROFILES, ids=lambda profile: profile.name)
 async def test_smoke_session(
     topology: TopologyManager,
-    relay: RelayProcess,
     cli_pair: dict[str, CliProcess],
     profile: NetworkProfile,
 ) -> None:
-    _ = topology, relay, profile
+    _ = topology, profile
     await _run_scenario("smoke_session.yaml", cli_pair)
 
 
@@ -220,11 +482,10 @@ async def test_smoke_session(
 @pytest.mark.parametrize("profile", NETWORK_PROFILES, ids=lambda profile: profile.name)
 async def test_session_one_sided_contact(
     topology: TopologyManager,
-    relay: RelayProcess,
     cli_pair: dict[str, CliProcess],
     profile: NetworkProfile,
 ) -> None:
-    _ = topology, relay, profile
+    _ = topology, profile
     await _run_scenario("session_one_sided_contact.yaml", cli_pair)
 
 
@@ -232,11 +493,10 @@ async def test_session_one_sided_contact(
 @pytest.mark.parametrize("profile", NETWORK_PROFILES, ids=lambda profile: profile.name)
 async def test_session_simultaneous_dial(
     topology: TopologyManager,
-    relay: RelayProcess,
     cli_pair: dict[str, CliProcess],
     profile: NetworkProfile,
 ) -> None:
-    _ = topology, relay, profile
+    _ = topology, profile
     await _run_scenario("session_simultaneous_dial.yaml", cli_pair)
 
 
@@ -244,11 +504,10 @@ async def test_session_simultaneous_dial(
 @pytest.mark.parametrize("profile", NETWORK_PROFILES, ids=lambda profile: profile.name)
 async def test_call_simultaneous_dial(
     topology: TopologyManager,
-    relay: RelayProcess,
     cli_pair: dict[str, CliProcess],
     profile: NetworkProfile,
 ) -> None:
-    _ = topology, relay, profile
+    _ = topology, profile
     await _run_scenario("call_simultaneous_dial.yaml", cli_pair)
 
     alice = cli_pair["alice"]
@@ -285,11 +544,10 @@ async def test_call_simultaneous_dial(
 @pytest.mark.parametrize("profile", NETWORK_PROFILES, ids=lambda profile: profile.name)
 async def test_call_hello_ack_timeout(
     topology: TopologyManager,
-    relay: RelayProcess,
     cli_pair: dict[str, CliProcess],
     profile: NetworkProfile,
 ) -> None:
-    _ = topology, relay, profile
+    _ = topology, profile
     await _run_scenario("call_hello_ack_timeout.yaml", cli_pair)
 
     alice = cli_pair["alice"]
@@ -323,11 +581,10 @@ async def test_call_hello_ack_timeout(
 )
 async def test_session_client_disappears_and_reappears(
     topology: TopologyManager,
-    relay: RelayProcess,
     cli_pair: dict[str, CliProcess],
     profile: NetworkProfile,
 ) -> None:
-    _ = topology, relay, profile
+    _ = topology, profile
     alice = cli_pair["alice"]
     bob = cli_pair["bob"]
 
@@ -385,7 +642,10 @@ async def test_session_client_disappears_and_reappears(
     await bob.terminate()
     await asyncio.sleep(2.0)
     await bob.restart()
-    await _set_identity_on_actor(bob, _TEST_IDENTITY_KEYS_B64[1])
+    bob_identity = getattr(bob, "identity", None)
+    if not isinstance(bob_identity, TestIdentity):
+        raise AssertionError("bob identity missing before restart")
+    await _set_identity_on_actor(bob, bob_identity)
 
     bob_start_manager = await bob.send({"cmd": "start_manager", "args": {}})
     assert bob_start_manager.get("ok") is True
