@@ -17,14 +17,14 @@ test-internals = []
 
 [dependencies]
 atomic_float = "1"
-audioadapter-buffers = "2"
+audioadapter-buffers = "3"
 bytes = "1"
 crossbeam = "0.8"
 cfg-if = "1"
 cpal = { version = "0.17", features = ["wasm-bindgen"] }
 tracing = "0.1"
 nnnoiseless = { git = "https://github.com/chanderlud/nnnoiseless", branch="wasm-optimization", default-features = false }
-rubato = "1"
+rubato = "3"
 libm = "0.2"
 tokio = { version = "1", features = ["time", "sync", "rt", "macros"] }
 rtrb = "0.3"

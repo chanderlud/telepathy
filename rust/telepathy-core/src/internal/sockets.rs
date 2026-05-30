@@ -189,7 +189,6 @@ pub(crate) async fn audio_input<S: TelepathyConnection>(
     input_receiver: AsyncReceiver<PooledBuffer>,
     mut sockets: S,
     cancel: CancellationToken,
-    bandwidth: Arc<AtomicUsize>,
 ) -> Result<(), Error> {
     // static signal bytes
     let keep_alive = Bytes::from_static(&[1]);
@@ -203,11 +202,11 @@ pub(crate) async fn audio_input<S: TelepathyConnection>(
             }
         };
 
-        let (bytes_len, successful_sends) = match message {
+        match message {
             Ok(Ok(buffer)) => {
                 // send the bytes to all connections, dropping any that error
                 let bytes = buffer.freeze();
-                (bytes.len(), sockets.send(bytes.as_ref()))
+                sockets.send(bytes.as_ref())
             }
             // shutdown
             Ok(_) => {
@@ -215,13 +214,8 @@ pub(crate) async fn audio_input<S: TelepathyConnection>(
                 break Ok(());
             }
             // send keep alive during extended silence
-            Err(_) => (1, sockets.send(&keep_alive)),
+            Err(_) => sockets.send(&keep_alive),
         };
-
-        // update bandwidth based on successful sends only
-        if successful_sends > 0 {
-            bandwidth.fetch_add(bytes_len * successful_sends, Relaxed);
-        }
     }
 }
 
@@ -230,7 +224,6 @@ pub(crate) async fn audio_output(
     sender: Sender<Bytes>,
     connection: Connection,
     cancel: CancellationToken,
-    bandwidth: Arc<AtomicUsize>,
     loss: Arc<AtomicUsize>,
 ) -> Result<(), Error> {
     let started_at = Instant::now();
@@ -247,8 +240,6 @@ pub(crate) async fn audio_output(
         match message {
             Ok(mut message) => {
                 let len = message.len();
-                bandwidth.fetch_add(len, Relaxed);
-
                 if len >= 16 {
                     // Use wrapping_sub for safe overflow handling
                     let packet_ts = message.get_u32();

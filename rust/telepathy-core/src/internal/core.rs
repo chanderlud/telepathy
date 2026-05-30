@@ -1224,9 +1224,7 @@ where
 
         // shared statistics values
         let statistics_state = StatisticsCollectorState::new(optional.as_ref().map(|o| o.state));
-        // references for use in networking threads
-        let upload_bandwidth = statistics_state.upload_bandwidth.clone();
-        let download_bandwidth = statistics_state.download_bandwidth.clone();
+        // reference for use in networking tasks
         let loss = statistics_state.loss.clone();
 
         // the two clients agree on these codec options
@@ -1261,14 +1259,12 @@ where
                 input_helper.receiver(),
                 ConstConnection::new(o.connection.clone()),
                 stop_io.clone(),
-                upload_bandwidth,
             ));
 
             let output_handle = spawn_task(audio_output(
                 output_helper.sender(),
                 o.connection.clone(),
                 stop_io.clone(),
-                download_bandwidth,
                 loss,
             ));
 
@@ -1540,7 +1536,6 @@ where
             input_helper.receiver(),
             DynamicConnection::new(connection_sender.clone()),
             stop_io.clone(),
-            statistics_state.upload_bandwidth.clone(),
         ));
 
         let statistics_handle = spawn_task(statistics_collector(
@@ -1616,7 +1611,6 @@ where
                                 helper.sender(),
                                 connection.clone(),
                                 stop_io.clone(),
-                                statistics_state.download_bandwidth.clone(),
                                 statistics_state.loss.clone(),
                             ));
 
@@ -1637,14 +1631,13 @@ where
                             peer,
                             connection_id,
                         }) => {
-                            self.callbacks
-                                .call_state(CallState::RoomLeave(peer.to_string()))
-                                .await;
-
                             match peer_connections.get(&peer).copied() {
                                 Some(active_connection_id)
                                     if active_connection_id == connection_id =>
                                 {
+                                    self.callbacks
+                                        .call_state(CallState::RoomLeave(peer.to_string()))
+                                        .await;
                                     peer_connections.remove(&peer);
                                     if let Some(connection) = connections.remove(&connection_id) {
                                         connection_sender.remove(&connection.connection);
