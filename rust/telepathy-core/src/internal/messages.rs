@@ -77,7 +77,11 @@ pub(crate) enum RoomMessage {
         /// established early call state
         state: EarlyCallState,
     },
-    Leave(PublicKey),
+    Leave {
+        peer: PublicKey,
+        /// [`Connection::stable_id`] for the transport being torn down.
+        connection_id: usize,
+    },
 }
 
 #[derive(Debug)]

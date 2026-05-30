@@ -629,15 +629,15 @@ mod tests {
     #[cfg(target_arch = "x86_64")]
     fn MulVariants_DummyFrame_EqualOutputs() {
         let frame = dummy_frame();
-        let mut scalar_frame = frame.clone();
-        let mut wide_frame = frame.clone();
+        let mut scalar_frame = frame;
+        let mut wide_frame = frame;
 
         super::scalar_mul(&mut scalar_frame, 2_f32);
         super::wide_mul(&mut wide_frame, 2_f32);
 
         #[cfg(target_arch = "x86_64")]
         if is_x86_feature_detected!("avx2") {
-            let mut simd_avx2_frame = frame.clone();
+            let mut simd_avx2_frame = frame;
             unsafe {
                 super::avx2_mul(&mut simd_avx2_frame, 2_f32);
             }
@@ -647,7 +647,7 @@ mod tests {
 
         #[cfg(target_arch = "x86_64")]
         if is_x86_feature_detected!("avx512f") {
-            let mut simd_avx512_frame = frame.clone();
+            let mut simd_avx512_frame = frame;
             unsafe {
                 super::avx512_mul(&mut simd_avx512_frame, 2_f32);
             }
@@ -689,8 +689,8 @@ mod tests {
     #[cfg(target_arch = "x86_64")]
     fn FloatConversion_DummyFrame_EqualOutputs() {
         let frame = dummy_frame();
-        let mut scalar_frame = frame.clone();
-        let mut wide_frame = frame.clone();
+        let mut scalar_frame = frame;
+        let mut wide_frame = frame;
 
         let scale = i16::MAX as f32 * 2.0;
         super::scalar_float_scaler(&mut scalar_frame, scale);
@@ -698,14 +698,14 @@ mod tests {
 
         #[cfg(target_arch = "x86_64")]
         if is_x86_feature_detected!("avx") {
-            let mut avx_frame = frame.clone();
+            let mut avx_frame = frame;
             unsafe { super::avx_float_scaler(&mut avx_frame, scale) };
             assert_eq!(scalar_frame, avx_frame);
         }
 
         #[cfg(target_arch = "x86_64")]
         if is_x86_feature_detected!("avx512f") {
-            let mut avx_frame = frame.clone();
+            let mut avx_frame = frame;
             unsafe { super::avx512_float_scaler(&mut avx_frame, scale) };
             assert_eq!(scalar_frame, avx_frame);
         }

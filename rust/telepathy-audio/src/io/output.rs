@@ -122,6 +122,7 @@ struct OutputBuildContext {
     deafened: Arc<AtomicBool>,
     loss_sender: Arc<AtomicUsize>,
     processor_handle: JoinHandle<()>,
+    #[cfg_attr(feature = "mock-audio", allow(dead_code))]
     output_consumer: Consumer<f32>,
 }
 

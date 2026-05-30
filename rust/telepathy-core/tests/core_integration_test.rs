@@ -349,12 +349,9 @@ fn construct_mock_callbacks(
         let is_active_clone = is_active.clone();
         let is_relayed_clone = is_relayed.clone();
         Box::pin(async move {
-            match status {
-                SessionStatus::Connected { relayed, .. } => {
-                    is_active_clone.store(true, Relaxed);
-                    is_relayed_clone.store(relayed, Relaxed);
-                }
-                _ => (),
+            if let SessionStatus::Connected { relayed, .. } = status {
+                is_active_clone.store(true, Relaxed);
+                is_relayed_clone.store(relayed, Relaxed);
             }
         })
     });

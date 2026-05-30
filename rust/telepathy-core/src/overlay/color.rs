@@ -29,16 +29,6 @@ pub(crate) struct Color {
 }
 
 impl Color {
-    #[cfg(test)]
-    pub(crate) fn new(red: u32, green: u32, blue: u32, opacity: u32) -> Self {
-        Color {
-            red,
-            green,
-            blue,
-            opacity,
-        }
-    }
-
     /// linear interpolation between two colors and opacities
     fn lerp(start: Color, end: Color, fraction: f64) -> Color {
         let red = start.red as f64 + (end.red as f64 - start.red as f64) * fraction;

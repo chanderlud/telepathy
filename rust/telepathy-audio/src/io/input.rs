@@ -198,6 +198,7 @@ struct InputBuildContext {
     rms_threshold: Arc<AtomicF32>,
     muted: Arc<AtomicBool>,
     processor_handle: JoinHandle<()>,
+    #[cfg_attr(feature = "mock-audio", allow(dead_code))]
     input_sender: RingBufferSender,
 }
 
@@ -846,6 +847,7 @@ pub enum CodecBitrateMode {
 /// Crucially, when the sender is dropped, the input processor is woken up
 #[cfg(not(target_family = "wasm"))]
 struct RingBufferSender {
+    #[cfg_attr(feature = "mock-audio", allow(dead_code))]
     producer: rtrb::Producer<f32>,
     notify: Arc<Condvar>,
 }

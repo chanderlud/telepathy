@@ -317,19 +317,16 @@ where
                         break Some(connection);
                     }
                     Err(error) => {
-                        match error {
-                            // do not retry timeouts
-                            ConnectError::Connecting {
-                                source:
-                                    ConnectingError::ConnectionError {
-                                        source: ConnectionError::TimedOut,
-                                        ..
-                                    },
-                                ..
-                            } => {
-                                break None;
-                            }
-                            _ => (),
+                        if let ConnectError::Connecting {
+                            source:
+                                ConnectingError::ConnectionError {
+                                    source: ConnectionError::TimedOut,
+                                    ..
+                                },
+                            ..
+                        } = error
+                        {
+                            break None;
                         }
 
                         if retries > 3 {
@@ -1447,6 +1444,7 @@ where
         call_state: EarlyCallState,
     ) -> Result<()> {
         let peer_id = call_state.peer;
+        let connection_id = connection.stable_id();
         let (sender, cancel) = self
             .room_state
             .read()
@@ -1493,7 +1491,12 @@ where
         }
 
         // sender may already be closed at this point
-        _ = sender.send(RoomMessage::Leave(peer_id)).await;
+        _ = sender
+            .send(RoomMessage::Leave {
+                peer: peer_id,
+                connection_id,
+            })
+            .await;
         Ok(())
     }
 
@@ -1520,8 +1523,9 @@ where
         let connection_sender = SharedConnections::default();
         // shared statistics
         let statistics_state = StatisticsCollectorState::new(None);
-        // tracks connection state for peers
-        let mut connections = HashMap::new();
+        // tracks connection state for peers keyed by transport stable id
+        let mut connections: HashMap<usize, RoomConnection> = HashMap::new();
+        let mut peer_connections: HashMap<PublicKey, usize> = HashMap::new();
 
         // Setup input (stream is managed internally)
         let mut input_helper = self
@@ -1555,7 +1559,40 @@ where
                 message = receiver.recv() => {
                     match message {
                         Some(RoomMessage::Join { connection, state }) => {
-                            info!(event = "room_join_received", peer.id = %state.peer);
+                            let connection_id = connection.stable_id();
+                            info!(
+                                event = "room_join_received",
+                                peer.id = %state.peer,
+                                connection.id = connection_id
+                            );
+
+                            if connections.contains_key(&connection_id) {
+                                warn!(
+                                    event = "room_duplicate_join_same_connection",
+                                    peer.id = %state.peer,
+                                    connection.id = connection_id
+                                );
+                                continue;
+                            }
+
+                            if let Some(old_connection_id) = peer_connections.get(&state.peer).copied()
+                                && old_connection_id != connection_id
+                            {
+                                if let Some(old_connection) = connections.remove(&old_connection_id) {
+                                    info!(
+                                        event = "room_duplicate_join_replacing_connection",
+                                        peer.id = %state.peer,
+                                        old.connection.id = old_connection_id,
+                                        new.connection.id = connection_id
+                                    );
+                                    connection_sender.remove(&old_connection.connection);
+                                    old_connection
+                                        .connection
+                                        .close(VarInt::from_u32(0), b"replaced");
+                                    old_connection.handle.await??;
+                                }
+                                peer_connections.remove(&state.peer);
+                            }
 
                             // first connection
                             if connections.is_empty() {
@@ -1563,8 +1600,7 @@ where
                                 self.callbacks.call_state(CallState::Connected).await;
                             }
 
-                            // this unwrap is safe because audio_input never panics
-                            connection_sender.lock().unwrap().push((connection.clone(), Instant::now()));
+                            connection_sender.push(connection.clone());
                             // setup output stack
                             let mut helper = self
                                 .setup_output(
@@ -1578,26 +1614,63 @@ where
                             // begin sending
                             let handle = spawn_task(audio_output(
                                 helper.sender(),
-                                connection,
+                                connection.clone(),
                                 stop_io.clone(),
                                 statistics_state.download_bandwidth.clone(),
                                 statistics_state.loss.clone(),
                             ));
 
-                            connections.insert(state.peer, RoomConnection {
-                                _output: helper,
-                                handle,
-                            });
-                            self.callbacks.call_state(CallState::RoomJoin(state.peer.to_string())).await;
+                            peer_connections.insert(state.peer, connection_id);
+                            connections.insert(
+                                connection_id,
+                                RoomConnection {
+                                    connection,
+                                    _output: helper,
+                                    handle,
+                                },
+                            );
+                            self.callbacks
+                                .call_state(CallState::RoomJoin(state.peer.to_string()))
+                                .await;
                         }
-                        Some(RoomMessage::Leave(peer)) => {
-                            self.callbacks.call_state(CallState::RoomLeave(peer.to_string())).await;
+                        Some(RoomMessage::Leave {
+                            peer,
+                            connection_id,
+                        }) => {
+                            self.callbacks
+                                .call_state(CallState::RoomLeave(peer.to_string()))
+                                .await;
 
-                            if let Some(connection) = connections.remove(&peer) {
-                                connection.handle.await??;
-                                info!(event = "room_connection_cleaned_up", peer.id = %peer);
-                            } else {
-                                warn!(event = "room_leave_without_connection", peer.id = %peer);
+                            match peer_connections.get(&peer).copied() {
+                                Some(active_connection_id)
+                                    if active_connection_id == connection_id =>
+                                {
+                                    peer_connections.remove(&peer);
+                                    if let Some(connection) = connections.remove(&connection_id) {
+                                        connection_sender.remove(&connection.connection);
+                                        connection.handle.await??;
+                                        info!(
+                                            event = "room_connection_cleaned_up",
+                                            peer.id = %peer,
+                                            connection.id = connection_id
+                                        );
+                                    }
+                                }
+                                Some(active_connection_id) => {
+                                    warn!(
+                                        event = "room_leave_stale_connection",
+                                        peer.id = %peer,
+                                        leave.connection.id = connection_id,
+                                        active.connection.id = active_connection_id
+                                    );
+                                }
+                                None => {
+                                    warn!(
+                                        event = "room_leave_without_connection",
+                                        peer.id = %peer,
+                                        connection.id = connection_id
+                                    );
+                                }
                             }
                         }
                         None => {
@@ -1670,6 +1743,7 @@ where
 }
 
 struct RoomConnection {
+    connection: Connection,
     _output: OutputHelper,
     handle: JoinHandle<Result<()>>,
 }

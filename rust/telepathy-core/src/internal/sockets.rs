@@ -3,6 +3,7 @@ use crate::internal::error::Error;
 use bytes::Bytes;
 use iroh::endpoint::Connection;
 use kanal::{AsyncReceiver, Sender};
+use std::collections::HashSet;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::{Arc, Mutex};
@@ -18,7 +19,54 @@ use tracing::{debug, error, info, warn};
 #[cfg(target_family = "wasm")]
 use wasmtimer::{std::Instant, tokio::timeout};
 
-pub(crate) type SharedConnections = Arc<Mutex<Vec<(Connection, Instant)>>>;
+/// Tracks room audio transport connections for the shared uplink path.
+///
+/// Connections are keyed by [`Connection::stable_id`] so duplicate joins and
+/// leaves can remove the exact socket even after a peer reconnects.
+pub(crate) struct RoomConnectionRegistry {
+    pending: Mutex<Vec<(Connection, Instant)>>,
+    removed: Mutex<HashSet<usize>>,
+}
+
+impl Default for RoomConnectionRegistry {
+    fn default() -> Self {
+        Self {
+            pending: Mutex::new(Vec::new()),
+            removed: Mutex::new(HashSet::new()),
+        }
+    }
+}
+
+impl RoomConnectionRegistry {
+    pub(crate) fn push(&self, connection: Connection) {
+        self.pending
+            .lock()
+            .unwrap()
+            .push((connection, Instant::now()));
+    }
+
+    pub(crate) fn remove(&self, connection: &Connection) {
+        let connection_id = connection.stable_id();
+        self.removed.lock().unwrap().insert(connection_id);
+        self.pending
+            .lock()
+            .unwrap()
+            .retain(|(pending, _)| pending.stable_id() != connection_id);
+    }
+
+    fn is_removed(&self, connection: &Connection) -> bool {
+        self.removed
+            .lock()
+            .unwrap()
+            .contains(&connection.stable_id())
+    }
+
+    fn drain_pending(&self) -> Vec<(Connection, Instant)> {
+        self.pending.lock().unwrap().drain(..).collect()
+    }
+}
+
+pub(crate) type SharedConnections = Arc<RoomConnectionRegistry>;
 
 /// only packets younger than this are accepted, represents 2.5 seconds
 const MAX_AGE: u32 = 250;
@@ -82,10 +130,14 @@ pub(crate) struct DynamicConnection {
 
 impl TelepathyConnection for DynamicConnection {
     fn send(&mut self, packet: &Bytes) -> usize {
-        // this unwrap is safe because holders of SharedSockets do not panic
-        for pair in self.new_connections.lock().unwrap().drain(..) {
-            self.connections.push(pair);
+        for pair in self.new_connections.drain_pending() {
+            if !self.new_connections.is_removed(&pair.0) {
+                self.connections.push(pair);
+            }
         }
+
+        self.connections
+            .retain(|(connection, _)| !self.new_connections.is_removed(connection));
 
         // send the bytes to all connections, dropping any that error
         let mut i = 0;
