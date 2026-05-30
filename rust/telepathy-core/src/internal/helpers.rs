@@ -524,6 +524,14 @@ where
         *self.web_input.lock().await = Some(wrapper);
         Ok(())
     }
+
+    /// Ends all sessions & restores session_states to default
+    pub(crate) async fn reset_sessions(&self) {
+        for (_, session) in self.session_states.write().await.drain() {
+            session.teardown().await;
+        }
+        self.outbound_attempts.write().await.clear();
+    }
 }
 
 pub(crate) struct OutputHelper {

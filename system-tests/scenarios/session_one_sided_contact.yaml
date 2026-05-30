@@ -43,6 +43,13 @@ steps:
     expect_ack:
       ok: true
   - actor: bob
+    send:
+      cmd: start_session
+      args:
+        contact_id: alice
+    expect_ack:
+      ok: true
+  - actor: bob
     expect_event:
       type: session_status
       timeout: 20.0

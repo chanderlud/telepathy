@@ -188,14 +188,6 @@ where
         ))
     }
 
-    /// Ends all sessions & restores session_states to default
-    pub(crate) async fn reset_sessions(&self) {
-        for (_, session) in self.session_states.write().await.drain() {
-            session.teardown().await;
-        }
-        self.outbound_attempts.write().await.clear();
-    }
-
     /// Builds the iroh endpoint, handles session start requests and incoming connections
     #[instrument(
         name = "manager.run",
@@ -241,6 +233,15 @@ where
 
                     match accepting.await {
                         Ok(connection) => {
+                            let peer_id = connection.remote_id();
+                            let contact = self.callbacks.get_contact(peer_id.to_vec()).await;
+
+                            if contact.is_none() && !self.is_in_room(&peer_id).await {
+                                warn!(event = "unknown_peer_connected", peer.id = %peer_id);
+                                connection.close(VarInt::from_u32(1), b"unknown peer");
+                                continue;
+                            }
+
                             let self_clone = self.clone();
                             handles.push(spawn_task(async move {
                                 self_clone
