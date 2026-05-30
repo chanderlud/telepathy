@@ -21,12 +21,16 @@ class TopologyManager:
 
     def __init__(self, worker_id: str = "0") -> None:
         self.worker_id = worker_id
-        self._worker_index = self._parse_worker_index(worker_id) + 1 # TODO adding this plus 1 breaks all tests with
+        self._worker_index = self._parse_worker_index(worker_id)
         self.client_namespaces: list[str] = []
         self._created_namespaces: list[str] = []
         self._gateway_ips: dict[str, str] = {}
         self._client_ifaces: dict[str, str] = {}
         self._root_ifaces: list[str] = []
+        # Whether iptables is usable on this host. Disabled lazily if the
+        # binary is missing so forwarding setup is a no-op where the FORWARD
+        # policy already accepts inter-namespace traffic.
+        self._iptables_available = True
         self._canonical_relay_url = (
             f"http://{self._CANONICAL_RELAY_IP}:{self._RELAY_PORT}"
         )
@@ -54,6 +58,63 @@ class TopologyManager:
                 f"stdout: {stdout.decode(errors='replace')}\n"
                 f"stderr: {stderr.decode(errors='replace')}"
             )
+
+    async def _iptables(self, *args: str, check: bool = True) -> int:
+        """Runs an iptables command, returning its exit code.
+
+        If iptables is not installed the host is assumed to permit forwarding
+        already (no Docker-imposed DROP policy), so forwarding management is
+        disabled for the remainder of this manager's lifetime.
+        """
+        if not self._iptables_available:
+            return 1
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "iptables",
+                *args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        except FileNotFoundError:
+            self._iptables_available = False
+            return 1
+        stdout, stderr = await proc.communicate()
+        if check and proc.returncode != 0:
+            raise RuntimeError(
+                f"command failed: iptables {' '.join(args)}\n"
+                f"stdout: {stdout.decode(errors='replace')}\n"
+                f"stderr: {stderr.decode(errors='replace')}"
+            )
+        return proc.returncode
+
+    async def _allow_forwarding(self, iface: str) -> None:
+        """Inserts FORWARD ACCEPT rules so traffic to/from `iface` is routed.
+
+        Rules are inserted at the head of the FORWARD chain so they take
+        precedence over Docker's default DROP policy. Any stale duplicates from
+        a previous run are removed first to keep the chain from growing without
+        bound across repeated test sessions.
+        """
+        for direction in ("-i", "-o"):
+            await self._remove_forward_rule(iface, direction)
+            await self._iptables(
+                "-I", "FORWARD", "1", direction, iface, "-j", "ACCEPT"
+            )
+
+    async def _remove_forward_rule(self, iface: str, direction: str) -> None:
+        # A given rule may have been inserted multiple times historically;
+        # delete until none remain.
+        while (
+            await self._iptables(
+                "-D", "FORWARD", direction, iface, "-j", "ACCEPT", check=False
+            )
+            == 0
+        ):
+            pass
+
+    async def _clear_forwarding(self, iface: str) -> None:
+        for direction in ("-i", "-o"):
+            await self._remove_forward_rule(iface, direction)
 
     async def setup(
         self,
@@ -131,6 +192,14 @@ class TopologyManager:
                     gateway_iface,
                 )
                 await self._run("ip", "link", "set", gateway_iface, "up")
+
+                # Docker (used for the relay/DNS containers) sets the kernel
+                # FORWARD policy to DROP, which silently blocks the direct
+                # client-to-client path that iroh needs for holepunching.
+                # Relay traffic is delivered locally and is unaffected, so the
+                # symptom is "relay works, direct never forms" on every worker
+                # whose gateway interfaces lack an explicit ACCEPT rule.
+                await self._allow_forwarding(gateway_iface)
 
                 await self._run(
                     "ip",
@@ -229,6 +298,7 @@ class TopologyManager:
 
     async def teardown(self) -> None:
         for iface in self._root_ifaces:
+            await self._clear_forwarding(iface)
             await self._delete_link_if_exists(iface)
 
         for namespace in reversed(self._created_namespaces):
