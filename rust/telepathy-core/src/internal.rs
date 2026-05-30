@@ -260,7 +260,8 @@ where
         // stops sessions & manager
         self.inner.shutdown().await;
         // wait for manager & any room controllers to join
-        for handle in self.handles.lock().await.drain(..) {
+        let handles: Vec<_> = self.handles.lock().await.drain(..).collect();
+        for handle in handles {
             handle.await.unwrap();
         }
         info!("shutdown complete");

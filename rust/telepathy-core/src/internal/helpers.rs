@@ -527,7 +527,11 @@ where
 
     /// Ends all sessions & restores session_states to default
     pub(crate) async fn reset_sessions(&self) {
-        for (_, session) in self.session_states.write().await.drain() {
+        let sessions: Vec<_> = {
+            let mut states = self.session_states.write().await;
+            states.drain().map(|(_, session)| session).collect()
+        };
+        for session in sessions {
             session.teardown().await;
         }
         self.outbound_attempts.write().await.clear();
