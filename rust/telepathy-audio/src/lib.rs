@@ -254,6 +254,9 @@ mod platform;
 pub use constants::FRAME_SIZE;
 pub use error::Error;
 
+#[cfg(any(test, feature = "test-internals"))]
+pub use constants::MINIMUM_SILENCE_LENGTH;
+
 #[cfg(feature = "mock-audio")]
 pub use mock::{MockAudioHost, MockAudioInput, MockAudioOutput};
 

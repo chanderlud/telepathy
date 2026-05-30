@@ -60,10 +60,10 @@ impl MockAudioInput {
 impl AudioInput for MockAudioInput {
     fn read_into(&mut self, dst: &mut [f32]) -> Result<usize, Error> {
         // Check if we've reached the sample limit
-        if let Some(max) = self.max_samples {
-            if self.samples_generated >= max {
-                return Ok(0); // End of stream
-            }
+        if let Some(max) = self.max_samples
+            && self.samples_generated >= max
+        {
+            return Ok(0); // End of stream
         }
 
         // Record timestamp for this frame

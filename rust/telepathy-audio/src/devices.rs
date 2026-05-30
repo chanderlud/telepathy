@@ -516,6 +516,40 @@ impl AudioHost for CpalAudioHost {
     }
 }
 
+pub fn list_input_devices(host: &impl AudioHost) -> Result<Vec<AudioDeviceInfo>, DeviceError> {
+    host.list_input_devices()
+}
+
+pub fn list_output_devices(host: &impl AudioHost) -> Result<Vec<AudioDeviceInfo>, DeviceError> {
+    host.list_output_devices()
+}
+
+pub fn list_all_devices(host: &impl AudioHost) -> Result<AudioDeviceList, DeviceError> {
+    host.list_all_devices()
+}
+
+pub fn get_input_device(
+    host: &impl AudioHost,
+    device_id: Option<&str>,
+) -> Result<DeviceHandle, DeviceError> {
+    host.get_input_device(device_id)
+}
+
+pub fn get_output_device(
+    host: &impl AudioHost,
+    device_id: Option<&str>,
+) -> Result<DeviceHandle, DeviceError> {
+    host.get_output_device(device_id)
+}
+
+pub fn get_default_input_device(host: &impl AudioHost) -> Result<DeviceHandle, DeviceError> {
+    host.get_default_input_device()
+}
+
+pub fn get_default_output_device(host: &impl AudioHost) -> Result<DeviceHandle, DeviceError> {
+    host.get_default_output_device()
+}
+
 /// Converts a cpal device to AudioDeviceInfo.
 ///
 /// Returns `None` if the device name or ID cannot be extracted.
