@@ -57,7 +57,7 @@ pub struct Contact {
     pub(crate) nickname: String,
 
     /// The public/verifying key for the contact
-    pub peer_id: PublicKey,
+    pub(crate) peer_id: PublicKey,
 
     pub(crate) output_volume: f32,
 
@@ -131,6 +131,10 @@ impl Contact {
     #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
     pub fn id_eq(&self, id: Vec<u8>) -> bool {
         self.peer_id.to_vec() == id
+    }
+
+    pub fn get_peer_id(&self) -> PublicKey {
+        self.peer_id
     }
 }
 

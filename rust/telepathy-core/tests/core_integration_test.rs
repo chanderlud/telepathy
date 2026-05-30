@@ -204,7 +204,7 @@ async fn session_collision_doesnt_fail() {
         .start_session
         .as_ref()
         .unwrap()
-        .send(contact_b.peer_id)
+        .send(contact_b.get_peer_id())
         .await
         .unwrap();
 
@@ -217,7 +217,7 @@ async fn session_collision_doesnt_fail() {
         .session_states
         .read()
         .await
-        .get(&contact_b.peer_id)
+        .get(&contact_b.get_peer_id())
         .cloned()
         .unwrap();
     let a_session = client_b
@@ -225,7 +225,7 @@ async fn session_collision_doesnt_fail() {
         .session_states
         .read()
         .await
-        .get(&contact_a.peer_id)
+        .get(&contact_a.get_peer_id())
         .cloned()
         .unwrap();
 
@@ -287,7 +287,7 @@ async fn audio_frames_play_in_order() {
         .start_session
         .as_ref()
         .unwrap()
-        .send(contact_b.peer_id)
+        .send(contact_b.get_peer_id())
         .await
         .unwrap();
 
@@ -300,7 +300,7 @@ async fn audio_frames_play_in_order() {
         .session_states
         .read()
         .await
-        .get(&contact_b.peer_id)
+        .get(&contact_b.get_peer_id())
         .cloned()
         .unwrap();
 
@@ -382,7 +382,7 @@ fn construct_mock_callbacks(
         let contacts_clone = contacts.clone();
         Box::pin(async move {
             for contact in contacts_clone.iter() {
-                if contact.peer_id.to_vec() == peer_id {
+                if contact.get_peer_id().to_vec() == peer_id {
                     return Some(contact.clone());
                 }
             }

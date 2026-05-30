@@ -64,10 +64,6 @@ abstract class CodecConfig implements RustOpaqueInterface {
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Contact>>
 abstract class Contact implements RustOpaqueInterface {
-  PublicKey get peerId;
-
-  set peerId(PublicKey peerId);
-
   static Contact fromParts(
           {required String id,
           required String nickname,
@@ -78,6 +74,8 @@ abstract class Contact implements RustOpaqueInterface {
           nickname: nickname,
           peerId: peerId,
           outputVolume: outputVolume);
+
+  Future<PublicKey> getPeerId();
 
   String id();
 
