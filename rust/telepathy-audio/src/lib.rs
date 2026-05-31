@@ -247,8 +247,6 @@ pub mod internal;
 #[doc(hidden)]
 pub mod sea;
 
-#[cfg(feature = "mock-audio")]
-mod mock;
 mod platform;
 
 pub use constants::FRAME_SIZE;
@@ -257,12 +255,9 @@ pub use error::Error;
 #[cfg(any(test, feature = "test-internals"))]
 pub use constants::MINIMUM_SILENCE_LENGTH;
 
-#[cfg(feature = "mock-audio")]
-pub use mock::{MockAudioHost, MockAudioInput, MockAudioOutput};
-
 // Re-export web audio wrapper for WASM consumers
 #[cfg(target_family = "wasm")]
 pub use platform::web_audio::WebAudioWrapper;
 
-pub use cpal::Host;
+pub use cpal::{Host, Stream};
 pub use nnnoiseless::RnnModel;

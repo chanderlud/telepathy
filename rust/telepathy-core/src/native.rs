@@ -9,10 +9,14 @@ use iroh::PublicKey;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-#[cfg(feature = "integration-testing")]
-use telepathy_audio::MockAudioHost;
+#[cfg(not(feature = "integration-testing"))]
+use telepathy_audio::Stream;
 #[cfg(not(feature = "integration-testing"))]
 use telepathy_audio::devices::CpalAudioHost;
+#[cfg(feature = "integration-testing")]
+use telepathy_audio::devices::MockAudioHost;
+#[cfg(not(feature = "integration-testing"))]
+use telepathy_audio::io::SendStream;
 use tokio::sync::{Notify, oneshot, watch};
 
 type NativeFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
@@ -23,12 +27,18 @@ type NativeAcceptCall = Arc<
 >;
 
 #[cfg(not(feature = "integration-testing"))]
-type NativeHandle = TelepathyHandle<NativeCallbacks, NativeStatisticsCallback, CpalAudioHost>;
+type NativeHandle =
+    TelepathyHandle<NativeCallbacks, NativeStatisticsCallback, CpalAudioHost, Stream, SendStream>;
 #[cfg(feature = "integration-testing")]
 type NativeHandle = TelepathyHandle<
     NativeCallbacks,
     NativeStatisticsCallback,
-    MockAudioHost<telepathy_audio::MockAudioInput, telepathy_audio::MockAudioOutput>,
+    MockAudioHost<
+        telepathy_audio::devices::MockAudioInput,
+        telepathy_audio::devices::MockAudioOutput,
+    >,
+    (),
+    (),
 >;
 
 /// Rust-native runtime client for `telepathy-core`.

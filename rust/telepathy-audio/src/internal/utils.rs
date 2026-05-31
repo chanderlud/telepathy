@@ -109,7 +109,6 @@ pub fn resampler_factory(
 }
 
 #[inline]
-#[cfg(not(feature = "mock-audio"))]
 pub(crate) fn hann_fade_in(i: usize, len: usize) -> f32 {
     // t in (0, 1]
     let t = (i + 1) as f32 / len as f32;
@@ -117,7 +116,6 @@ pub(crate) fn hann_fade_in(i: usize, len: usize) -> f32 {
 }
 
 #[inline]
-#[cfg(not(feature = "mock-audio"))]
 pub(crate) fn hann_fade_out(i: usize, len: usize) -> f32 {
     // t in (0, 1]
     let t = (i + 1) as f32 / len as f32;
@@ -163,7 +161,6 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[cfg(not(feature = "mock-audio"))]
     #[test]
     fn hann_fade_in_starts_near_zero() {
         let len = 64;
@@ -171,28 +168,24 @@ mod tests {
         approx_eq(hann_fade_in(0, len), expected, f32::EPSILON * 4.0);
     }
 
-    #[cfg(not(feature = "mock-audio"))]
     #[test]
     fn hann_fade_in_ends_at_one() {
         let len = 64;
         approx_eq(hann_fade_in(len - 1, len), 1.0, f32::EPSILON * 4.0);
     }
 
-    #[cfg(not(feature = "mock-audio"))]
     #[test]
     fn hann_fade_out_starts_near_one() {
         let len = 64;
         approx_eq(hann_fade_out(0, len), 1.0, 0.001);
     }
 
-    #[cfg(not(feature = "mock-audio"))]
     #[test]
     fn hann_fade_out_ends_near_zero() {
         let len = 64;
         approx_eq(hann_fade_out(len - 1, len), 0.0, f32::EPSILON * 4.0);
     }
 
-    #[cfg(not(feature = "mock-audio"))]
     #[test]
     fn hann_fade_in_is_monotonically_increasing() {
         let len = 64;
@@ -201,7 +194,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "mock-audio"))]
     #[test]
     fn hann_fade_out_is_monotonically_decreasing() {
         let len = 64;
@@ -210,7 +202,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "mock-audio"))]
     #[test]
     fn hann_fade_in_plus_fade_out_equals_one() {
         let len = 64;

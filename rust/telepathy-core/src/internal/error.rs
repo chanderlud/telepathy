@@ -10,7 +10,7 @@ use tokio::time::error::Elapsed;
 
 /// generic error type for Telepathy
 #[derive(Debug)]
-pub(crate) struct Error {
+pub struct Error {
     pub(crate) kind: ErrorKind,
 }
 

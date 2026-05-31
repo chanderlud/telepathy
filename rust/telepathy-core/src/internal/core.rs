@@ -4,7 +4,7 @@
 
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::error::ErrorKind;
-use crate::internal::helpers::OutputHelper;
+use crate::internal::helpers::{InputHelper, OutputHelper};
 use crate::internal::messages::{
     AudioHeader, ProtocolMessage, RoomMessage, SESSION_STOPPED_REASON, StartScreenshare,
 };
@@ -60,7 +60,7 @@ use wasmtimer::tokio::{Interval, interval, sleep_until, timeout};
 const MANAGER_RETRY_BASE_MS: u64 = 500;
 const MANAGER_RETRY_MAX_MS: u64 = 30_000;
 
-pub struct TelepathyCore<C, S, H>
+pub struct TelepathyCore<C, S, H, I, O>
 where
     S: CoreStatisticsCallback + Send + Sync + 'static,
     C: CoreCallbacks<S> + Send + Sync + 'static,
@@ -99,14 +99,18 @@ where
     /// callback methods provided by the flutter frontend
     pub(crate) callbacks: Arc<C>,
 
-    phantom: PhantomData<Arc<S>>,
+    phantom_statistics: PhantomData<Arc<S>>,
+    phantom_input: PhantomData<Arc<I>>,
+    phantom_output: PhantomData<Arc<O>>,
 }
 
-impl<C, S, H> TelepathyCore<C, S, H>
+impl<C, S, H, I, O> TelepathyCore<C, S, H, I, O>
 where
     S: CoreStatisticsCallback + Send + Sync + 'static,
     C: CoreCallbacks<S> + Send + Sync + 'static,
-    H: AudioHost + Send + Sync + Clone + 'static,
+    H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
+    I: Send + Sync + 'static,
+    O: Send + Sync + 'static,
 {
     pub fn new(
         host: H,
@@ -115,7 +119,7 @@ where
         overlay: &Overlay,
         codec_config: &CodecConfig,
         callbacks: C,
-    ) -> TelepathyCore<C, S, H> {
+    ) -> TelepathyCore<C, S, H, I, O> {
         Self {
             host,
             core_state: CoreState::new(network_config, screenshare_config, codec_config),
@@ -129,7 +133,9 @@ where
             #[cfg(target_family = "wasm")]
             web_input: Default::default(),
             callbacks: Arc::new(callbacks),
-            phantom: Default::default(),
+            phantom_statistics: Default::default(),
+            phantom_input: Default::default(),
+            phantom_output: Default::default(),
         }
     }
 
@@ -1520,11 +1526,11 @@ where
         // shared statistics
         let statistics_state = StatisticsCollectorState::new(None);
         // tracks connection state for peers keyed by transport stable id
-        let mut connections: HashMap<usize, RoomConnection> = HashMap::new();
+        let mut connections: HashMap<usize, RoomConnection<O>> = HashMap::new();
         let mut peer_connections: HashMap<PublicKey, usize> = HashMap::new();
 
         // Setup input (stream is managed internally)
-        let mut input_helper = self
+        let mut input_helper: InputHelper<I> = self
             .setup_input(
                 (true, true, 5_f32), // hard coded room codec options
                 &statistics_state,
@@ -1710,7 +1716,7 @@ where
     }
 }
 
-impl<C, S, H> Clone for TelepathyCore<C, S, H>
+impl<C, S, H, I, O> Clone for TelepathyCore<C, S, H, I, O>
 where
     S: CoreStatisticsCallback + Send + Sync + 'static,
     C: CoreCallbacks<S> + Send + Sync + 'static,
@@ -1730,14 +1736,16 @@ where
             #[cfg(target_family = "wasm")]
             web_input: Arc::clone(&self.web_input),
             callbacks: Arc::clone(&self.callbacks),
-            phantom: self.phantom,
+            phantom_statistics: self.phantom_statistics,
+            phantom_input: self.phantom_input,
+            phantom_output: self.phantom_output,
         }
     }
 }
 
-struct RoomConnection {
+struct RoomConnection<O> {
     connection: Connection,
-    _output: OutputHelper,
+    _output: OutputHelper<O>,
     handle: JoinHandle<Result<()>>,
 }
 

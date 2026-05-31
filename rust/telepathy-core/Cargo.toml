@@ -12,7 +12,7 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 [features]
 flutter = ["dep:flutter_rust_bridge"]
 native = []
-integration-testing = ["telepathy-audio/mock-audio", "mockall", "async-trait", "iroh/test-utils"]
+integration-testing = ["mockall", "async-trait", "iroh/test-utils"]
 default = ["flutter"]
 
 [dependencies]

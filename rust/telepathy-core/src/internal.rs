@@ -2,7 +2,7 @@
 pub mod callbacks;
 /// implementations for core telepathy functionality
 pub mod core;
-pub(crate) mod error;
+pub mod error;
 /// helper methods used by telepathy core
 mod helpers;
 pub(crate) mod messages;
@@ -48,26 +48,30 @@ const ALPN: &[u8] = b"telepathy/session/0";
 /// Maximum allowed size for a single length-delimited control/message frame on the session stream.
 const SESSION_MAX_FRAME_LENGTH: usize = 1024 * 1024 * 1024;
 
-pub(crate) struct TelepathyHandle<C, S, H>
+pub struct TelepathyHandle<C, S, H, I, O>
 where
     C: CoreCallbacks<S> + Send + Sync + 'static,
     S: CoreStatisticsCallback + Send + Sync + 'static,
-    H: AudioHost + Send + Sync + Clone + 'static,
+    H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
+    I: Send + Sync + 'static,
+    O: Send + Sync + 'static,
 {
-    inner: TelepathyCore<C, S, H>,
+    pub inner: TelepathyCore<C, S, H, I, O>,
 
     /// contains handles to the manager thread & room managers
     handles: Arc<Mutex<Vec<JoinHandle<()>>>>,
 }
 
-impl<C, S, H> TelepathyHandle<C, S, H>
+impl<C, S, H, I, O> TelepathyHandle<C, S, H, I, O>
 where
     C: CoreCallbacks<S> + Send + Sync + 'static,
     S: CoreStatisticsCallback + Send + Sync + 'static,
-    H: AudioHost + Send + Sync + Clone + 'static,
+    H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
+    I: Send + Sync + 'static,
+    O: Send + Sync + 'static,
 {
     /// Builds a new handle around a fresh `TelepathyCore`.
-    pub(crate) fn new(
+    pub fn new(
         host: H,
         network_config: &NetworkConfig,
         screenshare_config: &ScreenshareConfig,

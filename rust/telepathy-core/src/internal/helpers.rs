@@ -11,10 +11,10 @@ use crate::types::FrontendNotify;
 use crate::types::{ManagerState, SessionStatus};
 use bytes::Bytes;
 use cfg_if::cfg_if;
-use iroh::address_lookup::{DnsAddressLookup, PkarrPublisher};
-use iroh::dns::DnsResolver;
+use iroh::address_lookup::PkarrPublisher;
 use iroh::endpoint::{default_relay_mode, presets};
 use iroh::{Endpoint, PublicKey, RelayMode, SecretKey};
+#[cfg(not(target_family = "wasm"))]
 use rustls::crypto::aws_lc_rs::{self, kx_group};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::net::SocketAddr;
@@ -36,11 +36,13 @@ use tokio::select;
 use tokio::sync::Notify;
 use tracing::{debug, error, info, instrument, warn};
 
-impl<C, S, H> TelepathyCore<C, S, H>
+impl<C, S, H, I, O> TelepathyCore<C, S, H, I, O>
 where
     S: CoreStatisticsCallback + Send + Sync + 'static,
     C: CoreCallbacks<S> + Send + Sync + 'static,
-    H: AudioHost + Send + Sync + Clone + 'static,
+    H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
+    I: Send + Sync + 'static,
+    O: Send + Sync + 'static,
 {
     /// builds an iroh endpoint and waits for it to come online
     #[instrument(name = "manager.setup_endpoint", skip_all)]
@@ -54,14 +56,6 @@ where
         info!(event = "endpoint_launch", config = ?self.core_state.network_config);
         self.callbacks.manager_state(ManagerState::Starting).await;
 
-        let mut provider = aws_lc_rs::default_provider();
-        provider.kx_groups = vec![
-            kx_group::X25519MLKEM768,
-            kx_group::X25519,
-            kx_group::SECP256R1,
-            kx_group::SECP384R1,
-        ];
-
         let listen_port = self.core_state.network_config.listen_port.load(Relaxed);
         let bind_addresses = self
             .core_state
@@ -72,16 +66,32 @@ where
             .clone();
 
         let mut endpoint_builder = Endpoint::builder(presets::Empty)
-            .crypto_provider(Arc::new(provider))
             .secret_key(identity)
             .alpns(vec![ALPN.to_vec()])
-            .clear_ip_transports()
             .relay_mode(default_relay_mode());
 
-        for ip in bind_addresses {
-            endpoint_builder = endpoint_builder
-                .bind_addr(SocketAddr::new(ip, listen_port))
-                .expect("validated bind address must produce a valid socket address");
+        cfg_if::cfg_if! {
+            if #[cfg(target_family = "wasm")] {
+                // TODO figure out how to enable a crypto provider
+            } else {
+                let mut provider = aws_lc_rs::default_provider();
+                provider.kx_groups = vec![
+                    kx_group::X25519MLKEM768,
+                    kx_group::X25519,
+                    kx_group::SECP256R1,
+                    kx_group::SECP384R1,
+                ];
+
+                endpoint_builder = endpoint_builder
+                    .clear_ip_transports()
+                    .crypto_provider(Arc::new(provider));
+
+                for ip in bind_addresses {
+                    endpoint_builder = endpoint_builder
+                        .bind_addr(SocketAddr::new(ip, listen_port))
+                        .expect("validated bind address must produce a valid socket address");
+                }
+            }
         }
 
         if let Some(ref relay) = self.core_state.network_config.pkarr_relay {
@@ -100,6 +110,9 @@ where
                     endpoint_builder = endpoint_builder.address_lookup(PkarrResolver::n0_dns());
                 }
             } else {
+                use iroh::address_lookup::DnsAddressLookup;
+                use iroh::dns::DnsResolver;
+
                 if let Some(ref endpoint) = self.core_state.network_config.dns_endpoint {
                     let resolver = DnsResolver::with_nameserver(endpoint.parse()?);
                     endpoint_builder = endpoint_builder.address_lookup(
@@ -227,7 +240,7 @@ where
         codec_options: (bool, bool, f32),
         statistics_state: &StatisticsCollectorState,
         end_call: &Arc<Notify>,
-    ) -> Result<InputHelper> {
+    ) -> Result<InputHelper<I>> {
         let (codec_enabled, vbr, residual_bits) = codec_options;
         // Channel for receiving processed audio data
         let (sender, receiver) = kanal::unbounded_async();
@@ -283,7 +296,7 @@ where
         codec_enabled: bool,
         statistics_state: &StatisticsCollectorState,
         end_call: Arc<Notify>,
-    ) -> Result<OutputHelper> {
+    ) -> Result<OutputHelper<O>> {
         // Get device ID
         let device_id = self.core_state.output_device.lock().await.clone();
         // Create the input channel
@@ -338,9 +351,7 @@ where
                         .sample_rate as u32
                 } else {
                     let device_id = self.core_state.input_device.lock().await;
-                    let device_handle = self.host.get_input_device(device_id.as_deref())?;
-                    info!("input_device: {:?}", device_handle.name());
-                    device_handle.sample_rate()?
+                    self.host.input_sample_rate(device_id.as_deref())?
                 }
             }
         };
@@ -538,14 +549,14 @@ where
     }
 }
 
-pub(crate) struct OutputHelper {
-    _handle: AudioOutputHandle,
+pub(crate) struct OutputHelper<O> {
+    _handle: AudioOutputHandle<O>,
     sender: Option<kanal::Sender<Bytes>>,
 }
 
-impl OutputHelper {
+impl<O> OutputHelper<O> {
     /// Creates a new OutputHelper and stores the handle in the shared storage
-    pub(crate) fn new(handle: AudioOutputHandle, sender: kanal::Sender<Bytes>) -> Self {
+    pub(crate) fn new(handle: AudioOutputHandle<O>, sender: kanal::Sender<Bytes>) -> Self {
         Self {
             _handle: handle,
             sender: Some(sender),
@@ -557,15 +568,15 @@ impl OutputHelper {
     }
 }
 
-pub(crate) struct InputHelper {
-    _handle: AudioInputHandle,
+pub(crate) struct InputHelper<I> {
+    _handle: AudioInputHandle<I>,
     receiver: Option<kanal::AsyncReceiver<PooledBuffer>>,
 }
 
-impl InputHelper {
+impl<I> InputHelper<I> {
     /// Creates a new InputHelper and stores the handle in the shared storage
     pub(crate) fn new(
-        handle: AudioInputHandle,
+        handle: AudioInputHandle<I>,
         receiver: kanal::AsyncReceiver<PooledBuffer>,
     ) -> Self {
         Self {

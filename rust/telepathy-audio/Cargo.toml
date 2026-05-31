@@ -12,7 +12,6 @@ wasm-opt = ["-O", "--enable-bulk-memory", "--enable-nontrapping-float-to-int", "
 crate-type = ["lib"]
 
 [features]
-mock-audio = []
 test-internals = []
 
 [dependencies]

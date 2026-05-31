@@ -69,23 +69,14 @@ use crate::internal::buffer_pool::{DEFAULT_POOL_CAPACITY, PooledBuffer};
 use crate::internal::processor::input_processor;
 use crate::internal::state::InputProcessorState;
 use crate::internal::thread::{self, JoinHandle};
-#[cfg(not(target_family = "wasm"))]
-use crate::internal::traits::CHANNEL_SIZE;
+use crate::internal::traits::AudioInput;
 use crate::io::StreamErrorCallback;
 use crate::io::traits::AudioDataSink;
 #[cfg(target_family = "wasm")]
 use crate::platform::web_audio::WebAudioWrapper;
 use crate::sea::encoder::{EncoderSettings, SeaEncoder};
 use atomic_float::AtomicF32;
-#[cfg(all(not(target_family = "wasm"), not(feature = "mock-audio")))]
-use cpal::Sample;
-#[cfg(all(not(target_family = "wasm"), not(feature = "mock-audio")))]
-use cpal::SampleFormat;
-#[cfg(all(not(target_family = "wasm"), not(feature = "mock-audio")))]
-use cpal::traits::{DeviceTrait, StreamTrait};
 use nnnoiseless::{DenoiseState, RnnModel};
-#[cfg(not(target_family = "wasm"))]
-use rtrb::RingBuffer;
 use std::sync::Arc;
 #[cfg(not(target_family = "wasm"))]
 use std::sync::Condvar;
@@ -198,8 +189,6 @@ struct InputBuildContext {
     rms_threshold: Arc<AtomicF32>,
     muted: Arc<AtomicBool>,
     processor_handle: JoinHandle<()>,
-    #[cfg_attr(feature = "mock-audio", allow(dead_code))]
-    input_sender: RingBufferSender,
 }
 
 impl AudioInputBuilder<Box<dyn Fn(PooledBuffer) + Send + 'static>> {
@@ -459,9 +448,9 @@ where
     ///
     /// Returns `Result<InputBuildContext, AudioError>` containing handles and state for the created threads,
     /// or an error if codec initialization fails.
-    fn build_common(
+    fn build_common<I: AudioInput + Send + 'static>(
         self,
-        host: &impl AudioHost,
+        processor_input: I,
         input_rate: u32,
     ) -> Result<InputBuildContext, Error> {
         // Create shared atomic state (use provided shared atomics or create new ones)
@@ -510,17 +499,6 @@ where
             None
         };
 
-        // Create ring buffer for cpal stream to processor
-        let (input_producer, input_consumer) = RingBuffer::<f32>::new(CHANNEL_SIZE);
-        // Create condvar to wake input processor when the ring buffer changes
-        let input_notify = Arc::new(Condvar::new());
-        // Create sender for input stream to input processor
-        let input_sender = RingBufferSender {
-            producer: input_producer,
-            notify: input_notify.clone(),
-        };
-        let processor_input = host.get_input(input_consumer, input_notify);
-
         // spawn processor thread
         let processor_handle = thread::safe_spawn(move || {
             if let Err(e) = input_processor(
@@ -542,7 +520,6 @@ where
             rms_threshold,
             muted,
             processor_handle,
-            input_sender,
         })
     }
 
@@ -558,128 +535,29 @@ where
     /// - The device cannot be found
     /// - The stream cannot be created
     /// - The device uses an unsupported sample format
-    #[cfg(all(not(target_family = "wasm"), not(feature = "mock-audio")))]
-    pub fn build(mut self, host: &impl AudioHost) -> Result<AudioInputHandle, Error> {
+    #[cfg(not(target_family = "wasm"))]
+    pub fn build<I>(
+        mut self,
+        host: &impl AudioHost<InputStream = I>,
+    ) -> Result<AudioInputHandle<I>, Error>
+    where
+        I: Send + 'static,
+    {
         if self.sink.is_none() {
             return Err(Error::Config(
                 "a data sink must be set via callback() or sink()".to_string(),
             ));
         }
 
-        // Get the input device
-        let device_handle = host.get_input_device(self.config.device_id.as_deref())?;
-
-        let device = device_handle.device();
-        let config = device.default_input_config()?;
-
-        let input_channels = config.channels() as usize;
-        let device_sample_rate = config.sample_rate();
-        let sample_format = config.sample_format();
-
+        // Open the input
         let error_callback = self.config.error_callback.take();
+        let (processor_input, input_rate, stream) =
+            host.open_input(self.config.device_id.as_deref(), error_callback)?;
         // Build common components (channels, threads, state)
-        let context = self.build_common(host, device_sample_rate)?;
-        let input_sender = context.input_sender;
-
-        // Build the audio stream with the appropriate sample format
-        let stream = match sample_format {
-            SampleFormat::I8 => build_input_stream_with_format::<i8>(
-                device,
-                &config.into(),
-                input_sender,
-                input_channels,
-                error_callback,
-            )?,
-            SampleFormat::I16 => build_input_stream_with_format::<i16>(
-                device,
-                &config.into(),
-                input_sender,
-                input_channels,
-                error_callback,
-            )?,
-            SampleFormat::I32 => build_input_stream_with_format::<i32>(
-                device,
-                &config.into(),
-                input_sender,
-                input_channels,
-                error_callback,
-            )?,
-            SampleFormat::I64 => build_input_stream_with_format_64::<i64>(
-                device,
-                &config.into(),
-                input_sender,
-                input_channels,
-                error_callback,
-            )?,
-            SampleFormat::U8 => build_input_stream_with_format::<u8>(
-                device,
-                &config.into(),
-                input_sender,
-                input_channels,
-                error_callback,
-            )?,
-            SampleFormat::U16 => build_input_stream_with_format::<u16>(
-                device,
-                &config.into(),
-                input_sender,
-                input_channels,
-                error_callback,
-            )?,
-            SampleFormat::U32 => build_input_stream_with_format::<u32>(
-                device,
-                &config.into(),
-                input_sender,
-                input_channels,
-                error_callback,
-            )?,
-            SampleFormat::U64 => build_input_stream_with_format_64::<u64>(
-                device,
-                &config.into(),
-                input_sender,
-                input_channels,
-                error_callback,
-            )?,
-            SampleFormat::F32 => build_input_stream_with_format::<f32>(
-                device,
-                &config.into(),
-                input_sender,
-                input_channels,
-                error_callback,
-            )?,
-            SampleFormat::F64 => build_input_stream_with_format_64::<f64>(
-                device,
-                &config.into(),
-                input_sender,
-                input_channels,
-                error_callback,
-            )?,
-            _ => return Err(Error::Config("Unsupported sample format".to_string())),
-        };
-
-        stream.play()?;
+        let context = self.build_common(processor_input, input_rate)?;
 
         Ok(AudioInputHandle {
             _stream: Some(stream),
-            _processor_handle: Some(context.processor_handle),
-            input_volume: context.input_volume,
-            rms_threshold: context.rms_threshold,
-            muted: context.muted,
-        })
-    }
-
-    /// Builds and starts the audio input stream using in-process mock audio.
-    #[cfg(all(not(target_family = "wasm"), feature = "mock-audio"))]
-    pub fn build(self, host: &impl AudioHost) -> Result<AudioInputHandle, Error> {
-        if self.sink.is_none() {
-            return Err(Error::Config(
-                "a data sink must be set via callback() or sink()".to_string(),
-            ));
-        }
-
-        let context = self.build_common(host, 48_000)?;
-
-        Ok(AudioInputHandle {
-            _stream: None,
             _processor_handle: Some(context.processor_handle),
             input_volume: context.input_volume,
             rms_threshold: context.rms_threshold,
@@ -722,7 +600,10 @@ where
     /// # }
     /// ```
     #[cfg(target_family = "wasm")]
-    pub fn build(mut self, host: &impl AudioHost) -> Result<AudioInputHandle, Error> {
+    pub fn build<I>(
+        mut self,
+        _host: &impl AudioHost<InputStream = I>,
+    ) -> Result<AudioInputHandle<I>, Error> {
         if self.sink.is_none() {
             return Err(Error::Config(
                 "a data sink must be set via callback() or sink()".to_string(),
@@ -739,12 +620,13 @@ where
         let processor_input = web_audio.get_input();
 
         // Build common components (channels, threads, state)
-        let context = self.build_common(host, input_sample_rate)?;
+        let context = self.build_common(processor_input, input_sample_rate)?;
 
         // Resume the audio context
         web_audio.resume();
 
         Ok(AudioInputHandle {
+            _stream: None,
             _web_audio: Some(web_audio),
             _processor_handle: Some(context.processor_handle),
             input_volume: context.input_volume,
@@ -782,9 +664,8 @@ where
 /// Calling `drop` (implicit when handle goes out of scope) and `stop()` have
 /// the same effect. Use `stop()` when you need to explicitly wait for cleanup
 /// completion in a specific code location.
-pub struct AudioInputHandle {
-    #[cfg(not(target_family = "wasm"))]
-    _stream: Option<cpal::Stream>,
+pub struct AudioInputHandle<S> {
+    _stream: Option<S>,
     #[cfg(target_family = "wasm")]
     _web_audio: Option<WebAudioWrapper>,
     _processor_handle: Option<JoinHandle<()>>,
@@ -793,7 +674,7 @@ pub struct AudioInputHandle {
     muted: Arc<AtomicBool>,
 }
 
-impl AudioInputHandle {
+impl<S> AudioInputHandle<S> {
     /// Mutes the audio input.
     ///
     /// When muted, no audio data will be processed or sent to the callback.
@@ -846,10 +727,9 @@ pub enum CodecBitrateMode {
 ///
 /// Crucially, when the sender is dropped, the input processor is woken up
 #[cfg(not(target_family = "wasm"))]
-struct RingBufferSender {
-    #[cfg_attr(feature = "mock-audio", allow(dead_code))]
-    producer: rtrb::Producer<f32>,
-    notify: Arc<Condvar>,
+pub(crate) struct RingBufferSender {
+    pub(crate) producer: rtrb::Producer<f32>,
+    pub(crate) notify: Arc<Condvar>,
 }
 
 #[cfg(not(target_family = "wasm"))]
@@ -857,122 +737,4 @@ impl Drop for RingBufferSender {
     fn drop(&mut self) {
         self.notify.notify_one();
     }
-}
-
-/// Builds an input stream with automatic sample format conversion.
-///
-/// This helper function creates a cpal input stream that converts the device's
-/// native sample format T to f32 for the processing pipeline using cpal's
-/// `to_float_sample()` method.
-///
-/// # Type Parameters
-///
-/// * `T` - The device's native sample format (e.g., i16, f32, u16)
-///
-/// # Arguments
-///
-/// * `device` - The cpal device to build the stream on
-/// * `config` - Stream configuration (sample rate, channels, etc.)
-/// * `input_producer` - Ring buffer producer for f32 samples to the processor
-/// * `input_channels` - Number of input channels
-/// * `error_callback` - Optional callback for stream errors
-#[cfg(all(not(target_family = "wasm"), not(feature = "mock-audio")))]
-fn build_input_stream_with_format<T>(
-    device: &cpal::Device,
-    config: &cpal::StreamConfig,
-    mut input_sender: RingBufferSender,
-    input_channels: usize,
-    mut error_callback: Option<StreamErrorCallback>,
-) -> Result<cpal::Stream, Error>
-where
-    T: Sample<Float = f32> + cpal::SizedSample + Send + 'static,
-{
-    use cpal::traits::DeviceTrait;
-
-    let stream = device.build_input_stream(
-        config,
-        move |data: &[T], _: &_| {
-            input_stream_helper(
-                &mut input_sender,
-                input_channels,
-                data.len(),
-                data.chunks(input_channels).map(|frame| {
-                    // Convert device format T to f32
-                    frame[0].to_float_sample()
-                }),
-            );
-        },
-        move |err| {
-            if let Some(callback) = error_callback.as_mut() {
-                callback(err);
-            } else {
-                error!(error = %err, "input_stream_error");
-            }
-        },
-        None,
-    )?;
-
-    Ok(stream)
-}
-
-/// Builds an input stream for 64-bit sample formats (i64, u64, f64).
-///
-/// These types use f64 as their intermediate float type, so we need a separate
-/// helper that converts f64 to f32.
-#[cfg(all(not(target_family = "wasm"), not(feature = "mock-audio")))]
-fn build_input_stream_with_format_64<T>(
-    device: &cpal::Device,
-    config: &cpal::StreamConfig,
-    mut input_sender: RingBufferSender,
-    input_channels: usize,
-    mut error_callback: Option<StreamErrorCallback>,
-) -> Result<cpal::Stream, Error>
-where
-    T: Sample<Float = f64> + cpal::SizedSample + Send + 'static,
-{
-    use cpal::traits::DeviceTrait;
-
-    let stream = device.build_input_stream(
-        config,
-        move |data: &[T], _: &_| {
-            input_stream_helper(
-                &mut input_sender,
-                input_channels,
-                data.len(),
-                data.chunks(input_channels).map(|frame| {
-                    // Convert device format T to f64, then to f32
-                    let sample_f64 = frame[0].to_float_sample();
-                    sample_f64 as f32
-                }),
-            );
-        },
-        move |err| {
-            if let Some(callback) = error_callback.as_mut() {
-                callback(err);
-            } else {
-                error!(error = %err, "input_stream_error");
-            }
-        },
-        None,
-    )?;
-
-    Ok(stream)
-}
-
-#[cfg(all(not(target_family = "wasm"), not(feature = "mock-audio")))]
-fn input_stream_helper(
-    input_sender: &mut RingBufferSender,
-    input_channels: usize,
-    data_len: usize,
-    sample_iter: impl Iterator<Item = f32>,
-) {
-    let Ok(chunk) = input_sender
-        .producer
-        .write_chunk_uninit(data_len / input_channels)
-    else {
-        return;
-    };
-
-    chunk.fill_from_iter(sample_iter);
-    input_sender.notify.notify_one();
 }
