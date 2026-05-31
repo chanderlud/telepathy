@@ -187,11 +187,21 @@ where
         self
     }
 
+    /// Sets a shared atomic for the current output RMS level, enabling real-time monitoring.
+    ///
+    /// When provided, the processor writes the computed RMS of each played frame
+    /// into this atomic, allowing external code to read the live output level without
+    /// additional synchronization.
     pub fn rms_shared(mut self, rms: &Arc<AtomicF32>) -> Self {
         self.shared_rms = Some(rms.clone());
         self
     }
 
+    /// Sets a shared atomic for tracking packet loss, enabling real-time monitoring.
+    ///
+    /// When provided, the processor increments this counter each time a frame
+    /// underrun occurs (i.e., the source had no data when the output device
+    /// requested samples). External code can poll this value to measure loss rate.
     pub fn loss_shared(mut self, loss: &Arc<AtomicUsize>) -> Self {
         self.shared_loss = Some(loss.clone());
         self
@@ -216,15 +226,20 @@ where
 
     /// Builds and starts the audio output stream.
     ///
-    /// This method creates and configures all necessary processing threads
-    /// and returns an `AudioOutputHandle` for controlling the stream.
+    /// Delegates device opening to the provided [`AudioHost`] implementation via
+    /// [`AudioHost::open_output`], then spawns the processor thread and returns a
+    /// handle for controlling the running stream.
+    ///
+    /// The type parameter `I` is the host's associated `OutputStream` type (e.g.,
+    /// `SendStream` for [`CpalAudioHost`]). It is inferred automatically.
     ///
     /// # Errors
     ///
     /// Returns an error if:
-    /// - The device cannot be found
-    /// - The stream cannot be created
-    /// - The device uses an unsupported sample format
+    /// - No source was set via [`source`](Self::source)
+    /// - The host fails to open the output device (see [`AudioHost::open_output`])
+    /// - Codec initialization fails (invalid decoder settings)
+    /// - The processor thread cannot be spawned
     pub fn build<I>(
         mut self,
         host: &impl AudioHost<OutputStream = I>,
@@ -303,9 +318,20 @@ impl Default for AudioOutputBuilder<Box<dyn AudioDataSource>> {
 
 /// Handle to a running audio output stream.
 ///
-/// This handle allows controlling the audio output (deafen/undeafen, volume)
-/// while audio data is received from the user-provided source. Resources are automatically
-/// cleaned up when dropped.
+/// This handle allows controlling the audio output (deafen/undeafen, volume,
+/// loss monitoring) while audio data is received from the user-provided source.
+/// Resources are automatically cleaned up when dropped.
+///
+/// The type parameter `S` is the platform stream type returned by the
+/// [`AudioHost`] (e.g., `SendStream` for [`CpalAudioHost`], `()` for
+/// [`MockAudioHost`]). It is inferred from the host passed to
+/// [`AudioOutputBuilder::build`].
+///
+/// ## Lifecycle
+///
+/// - **Creation**: Created by [`AudioOutputBuilder::build`]
+/// - **Running**: Audio is decoded (if codec enabled), resampled, and played via the output device
+/// - **Cleanup**: Dropping the handle drops the underlying stream, causing the processor thread to exit
 ///
 /// ## Thread Safety
 ///

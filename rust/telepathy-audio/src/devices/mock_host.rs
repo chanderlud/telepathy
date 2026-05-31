@@ -1,3 +1,24 @@
+/// In-process audio host for testing and integration without real hardware.
+///
+/// `MockAudioHost<I, O="">` implements [`AudioHost`] using caller-supplied
+/// [`AudioInput`] and [`AudioOutput`] implementations, making it suitable
+/// for unit and integration tests that must run without a physical audio device.
+///
+/// Both `I` and `O` must be `Clone` because `open_input` / `open_output`
+/// clone the stored value on each call.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use telepathy_audio::devices::{MockAudioHost, MockAudioInput, MockAudioOutput};
+///
+/// let host = MockAudioHost::new(
+///     MockAudioInput::default(),
+///     48_000,
+///     MockAudioOutput::default(),
+///     48_000,
+/// );
+/// ```
 use crate::Error;
 use crate::devices::{AudioDeviceInfo, AudioDeviceList, AudioHost, DeviceError};
 use crate::internal::traits::{AudioInput, AudioOutput};
@@ -17,6 +38,14 @@ pub struct MockAudioHost<I, O> {
 }
 
 impl<I, O> MockAudioHost<I, O> {
+    /// Creates a new mock host with the given input/output implementations and sample rates.
+    ///
+    /// # Arguments
+    ///
+    /// * `input` - The [`AudioInput`] implementation to clone on each `open_input` call
+    /// * `input_rate` - Sample rate reported for the mock input device (Hz)
+    /// * `output` - The [`AudioOutput`] implementation to clone on each `open_output` call
+    /// * `output_rate` - Sample rate reported for the mock output device (Hz)
     pub fn new(input: I, input_rate: u32, output: O, output_rate: u32) -> Self {
         Self {
             input,
@@ -89,6 +118,11 @@ pub struct MockAudioInput {
 }
 
 impl MockAudioInput {
+    /// Creates a new mock input that emits silence at the given sample rate.
+    ///
+    /// # Arguments
+    ///
+    /// * `sample_rate` - The sample rate used to calculate real-time sleep duration per frame
     pub fn new(sample_rate: u32) -> Self {
         Self { sample_rate }
     }

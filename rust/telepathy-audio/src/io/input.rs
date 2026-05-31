@@ -48,13 +48,12 @@
 //! use telepathy_audio::devices::CpalAudioHost;
 //! use telepathy_audio::io::AudioInputBuilder;
 //! use telepathy_audio::platform::web_audio::WebAudioWrapper;
-//! use std::sync::Arc;
 //!
 //! // WebAudioWrapper::new() is async and must be called on the main thread
 //! let wrapper = WebAudioWrapper::new().await.unwrap();
 //! let host = CpalAudioHost::new();
 //! let input = AudioInputBuilder::new()
-//!     .web_audio_wrapper(&wrapper)
+//!     .web_audio_wrapper(wrapper)
 //!     .volume(1.0)
 //!     .callback(|data| {
 //!         println!("Received {} bytes", data.as_ref().len());
@@ -297,6 +296,14 @@ where
         self
     }
 
+    /// Sets a shared atomic for the current RMS level, enabling real-time monitoring.
+    ///
+    /// When provided, the processor writes the computed RMS of each processed frame
+    /// into this atomic, allowing external code to read the live input level without
+    /// additional synchronization.
+    ///
+    /// Use this when you need to display an input level meter or drive silence
+    /// detection from outside the builder.
     pub fn rms_shared(mut self, shared: &Arc<AtomicF32>) -> Self {
         self.shared_rms = Some(shared.clone());
         self
@@ -359,20 +366,18 @@ where
     /// The wrapper must be initialized on the main thread during a user interaction
     /// (e.g., a button click) to satisfy browser autoplay policies.
     ///
-    /// Create the wrapper using [`WebAudioWrapper::new()`] before building the input:
+    /// The wrapper is consumed (moved) into the builder.
     ///
-    /// ```rust,no_run
-    /// # #[cfg(target_family = "wasm")]
+    /// ```rust,ignore
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// use telepathy_audio::devices::CpalAudioHost;
     /// use telepathy_audio::io::AudioInputBuilder;
     /// use telepathy_audio::platform::web_audio::WebAudioWrapper;
-    /// use std::sync::Arc;
     ///
     /// let host = CpalAudioHost::new();
     /// let wrapper = WebAudioWrapper::new().await?;
     /// let input = AudioInputBuilder::new()
-    ///     .web_audio_wrapper(&wrapper)
+    ///     .web_audio_wrapper(wrapper)
     ///     .callback(|data| { /* process audio */ })
     ///     .build(&host)?;
     /// # Ok(())
@@ -423,31 +428,30 @@ where
     /// Common initialization logic shared between native and WASM builds.
     ///
     /// This method handles all shared setup steps:
-    /// - Creates shared atomic state (input_volume, rms_threshold, muted, rms_sender)
-    /// - Uses the configured sink for inter-thread / cross-component delivery
-    /// - Calculates output sample rate and resampling ratio with the following precedence:
-    ///   1. **Denoise enabled**: Always 48kHz (RNNoise requirement)
-    ///   2. **Custom output_sample_rate**: Uses the specified rate
-    ///   3. **Neither**: Uses device's native sample rate (pass-through)
-    /// - Creates denoiser if needed (DenoiseState with optional custom model)
-    /// - Creates InputProcessorState for atomic state management
-    /// - Creates encoder if codec is enabled (sample rate matches processor output)
-    /// - Spawns processor thread (calls `input_processor` with calculated ratio)
-    /// - Calls the sink directly from the processor thread
+    /// - Resolves shared atomics (input_volume, rms_threshold, muted, rms_sender),
+    ///   using caller-supplied `Arc`s when provided or creating new ones otherwise
+    /// - Calculates the output sample rate with the following precedence:
+    ///   1. **Denoise enabled**: Always 48 kHz (RNNoise requirement)
+    ///   2. **Custom `output_sample_rate`**: Uses the specified rate
+    ///   3. **Neither**: Passes through at the device's native rate (`input_rate`)
+    /// - Creates a [`DenoiseState`] if a denoise model was configured
+    /// - Creates an [`InputProcessorState`] for atomic state management
+    /// - Creates a [`SeaEncoder`] if codec encoding is enabled (sample rate matches output rate)
+    /// - Spawns the processor thread via [`input_processor`]
     ///
     /// # Type Parameters
     ///
-    /// * `I` - Type implementing `AudioInput` trait (e.g., `RingBufferInput`, `WebAudioInput`)
+    /// * `I` - Type implementing [`AudioInput`] (e.g., `RingBufferInput`, `WebAudioInput`)
     ///
     /// # Arguments
     ///
-    /// * `processor_input` - The audio input source for the processor
+    /// * `processor_input` - The audio input source for the processor thread
     /// * `input_rate` - Device's native sample rate in Hz
     ///
     /// # Returns
     ///
-    /// Returns `Result<InputBuildContext, AudioError>` containing handles and state for the created threads,
-    /// or an error if codec initialization fails.
+    /// Returns `Result<InputBuildContext, Error>` containing the shared atomics and
+    /// processor thread handle, or an error if codec initialization or thread spawning fails.
     fn build_common<I: AudioInput + Send + 'static>(
         self,
         processor_input: I,
@@ -525,16 +529,20 @@ where
 
     /// Builds and starts the audio input stream.
     ///
-    /// This method creates and configures all necessary processing threads
-    /// and returns an `AudioInputHandle` for controlling the stream.
+    /// Delegates device opening to the provided [`AudioHost`] implementation via
+    /// [`AudioHost::open_input`], then spawns the processor thread and returns a
+    /// handle for controlling the running stream.
+    ///
+    /// The type parameter `I` is the host's associated `InputStream` type (e.g.,
+    /// `cpal::Stream` for [`CpalAudioHost`]). It is inferred automatically.
     ///
     /// # Errors
     ///
     /// Returns an error if:
-    /// - No sink was set
-    /// - The device cannot be found
-    /// - The stream cannot be created
-    /// - The device uses an unsupported sample format
+    /// - No sink was set via [`callback`](Self::callback) or [`sink`](Self::sink)
+    /// - The host fails to open the input device (see [`AudioHost::open_input`])
+    /// - Codec initialization fails (invalid encoder settings)
+    /// - The processor thread cannot be spawned
     #[cfg(not(target_family = "wasm"))]
     pub fn build<I>(
         mut self,
@@ -569,35 +577,34 @@ where
     ///
     /// On WASM targets, a [`WebAudioWrapper`] must be set via
     /// [`web_audio_wrapper`](Self::web_audio_wrapper) before calling this method.
-    /// The wrapper handles the Web Audio API setup including microphone access
+    /// The wrapper handles Web Audio API setup including microphone access
     /// and AudioWorklet registration.
+    ///
+    /// The `host` argument is accepted for API symmetry with the native `build`
+    /// but is not used on WASM; audio routing is handled entirely by the wrapper.
     ///
     /// # Errors
     ///
     /// Returns an error if:
-    /// - No sink was set
-    /// - No `WebAudioWrapper` was set via [`web_audio_wrapper`](Self::web_audio_wrapper)
-    /// - Common build steps fail (codec initialization, thread spawning, etc.)
+    /// - No sink was set via [`callback`](Self::callback) or [`sink`](Self::sink)
+    /// - No [`WebAudioWrapper`] was provided via [`web_audio_wrapper`](Self::web_audio_wrapper)
+    /// - Codec initialization fails
+    /// - The processor thread cannot be spawned
     ///
     /// # Example
     ///
-    /// ```rust,no_run
-    /// # #[cfg(target_family = "wasm")]
-    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// ```rust,ignore
     /// use telepathy_audio::devices::CpalAudioHost;
     /// use telepathy_audio::io::AudioInputBuilder;
     /// use telepathy_audio::platform::web_audio::WebAudioWrapper;
-    /// use std::sync::Arc;
     ///
     /// let host = CpalAudioHost::new();
-    /// // wrapper must be created ahead of time on the main thread
-    /// let wrapper = WebAudioWrapper::new().await;
+    /// // Must be called on the main thread during a user interaction
+    /// let wrapper = WebAudioWrapper::new().await?;
     /// let input = AudioInputBuilder::new()
-    ///     .web_audio_wrapper(&wrapper)
+    ///     .web_audio_wrapper(wrapper)
     ///     .callback(|data| { /* process audio */ })
     ///     .build(&host)?;
-    /// # Ok(())
-    /// # }
     /// ```
     #[cfg(target_family = "wasm")]
     pub fn build<I>(
@@ -659,11 +666,11 @@ where
 ///   and Web Audio API; the wrapper must be provided via
 ///   `AudioInputBuilder::web_audio_wrapper` before calling `build()`
 ///
-/// ## Drop vs stop()
+/// ## Drop vs Explicit Cleanup
 ///
-/// Calling `drop` (implicit when handle goes out of scope) and `stop()` have
-/// the same effect. Use `stop()` when you need to explicitly wait for cleanup
-/// completion in a specific code location.
+/// Dropping the handle (implicit when it goes out of scope) is the standard
+/// way to stop the stream. The underlying audio stream is dropped first,
+/// which signals EOF to the processor thread, causing it to exit cleanly.
 pub struct AudioInputHandle<S> {
     _stream: Option<S>,
     #[cfg(target_family = "wasm")]
