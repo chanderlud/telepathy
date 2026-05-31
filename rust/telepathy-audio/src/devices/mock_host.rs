@@ -29,7 +29,7 @@ use std::time::Duration;
 const DEFAULT_SAMPLE_RATE: u32 = 48_000;
 const MOCK_DEVICE_ID: &str = "mock";
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct MockAudioHost<I, O> {
     input: I,
     input_rate: u32,
@@ -108,6 +108,17 @@ where
         _: Option<StreamErrorCallback>,
     ) -> Result<(impl AudioOutput + Send + 'static, u32, Self::OutputStream), DeviceError> {
         Ok((self.output.clone(), self.output_rate, ()))
+    }
+}
+
+impl<I: Default, O: Default> Default for MockAudioHost<I, O> {
+    fn default() -> Self {
+        Self {
+            input: Default::default(),
+            input_rate: DEFAULT_SAMPLE_RATE,
+            output: Default::default(),
+            output_rate: DEFAULT_SAMPLE_RATE,
+        }
     }
 }
 
