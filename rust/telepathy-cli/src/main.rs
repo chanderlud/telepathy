@@ -156,35 +156,44 @@ mod tests {
 
     struct EnvVarGuard {
         _lock: MutexGuard<'static, ()>,
+        previous: Vec<EnvVarSnapshot>,
+    }
+
+    struct EnvVarSnapshot {
         key: &'static str,
-        previous: Option<String>,
+        value: Option<String>,
     }
 
     impl EnvVarGuard {
         fn set(key: &'static str, value: &str) -> Self {
-            let lock = ENV_LOCK.lock().expect("env lock poisoned");
-            let previous = std::env::var(key).ok();
-            // SAFETY: guarded by ENV_LOCK so only one test mutates process env at a time.
-            unsafe {
-                std::env::set_var(key, value);
-            }
-            Self {
-                _lock: lock,
-                key,
-                previous,
-            }
+            Self::with_vars(&[(key, Some(value))])
         }
 
         fn clear(key: &'static str) -> Self {
+            Self::with_vars(&[(key, None)])
+        }
+
+        fn with_vars(vars: &[(&'static str, Option<&str>)]) -> Self {
             let lock = ENV_LOCK.lock().expect("env lock poisoned");
-            let previous = std::env::var(key).ok();
-            // SAFETY: guarded by ENV_LOCK so only one test mutates process env at a time.
-            unsafe {
-                std::env::remove_var(key);
+            let mut previous = Vec::with_capacity(vars.len());
+
+            for (key, value) in vars {
+                previous.push(EnvVarSnapshot {
+                    key,
+                    value: std::env::var(key).ok(),
+                });
+
+                // SAFETY: guarded by ENV_LOCK so only one test mutates process env at a time.
+                unsafe {
+                    match value {
+                        Some(value) => std::env::set_var(key, value),
+                        None => std::env::remove_var(key),
+                    }
+                }
             }
+
             Self {
                 _lock: lock,
-                key,
                 previous,
             }
         }
@@ -194,9 +203,11 @@ mod tests {
         fn drop(&mut self) {
             // SAFETY: guarded by ENV_LOCK so only one test mutates process env at a time.
             unsafe {
-                match &self.previous {
-                    Some(value) => std::env::set_var(self.key, value),
-                    None => std::env::remove_var(self.key),
+                for snapshot in self.previous.iter().rev() {
+                    match &snapshot.value {
+                        Some(value) => std::env::set_var(snapshot.key, value),
+                        None => std::env::remove_var(snapshot.key),
+                    }
                 }
             }
         }
@@ -267,9 +278,11 @@ mod tests {
 
     #[test]
     fn discovery_flags_and_env_apply_with_flag_precedence() {
-        let _relay = EnvVarGuard::set("TELEPATHY_RELAY_URL", "http://10.0.0.1:3340");
-        let _dns = EnvVarGuard::set("TELEPATHY_DNS_ENDPOINT", "10.0.0.1:5300");
-        let _pkarr = EnvVarGuard::set("TELEPATHY_PKARR_RELAY", "http://10.0.0.1:8080/pkarr");
+        let _discovery = EnvVarGuard::with_vars(&[
+            ("TELEPATHY_RELAY_URL", Some("http://10.0.0.1:3340")),
+            ("TELEPATHY_DNS_ENDPOINT", Some("10.0.0.1:5300")),
+            ("TELEPATHY_PKARR_RELAY", Some("http://10.0.0.1:8080/pkarr")),
+        ]);
         let from_env = parse_args(base_args()).expect("discovery env vars should succeed");
         assert_eq!(from_env.relay_url.as_deref(), Some("http://10.0.0.1:3340"));
         assert_eq!(from_env.dns_endpoint.as_deref(), Some("10.0.0.1:5300"));
