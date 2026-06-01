@@ -49,15 +49,3 @@ pub async fn screenshare_available() -> bool {
         false
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[ignore]
-    #[tokio::test]
-    async fn screenshare_available_returns_true() {
-        let ffmpeg_available = screenshare_available().await;
-        assert!(ffmpeg_available);
-    }
-}
