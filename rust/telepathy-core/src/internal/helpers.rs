@@ -14,8 +14,6 @@ use cfg_if::cfg_if;
 use iroh::address_lookup::PkarrPublisher;
 use iroh::endpoint::{default_relay_mode, presets};
 use iroh::{Endpoint, PublicKey, RelayMode, SecretKey};
-#[cfg(not(target_family = "wasm"))]
-use rustls::crypto::aws_lc_rs::{self, kx_group};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -72,8 +70,13 @@ where
 
         cfg_if::cfg_if! {
             if #[cfg(target_family = "wasm")] {
-                // TODO figure out how to enable a crypto provider
+                use rustls::crypto::ring;
+
+                let provider = ring::default_provider();
+                endpoint_builder = endpoint_builder.crypto_provider(Arc::new(provider));
             } else {
+                use rustls::crypto::aws_lc_rs::{self, kx_group};
+
                 let mut provider = aws_lc_rs::default_provider();
                 provider.kx_groups = vec![
                     kx_group::X25519MLKEM768,
