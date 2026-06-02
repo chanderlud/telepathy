@@ -3,13 +3,13 @@
 //! or room [`room_handshake`] handling.
 
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
+use crate::internal::connections::{
+    ConstConnection, DynamicConnection, SharedConnections, audio_input, audio_output,
+};
 use crate::internal::error::ErrorKind;
 use crate::internal::helpers::{InputHelper, OutputHelper};
 use crate::internal::messages::{
     AudioHeader, ProtocolMessage, RoomMessage, SESSION_STOPPED_REASON, StartScreenshare,
-};
-use crate::internal::sockets::{
-    ConstConnection, DynamicConnection, SharedConnections, audio_input, audio_output,
 };
 use crate::internal::state::{
     CallSlot, CallSlotAcquireResult, CallSlotState, CoreState, StatisticsCollectorState,
@@ -668,6 +668,12 @@ where
         let is_in_room = args.room_hash.is_some();
         match message {
             ProtocolMessage::HelloAck { audio_header } => {
+                if !audio_header.is_valid() {
+                    warn!(event = "invalid_audio_header_rejected");
+                    write_message(io.send, &ProtocolMessage::Reject).await?;
+                    return Ok(HelloResponse::EndedSilently);
+                };
+
                 call_state.remote_configuration = audio_header;
                 match self
                     .perform_call_handshake_dispatch(
@@ -1272,6 +1278,7 @@ where
                 o.connection.clone(),
                 stop_io.clone(),
                 loss,
+                call_state.remote_configuration.sample_rate,
             ));
 
             let controller_future = self.call_controller(o, call_state.peer, end_call);
@@ -1618,6 +1625,7 @@ where
                                 connection.clone(),
                                 stop_io.clone(),
                                 statistics_state.loss.clone(),
+                                state.remote_configuration.sample_rate,
                             ));
 
                             peer_connections.insert(state.peer, connection_id);

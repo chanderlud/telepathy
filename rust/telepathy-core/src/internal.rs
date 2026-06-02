@@ -1,5 +1,7 @@
 /// callback traits shared by FRB and native frontends
 pub mod callbacks;
+/// networking code for live audio streams
+mod connections;
 /// implementations for core telepathy functionality
 pub mod core;
 pub mod error;
@@ -7,8 +9,6 @@ pub mod error;
 mod helpers;
 pub(crate) mod messages;
 pub(crate) mod screenshare;
-/// networking code for live audio streams
-mod sockets;
 pub mod state;
 mod utils;
 
