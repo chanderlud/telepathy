@@ -110,18 +110,29 @@ class ContactsList extends StatelessWidget {
                             ManagerState.active => SvgPicture.asset(
                                 'assets/icons/ShieldYes.svg',
                                 semanticsLabel: 'Manager active icon',
+                                colorFilter: ColorFilter.mode(
+                                    Theme.of(context).colorScheme.primary,
+                                    BlendMode.srcIn),
                                 width: 28),
-                            ManagerState.starting => const SizedBox(
-                                width: 20,
-                                height: 20,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 3,
+                            ManagerState.starting => const Padding(
+                                padding: EdgeInsets.all(4),
+                                child: SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 3,
+                                  ),
                                 ),
                               ),
                             ManagerState.failed ||
                             ManagerState.stopped =>
                               SvgPicture.asset('assets/icons/ShieldOff.svg',
-                                  semanticsLabel: 'Manager inactive icon'),
+                                  colorFilter: const ColorFilter.mode(
+                                    Color(0xFFdc2626),
+                                    BlendMode.srcIn,
+                                  ),
+                                  semanticsLabel: 'Manager inactive icon',
+                                  width: 28),
                           },
                           if (managerState == ManagerState.failed) ...[
                             const SizedBox(width: 10),
