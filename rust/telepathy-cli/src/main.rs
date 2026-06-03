@@ -52,6 +52,7 @@ fn parse_args(args: Vec<String>) -> Result<RunOptions> {
         .unwrap_or_default();
     let mut relay_url = std::env::var("TELEPATHY_RELAY_URL").ok();
     let mut dns_endpoint = std::env::var("TELEPATHY_DNS_ENDPOINT").ok();
+    let mut dns_origin_domain = std::env::var("TELEPATHY_DNS_ORIGIN_DOMAIN").ok();
     let mut pkarr_relay = std::env::var("TELEPATHY_PKARR_RELAY").ok();
 
     let mut idx = 1usize;
@@ -89,6 +90,14 @@ fn parse_args(args: Vec<String>) -> Result<RunOptions> {
                         .ok_or_else(|| startup_failure("missing value for --dns-endpoint"))?,
                 );
             }
+            "--dns-origin-domain" => {
+                idx += 1;
+                dns_origin_domain = Some(
+                    args.get(idx)
+                        .cloned()
+                        .ok_or_else(|| startup_failure("missing value for --dns-origin-domain"))?,
+                );
+            }
             "--pkarr-relay" => {
                 idx += 1;
                 pkarr_relay = Some(
@@ -112,6 +121,7 @@ fn parse_args(args: Vec<String>) -> Result<RunOptions> {
         bind_addresses,
         relay_url,
         dns_endpoint,
+        dns_origin_domain,
         pkarr_relay,
     })
 }
@@ -281,11 +291,16 @@ mod tests {
         let _discovery = EnvVarGuard::with_vars(&[
             ("TELEPATHY_RELAY_URL", Some("http://10.0.0.1:3340")),
             ("TELEPATHY_DNS_ENDPOINT", Some("10.0.0.1:5300")),
+            ("TELEPATHY_DNS_ORIGIN_DOMAIN", Some("dns.iroh.test.")),
             ("TELEPATHY_PKARR_RELAY", Some("http://10.0.0.1:8080/pkarr")),
         ]);
         let from_env = parse_args(base_args()).expect("discovery env vars should succeed");
         assert_eq!(from_env.relay_url.as_deref(), Some("http://10.0.0.1:3340"));
         assert_eq!(from_env.dns_endpoint.as_deref(), Some("10.0.0.1:5300"));
+        assert_eq!(
+            from_env.dns_origin_domain.as_deref(),
+            Some("dns.iroh.test.")
+        );
         assert_eq!(
             from_env.pkarr_relay.as_deref(),
             Some("http://10.0.0.1:8080/pkarr")
@@ -297,6 +312,8 @@ mod tests {
             "http://10.0.10.1:3340".to_string(),
             "--dns-endpoint".to_string(),
             "10.0.10.1:5300".to_string(),
+            "--dns-origin-domain".to_string(),
+            "dns.iroh.test.".to_string(),
             "--pkarr-relay".to_string(),
             "http://10.0.10.1:8080/pkarr".to_string(),
         ])
@@ -306,6 +323,10 @@ mod tests {
             Some("http://10.0.10.1:3340")
         );
         assert_eq!(from_flags.dns_endpoint.as_deref(), Some("10.0.10.1:5300"));
+        assert_eq!(
+            from_flags.dns_origin_domain.as_deref(),
+            Some("dns.iroh.test.")
+        );
         assert_eq!(
             from_flags.pkarr_relay.as_deref(),
             Some("http://10.0.10.1:8080/pkarr")

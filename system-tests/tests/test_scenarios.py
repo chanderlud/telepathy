@@ -254,6 +254,7 @@ async def cli_pair(
         bind_addresses=["0.0.0.0"],
         relay_url=topology.relay_url(alice_namespace),
         dns_endpoint=topology.dns_endpoint(alice_namespace),
+        dns_origin_domain=topology.dns_origin_domain(alice_namespace),
         pkarr_relay=topology.pkarr_relay(alice_namespace),
     )
     bob = CliProcess(
@@ -263,6 +264,7 @@ async def cli_pair(
         bind_addresses=["0.0.0.0"],
         relay_url=topology.relay_url(bob_namespace),
         dns_endpoint=topology.dns_endpoint(bob_namespace),
+        dns_origin_domain=topology.dns_origin_domain(bob_namespace),
         pkarr_relay=topology.pkarr_relay(bob_namespace),
     )
     test_failed = False

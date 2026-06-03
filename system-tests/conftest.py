@@ -137,6 +137,7 @@ def _serialize_topology(topology: TopologyManager) -> dict[str, Any]:
         discovery[namespace] = {
             "relay_url": topology.relay_url(namespace),
             "dns_endpoint": topology.dns_endpoint(namespace),
+            "dns_origin_domain": topology.dns_origin_domain(namespace),
             "pkarr_relay": topology.pkarr_relay(namespace),
         }
     return {

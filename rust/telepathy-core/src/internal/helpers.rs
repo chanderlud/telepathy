@@ -10,7 +10,6 @@ use crate::internal::{ALPN, Result};
 use crate::types::FrontendNotify;
 use crate::types::{ManagerState, SessionStatus};
 use bytes::Bytes;
-use cfg_if::cfg_if;
 use iroh::address_lookup::PkarrPublisher;
 use iroh::endpoint::{default_relay_mode, presets};
 use iroh::{Endpoint, PublicKey, RelayMode, SecretKey};
@@ -33,6 +32,7 @@ use tokio::io::AsyncReadExt;
 use tokio::select;
 use tokio::sync::Notify;
 use tracing::{debug, error, info, instrument, warn};
+use url::Url;
 
 impl<C, S, H, I, O> TelepathyCore<C, S, H, I, O>
 where
@@ -54,28 +54,43 @@ where
         info!(event = "endpoint_launch", config = ?self.core_state.network_config);
         self.callbacks.manager_state(ManagerState::Starting).await;
 
-        let listen_port = self.core_state.network_config.listen_port.load(Relaxed);
-        let bind_addresses = self
-            .core_state
-            .network_config
-            .bind_addresses
-            .read()
-            .expect("bind_addresses lock poisoned")
-            .clone();
-
         let mut endpoint_builder = Endpoint::builder(presets::Empty)
             .secret_key(identity)
             .alpns(vec![ALPN.to_vec()])
             .relay_mode(default_relay_mode());
 
+        let pkarr_relay_value: Option<Url> = self
+            .core_state
+            .network_config
+            .pkarr_relay
+            .read()
+            .map_err(|_| ErrorKind::Poison("pkarr_relay"))?
+            .clone();
+
+        if let Some(ref relay) = pkarr_relay_value {
+            endpoint_builder =
+                endpoint_builder.address_lookup(PkarrPublisher::builder(relay.clone()));
+        } else {
+            endpoint_builder = endpoint_builder.address_lookup(PkarrPublisher::n0_dns());
+        }
+
         cfg_if::cfg_if! {
             if #[cfg(target_family = "wasm")] {
                 use rustls::crypto::ring;
+                use iroh::address_lookup::PkarrResolver;
 
                 let provider = ring::default_provider();
                 endpoint_builder = endpoint_builder.crypto_provider(Arc::new(provider));
+
+                if let Some(relay) = pkarr_relay_value {
+                    endpoint_builder = endpoint_builder.address_lookup(PkarrResolver::builder(relay.clone()));
+                } else {
+                    endpoint_builder = endpoint_builder.address_lookup(PkarrResolver::n0_dns());
+                }
             } else {
                 use rustls::crypto::aws_lc_rs::{self, kx_group};
+                use iroh::address_lookup::DnsAddressLookup;
+                use iroh::dns::DnsResolver;
 
                 let mut provider = aws_lc_rs::default_provider();
                 provider.kx_groups = vec![
@@ -89,38 +104,38 @@ where
                     .clear_ip_transports()
                     .crypto_provider(Arc::new(provider));
 
+                let listen_port = self.core_state.network_config.listen_port.load(Relaxed);
+                let bind_addresses = self
+                    .core_state
+                    .network_config
+                    .bind_addresses
+                    .read()
+                    .map_err(|_| ErrorKind::Poison("bind_addresses"))?
+                    .clone();
+
                 for ip in bind_addresses {
                     endpoint_builder = endpoint_builder
-                        .bind_addr(SocketAddr::new(ip, listen_port))
-                        .expect("validated bind address must produce a valid socket address");
+                        .bind_addr(SocketAddr::new(ip, listen_port))?;
                 }
-            }
-        }
 
-        if let Some(ref relay) = self.core_state.network_config.pkarr_relay {
-            endpoint_builder =
-                endpoint_builder.address_lookup(PkarrPublisher::builder(relay.clone()));
-        } else {
-            endpoint_builder = endpoint_builder.address_lookup(PkarrPublisher::n0_dns());
-        }
+                let dns_endpoint = *self
+                    .core_state
+                    .network_config
+                    .dns_endpoint
+                    .read()
+                    .map_err(|_| ErrorKind::Poison("dns_endpoint"))?;
 
-        cfg_if! {
-            if #[cfg(target_family = "wasm")] {
-                use iroh::address_lookup::PkarrResolver;
-                if let Some(ref relay) = self.core_state.network_config.pkarr_relay {
-                    endpoint_builder = endpoint_builder.address_lookup(PkarrResolver::builder(relay.clone()));
-                } else {
-                    endpoint_builder = endpoint_builder.address_lookup(PkarrResolver::n0_dns());
-                }
-            } else {
-                use iroh::address_lookup::DnsAddressLookup;
-                use iroh::dns::DnsResolver;
+                let dns_origin_domain = self
+                    .core_state
+                    .network_config
+                    .dns_origin_domain
+                    .read()
+                    .map_err(|_| ErrorKind::Poison("dns_origin_domain"))?.clone();
 
-                if let Some(ref endpoint) = self.core_state.network_config.dns_endpoint {
-                    let resolver = DnsResolver::with_nameserver(endpoint.parse()?);
+                if let (Some(endpoint), Some(origin_domain)) = (dns_endpoint, dns_origin_domain) {
+                    let resolver = DnsResolver::with_nameserver(endpoint);
                     endpoint_builder = endpoint_builder.address_lookup(
-                        // TODO move the origin_domain to network_config instead of hard coding for tests
-                        DnsAddressLookup::builder("dns.iroh.test.".to_string())
+                        DnsAddressLookup::builder(origin_domain)
                             .dns_resolver(resolver)
                             .build()
                     );
@@ -130,7 +145,13 @@ where
             }
         }
 
-        if let Some(ref relays) = self.core_state.network_config.relays {
+        if let Some(ref relays) = *self
+            .core_state
+            .network_config
+            .relays
+            .read()
+            .map_err(|_| ErrorKind::Poison("relays"))?
+        {
             // Keep endpoint relay identity exactly aligned with NetworkConfig so PKARR
             // advertisements use one canonical relay URL per physical relay service.
             endpoint_builder = endpoint_builder.relay_mode(RelayMode::Custom(relays.clone()));

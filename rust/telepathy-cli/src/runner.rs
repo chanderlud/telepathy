@@ -17,6 +17,7 @@ pub struct RunOptions {
     pub bind_addresses: Vec<String>,
     pub relay_url: Option<String>,
     pub dns_endpoint: Option<String>,
+    pub dns_origin_domain: Option<String>,
     pub pkarr_relay: Option<String>,
 }
 
@@ -27,7 +28,15 @@ pub async fn run(opts: RunOptions) -> Result<()> {
     let hub = Hub::new(event_tx);
     let callbacks = hub.build_callbacks();
 
-    let mut network_config = match NetworkConfig::new(opts.listen_port, opts.bind_addresses) {
+    let relays = opts.relay_url.clone().map(|url| vec![url]);
+    let network_config = match NetworkConfig::new(
+        opts.listen_port,
+        opts.bind_addresses.clone(),
+        relays,
+        opts.dns_endpoint.clone(),
+        opts.dns_origin_domain.clone(),
+        opts.pkarr_relay.clone(),
+    ) {
         Ok(config) => config,
         Err(err) => {
             let message = err.message;
@@ -43,37 +52,6 @@ pub async fn run(opts: RunOptions) -> Result<()> {
             return Err(anyhow::anyhow!(message)).context("failed to build network config");
         }
     };
-    if let Some(relay_url) = opts.relay_url
-        && let Err(err) = network_config.set_relay_url(&relay_url)
-    {
-        let message = err.message;
-        send_event(
-            &output_tx,
-            Event::Error {
-                id: None,
-                message: message.clone(),
-            },
-        );
-        drop(output_tx);
-        let _ = writer.await;
-        return Err(anyhow::anyhow!(message)).context("failed to configure relay url");
-    }
-    network_config.set_dns_endpoint(opts.dns_endpoint);
-    if let Some(pkarr_relay) = opts.pkarr_relay
-        && let Err(err) = network_config.set_pkarr_relay(&pkarr_relay)
-    {
-        let message = err.message;
-        send_event(
-            &output_tx,
-            Event::Error {
-                id: None,
-                message: message.clone(),
-            },
-        );
-        drop(output_tx);
-        let _ = writer.await;
-        return Err(anyhow::anyhow!(message)).context("failed to configure pkarr relay");
-    }
     let codec_config = CodecConfig::new(true, true, 5.0);
     let mut telepathy = NativeTelepathy::new(&network_config, &codec_config, callbacks);
 

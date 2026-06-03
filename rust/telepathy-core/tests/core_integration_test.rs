@@ -434,7 +434,7 @@ where
     I: Send + Sync + 'static,
     O: Send + Sync + 'static,
 {
-    let network_config = NetworkConfig::mock(relay_map, None, None);
+    let network_config = NetworkConfig::mock(relay_map, None, None, None);
     let screenshare = ScreenshareConfig::default();
     let overlay = Overlay::default();
 

@@ -18,6 +18,7 @@ class NetworkProfile:
 class TopologyManager:
     _CANONICAL_RELAY_IP = "100.64.0.1"
     _RELAY_PORT = 3340
+    _DNS_ORIGIN_DOMAIN = "dns.iroh.test."
 
     def __init__(self, worker_id: str = "0") -> None:
         self.worker_id = worker_id
@@ -324,6 +325,9 @@ class TopologyManager:
     def dns_endpoint(self, namespace: str) -> str:
         gateway_ip = self._gateway_ips.get(namespace, "127.0.0.1")
         return f"{gateway_ip}:5300"
+
+    def dns_origin_domain(self, namespace: str) -> str:
+        return self._DNS_ORIGIN_DOMAIN
 
     def pkarr_relay(self, namespace: str) -> str:
         gateway_ip = self._gateway_ips.get(namespace, "127.0.0.1")

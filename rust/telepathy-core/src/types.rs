@@ -12,7 +12,7 @@ use iroh::RelayUrl;
 pub use iroh::{PublicKey, SecretKey};
 use serde::{Serialize, Serializer};
 use speedy::{Readable, Writable};
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::RwLock as StdRwLock;
@@ -247,7 +247,6 @@ impl FrontendNotify {
     }
 }
 
-// TODO extend frontend to support relays and address discovery options
 #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(opaque))]
 #[derive(Clone, Debug)]
 pub struct NetworkConfig {
@@ -255,22 +254,53 @@ pub struct NetworkConfig {
 
     pub(crate) bind_addresses: Arc<StdRwLock<Vec<IpAddr>>>,
 
-    pub(crate) relays: Option<RelayMap>,
+    pub(crate) relays: Arc<StdRwLock<Option<RelayMap>>>,
 
-    pub(crate) dns_endpoint: Option<String>,
+    pub(crate) dns_endpoint: Arc<StdRwLock<Option<SocketAddr>>>,
 
-    pub(crate) pkarr_relay: Option<Url>,
+    pub(crate) dns_origin_domain: Arc<StdRwLock<Option<String>>>,
+
+    pub(crate) pkarr_relay: Arc<StdRwLock<Option<Url>>>,
 }
 
 impl NetworkConfig {
     #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
-    pub fn new(listen_port: u16, bind_addresses: Vec<String>) -> Result<Self, DartError> {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        listen_port: u16,
+        bind_addresses: Vec<String>,
+        relays: Option<Vec<String>>,
+        dns_endpoint: Option<String>,
+        dns_origin_domain: Option<String>,
+        pkarr_relay: Option<String>,
+    ) -> Result<Self, DartError> {
+        let relays_value = match relays {
+            Some(urls) => Some(relay_map_from_urls(urls)?),
+            None => None,
+        };
+
+        let dns_endpoint_value = match dns_endpoint {
+            Some(value) => Some(
+                SocketAddr::from_str(&value).map_err(|error| DartError::from(error.to_string()))?,
+            ),
+            None => None,
+        };
+
+        let pkarr_relay_value = match pkarr_relay {
+            Some(value) => {
+                let url = Url::parse(&value).map_err(|error| DartError::from(error.to_string()))?;
+                Some(url)
+            }
+            None => None,
+        };
+
         Ok(Self {
             listen_port: Arc::new(AtomicU16::new(listen_port)),
-            bind_addresses: Arc::new(StdRwLock::new(Self::parse_bind_addresses(bind_addresses)?)),
-            relays: None,
-            dns_endpoint: None,
-            pkarr_relay: None,
+            bind_addresses: Arc::new(StdRwLock::new(parse_bind_addresses(bind_addresses)?)),
+            relays: Arc::new(StdRwLock::new(relays_value)),
+            dns_endpoint: Arc::new(StdRwLock::new(dns_endpoint_value)),
+            dns_origin_domain: Arc::new(StdRwLock::new(dns_origin_domain)),
+            pkarr_relay: Arc::new(StdRwLock::new(pkarr_relay_value)),
         })
     }
 
@@ -278,24 +308,82 @@ impl NetworkConfig {
     pub fn mock(
         relay_map: &RelayMap,
         dns_endpoint: Option<&str>,
+        dns_origin_domain: Option<&str>,
         pkarr_relay: Option<Url>,
     ) -> Self {
         Self {
             listen_port: Arc::new(AtomicU16::new(0)),
             bind_addresses: Arc::new(StdRwLock::new(vec![IpAddr::V4(Ipv4Addr::UNSPECIFIED)])),
-            relays: Some(relay_map.clone()),
-            dns_endpoint: dns_endpoint.map(String::from),
-            pkarr_relay,
+            relays: Arc::new(StdRwLock::new(Some(relay_map.clone()))),
+            dns_endpoint: Arc::new(StdRwLock::new(dns_endpoint.and_then(|s| s.parse().ok()))),
+            dns_origin_domain: Arc::new(StdRwLock::new(dns_origin_domain.map(String::from))),
+            pkarr_relay: Arc::new(StdRwLock::new(pkarr_relay)),
         }
     }
 
-    fn parse_bind_addresses(bind_addresses: Vec<String>) -> Result<Vec<IpAddr>, DartError> {
-        bind_addresses
-            .into_iter()
-            .map(|address| {
-                IpAddr::from_str(&address).map_err(|error| DartError::from(error.to_string()))
-            })
-            .collect()
+    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
+    pub fn set_listen_port(&self, listen_port: u16) {
+        self.listen_port.store(listen_port, Relaxed);
+    }
+
+    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
+    pub fn set_bind_addresses(&self, bind_addresses: Vec<String>) -> Result<(), DartError> {
+        *self
+            .bind_addresses
+            .write()
+            .map_err(|error| DartError::from(error.to_string()))? =
+            parse_bind_addresses(bind_addresses)?;
+        Ok(())
+    }
+
+    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
+    pub fn set_relays(&self, relays: Option<Vec<String>>) -> Result<(), DartError> {
+        let value = match relays {
+            Some(urls) => Some(relay_map_from_urls(urls)?),
+            None => None,
+        };
+        *self
+            .relays
+            .write()
+            .map_err(|error| DartError::from(error.to_string()))? = value;
+        Ok(())
+    }
+
+    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
+    pub fn set_dns_endpoint(&self, endpoint: Option<String>) -> Result<(), DartError> {
+        let value = match endpoint {
+            Some(value) => Some(
+                SocketAddr::from_str(&value).map_err(|error| DartError::from(error.to_string()))?,
+            ),
+            None => None,
+        };
+        *self
+            .dns_endpoint
+            .write()
+            .map_err(|error| DartError::from(error.to_string()))? = value;
+        Ok(())
+    }
+
+    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
+    pub fn set_dns_origin_domain(&self, origin_domain: Option<String>) {
+        if let Ok(mut guard) = self.dns_origin_domain.write() {
+            *guard = origin_domain;
+        }
+    }
+
+    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
+    pub fn set_pkarr_relay(&self, pkarr_relay: Option<String>) -> Result<(), DartError> {
+        let value = match pkarr_relay {
+            Some(value) => {
+                Some(Url::parse(&value).map_err(|error| DartError::from(error.to_string()))?)
+            }
+            None => None,
+        };
+        *self
+            .pkarr_relay
+            .write()
+            .map_err(|error| DartError::from(error.to_string()))? = value;
+        Ok(())
     }
 
     #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
@@ -304,8 +392,42 @@ impl NetworkConfig {
     }
 
     #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
-    pub fn set_listen_port(&self, listen_port: u16) {
-        self.listen_port.store(listen_port, Relaxed);
+    pub fn get_pkarr_relay(&self) -> Option<String> {
+        self.pkarr_relay
+            .read()
+            .expect("pkarr_relay lock poisoned")
+            .as_ref()
+            .map(|url| url.to_string())
+    }
+
+    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
+    pub fn get_relays(&self) -> Option<Vec<String>> {
+        self.relays
+            .read()
+            .expect("relays lock poisoned")
+            .as_ref()
+            .map(|map| {
+                map.urls::<Vec<_>>()
+                    .into_iter()
+                    .map(|u| u.to_string())
+                    .collect()
+            })
+    }
+
+    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
+    pub fn get_dns_endpoint(&self) -> Option<String> {
+        self.dns_endpoint
+            .read()
+            .expect("dns_endpoint lock poisoned")
+            .map(|addr| addr.to_string())
+    }
+
+    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
+    pub fn get_dns_origin_domain(&self) -> Option<String> {
+        self.dns_origin_domain
+            .read()
+            .expect("dns_origin_domain lock poisoned")
+            .clone()
     }
 
     #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
@@ -317,36 +439,6 @@ impl NetworkConfig {
             .map(ToString::to_string)
             .collect()
     }
-
-    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
-    pub fn set_bind_addresses(&self, bind_addresses: Vec<String>) -> Result<(), DartError> {
-        *self
-            .bind_addresses
-            .write()
-            .map_err(|error| DartError::from(error.to_string()))? =
-            Self::parse_bind_addresses(bind_addresses)?;
-        Ok(())
-    }
-
-    #[cfg(any(feature = "native", feature = "integration-testing"))]
-    pub fn set_relay_url(&mut self, relay_url: &str) -> Result<(), DartError> {
-        let url =
-            RelayUrl::from_str(relay_url).map_err(|error| DartError::from(error.to_string()))?;
-        self.relays = Some(RelayMap::from_iter([url]));
-        Ok(())
-    }
-
-    #[cfg(any(feature = "native", feature = "integration-testing"))]
-    pub fn set_dns_endpoint(&mut self, endpoint: Option<String>) {
-        self.dns_endpoint = endpoint;
-    }
-
-    #[cfg(any(feature = "native", feature = "integration-testing"))]
-    pub fn set_pkarr_relay(&mut self, pkarr_relay: &str) -> Result<(), DartError> {
-        let url = Url::parse(pkarr_relay).map_err(|error| DartError::from(error.to_string()))?;
-        self.pkarr_relay = Some(url);
-        Ok(())
-    }
 }
 
 impl Default for NetworkConfig {
@@ -354,9 +446,10 @@ impl Default for NetworkConfig {
         Self {
             listen_port: Arc::new(Default::default()),
             bind_addresses: Arc::new(StdRwLock::new(vec![IpAddr::V4(Ipv4Addr::UNSPECIFIED)])),
-            relays: None,
-            dns_endpoint: None,
-            pkarr_relay: None,
+            relays: Arc::new(StdRwLock::new(None)),
+            dns_endpoint: Arc::new(StdRwLock::new(None)),
+            dns_origin_domain: Arc::new(StdRwLock::new(None)),
+            pkarr_relay: Arc::new(StdRwLock::new(None)),
         }
     }
 }
@@ -643,12 +736,43 @@ where
     )
 }
 
+fn parse_bind_addresses(bind_addresses: Vec<String>) -> Result<Vec<IpAddr>, DartError> {
+    bind_addresses
+        .into_iter()
+        .map(|address| {
+            IpAddr::from_str(&address).map_err(|error| DartError::from(error.to_string()))
+        })
+        .collect()
+}
+
+/// Parse a list of relay URL strings into a [`RelayMap`].
+///
+/// Returns a [`DartError`] if any of the strings fails to parse as a [`RelayUrl`].
+fn relay_map_from_urls(urls: Vec<String>) -> Result<RelayMap, DartError> {
+    let relay_urls = urls
+        .into_iter()
+        .map(|url| RelayUrl::from_str(&url).map_err(|error| DartError::from(error.to_string())))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(RelayMap::from_iter(relay_urls))
+}
+
 #[cfg(test)]
 mod tests {
     use super::NetworkConfig;
 
-    #[tokio::test]
-    async fn network_config_defaults_and_mutation_work() {
+    const VALID_RELAY_A: &str = "https://relay-us.iroh.example/";
+    const VALID_RELAY_B: &str = "https://relay-eu.iroh.example/";
+    const VALID_PKARR: &str = "https://pkarr.iroh.example/";
+    const VALID_DNS_ENDPOINT: &str = "1.1.1.1:53";
+    const VALID_ORIGIN_DOMAIN: &str = "dns.iroh.example";
+
+    fn vec_of(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn network_config_defaults_and_mutation_work() {
         let config = NetworkConfig::default();
         assert_eq!(config.get_listen_port(), 0);
         assert_eq!(config.get_bind_addresses(), vec!["0.0.0.0".to_string()]);
@@ -665,18 +789,465 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn network_config_new_and_validation_work() {
-        let config = NetworkConfig::new(40142, vec!["0.0.0.0".to_string(), "::".to_string()])
-            .expect("valid constructor input should succeed");
+    #[test]
+    fn network_config_new_and_validation_work() {
+        let config = NetworkConfig::new(
+            40142,
+            vec!["0.0.0.0".to_string(), "::".to_string()],
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("valid constructor input should succeed");
         assert_eq!(config.get_listen_port(), 40142);
         assert_eq!(
             config.get_bind_addresses(),
             vec!["0.0.0.0".to_string(), "::".to_string()]
         );
+        assert!(config.get_relays().is_none());
+        assert!(config.get_dns_endpoint().is_none());
+        assert!(config.get_dns_origin_domain().is_none());
+        assert!(config.get_pkarr_relay().is_none());
 
         let result = config.set_bind_addresses(vec!["not-an-ip".to_string()]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn default_constructor_leaves_optionals_unset_and_listens_on_unspecified_v4() {
+        let config = NetworkConfig::default();
+
+        assert_eq!(config.get_listen_port(), 0);
+        assert_eq!(config.get_bind_addresses(), vec!["0.0.0.0".to_string()]);
+        assert!(config.get_relays().is_none());
+        assert!(config.get_dns_endpoint().is_none());
+        assert!(config.get_dns_origin_domain().is_none());
+        assert!(config.get_pkarr_relay().is_none());
+    }
+
+    #[test]
+    fn new_accepts_a_fully_populated_valid_configuration() {
+        let config = NetworkConfig::new(
+            40142,
+            vec_of(&["0.0.0.0", "::1"]),
+            Some(vec_of(&[VALID_RELAY_A, VALID_RELAY_B])),
+            Some(VALID_DNS_ENDPOINT.to_string()),
+            Some(VALID_ORIGIN_DOMAIN.to_string()),
+            Some(VALID_PKARR.to_string()),
+        )
+        .expect("fully populated valid inputs should be accepted");
+
+        assert_eq!(config.get_listen_port(), 40142);
+        assert_eq!(
+            config.get_bind_addresses(),
+            vec!["0.0.0.0".to_string(), "::1".to_string()]
+        );
+
+        let relays = config.get_relays().expect("relays should be present");
+        assert_eq!(relays.len(), 2);
+        assert!(relays.contains(&VALID_RELAY_A.to_string()));
+        assert!(relays.contains(&VALID_RELAY_B.to_string()));
+
+        assert_eq!(
+            config.get_dns_endpoint(),
+            Some(VALID_DNS_ENDPOINT.to_string())
+        );
+        assert_eq!(
+            config.get_dns_origin_domain(),
+            Some(VALID_ORIGIN_DOMAIN.to_string())
+        );
+        assert_eq!(config.get_pkarr_relay(), Some(VALID_PKARR.to_string()));
+    }
+
+    #[test]
+    fn new_accepts_all_optional_fields_as_none() {
+        let config = NetworkConfig::new(0, Vec::new(), None, None, None, None)
+            .expect("optional fields may be unset and bind list may be empty");
+
+        assert_eq!(config.get_listen_port(), 0);
+        assert!(config.get_bind_addresses().is_empty());
+        assert!(config.get_relays().is_none());
+        assert!(config.get_dns_endpoint().is_none());
+        assert!(config.get_dns_origin_domain().is_none());
+        assert!(config.get_pkarr_relay().is_none());
+    }
+
+    #[test]
+    fn new_accepts_listen_port_at_u16_boundaries() {
+        for port in [0u16, 1, 8080, 65535] {
+            let config = NetworkConfig::new(port, vec_of(&["0.0.0.0"]), None, None, None, None)
+                .unwrap_or_else(|e| {
+                    panic!("port {port} should be valid, got error: {}", e.message)
+                });
+            assert_eq!(config.get_listen_port(), port);
+        }
+    }
+
+    #[test]
+    fn new_accepts_mixed_ipv4_and_ipv6_bind_addresses() {
+        let config = NetworkConfig::new(
+            11211,
+            vec_of(&["0.0.0.0", "::", "127.0.0.1", "::1", "fe80::1"]),
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("mixed IPv4 and IPv6 addresses should be accepted");
+
+        assert_eq!(
+            config.get_bind_addresses(),
+            vec_of(&["0.0.0.0", "::", "127.0.0.1", "::1", "fe80::1"])
+        );
+    }
+
+    #[test]
+    fn new_rejects_malformed_bind_addresses() {
+        for bad in ["not-an-ip", "256.256.256.256", "1.2.3", "", "1.2.3.4.5"] {
+            let result = NetworkConfig::new(0, vec_of(&[bad]), None, None, None, None);
+            assert!(
+                result.is_err(),
+                "expected error for malformed bind address: {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn new_rejects_when_any_bind_address_is_invalid() {
+        // A single invalid entry in a list otherwise full of valid entries must fail.
+        let result = NetworkConfig::new(
+            0,
+            vec_of(&["0.0.0.0", "garbage", "::1"]),
+            None,
+            None,
+            None,
+            None,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn new_rejects_malformed_relay_urls() {
+        for bad in [
+            "not a url",
+            "://no-scheme",
+            "http:// bad url",
+            "relay.example.com", // missing scheme
+        ] {
+            let result = NetworkConfig::new(0, Vec::new(), Some(vec_of(&[bad])), None, None, None);
+            assert!(
+                result.is_err(),
+                "expected error for malformed relay url: {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn new_rejects_when_any_relay_url_is_invalid() {
+        let result = NetworkConfig::new(
+            0,
+            Vec::new(),
+            Some(vec_of(&[VALID_RELAY_A, "http:// bad url", VALID_RELAY_B])),
+            None,
+            None,
+            None,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn new_rejects_malformed_dns_endpoint() {
+        for bad in [
+            "1.1.1.1",       // missing port
+            "1.1.1.1:99999", // port out of range
+            "not-an-address",
+            "1.2.3.4:not-a-port",
+            "",
+        ] {
+            let result = NetworkConfig::new(0, Vec::new(), None, Some(bad.to_string()), None, None);
+            assert!(
+                result.is_err(),
+                "expected error for malformed dns endpoint: {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn new_accepts_ipv6_dns_endpoint() {
+        let endpoint = "[2606:4700:4700::1111]:53";
+        let config =
+            NetworkConfig::new(0, Vec::new(), None, Some(endpoint.to_string()), None, None)
+                .expect("IPv6 dns endpoint should be accepted");
+        assert_eq!(config.get_dns_endpoint(), Some(endpoint.to_string()));
+    }
+
+    #[test]
+    fn new_rejects_malformed_pkarr_relay_url() {
+        for bad in [
+            "not a url",
+            "://no-scheme",
+            "http:// bad url",
+            "pkarr.example.com", // missing scheme
+        ] {
+            let result = NetworkConfig::new(0, Vec::new(), None, None, None, Some(bad.to_string()));
+            assert!(
+                result.is_err(),
+                "expected error for malformed pkarr relay url: {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn set_listen_port_updates_and_overwrites_previous_value() {
+        let config = NetworkConfig::default();
+        assert_eq!(config.get_listen_port(), 0);
+
+        config.set_listen_port(8080);
+        assert_eq!(config.get_listen_port(), 8080);
+
+        config.set_listen_port(65535);
+        assert_eq!(config.get_listen_port(), 65535);
+
+        config.set_listen_port(0);
+        assert_eq!(config.get_listen_port(), 0);
+    }
+
+    #[test]
+    fn set_bind_addresses_replaces_previous_addresses_on_success() {
+        let config = NetworkConfig::default();
+        assert_eq!(config.get_bind_addresses(), vec!["0.0.0.0".to_string()]);
+
+        config
+            .set_bind_addresses(vec_of(&["10.0.0.1", "10.0.0.2"]))
+            .unwrap();
+        assert_eq!(
+            config.get_bind_addresses(),
+            vec!["10.0.0.1".to_string(), "10.0.0.2".to_string()]
+        );
+
+        // Replaces, not appends: previous addresses should be gone.
+        config.set_bind_addresses(vec_of(&["192.168.1.1"])).unwrap();
+        assert_eq!(config.get_bind_addresses(), vec!["192.168.1.1".to_string()]);
+    }
+
+    #[test]
+    fn set_bind_addresses_preserves_prior_value_when_validation_fails() {
+        let config = NetworkConfig::default();
+        config
+            .set_bind_addresses(vec_of(&["10.0.0.1"]))
+            .expect("first set should succeed");
+        let before_failure = config.get_bind_addresses();
+
+        let result = config.set_bind_addresses(vec_of(&["not-an-ip"]));
+        assert!(result.is_err());
+
+        // The failed assignment must not mutate the previously stored addresses.
+        assert_eq!(config.get_bind_addresses(), before_failure);
+    }
+
+    #[test]
+    fn set_bind_addresses_accepts_empty_list() {
+        let config = NetworkConfig::default();
+        config
+            .set_bind_addresses(Vec::new())
+            .expect("an empty bind list is valid (none yet configured)");
+        assert!(config.get_bind_addresses().is_empty());
+    }
+
+    #[test]
+    fn set_relays_can_install_replace_and_clear() {
+        let config = NetworkConfig::default();
+        assert!(config.get_relays().is_none());
+
+        config
+            .set_relays(Some(vec_of(&[VALID_RELAY_A])))
+            .expect("valid relay url should be accepted");
+        let first = config
+            .get_relays()
+            .expect("relays should be present after set");
+        assert_eq!(first, vec![VALID_RELAY_A.to_string()]);
+
+        // Replace with a different list.
+        config
+            .set_relays(Some(vec_of(&[VALID_RELAY_A, VALID_RELAY_B])))
+            .expect("valid relay urls should be accepted");
+        let second = config
+            .get_relays()
+            .expect("relays should be present after replace");
+        assert_eq!(second.len(), 2);
+        assert!(second.contains(&VALID_RELAY_A.to_string()));
+        assert!(second.contains(&VALID_RELAY_B.to_string()));
+
+        // Clear with None.
+        config
+            .set_relays(None)
+            .expect("clearing relays must succeed");
+        assert!(config.get_relays().is_none());
+    }
+
+    #[test]
+    fn set_relays_rejects_invalid_urls() {
+        let config = NetworkConfig::default();
+        let result = config.set_relays(Some(vec_of(&["not a url"])));
+        assert!(result.is_err());
+        // Failed set must leave the stored relays untouched (still None from default).
+        assert!(config.get_relays().is_none());
+    }
+
+    #[test]
+    fn set_dns_endpoint_can_install_replace_and_clear() {
+        let config = NetworkConfig::default();
+        assert!(config.get_dns_endpoint().is_none());
+
+        config
+            .set_dns_endpoint(Some("8.8.8.8:53".to_string()))
+            .expect("valid endpoint should be accepted");
+        assert_eq!(config.get_dns_endpoint(), Some("8.8.8.8:53".to_string()));
+
+        // Replace.
+        config
+            .set_dns_endpoint(Some("[2606:4700:4700::1111]:53".to_string()))
+            .expect("valid IPv6 endpoint should be accepted");
+        assert_eq!(
+            config.get_dns_endpoint(),
+            Some("[2606:4700:4700::1111]:53".to_string())
+        );
+
+        // Clear.
+        config
+            .set_dns_endpoint(None)
+            .expect("clearing must succeed");
+        assert!(config.get_dns_endpoint().is_none());
+    }
+
+    #[test]
+    fn set_dns_endpoint_rejects_invalid_values() {
+        let config = NetworkConfig::default();
+        for bad in ["1.1.1.1", "not-an-address", "1.2.3.4:99999"] {
+            let result = config.set_dns_endpoint(Some(bad.to_string()));
+            assert!(
+                result.is_err(),
+                "expected error for malformed dns endpoint: {bad:?}"
+            );
+            // No mutation on failure.
+            assert!(config.get_dns_endpoint().is_none());
+        }
+    }
+
+    #[test]
+    fn set_dns_origin_domain_can_install_replace_and_clear() {
+        let config = NetworkConfig::default();
+        assert!(config.get_dns_origin_domain().is_none());
+
+        config.set_dns_origin_domain(Some("first.example".to_string()));
+        assert_eq!(
+            config.get_dns_origin_domain(),
+            Some("first.example".to_string())
+        );
+
+        config.set_dns_origin_domain(Some("second.example".to_string()));
+        assert_eq!(
+            config.get_dns_origin_domain(),
+            Some("second.example".to_string())
+        );
+
+        // The set function intentionally accepts any string, including empty.
+        config.set_dns_origin_domain(Some(String::new()));
+        assert_eq!(config.get_dns_origin_domain(), Some(String::new()));
+
+        // Clear with None.
+        config.set_dns_origin_domain(None);
+        assert!(config.get_dns_origin_domain().is_none());
+    }
+
+    #[test]
+    fn set_dns_origin_domain_preserves_unicode_domains() {
+        let config = NetworkConfig::default();
+        let unicode_domain = "café.example".to_string();
+        config.set_dns_origin_domain(Some(unicode_domain.clone()));
+        assert_eq!(config.get_dns_origin_domain(), Some(unicode_domain));
+    }
+
+    #[test]
+    fn set_pkarr_relay_can_install_replace_and_clear() {
+        let config = NetworkConfig::default();
+        assert!(config.get_pkarr_relay().is_none());
+
+        config
+            .set_pkarr_relay(Some(VALID_PKARR.to_string()))
+            .expect("valid pkarr relay url should be accepted");
+        assert_eq!(config.get_pkarr_relay(), Some(VALID_PKARR.to_string()));
+
+        let other = "https://pkarr-other.iroh.example/".to_string();
+        config
+            .set_pkarr_relay(Some(other.clone()))
+            .expect("valid replacement pkarr url should be accepted");
+        assert_eq!(config.get_pkarr_relay(), Some(other));
+
+        // Clear.
+        config.set_pkarr_relay(None).expect("clearing must succeed");
+        assert!(config.get_pkarr_relay().is_none());
+    }
+
+    #[test]
+    fn set_pkarr_relay_rejects_invalid_urls() {
+        let config = NetworkConfig::default();
+        for bad in [
+            "not a url",
+            "://missing-scheme",
+            "http:// bad url",
+            "pkarr.example.com", // missing scheme
+        ] {
+            let result = config.set_pkarr_relay(Some(bad.to_string()));
+            assert!(
+                result.is_err(),
+                "expected error for malformed pkarr url: {bad:?}"
+            );
+            // No mutation on failure.
+            assert!(config.get_pkarr_relay().is_none());
+        }
+    }
+
+    #[test]
+    fn cloned_config_shares_state_with_the_original() {
+        // NetworkConfig uses Arc internally, so cloning a reference (e.g. via Clone
+        // of the Arc-backed fields) must observe writes from either handle. This
+        // guards the thread-safety assumptions the rest of the crate relies on.
+        let config = NetworkConfig::default();
+        let clone = config.clone();
+
+        config.set_listen_port(4242);
+        assert_eq!(clone.get_listen_port(), 4242);
+
+        config
+            .set_bind_addresses(vec_of(&["10.0.0.5"]))
+            .expect("valid bind addresses should be accepted");
+        assert_eq!(clone.get_bind_addresses(), vec!["10.0.0.5".to_string()]);
+
+        config
+            .set_relays(Some(vec_of(&[VALID_RELAY_A])))
+            .expect("valid relay should be accepted");
+        assert_eq!(clone.get_relays(), Some(vec![VALID_RELAY_A.to_string()]));
+
+        config
+            .set_dns_endpoint(Some(VALID_DNS_ENDPOINT.to_string()))
+            .expect("valid dns endpoint should be accepted");
+        assert_eq!(
+            clone.get_dns_endpoint(),
+            Some(VALID_DNS_ENDPOINT.to_string())
+        );
+
+        config.set_dns_origin_domain(Some(VALID_ORIGIN_DOMAIN.to_string()));
+        assert_eq!(
+            clone.get_dns_origin_domain(),
+            Some(VALID_ORIGIN_DOMAIN.to_string())
+        );
+
+        config
+            .set_pkarr_relay(Some(VALID_PKARR.to_string()))
+            .expect("valid pkarr url should be accepted");
+        assert_eq!(clone.get_pkarr_relay(), Some(VALID_PKARR.to_string()));
     }
 
     use super::{

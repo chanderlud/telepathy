@@ -35,6 +35,7 @@ class CliProcess:
         bind_addresses: list[str],
         relay_url: str | None = None,
         dns_endpoint: str | None = None,
+        dns_origin_domain: str | None = None,
         pkarr_relay: str | None = None,
     ) -> None:
         self.binary_path = binary_path
@@ -43,6 +44,7 @@ class CliProcess:
         self.bind_addresses = bind_addresses
         self.relay_url = relay_url
         self.dns_endpoint = dns_endpoint
+        self.dns_origin_domain = dns_origin_domain
         self.pkarr_relay = pkarr_relay
 
         self._proc: asyncio.subprocess.Process | None = None
@@ -63,6 +65,8 @@ class CliProcess:
             args.extend(["--relay-url", self.relay_url])
         if self.dns_endpoint is not None:
             args.extend(["--dns-endpoint", self.dns_endpoint])
+        if self.dns_origin_domain is not None:
+            args.extend(["--dns-origin-domain", self.dns_origin_domain])
         if self.pkarr_relay is not None:
             args.extend(["--pkarr-relay", self.pkarr_relay])
         exec_args = _build_exec_args(self.namespace, self.binary_path, args)
