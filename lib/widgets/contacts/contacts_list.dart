@@ -87,61 +87,68 @@ class ContactsList extends StatelessWidget {
                       ),
                     ],
                   ),
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Tooltip(
-                        message: switch (managerState) {
-                          ManagerState.active => 'Session Manager Connected',
-                          ManagerState.starting => 'Session Manager Starting…',
-                          ManagerState.failed => 'Session Manager Failed',
-                          ManagerState.stopped => 'Session Manager Inactive',
-                        },
-                        child: switch (managerState) {
-                          ManagerState.active => const Icon(
-                              Icons.language,
-                              color: Color(0xFF16a34a),
-                              size: 20,
-                            ),
-                          ManagerState.starting => const SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 3,
+                  Container(
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).colorScheme.tertiaryContainer,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    padding: const EdgeInsets.only(
+                        left: 8, right: 3, top: 3, bottom: 3),
+                    child: Tooltip(
+                      message: switch (managerState) {
+                        ManagerState.active => 'Session Manager Connected',
+                        ManagerState.starting => 'Session Manager Starting…',
+                        ManagerState.failed => 'Session Manager Failed',
+                        ManagerState.stopped => 'Session Manager Inactive',
+                      },
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Text('Session Manager'),
+                          const SizedBox(width: 5),
+                          switch (managerState) {
+                            ManagerState.active => SvgPicture.asset(
+                                'assets/icons/ShieldYes.svg',
+                                semanticsLabel: 'Manager active icon',
+                                width: 28),
+                            ManagerState.starting => const SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 3,
+                                ),
                               ),
-                            ),
-                          ManagerState.failed ||
-                          ManagerState.stopped =>
-                            const Icon(
-                              Icons.language,
-                              color: Color(0xFFdc2626),
-                              size: 20,
-                            ),
-                        },
+                            ManagerState.failed ||
+                            ManagerState.stopped =>
+                              SvgPicture.asset('assets/icons/ShieldOff.svg',
+                                  semanticsLabel: 'Manager inactive icon'),
+                          },
+                          if (managerState == ManagerState.failed) ...[
+                            const SizedBox(width: 10),
+                            IconButton(
+                                onPressed: () {
+                                  telepathy.restartManager();
+                                },
+                                constraints: const BoxConstraints(
+                                  maxWidth: 36,
+                                  maxHeight: 36,
+                                ),
+                                padding: const EdgeInsetsDirectional.only(
+                                  start: 1,
+                                  top: 1,
+                                  end: 1,
+                                  bottom: 1,
+                                ),
+                                icon: SvgPicture.asset(
+                                    'assets/icons/Restart.svg',
+                                    colorFilter: const ColorFilter.mode(
+                                        Color(0xFFdc2626), BlendMode.srcIn),
+                                    semanticsLabel: 'Restart session manager')),
+                          ],
+                        ],
                       ),
-                      if (managerState == ManagerState.failed) ...[
-                        const SizedBox(width: 10),
-                        IconButton(
-                            onPressed: () {
-                              telepathy.restartManager();
-                            },
-                            constraints: const BoxConstraints(
-                              maxWidth: 36,
-                              maxHeight: 36,
-                            ),
-                            padding: const EdgeInsetsDirectional.only(
-                              start: 1,
-                              top: 1,
-                              end: 1,
-                              bottom: 1,
-                            ),
-                            icon: SvgPicture.asset('assets/icons/Restart.svg',
-                                colorFilter: const ColorFilter.mode(
-                                    Color(0xFFdc2626), BlendMode.srcIn),
-                                semanticsLabel: 'Restart session manager')),
-                      ]
-                    ],
-                  ),
+                    ),
+                  )
                 ],
               )),
           SizedBox(height: isCompact ? 2.5 : 10),
