@@ -11,6 +11,8 @@ import 'package:telepathy/core/utils/console.dart';
 import 'package:telepathy/models/index.dart';
 import 'package:uuid/uuid.dart';
 
+typedef RoomHasher = String Function({required List<String> peers});
+
 class ProfilesController with ChangeNotifier {
   static const String _profilesKey = 'profilesV2';
   static const String _activeProfileKey = 'activeProfile';
@@ -21,8 +23,13 @@ class ProfilesController with ChangeNotifier {
 
   final FlutterSecureStorage storage;
   final SharedPreferencesAsync options;
+  final RoomHasher roomHasher;
 
-  ProfilesController({required this.storage, required this.options});
+  ProfilesController({
+    required this.storage,
+    required this.options,
+    this.roomHasher = roomHash,
+  });
 
   /// The ids of all available profiles.
   Map<String, Profile> profiles = <String, Profile>{};
@@ -187,12 +194,13 @@ class ProfilesController with ChangeNotifier {
 
   Room addRoom(String nickname, List<String> peerIds) {
     final Profile profile = _currentProfile();
+    final List<String> roomPeerIds = List<String>.from(peerIds);
 
     late final Room room;
     try {
       room = Room(
-        id: roomHash(peers: peerIds),
-        peerIds: peerIds,
+        id: roomHasher(peers: roomPeerIds),
+        peerIds: roomPeerIds,
         nickname: nickname,
       );
     } catch (error, stackTrace) {
@@ -213,6 +221,35 @@ class ProfilesController with ChangeNotifier {
       DebugConsole.warn('room was not added: $error');
       return null;
     }
+  }
+
+  void removeRoom(Room room) {
+    final Profile profile = _currentProfile();
+
+    Room? removedRoom = profile.rooms.remove(room.id);
+
+    if (removedRoom == null) {
+      String? roomKey;
+      for (final MapEntry<String, Room> entry in profile.rooms.entries) {
+        if (identical(entry.value, room)) {
+          roomKey = entry.key;
+          break;
+        }
+      }
+
+      if (roomKey == null) {
+        return;
+      }
+
+      removedRoom = profile.rooms.remove(roomKey);
+    }
+
+    if (removedRoom == null) {
+      return;
+    }
+
+    _safeNotifyListeners();
+    unawaited(_enqueue(() => _saveRoomsFor(profile.id, notify: false)));
   }
 
   Future<void> saveRooms() {
