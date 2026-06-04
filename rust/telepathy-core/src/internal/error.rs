@@ -1,7 +1,9 @@
 #[cfg(target_family = "wasm")]
 use flutter_rust_bridge::for_generated::futures::channel::oneshot::Canceled;
 use iroh::KeyParsingError;
-use iroh::endpoint::{BindError, ConnectionError, InvalidSocketAddr};
+use iroh::endpoint::{BindError, ConnectionError};
+#[cfg(not(target_family = "wasm"))]
+use iroh::endpoint::InvalidSocketAddr;
 use std::fmt::{Display, Formatter};
 use std::net::AddrParseError;
 use telepathy_audio::devices::DeviceError;
@@ -33,6 +35,7 @@ pub(crate) enum ErrorKind {
     BindError(BindError),
     KeyParsing(KeyParsingError),
     Connection(ConnectionError),
+    #[cfg(not(target_family = "wasm"))]
     InvalidSocketAddr(InvalidSocketAddr),
     Poison(&'static str),
     InvalidContactFormat,
@@ -174,6 +177,7 @@ impl From<ConnectionError> for Error {
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
 impl From<InvalidSocketAddr> for Error {
     fn from(err: InvalidSocketAddr) -> Self {
         Self {
@@ -212,6 +216,7 @@ impl Display for Error {
                 ErrorKind::KeyParsing(ref err) => format!("Key parsing error: {}", err),
                 ErrorKind::Connection(ref err) => format!("Connection error: {}", err),
                 ErrorKind::Poison(msg) => format!("Poison error: {}", msg),
+                #[cfg(not(target_family = "wasm"))]
                 ErrorKind::InvalidSocketAddr(ref err) => format!("Invalid socket address: {}", err),
                 ErrorKind::InvalidContactFormat => "Invalid contact format".to_string(),
                 ErrorKind::TransportSend => "Transport failed on send".to_string(),
