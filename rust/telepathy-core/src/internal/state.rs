@@ -548,7 +548,7 @@ impl SessionState {
                     let mut max_data = u64::MIN;
                     let mut primary_connection: Option<Path> = None;
 
-                    for path in paths.iter().filter(|p| p.is_selected()) {
+                    for path in paths.iter() {
                         info!(event = "connection_path", path = ?path);
                         let stats = path.stats();
 
