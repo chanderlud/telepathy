@@ -150,7 +150,12 @@ where
         } else if let Some(room_state) = self.inner.room_state.read().await.as_ref() {
             debug!("ending room");
             room_state.end_call.notify_one();
-        } else if let Ok(Some(peer)) = self.inner.core_state.call_slot.direct_peer()
+        } else if let Ok(Some(peer)) = self
+            .inner
+            .core_state
+            .call_slot
+            .snapshot()
+            .map(|s| s.direct_peer)
             && let Some(session_state) = self.inner.session_states.read().await.get(&peer)
         {
             debug!("ending call");
@@ -176,6 +181,17 @@ where
             self.inner.core_state.call_slot.release()?;
             return Err(error);
         }
+
+        // capture the exact ownership snapshot this room acquired so the room controller's
+        // teardown can release the slot against the same generation we own, even if the slot
+        // was released and re-acquired (e.g. a newer room) while the controller was running.
+        let room_owner = match self.inner.core_state.call_slot.snapshot() {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                self.inner.core_state.call_slot.release()?;
+                return Err(error);
+            }
+        };
 
         // parse members
         let members: Vec<_> = member_strings
@@ -225,7 +241,7 @@ where
             async move {
                 let stop_io = Default::default();
                 if let Err(error) = self_clone
-                    .room_controller(receiver, cancel, &stop_io, end_call)
+                    .room_controller(receiver, cancel, &stop_io, end_call, room_owner)
                     .await
                 {
                     error!("error in room controller: {:?}", error);
@@ -240,7 +256,7 @@ where
 
     /// Restarts the session manager
     pub async fn restart_manager(&self) -> Result<()> {
-        if self.inner.core_state.call_slot.occupied() {
+        if self.inner.core_state.call_slot.current() != CallSlotState::Idle {
             Err(ErrorKind::ManagerRestartDuringCall.into())
         } else {
             // reset sessions so manager can clean up

@@ -12,7 +12,8 @@ use crate::internal::messages::{
     AudioHeader, ProtocolMessage, RoomMessage, SESSION_STOPPED_REASON, StartScreenshare,
 };
 use crate::internal::state::{
-    CallSlot, CallSlotAcquireResult, CallSlotState, CoreState, StatisticsCollectorState,
+    CallSlot, CallSlotAcquireResult, CallSlotSnapshot, CallSlotState, CoreState,
+    StatisticsCollectorState,
 };
 use crate::internal::utils::{JoinHandle, spawn_task};
 #[cfg(target_os = "ios")]
@@ -573,16 +574,20 @@ where
                 (Err(error), room_only) => {
                     let peer = contact.peer_id;
                     let call_slot = &self.core_state.call_slot;
-                    if call_slot.direct_peer()? == Some(peer)
-                        && call_slot.current() == CallSlotState::ActiveDirect
-                        && !room_only
+                    // Snapshot state + owning peer in one lock acquisition; a split read could
+                    // observe a newer call's slot between the two checks and incorrectly release it.
+                    let snapshot = call_slot.snapshot()?;
+                    if !room_only
                         && !self.is_in_room(&peer).await
+                        && snapshot.state == CallSlotState::ActiveDirect
+                        && snapshot.direct_peer == Some(peer)
                     {
                         warn!(event = "session_error_while_call_active", ?error);
-                        self.callbacks
-                            .call_state(CallState::CallEnded(error.to_string(), false))
-                            .await;
-                        call_slot.release()?;
+                        if call_slot.release_if_match(snapshot)? {
+                            self.callbacks
+                                .call_state(CallState::CallEnded(error.to_string(), false))
+                                .await;
+                        }
                     }
 
                     if room_only || error.is_session_critical() {
@@ -608,9 +613,7 @@ where
         call_state: EarlyCallState,
         is_in_room: bool,
     ) -> Result<HandshakeDispatch> {
-        let call_slot = &self.core_state.call_slot;
         if is_in_room {
-            debug_assert_eq!(call_slot.current(), CallSlotState::RoomCall);
             self.room_handshake(
                 io.send,
                 io.recv,
@@ -621,8 +624,7 @@ where
             )
             .await?;
             Ok(HandshakeDispatch::Completed)
-        } else if let Some(slot) = pending_slot.take() {
-            slot.into_handshake()?;
+        } else if let Some(_slot) = pending_slot.take() {
             match self
                 .call_handshake(
                     io.send,
@@ -656,12 +658,10 @@ where
         // Three cases: matching room call (peer already in our room) -> room handshake;
         // mismatched room call -> reject; direct call -> try to acquire the direct call slot.
         if is_in_room && peer_room_hash == local_room_hash {
-            debug_assert_eq!(call_slot.current(), CallSlotState::RoomCall);
             Ok(IncomingSlotDecision::RoomMatch)
         } else if peer_room_hash.is_some() {
             info!(event = "room_call_rejected_not_in_room");
             write_message(send, &ProtocolMessage::Reject).await?;
-            debug_assert!(!call_slot.occupied() || call_slot.current() == CallSlotState::RoomCall);
             Ok(IncomingSlotDecision::RejectedNotInRoom)
         } else {
             match PendingDirectCallSlot::try_acquire_incoming(call_slot, peer)? {
@@ -669,7 +669,6 @@ where
                 None => {
                     info!(event = "call_busy_sent_call_already_active");
                     write_message(send, &ProtocolMessage::Busy).await?;
-                    debug_assert_ne!(call_slot.current(), CallSlotState::PendingIncoming);
                     Ok(IncomingSlotDecision::Busy)
                 }
             }
@@ -685,7 +684,6 @@ where
         pending_slot: &mut Option<PendingDirectCallSlot<'_>>,
         message: ProtocolMessage,
     ) -> Result<HelloResponse> {
-        let call_slot = &self.core_state.call_slot;
         let is_in_room = args.room_hash.is_some();
         match message {
             ProtocolMessage::HelloAck { audio_header } => {
@@ -706,7 +704,7 @@ where
                     .await?
                 {
                     HandshakeDispatch::Completed => {
-                        finalize_handshake_success(io.keep_alive, call_slot);
+                        io.keep_alive.reset();
                         Ok(HelloResponse::Completed)
                     }
                     HandshakeDispatch::SessionStopped => Ok(HelloResponse::SessionStopped),
@@ -768,7 +766,7 @@ where
                             .await?
                         {
                             HandshakeDispatch::Completed => {
-                                finalize_handshake_success(io.keep_alive, call_slot);
+                                io.keep_alive.reset();
                                 Ok(HelloResponse::Completed)
                             }
                             HandshakeDispatch::SessionStopped => Ok(HelloResponse::SessionStopped),
@@ -862,18 +860,18 @@ where
                 if let Some(cancel) = cancel_prompt {
                     cancel.notify_one();
                 }
-                abort_negotiation_session_stopped(io.send, &mut pending_slot, call_slot).await?;
+                abort_negotiation_session_stopped(io.send, &mut pending_slot).await?;
                 Ok(IncomingNegotiationOutcome::SessionStopped)
             }
             accept_result = accept_future => {
                 if !accept_result? {
                     if io.state.stop_session.is_cancelled() {
-                        abort_negotiation_session_stopped(io.send, &mut pending_slot, call_slot)
+                        abort_negotiation_session_stopped(io.send, &mut pending_slot)
                             .await?;
                         return Ok(IncomingNegotiationOutcome::SessionStopped);
                     }
                     write_message(io.send, &ProtocolMessage::Reject).await?;
-                    release_pending_and_assert_idle(&mut pending_slot, call_slot)?;
+                    release_pending(&mut pending_slot)?;
                     return Ok(IncomingNegotiationOutcome::ContinueSession);
                 }
 
@@ -898,7 +896,7 @@ where
                             .await?
                         {
                             HandshakeDispatch::Completed => {
-                                finalize_handshake_success(io.keep_alive, call_slot);
+                                io.keep_alive.reset();
                                 Ok(IncomingNegotiationOutcome::HandshakeComplete)
                             }
                             HandshakeDispatch::SessionStopped => {
@@ -915,7 +913,7 @@ where
                             },
                         )
                         .await?;
-                        release_pending_and_assert_idle(&mut pending_slot, call_slot)?;
+                        release_pending(&mut pending_slot)?;
                         Err(error)
                     }
                 }
@@ -926,7 +924,7 @@ where
                 if let Some(cancel) = cancel_prompt {
                     cancel.notify_one();
                 }
-                release_pending_and_assert_idle(&mut pending_slot, call_slot)?;
+                release_pending(&mut pending_slot)?;
                 let message = result?;
                 warn!(event = "accept_prompt_interrupted_by_message", ?message);
                 Ok(IncomingNegotiationOutcome::ContinueSession)
@@ -951,7 +949,6 @@ where
         if is_in_room {
             if call_slot.current() != CallSlotState::RoomCall {
                 warn!(event = "outgoing_room_call_without_room_slot");
-                debug_assert_ne!(call_slot.current(), CallSlotState::RoomCall);
                 return Ok(OutgoingNegotiationOutcome::CallEnded);
             }
         } else {
@@ -965,9 +962,6 @@ where
                             true,
                         ))
                         .await;
-                    debug_assert!(
-                        !call_slot.occupied() || call_slot.current() == CallSlotState::RoomCall
-                    );
                     return Ok(OutgoingNegotiationOutcome::CallEnded);
                 }
             }
@@ -980,7 +974,7 @@ where
                 self.callbacks
                     .call_state(CallState::CallEnded(error.to_string(), false))
                     .await;
-                release_pending_and_assert_idle(&mut pending_slot, call_slot)?;
+                release_pending(&mut pending_slot)?;
                 return Err(error);
             }
         };
@@ -1006,13 +1000,13 @@ where
             select! {
                 _ = io.state.stop_session.cancelled() => {
                     info!(event = "session_stopped_waiting_hello_ack");
-                    release_pending_and_assert_idle(&mut pending_slot, call_slot)?;
+                    release_pending(&mut pending_slot)?;
                     return Ok(OutgoingNegotiationOutcome::SessionStopped);
                 }
                 _ = io.state.end_call.notified() => {
                     info!(event = "end_call_notified_waiting_hello_ack");
                     write_message(io.send, &ProtocolMessage::Goodbye { reason: None }).await?;
-                    release_pending_and_assert_idle(&mut pending_slot, call_slot)?;
+                    release_pending(&mut pending_slot)?;
                     return Ok(OutgoingNegotiationOutcome::CallEnded);
                 }
                 result = timeout(hello_timeout, read_message(io.recv)) => {
@@ -1032,7 +1026,7 @@ where
                                     true,
                                 ))
                                 .await;
-                            release_pending_and_assert_idle(&mut pending_slot, call_slot)?;
+                            release_pending(&mut pending_slot)?;
                             return Ok(OutgoingNegotiationOutcome::CallEnded);
                         }
                         Ok(Err(error)) => return Err(error),
@@ -1057,17 +1051,11 @@ where
                                     self.callbacks
                                         .call_state(CallState::CallEnded(message, true))
                                         .await;
-                                    release_pending_and_assert_idle(
-                                        &mut pending_slot,
-                                        call_slot,
-                                    )?;
+                                    release_pending(&mut pending_slot)?;
                                     return Ok(OutgoingNegotiationOutcome::CallEnded);
                                 }
                                 HelloResponse::EndedSilently => {
-                                    release_pending_and_assert_idle(
-                                        &mut pending_slot,
-                                        call_slot,
-                                    )?;
+                                    release_pending(&mut pending_slot)?;
                                     return Ok(OutgoingNegotiationOutcome::CallEnded);
                                 }
                                 HelloResponse::Continue => continue,
@@ -1201,6 +1189,8 @@ where
             call_slot.release_if_pending_for_peer(call_state.peer)?;
             return Err(ErrorKind::CallAlreadyActive.into());
         }
+        // capture the expected active-direct slot ownership immediately after the transition
+        let expected_active = call_slot.snapshot()?;
         // show the overlay
         self.overlay.show();
 
@@ -1222,10 +1212,11 @@ where
         info!(event = "call_handshake_ended");
         // ensure that all background i/o threads are stopped
         stop_io.cancel();
-        // the call has ended
-        call_slot.release_if_state(CallSlotState::ActiveDirect)?;
-        // hide the overlay
-        self.overlay.hide();
+        // the call has ended; release only against the snapshot captured before `call()` ran.
+        if call_slot.release_if_match(expected_active)? {
+            // hide the overlay
+            self.overlay.hide();
+        }
         // send a goodbye message on errors
         if let Err(error) = result.as_ref() {
             warn!(event = "call_handshake_sending_error_goodbye", ?error);
@@ -1552,6 +1543,7 @@ where
         end_sessions: CancellationToken,
         stop_io: &CancellationToken,
         end_call: Arc<Notify>,
+        room_owner: CallSlotSnapshot,
     ) -> Result<()> {
         let room_hash = self.room_hash().await;
         Span::current().record("room.hash", field::debug(room_hash));
@@ -1772,9 +1764,8 @@ where
         debug!(event = "room_processing_teardown_done");
         // cleanup room state
         self.room_state.write().await.take();
-        self.core_state
-            .call_slot
-            .release_if_state(CallSlotState::RoomCall)?;
+        // release only against the exact `room_owner` snapshot
+        self.core_state.call_slot.release_if_match(room_owner)?;
         // cleanup sessions blocked by room
         end_sessions.cancel();
         // join statistics collector
@@ -1928,24 +1919,7 @@ impl<'a> PendingDirectCallSlot<'a> {
         // no-op when release_on_failure is false; peer owns the slot in the Matched-incoming case
         if self.release_on_failure {
             self.call_slot.release_if_pending_for_peer(self.peer)?;
-            debug_assert_eq!(self.call_slot.current(), CallSlotState::Idle);
         }
-        Ok(())
-    }
-
-    /// Transfers slot ownership to [`call_handshake`] without releasing.
-    fn into_handshake(self) -> Result<()> {
-        debug_assert!(matches!(
-            self.call_slot.current(),
-            CallSlotState::PendingIncoming | CallSlotState::PendingOutgoing
-        ));
-        debug_assert_eq!(self.call_slot.direct_peer()?, Some(self.peer));
-        let Self {
-            call_slot,
-            peer: _,
-            release_on_failure,
-        } = self;
-        debug_assert!(release_on_failure || call_slot.current() == CallSlotState::PendingOutgoing);
         Ok(())
     }
 }
@@ -2005,33 +1979,17 @@ fn should_keep_new_session(local_peer: &PublicKey, peer: &PublicKey, new_is_clie
 }
 
 /// Releases a pending direct-call slot and asserts the global slot is idle or in a room call.
-fn release_pending_and_assert_idle(
-    pending_slot: &mut Option<PendingDirectCallSlot<'_>>,
-    call_slot: &CallSlot,
-) -> Result<()> {
+fn release_pending(pending_slot: &mut Option<PendingDirectCallSlot<'_>>) -> Result<()> {
     if let Some(slot) = pending_slot.take() {
         slot.release()?;
     }
-    debug_assert!(!call_slot.occupied() || call_slot.current() == CallSlotState::RoomCall);
     Ok(())
-}
-
-/// Resets the keep-alive timer and asserts the call slot is idle or in a room call after handshake.
-///
-/// Callers must invoke this only after a successful [`perform_call_handshake_dispatch`].
-fn finalize_handshake_success(keep_alive: &mut Interval, call_slot: &CallSlot) {
-    keep_alive.reset();
-    debug_assert!(
-        call_slot.current() == CallSlotState::Idle
-            || call_slot.current() == CallSlotState::RoomCall
-    );
 }
 
 /// Sends a session-stopped `Goodbye`, releases any pending slot, and asserts idle/room post-condition.
 async fn abort_negotiation_session_stopped(
     send: &mut FramedWrite<SendStream, LengthDelimitedCodec>,
     pending_slot: &mut Option<PendingDirectCallSlot<'_>>,
-    call_slot: &CallSlot,
 ) -> Result<()> {
     _ = write_message(
         send,
@@ -2040,7 +1998,7 @@ async fn abort_negotiation_session_stopped(
         },
     )
     .await;
-    release_pending_and_assert_idle(pending_slot, call_slot)?;
+    release_pending(pending_slot)?;
     Ok(())
 }
 

@@ -7,8 +7,8 @@ use atomic_float::AtomicF32;
 use iroh::endpoint::{Connection, Path};
 use iroh::{PublicKey, SecretKey, TransportAddr};
 use std::collections::HashMap;
-use std::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed, Release};
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize};
+use std::sync::atomic::Ordering::Relaxed;
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 use telepathy_audio::RnnModel;
@@ -27,29 +27,14 @@ use wasmtimer::tokio::interval;
 type SharedDeviceId = Arc<Mutex<Option<String>>>;
 
 /// Per-state lifecycle for the global call slot. Only one non-idle state may be held at a time.
-#[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum CallSlotState {
-    Idle = 0,
-    PendingIncoming = 1,
-    PendingOutgoing = 2,
-    ActiveDirect = 3,
-    RoomCall = 4,
-    AudioTest = 5,
-}
-
-impl CallSlotState {
-    fn from_u8(value: u8) -> Option<Self> {
-        match value {
-            0 => Some(Self::Idle),
-            1 => Some(Self::PendingIncoming),
-            2 => Some(Self::PendingOutgoing),
-            3 => Some(Self::ActiveDirect),
-            4 => Some(Self::RoomCall),
-            5 => Some(Self::AudioTest),
-            _ => None,
-        }
-    }
+    Idle,
+    PendingIncoming,
+    PendingOutgoing,
+    ActiveDirect,
+    RoomCall,
+    AudioTest,
 }
 
 /// Result of [`CallSlot::try_acquire_or_match`].
@@ -63,59 +48,95 @@ pub(crate) enum CallSlotAcquireResult {
     Failed,
 }
 
-/// Authoritative global call-slot lifecycle. All transitions must use the atomic helpers on
-/// [`CallSlot`]; do not read [`CallSlot::current`] and then mutate the slot in separate steps.
+/// Atomic snapshot of [`CallSlot`] state and ownership captured under a single lock acquisition.
+///
+/// Callers must use this type when they need to reason about both `state` and `direct_peer`
+/// together; split `current()` + `direct_peer()` reads can observe ownership that has already
+/// transitioned to a newer call by the time the second read is taken.
+///
+/// `generation` is a monotonically increasing ownership token: it is bumped every time a new
+/// non-idle owner acquires the slot. It is preserved across a matched simultaneous-dial path so
+/// that the matched peer observes the same generation it would have observed as the original
+/// acquirer. This guarantees that release/reacquire cycles for the same `(state, peer)` pair
+/// produce snapshots with different generations, so a stale snapshot cannot accidentally match
+/// a newer owner that happens to share the same state and peer.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct CallSlotSnapshot {
+    pub(crate) state: CallSlotState,
+    pub(crate) direct_peer: Option<PublicKey>,
+    pub(crate) generation: u64,
+}
+
+#[derive(Clone, Copy)]
+struct CallSlotInner {
+    state: CallSlotState,
+    direct_peer: Option<PublicKey>,
+    /// Monotonic ownership token; bumped on every transition from idle to a non-idle state
+    /// and preserved across simultaneous-dial match.
+    generation: u64,
+}
+
 #[derive(Clone)]
 pub(crate) struct CallSlot {
-    state: Arc<AtomicU8>,
-    /// Set for direct-call states so `end_call` can route to the active session.
-    direct_peer: Arc<StdMutex<Option<PublicKey>>>,
+    inner: Arc<StdMutex<CallSlotInner>>,
 }
 
 impl Default for CallSlot {
     fn default() -> Self {
         Self {
-            state: Arc::new(AtomicU8::new(CallSlotState::Idle as u8)),
-            direct_peer: Arc::new(StdMutex::new(None)),
+            inner: Arc::new(StdMutex::new(CallSlotInner {
+                state: CallSlotState::Idle,
+                direct_peer: None,
+                generation: 0,
+            })),
         }
     }
 }
 
 impl CallSlot {
-    pub(crate) fn occupied(&self) -> bool {
-        self.state.load(Acquire) != CallSlotState::Idle as u8
-    }
-
     pub(crate) fn current(&self) -> CallSlotState {
-        CallSlotState::from_u8(self.state.load(Acquire)).unwrap_or(CallSlotState::Idle)
-    }
-
-    pub(crate) fn direct_peer(&self) -> Result<Option<PublicKey>> {
-        Ok(*self
-            .direct_peer
+        self.inner
             .lock()
-            .map_err(|_| ErrorKind::Poison("call slot direct peer mutex poisoned"))?)
+            .map(|inner| inner.state)
+            .unwrap_or_else(|poisoned| poisoned.into_inner().state)
     }
 
-    /// Atomically claims the call slot from idle.
+    /// Returns a consistent snapshot of the slot's state, owning peer, and ownership generation
+    /// from one lock acquisition.
+    ///
+    /// Prefer this over separate `current()` + `direct_peer()` reads whenever both fields are
+    /// needed together: a snapshot cannot observe a peer mismatch where the state has been
+    /// released and the slot re-acquired by a different call between the two reads. The
+    /// `generation` token additionally distinguishes release/reacquire cycles that would
+    /// otherwise appear identical (same state, same peer).
+    pub(crate) fn snapshot(&self) -> Result<CallSlotSnapshot> {
+        let inner = self
+            .inner
+            .lock()
+            .map_err(|_| ErrorKind::Poison("call slot mutex poisoned"))?;
+        Ok(CallSlotSnapshot {
+            state: inner.state,
+            direct_peer: inner.direct_peer,
+            generation: inner.generation,
+        })
+    }
+
+    /// Atomically claims the call slot from idle, bumping the ownership generation.
     pub(crate) fn try_acquire(
         &self,
         state: CallSlotState,
         peer: Option<PublicKey>,
     ) -> Result<bool> {
-        debug_assert_ne!(state, CallSlotState::Idle);
-        if self
-            .state
-            .compare_exchange(CallSlotState::Idle as u8, state as u8, AcqRel, Acquire)
-            .is_ok()
-        {
-            if let Some(peer) = peer {
-                *self
-                    .direct_peer
-                    .lock()
-                    .map_err(|_| ErrorKind::Poison("call slot direct peer mutex poisoned"))? =
-                    Some(peer);
-            }
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| ErrorKind::Poison("call slot mutex poisoned"))?;
+        if inner.state == CallSlotState::Idle {
+            inner.state = state;
+            inner.direct_peer = peer;
+            // Bump the generation so callers that snapshot the slot before this acquisition
+            // cannot accidentally match a future reacquire of the same state/peer.
+            inner.generation = inner.generation.saturating_add(1);
             Ok(true)
         } else {
             Ok(false)
@@ -129,42 +150,32 @@ impl CallSlot {
     /// - the slot is already `state` for `peer`, or
     /// - `state` is [`CallSlotState::PendingIncoming`] and the slot is
     ///   [`CallSlotState::PendingOutgoing`] for the same `peer` (simultaneous dial).
+    ///
+    /// On `Acquired` the ownership generation is bumped so a stale snapshot from a prior
+    /// owner can never match this new acquisition. On `Matched` the existing generation is
+    /// preserved so the matched peer observes the same ownership token the original acquirer
+    /// would have used.
     pub(crate) fn try_acquire_or_match(
         &self,
         state: CallSlotState,
         peer: PublicKey,
     ) -> Result<CallSlotAcquireResult> {
-        debug_assert_ne!(state, CallSlotState::Idle);
-        loop {
-            let direct_peer_snapshot = *self
-                .direct_peer
-                .lock()
-                .map_err(|_| ErrorKind::Poison("call slot direct peer mutex poisoned"))?;
-            let current = self.current();
-            if Self::slot_matches_for_peer(state, current, peer, direct_peer_snapshot) {
-                return Ok(CallSlotAcquireResult::Matched);
-            }
-
-            if current == CallSlotState::Idle
-                && self
-                    .state
-                    .compare_exchange(CallSlotState::Idle as u8, state as u8, AcqRel, Acquire)
-                    .is_ok()
-            {
-                *self
-                    .direct_peer
-                    .lock()
-                    .map_err(|_| ErrorKind::Poison("call slot direct peer mutex poisoned"))? =
-                    Some(peer);
-                return Ok(CallSlotAcquireResult::Acquired);
-            }
-
-            if self.current() == CallSlotState::Idle {
-                continue;
-            }
-
-            return Ok(CallSlotAcquireResult::Failed);
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| ErrorKind::Poison("call slot mutex poisoned"))?;
+        if Self::slot_matches_for_peer(state, inner.state, peer, inner.direct_peer) {
+            return Ok(CallSlotAcquireResult::Matched);
         }
+
+        if inner.state == CallSlotState::Idle {
+            inner.state = state;
+            inner.direct_peer = Some(peer);
+            inner.generation = inner.generation.saturating_add(1);
+            return Ok(CallSlotAcquireResult::Acquired);
+        }
+
+        Ok(CallSlotAcquireResult::Failed)
     }
 
     fn slot_matches_for_peer(
@@ -185,58 +196,77 @@ impl CallSlot {
     }
 
     pub(crate) fn transition_pending_to_active_for_peer(&self, peer: PublicKey) -> Result<bool> {
-        loop {
-            let current = self.current();
-            match current {
-                CallSlotState::PendingIncoming | CallSlotState::PendingOutgoing
-                    if self.direct_peer()? == Some(peer) =>
-                {
-                    if self.try_transition(current, CallSlotState::ActiveDirect) {
-                        return Ok(true);
-                    }
-                }
-                _ => return Ok(false),
-            }
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| ErrorKind::Poison("call slot mutex poisoned"))?;
+        if matches!(
+            inner.state,
+            CallSlotState::PendingIncoming | CallSlotState::PendingOutgoing
+        ) && inner.direct_peer == Some(peer)
+        {
+            inner.state = CallSlotState::ActiveDirect;
+            Ok(true)
+        } else {
+            Ok(false)
         }
     }
 
-    pub(crate) fn try_transition(&self, from: CallSlotState, to: CallSlotState) -> bool {
-        self.state
-            .compare_exchange(from as u8, to as u8, AcqRel, Acquire)
-            .is_ok()
-    }
-
     pub(crate) fn release(&self) -> Result<()> {
-        self.state.store(CallSlotState::Idle as u8, Release);
-        *self
-            .direct_peer
+        let mut inner = self
+            .inner
             .lock()
-            .map_err(|_| ErrorKind::Poison("call slot direct peer mutex poisoned"))? = None;
+            .map_err(|_| ErrorKind::Poison("call slot mutex poisoned"))?;
+        inner.state = CallSlotState::Idle;
+        inner.direct_peer = None;
         Ok(())
     }
 
-    pub(crate) fn release_if_state(&self, expected: CallSlotState) -> Result<bool> {
-        if self.current() == expected {
-            self.release()?;
+    /// Releases the slot only if the current state, peer, and generation still match `expected`.
+    ///
+    /// Use this after observing a [`CallSlotSnapshot`] for `expected` to avoid the classic
+    /// "release a newer call's slot" race: between snapshotting and releasing, another path
+    /// may have already released and re-acquired the slot for a different call. The
+    /// generation check additionally guards against release/reacquire cycles that reuse the
+    /// same `(state, peer)` pair — a stale snapshot from the prior owner will not match the
+    /// post-reacquire slot.
+    pub(crate) fn release_if_match(&self, expected: CallSlotSnapshot) -> Result<bool> {
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| ErrorKind::Poison("call slot mutex poisoned"))?;
+        if inner.state == expected.state
+            && inner.direct_peer == expected.direct_peer
+            && inner.generation == expected.generation
+        {
+            inner.state = CallSlotState::Idle;
+            inner.direct_peer = None;
             Ok(true)
         } else {
             warn!(
-                event = "call_slot_release_skipped",
+                event = "call_slot_release_skipped_snapshot_mismatch",
                 ?expected,
-                actual = ?self.current()
+                actual.state = ?inner.state,
+                actual.direct_peer = ?inner.direct_peer,
+                actual.generation = inner.generation
             );
             Ok(false)
         }
     }
 
     pub(crate) fn release_if_pending_for_peer(&self, peer: PublicKey) -> Result<()> {
-        let current = self.current();
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| ErrorKind::Poison("call slot mutex poisoned"))?;
+        let current = inner.state;
         if matches!(
             current,
             CallSlotState::PendingIncoming | CallSlotState::PendingOutgoing
         ) {
-            if self.direct_peer()? == Some(peer) {
-                self.release()?;
+            if inner.direct_peer == Some(peer) {
+                inner.state = CallSlotState::Idle;
+                inner.direct_peer = None;
             } else {
                 warn!(
                     event = "call_slot_release_skipped_peer_mismatch",
@@ -636,6 +666,21 @@ mod call_slot_tests {
     use super::{CallSlot, CallSlotAcquireResult, CallSlotState};
     use iroh::SecretKey;
 
+    impl CallSlot {
+        fn try_transition(&self, from: CallSlotState, to: CallSlotState) -> bool {
+            let mut inner = self
+                .inner
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if inner.state == from {
+                inner.state = to;
+                true
+            } else {
+                false
+            }
+        }
+    }
+
     #[test]
     fn call_slot_acquire_and_release() {
         let slot = CallSlot::default();
@@ -646,7 +691,7 @@ mod call_slot_tests {
                 .unwrap()
         );
         assert_eq!(slot.current(), CallSlotState::PendingOutgoing);
-        assert_eq!(slot.direct_peer().unwrap(), Some(peer));
+        assert_eq!(slot.snapshot().unwrap().direct_peer, Some(peer));
         assert!(
             !slot
                 .try_acquire(CallSlotState::PendingIncoming, Some(peer))
@@ -655,7 +700,7 @@ mod call_slot_tests {
 
         slot.release().unwrap();
         assert_eq!(slot.current(), CallSlotState::Idle);
-        assert_eq!(slot.direct_peer().unwrap(), None);
+        assert_eq!(slot.snapshot().unwrap().direct_peer, None);
     }
 
     #[test]
@@ -669,7 +714,7 @@ mod call_slot_tests {
         );
         assert!(slot.try_transition(CallSlotState::PendingIncoming, CallSlotState::ActiveDirect));
         assert_eq!(slot.current(), CallSlotState::ActiveDirect);
-        assert_eq!(slot.direct_peer().unwrap(), Some(peer));
+        assert_eq!(slot.snapshot().unwrap().direct_peer, Some(peer));
     }
 
     #[test]
@@ -767,10 +812,154 @@ mod call_slot_tests {
 
     #[test]
     fn call_slot_try_acquire_or_match_never_matches_after_ownership_lost() {
-        use std::sync::{Arc, Barrier};
+        use std::sync::Arc;
+        use std::sync::Barrier;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::mpsc;
         use std::thread;
+        use std::time::Duration;
+
+        // The refactor this test guards against must keep `try_acquire_or_match` from
+        // returning `Matched` for a peer that has already released the slot, even when
+        // a competing thread is racing to release and re-acquire it for a different
+        // peer.
+        //
+        // The observer thread waits until the releaser has *committed* peer_b as
+        // the new owner — meaning the releaser's `try_acquire(peer_b)` has
+        // already returned `true` — and only then evaluates
+        // `try_acquire_or_match` for peer_a. A `Matched` here would mean the
+        // ownership transition from peer_a to peer_b was lost — the exact
+        // regression this test guards against.
+        //
+        // To make this a real concurrent race rather than a serial correctness
+        // check, the releaser and observer both start at a barrier and the
+        // releaser's start-up is jittered per iteration so the scheduler
+        // exercises different timings across the 1024 iterations. The
+        // observer's single post-signal call is the one that asserts the
+        // invariant: a `Matched` after peer_b has taken the slot is a bug.
+        const ITERATIONS: usize = 1024;
 
         let slot = Arc::new(CallSlot::default());
+        let peer_a = SecretKey::generate().public();
+        let peer_b = SecretKey::generate().public();
+
+        for iteration in 0..ITERATIONS {
+            // Reset the slot: each iteration must start from a clean state where peer_a
+            // is the only owner, otherwise we cannot attribute a `Matched` to a lost
+            // ownership transition.
+            assert_eq!(slot.current(), CallSlotState::Idle);
+            assert_eq!(slot.snapshot().unwrap().direct_peer, None);
+
+            assert!(
+                slot.try_acquire(CallSlotState::PendingOutgoing, Some(peer_a))
+                    .unwrap()
+            );
+
+            let start_barrier = Arc::new(Barrier::new(2));
+            let observer_matched = Arc::new(AtomicBool::new(false));
+            let (peer_b_tx, peer_b_rx) = mpsc::channel();
+
+            // Releaser thread: release the slot and re-acquire it for peer_b.
+            // The jitter varies the timing so different iterations exercise
+            // different interleavings with the observer's barrier release.
+            let releaser_slot = Arc::clone(&slot);
+            let releaser_barrier = Arc::clone(&start_barrier);
+            let releaser = thread::spawn(move || {
+                releaser_barrier.wait();
+                // Vary the delay so the interleaving changes between iterations.
+                // Even a tiny jitter is enough to break any fixed ordering the
+                // scheduler might otherwise settle into.
+                let jitter_nanos = (iteration as u64 * 37) % 200;
+                if jitter_nanos > 0 {
+                    thread::sleep(Duration::from_nanos(jitter_nanos));
+                }
+                releaser_slot.release().unwrap();
+                let reacquired = releaser_slot
+                    .try_acquire(CallSlotState::PendingOutgoing, Some(peer_b))
+                    .unwrap();
+                assert!(
+                    reacquired,
+                    "iteration {iteration}: releaser failed to reclaim the slot for peer_b \
+                     after peer_a released; another caller must have stolen it"
+                );
+                // Signal the observer that peer_b now owns the slot. Any
+                // subsequent `try_acquire_or_match(peer_a)` call must
+                // observe peer_b's ownership and return `Failed`.
+                peer_b_tx.send(()).unwrap();
+            });
+
+            // Observer thread: wait until peer_b has committed, then call
+            // `try_acquire_or_match` for the old owner peer_a. The result must
+            // be `Failed` because the slot is now owned by peer_b. A `Matched`
+            // here would mean the ownership transition from peer_a to peer_b
+            // was lost — the exact regression this test guards against.
+            let observer_slot = Arc::clone(&slot);
+            let observer_out = Arc::clone(&observer_matched);
+            let observer_barrier = Arc::clone(&start_barrier);
+            let observer = thread::spawn(move || {
+                observer_barrier.wait();
+                // Block until the releaser has committed peer_b as the owner.
+                // This is the synchronization that turns the test into a real
+                // check of the named invariant: peer_a's call is evaluated
+                // after peer_b has definitely taken the slot.
+                peer_b_rx.recv().unwrap();
+                let result = observer_slot
+                    .try_acquire_or_match(CallSlotState::PendingOutgoing, peer_a)
+                    .unwrap();
+                if result == CallSlotAcquireResult::Matched {
+                    observer_out.store(true, Ordering::SeqCst);
+                }
+            });
+
+            releaser.join().unwrap();
+            observer.join().unwrap();
+
+            assert!(
+                !observer_matched.load(Ordering::SeqCst),
+                "iteration {iteration}: try_acquire_or_match returned Matched for peer_a \
+                 after peer_a had already released and peer_b had re-acquired the slot"
+            );
+
+            // The slot must end up owned by peer_b at the end of the race:
+            // the releaser's reacquire succeeded and the observer's
+            // `try_acquire_or_match` did not change ownership.
+            assert_eq!(slot.current(), CallSlotState::PendingOutgoing);
+            assert_eq!(slot.snapshot().unwrap().direct_peer, Some(peer_b));
+
+            // Clean up so the next iteration starts from a known idle state.
+            slot.release().unwrap();
+        }
+    }
+
+    #[test]
+    fn call_slot_snapshot_captures_state_and_peer_atomically() {
+        use super::CallSlotSnapshot;
+        let slot = CallSlot::default();
+        let peer = SecretKey::generate().public();
+
+        let idle = slot.snapshot().unwrap();
+        assert_eq!(idle.state, CallSlotState::Idle);
+        assert_eq!(idle.direct_peer, None);
+
+        assert!(
+            slot.try_acquire(CallSlotState::PendingOutgoing, Some(peer))
+                .unwrap()
+        );
+        let acquired = slot.snapshot().unwrap();
+        assert_eq!(
+            acquired,
+            CallSlotSnapshot {
+                state: CallSlotState::PendingOutgoing,
+                direct_peer: Some(peer),
+                generation: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn call_slot_release_if_match_releases_only_matching_snapshot() {
+        use super::CallSlotSnapshot;
+        let slot = CallSlot::default();
         let peer_a = SecretKey::generate().public();
         let peer_b = SecretKey::generate().public();
 
@@ -778,39 +967,327 @@ mod call_slot_tests {
             slot.try_acquire(CallSlotState::PendingOutgoing, Some(peer_a))
                 .unwrap()
         );
+        let snapshot = slot.snapshot().unwrap();
+        assert_eq!(snapshot.state, CallSlotState::PendingOutgoing);
+        assert_eq!(snapshot.direct_peer, Some(peer_a));
 
-        let start = Arc::new(Barrier::new(2));
-        let done = Arc::new(Barrier::new(2));
+        assert!(slot.release_if_match(snapshot).unwrap());
+        assert_eq!(slot.current(), CallSlotState::Idle);
+
+        assert!(
+            slot.try_acquire(CallSlotState::ActiveDirect, Some(peer_b))
+                .unwrap()
+        );
+        let stale = CallSlotSnapshot {
+            state: CallSlotState::PendingOutgoing,
+            direct_peer: Some(peer_a),
+            generation: 1,
+        };
+        assert!(!slot.release_if_match(stale).unwrap());
+        assert_eq!(slot.current(), CallSlotState::ActiveDirect);
+        assert_eq!(slot.snapshot().unwrap().direct_peer, Some(peer_b));
+    }
+
+    #[test]
+    fn call_slot_release_if_match_never_releases_newer_call() {
+        use std::sync::Arc;
+        use std::sync::mpsc;
+        use std::thread;
+
+        let slot = Arc::new(CallSlot::default());
+        let peer_a = SecretKey::generate().public();
+        let peer_b = SecretKey::generate().public();
+
+        assert!(
+            slot.try_acquire(CallSlotState::ActiveDirect, Some(peer_a))
+                .unwrap()
+        );
+        let failing_snapshot = slot.snapshot().unwrap();
+
+        let (ready, wait) = mpsc::channel();
         let releaser = {
             let slot = Arc::clone(&slot);
-            let start = Arc::clone(&start);
-            let done = Arc::clone(&done);
             thread::spawn(move || {
-                for _ in 0..5_000 {
-                    start.wait();
-                    slot.release().unwrap();
-                    assert!(
-                        slot.try_acquire(CallSlotState::PendingOutgoing, Some(peer_b))
-                            .unwrap()
-                    );
-                    done.wait();
-                }
+                slot.release().unwrap();
+                assert!(
+                    slot.try_acquire(CallSlotState::ActiveDirect, Some(peer_b))
+                        .unwrap()
+                );
+                ready.send(()).unwrap();
             })
         };
+        wait.recv().unwrap();
 
-        for _ in 0..5_000 {
-            start.wait();
-            let result = slot
-                .try_acquire_or_match(CallSlotState::PendingOutgoing, peer_a)
-                .unwrap();
-            assert_ne!(
-                result,
-                CallSlotAcquireResult::Matched,
-                "must not match for a peer that lost ownership mid-call"
-            );
-            done.wait();
-        }
-
+        assert!(!slot.release_if_match(failing_snapshot).unwrap());
+        assert_eq!(slot.current(), CallSlotState::ActiveDirect);
+        assert_eq!(slot.snapshot().unwrap().direct_peer, Some(peer_b));
         releaser.join().unwrap();
+    }
+
+    /// Regression test for the direct-call teardown race.
+    ///
+    /// `call_handshake` now captures an `ActiveDirect` snapshot of the slot *before* the
+    /// long-running `call()` and uses that fixed expectation at teardown. This test
+    /// reproduces the same shape: a stale snapshot is taken when peer_a owns the slot,
+    /// the slot is then released and re-acquired by peer_b, and the teardown path must
+    /// observe the mismatch and skip the release. With a freshly-read snapshot, peer_b's
+    /// slot would be released incorrectly.
+    #[test]
+    fn call_slot_stale_teardown_does_not_release_newer_direct_call() {
+        use std::sync::Arc;
+        use std::sync::mpsc;
+        use std::thread;
+
+        let slot = Arc::new(CallSlot::default());
+        let peer_a = SecretKey::generate().public();
+        let peer_b = SecretKey::generate().public();
+
+        // Simulate the post-handshake state: peer_a is in an active direct call.
+        assert!(
+            slot.try_acquire(CallSlotState::ActiveDirect, Some(peer_a))
+                .unwrap()
+        );
+
+        // Snapshot the expected owner *before* the long-running call path, mirroring
+        // the fixed expectation now captured in `call_handshake` immediately after
+        // `transition_pending_to_active_for_peer` succeeds.
+        let expected_active = slot.snapshot().unwrap();
+        assert_eq!(expected_active.state, CallSlotState::ActiveDirect);
+        assert_eq!(expected_active.direct_peer, Some(peer_a));
+
+        // While the call is running, another path releases the slot and re-acquires
+        // it for a different call. This must NOT happen in the real call path because
+        // a direct call holds the slot exclusively, but the regression we are guarding
+        // against is exactly the case where it could happen and a stale teardown would
+        // clobber the new owner.
+        let (ready, wait) = mpsc::channel();
+        let releaser = {
+            let slot = Arc::clone(&slot);
+            thread::spawn(move || {
+                slot.release().unwrap();
+                assert!(
+                    slot.try_acquire(CallSlotState::ActiveDirect, Some(peer_b))
+                        .unwrap()
+                );
+                ready.send(()).unwrap();
+            })
+        };
+        wait.recv().unwrap();
+
+        // The fixed expectation from before must NOT match the new owner, so the
+        // teardown's `release_if_match` returns false and the slot is preserved.
+        assert!(!slot.release_if_match(expected_active).unwrap());
+        assert_eq!(slot.current(), CallSlotState::ActiveDirect);
+        assert_eq!(slot.snapshot().unwrap().direct_peer, Some(peer_b));
+        releaser.join().unwrap();
+    }
+
+    /// Regression test for the room teardown race.
+    ///
+    /// `room_controller` now captures a fixed `RoomCall` expectation at startup (the slot
+    /// is acquired as `RoomCall` with no direct peer in `join_room`) and uses that
+    /// expectation at teardown. This test reproduces the same shape: a stale fresh
+    /// snapshot at teardown time would observe a different (newer) call's slot and
+    /// release it. With the fixed `RoomCall` expectation, the release is skipped when
+    /// the slot is no longer the room's.
+    #[test]
+    fn call_slot_stale_teardown_does_not_release_newer_room_call() {
+        use super::CallSlotSnapshot;
+        use std::sync::Arc;
+        use std::sync::mpsc;
+        use std::thread;
+
+        let slot = Arc::new(CallSlot::default());
+        let peer = SecretKey::generate().public();
+
+        // Simulate the post-`join_room` state: the room owns the slot as `RoomCall`.
+        assert!(slot.try_acquire(CallSlotState::RoomCall, None).unwrap());
+
+        // Capture the fixed expectation up front, mirroring the snapshot now built in
+        // `room_controller` before the long-running loop.
+        let expected_room = CallSlotSnapshot {
+            state: CallSlotState::RoomCall,
+            direct_peer: None,
+            generation: 1,
+        };
+
+        // While the room controller is running, another path (e.g. an audio test or
+        // a newer direct call) releases the slot and acquires a new state. The
+        // teardown must observe that the slot no longer matches `RoomCall`/`None`
+        // and skip the release.
+        let (ready, wait) = mpsc::channel();
+        let releaser = {
+            let slot = Arc::clone(&slot);
+            thread::spawn(move || {
+                slot.release().unwrap();
+                assert!(
+                    slot.try_acquire(CallSlotState::ActiveDirect, Some(peer))
+                        .unwrap()
+                );
+                ready.send(()).unwrap();
+            })
+        };
+        wait.recv().unwrap();
+
+        assert!(!slot.release_if_match(expected_room).unwrap());
+        assert_eq!(slot.current(), CallSlotState::ActiveDirect);
+        assert_eq!(slot.snapshot().unwrap().direct_peer, Some(peer));
+        releaser.join().unwrap();
+    }
+
+    /// Regression test for the slot-generation token.
+    ///
+    /// Two acquisitions of the slot by the *same* peer in the *same* state would, without
+    /// a generation token, produce indistinguishable snapshots. A teardown holding the
+    /// earlier snapshot could then release a slot it no longer owns. This test reproduces
+    /// the failure mode the generation token guards against: a fresh acquisition bumps the
+    /// generation, so the stale snapshot from the prior owner does not match and the slot
+    /// is preserved for the newer owner.
+    #[test]
+    fn call_slot_generation_token_distinguishes_same_peer_reacquire() {
+        use super::CallSlotSnapshot;
+        let slot = CallSlot::default();
+        let peer = SecretKey::generate().public();
+
+        // First acquisition for peer in `ActiveDirect`.
+        assert!(
+            slot.try_acquire(CallSlotState::ActiveDirect, Some(peer))
+                .unwrap()
+        );
+        let first = slot.snapshot().unwrap();
+        assert_eq!(first.state, CallSlotState::ActiveDirect);
+        assert_eq!(first.direct_peer, Some(peer));
+        let first_generation = first.generation;
+        assert!(first_generation > 0);
+
+        // Simulate the teardown path: release the slot, then a *newer* call from the same
+        // peer acquires it again in the same state. The newer acquisition MUST bump the
+        // generation so a stale snapshot from the first call cannot release the new one.
+        slot.release().unwrap();
+        assert_eq!(slot.snapshot().unwrap().state, CallSlotState::Idle);
+
+        assert!(
+            slot.try_acquire(CallSlotState::ActiveDirect, Some(peer))
+                .unwrap()
+        );
+        let second = slot.snapshot().unwrap();
+        assert_eq!(
+            second,
+            CallSlotSnapshot {
+                state: CallSlotState::ActiveDirect,
+                direct_peer: Some(peer),
+                generation: first_generation + 1,
+            }
+        );
+        assert_ne!(first, second);
+
+        // The stale teardown snapshot from the first call MUST NOT release the slot now
+        // owned by the second call.
+        assert!(!slot.release_if_match(first).unwrap());
+        assert_eq!(slot.current(), CallSlotState::ActiveDirect);
+        assert_eq!(slot.snapshot().unwrap().direct_peer, Some(peer));
+        assert_eq!(slot.snapshot().unwrap().generation, first_generation + 1);
+
+        // The matching snapshot from the second call MUST still release correctly.
+        assert!(slot.release_if_match(second).unwrap());
+        assert_eq!(slot.current(), CallSlotState::Idle);
+    }
+
+    /// Regression test for the slot-generation token across `try_acquire_or_match`.
+    ///
+    /// A matched simultaneous-dial path must preserve the existing generation so both peers
+    /// observe the same ownership token. A later reacquire of the slot (e.g. by the same
+    /// outgoing call after a release) must bump the generation so a stale matched
+    /// snapshot cannot release the new acquisition.
+    #[test]
+    fn call_slot_generation_token_distinguishes_matched_then_reacquired_direct() {
+        let slot = CallSlot::default();
+        let peer = SecretKey::generate().public();
+
+        // Outgoing call acquires the slot first.
+        assert_eq!(
+            slot.try_acquire_or_match(CallSlotState::PendingOutgoing, peer)
+                .unwrap(),
+            CallSlotAcquireResult::Acquired
+        );
+        let outgoing_snapshot = slot.snapshot().unwrap();
+        let outgoing_generation = outgoing_snapshot.generation;
+        assert!(outgoing_generation > 0);
+
+        // Incoming call for the same peer matches (simultaneous dial); the generation MUST
+        // be preserved so both sides observe the same ownership token.
+        assert_eq!(
+            slot.try_acquire_or_match(CallSlotState::PendingIncoming, peer)
+                .unwrap(),
+            CallSlotAcquireResult::Matched
+        );
+        let matched = slot.snapshot().unwrap();
+        assert_eq!(matched.generation, outgoing_generation);
+        assert_eq!(matched.state, CallSlotState::PendingOutgoing);
+        assert_eq!(matched.direct_peer, Some(peer));
+
+        // Release the slot, then re-acquire via `try_acquire_or_match` for the same peer.
+        // The generation MUST bump so a stale matched snapshot from the prior owner does
+        // not match the new acquisition.
+        slot.release().unwrap();
+        assert_eq!(
+            slot.try_acquire_or_match(CallSlotState::PendingOutgoing, peer)
+                .unwrap(),
+            CallSlotAcquireResult::Acquired
+        );
+        let reacquired = slot.snapshot().unwrap();
+        assert_eq!(reacquired.generation, outgoing_generation + 1);
+        assert_ne!(matched, reacquired);
+
+        assert!(!slot.release_if_match(matched).unwrap());
+        assert_eq!(slot.current(), CallSlotState::PendingOutgoing);
+        assert_eq!(slot.snapshot().unwrap().direct_peer, Some(peer));
+    }
+
+    /// Regression test for the slot-generation token on `RoomCall`.
+    ///
+    /// Two consecutive room acquisitions would, without a generation token, produce
+    /// indistinguishable `(RoomCall, None)` snapshots. A teardown of the older room
+    /// holding the earlier snapshot could then release a slot now owned by the newer
+    /// room. This test reproduces the failure mode the generation token guards against:
+    /// after a release + reacquire, the stale snapshot must not match the new owner.
+    #[test]
+    fn call_slot_generation_token_distinguishes_room_reacquire() {
+        use super::CallSlotSnapshot;
+        let slot = CallSlot::default();
+
+        // First room acquires the slot.
+        assert!(slot.try_acquire(CallSlotState::RoomCall, None).unwrap());
+        let first_room = slot.snapshot().unwrap();
+        assert_eq!(first_room.state, CallSlotState::RoomCall);
+        assert_eq!(first_room.direct_peer, None);
+        let first_generation = first_room.generation;
+        assert!(first_generation > 0);
+
+        // Simulate the older room's teardown: it releases the slot, then a newer room
+        // acquires the same state with the same (None) peer. The newer acquisition MUST
+        // bump the generation.
+        slot.release().unwrap();
+        assert!(slot.try_acquire(CallSlotState::RoomCall, None).unwrap());
+        let second_room = slot.snapshot().unwrap();
+        assert_eq!(
+            second_room,
+            CallSlotSnapshot {
+                state: CallSlotState::RoomCall,
+                direct_peer: None,
+                generation: first_generation + 1,
+            }
+        );
+        assert_ne!(first_room, second_room);
+
+        // The older room's teardown snapshot MUST NOT release the slot now owned by the
+        // newer room.
+        assert!(!slot.release_if_match(first_room).unwrap());
+        assert_eq!(slot.current(), CallSlotState::RoomCall);
+        assert_eq!(slot.snapshot().unwrap().generation, first_generation + 1);
+
+        // The newer room's teardown snapshot MUST still release correctly.
+        assert!(slot.release_if_match(second_room).unwrap());
+        assert_eq!(slot.current(), CallSlotState::Idle);
     }
 }
