@@ -389,18 +389,14 @@ class _NetworkConfigRecorder {
   _NetworkConfigRecorder({
     required this.listenPort,
     required this.bindAddresses,
-    this.relays,
-    this.dnsEndpoint,
-    this.dnsOriginDomain,
-    this.pkarrRelay,
   });
 
   final int listenPort;
   final List<String> bindAddresses;
-  final List<String>? relays;
-  final String? dnsEndpoint;
-  final String? dnsOriginDomain;
-  final String? pkarrRelay;
+  final List<String>? relays = null;
+  final String? dnsEndpoint = null;
+  final String? dnsOriginDomain = null;
+  final String? pkarrRelay = null;
 
   /// Set to a non-null value to make the next `update` call throw.
   /// Mirrors the rust binding's "validate then commit" semantics:
