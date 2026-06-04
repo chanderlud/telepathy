@@ -44,7 +44,6 @@ where
 {
     telepathy: MockTelepathyHandle<H, I, O>,
     is_active: Arc<AtomicBool>,
-    is_relayed: Arc<AtomicBool>,
 }
 
 #[derive(Debug, Clone)]
@@ -933,7 +932,6 @@ where
     ClientHarness {
         telepathy: TelepathyHandle::from(telepathy),
         is_active,
-        is_relayed,
     }
 }
 

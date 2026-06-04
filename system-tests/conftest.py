@@ -156,6 +156,15 @@ def _serialize_cli_pair(cli_pair: dict[str, CliProcess]) -> dict[str, Any]:
     }
 
 
+def _serialize_cli_fixture(value: Any) -> dict[str, Any] | None:
+    if isinstance(value, dict):
+        return _serialize_cli_pair(value)
+    actors = getattr(value, "actors", None)
+    if isinstance(actors, dict):
+        return _serialize_cli_pair(actors)
+    return None
+
+
 def _serialize_profile(profile: Any) -> Any:
     if hasattr(profile, "__dict__"):
         return dict(vars(profile))
@@ -200,14 +209,15 @@ def record_test_artifacts(request: pytest.FixtureRequest) -> Any:
     funcargs = getattr(request.node, "funcargs", {})
     profile = funcargs.get("profile")
     topology = funcargs.get("topology")
-    cli_pair = funcargs.get("cli_pair")
 
     if profile is not None:
         payload["profile"] = _serialize_profile(profile)
     if topology is not None:
         payload["topology"] = _serialize_topology(topology)
-    if cli_pair is not None:
-        payload["cli_pair"] = _serialize_cli_pair(cli_pair)
+    for fixture_name in ("cli_pair", "room_cli_three", "room_cli_twenty"):
+        serialized = _serialize_cli_fixture(funcargs.get(fixture_name))
+        if serialized is not None:
+            payload[fixture_name] = serialized
 
     payload_path = test_dir / "debug.json"
     payload_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
