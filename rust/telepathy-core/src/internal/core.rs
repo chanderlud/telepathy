@@ -266,6 +266,8 @@ where
                     if peer_id == public_identity {
                         // prevents dialing yourself
                         debug!(event = "dial_ignored_self", peer.id = %peer_id);
+                    } else if self.session_states.read().await.get(&peer_id).is_some() {
+                        warn!(event = "ignored_redundant_outgoing", peer.id = %peer_id);
                     } else {
                         debug!(event = "dial_initial", peer.id = %peer_id);
                         let self_clone = self.clone();
