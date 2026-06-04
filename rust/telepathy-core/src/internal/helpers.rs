@@ -204,11 +204,11 @@ where
         if let Some(ProtocolMessage::ScreenshareHeader { encoder_name }) = message.header {
             // alert the frontend
             self.callbacks.screenshare_started(dart_stop, false).await;
+            let stream = message.connection.accept_uni().await?;
             // start playing back the screenshare
             screenshare::playback(
-                message.connection,
+                stream,
                 stop,
-                state.download_bandwidth.clone(),
                 encoder_name,
                 self.core_state.screenshare_config.width.load(Relaxed),
                 self.core_state.screenshare_config.height.load(Relaxed),
@@ -242,14 +242,9 @@ where
             if result.is_ok() {
                 // alert the frontend & provide the stop object
                 self.callbacks.screenshare_started(dart_stop, true).await;
+                let stream = message.connection.open_uni().await?;
                 // start recording the screenshare
-                screenshare::record(
-                    message.connection,
-                    stop,
-                    state.upload_bandwidth.clone(),
-                    config,
-                )
-                .await?;
+                screenshare::record(stream, stop, config).await?;
             } else {
                 warn!("giving up on screenshare start, state closed");
             }
@@ -326,7 +321,7 @@ where
         // Create the input channel
         let (sender, receiver) = kanal::unbounded();
         // Get the shared volume multiplier
-        let output_volume = self.core_state.output_volume_for_peer(peer);
+        let output_volume = self.core_state.output_volume_for_peer(peer)?;
         // Create the audio output using the builder
         let handle = AudioOutputBuilder::new()
             .source(KanalSource::new(receiver))

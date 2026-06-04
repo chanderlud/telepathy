@@ -1,9 +1,9 @@
 #[cfg(target_family = "wasm")]
 use flutter_rust_bridge::for_generated::futures::channel::oneshot::Canceled;
 use iroh::KeyParsingError;
-use iroh::endpoint::{BindError, ConnectionError};
 #[cfg(not(target_family = "wasm"))]
 use iroh::endpoint::InvalidSocketAddr;
+use iroh::endpoint::{BindError, ConnectionError};
 use std::fmt::{Display, Formatter};
 use std::net::AddrParseError;
 use telepathy_audio::devices::DeviceError;

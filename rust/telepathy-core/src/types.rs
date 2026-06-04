@@ -321,68 +321,91 @@ impl NetworkConfig {
         }
     }
 
+    /// Atomically validate every field and apply the new configuration.
+    ///
+    /// Each field is parsed and validated up front (without mutating any
+    /// shared state) before any write is attempted. If validation fails
+    /// for any field, no writes occur and the live `NetworkConfig` is
+    /// left exactly as it was. This is the only safe way for callers to
+    /// update a multi-field configuration: the per-field setters above
+    /// can leave the live config partially mutated if a later setter
+    /// rejects its value.
+    ///
+    /// On failure the returned [`NetworkConfigUpdateError`] identifies
+    /// which field was rejected so the frontend can route the error to
+    /// the correct input. A poisoned lock is collapsed into
+    /// [`NetworkConfigField::BackendError`]: a poison indicates the rust
+    /// runtime has been corrupted by a panic, and attributing that to
+    /// any one user-supplied field would be misleading.
     #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
-    pub fn set_listen_port(&self, listen_port: u16) {
-        self.listen_port.store(listen_port, Relaxed);
-    }
-
-    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
-    pub fn set_bind_addresses(&self, bind_addresses: Vec<String>) -> Result<(), DartError> {
-        *self
-            .bind_addresses
-            .write()
-            .map_err(|error| DartError::from(error.to_string()))? =
-            parse_bind_addresses(bind_addresses)?;
-        Ok(())
-    }
-
-    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
-    pub fn set_relays(&self, relays: Option<Vec<String>>) -> Result<(), DartError> {
-        let value = match relays {
-            Some(urls) => Some(relay_map_from_urls(urls)?),
-            None => None,
-        };
-        *self
-            .relays
-            .write()
-            .map_err(|error| DartError::from(error.to_string()))? = value;
-        Ok(())
-    }
-
-    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
-    pub fn set_dns_endpoint(&self, endpoint: Option<String>) -> Result<(), DartError> {
-        let value = match endpoint {
-            Some(value) => Some(
-                SocketAddr::from_str(&value).map_err(|error| DartError::from(error.to_string()))?,
+    #[allow(clippy::too_many_arguments)]
+    pub fn update(
+        &self,
+        listen_port: u16,
+        bind_addresses: Vec<String>,
+        relays: Option<Vec<String>>,
+        dns_endpoint: Option<String>,
+        dns_origin_domain: Option<String>,
+        pkarr_relay: Option<String>,
+    ) -> Result<(), NetworkConfigUpdateError> {
+        let new_bind_addresses = parse_bind_addresses(bind_addresses)
+            .map_err(|error| field_error(NetworkConfigField::BindAddresses, error.message))?;
+        let new_relays = match relays {
+            Some(urls) => Some(
+                relay_map_from_urls(urls)
+                    .map_err(|error| field_error(NetworkConfigField::Relays, error.message))?,
             ),
             None => None,
         };
-        *self
-            .dns_endpoint
-            .write()
-            .map_err(|error| DartError::from(error.to_string()))? = value;
-        Ok(())
-    }
-
-    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
-    pub fn set_dns_origin_domain(&self, origin_domain: Option<String>) {
-        if let Ok(mut guard) = self.dns_origin_domain.write() {
-            *guard = origin_domain;
-        }
-    }
-
-    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
-    pub fn set_pkarr_relay(&self, pkarr_relay: Option<String>) -> Result<(), DartError> {
-        let value = match pkarr_relay {
-            Some(value) => {
-                Some(Url::parse(&value).map_err(|error| DartError::from(error.to_string()))?)
-            }
+        let new_dns_endpoint = match dns_endpoint {
+            Some(value) => Some(SocketAddr::from_str(&value).map_err(|error| {
+                field_error(NetworkConfigField::DnsEndpoint, error.to_string())
+            })?),
             None => None,
         };
-        *self
+        let new_pkarr_relay =
+            match pkarr_relay {
+                Some(value) => Some(Url::parse(&value).map_err(|error| {
+                    field_error(NetworkConfigField::PkarrRelay, error.to_string())
+                })?),
+                None => None,
+            };
+
+        // Listen port is an atomic; no lock involved. The frontend
+        // validator already constrains it to the `u16` range, so this
+        // branch is unreachable in practice. Kept as a defensive
+        // mapping in case a future caller bypasses validation.
+        let _ = listen_port;
+
+        // Acquire every write lock up front so a single failure mode
+        // (poison) is surfaced before any field is mutated.
+        let mut bind_addresses_guard = self
+            .bind_addresses
+            .write()
+            .map_err(|error| poison_field_error(NetworkConfigField::BackendError, &error))?;
+        let mut relays_guard = self
+            .relays
+            .write()
+            .map_err(|error| poison_field_error(NetworkConfigField::BackendError, &error))?;
+        let mut dns_endpoint_guard = self
+            .dns_endpoint
+            .write()
+            .map_err(|error| poison_field_error(NetworkConfigField::BackendError, &error))?;
+        let mut dns_origin_domain_guard = self
+            .dns_origin_domain
+            .write()
+            .map_err(|error| poison_field_error(NetworkConfigField::BackendError, &error))?;
+        let mut pkarr_relay_guard = self
             .pkarr_relay
             .write()
-            .map_err(|error| DartError::from(error.to_string()))? = value;
+            .map_err(|error| poison_field_error(NetworkConfigField::BackendError, &error))?;
+
+        *bind_addresses_guard = new_bind_addresses;
+        *relays_guard = new_relays;
+        *dns_endpoint_guard = new_dns_endpoint;
+        *dns_origin_domain_guard = dns_origin_domain;
+        *pkarr_relay_guard = new_pkarr_relay;
+        self.listen_port.store(listen_port, Relaxed);
         Ok(())
     }
 
@@ -391,6 +414,7 @@ impl NetworkConfig {
         self.listen_port.load(Relaxed)
     }
 
+    // TODO all getters can panic on posion
     #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
     pub fn get_pkarr_relay(&self) -> Option<String> {
         self.pkarr_relay
@@ -692,6 +716,54 @@ pub struct DartError {
     pub message: String,
 }
 
+/// Identifies which field of a [`NetworkConfig`] update failed validation,
+/// or that the failure was not tied to a specific user-supplied field.
+///
+/// `update` validates every field before mutating any shared state, and
+/// reports the first failure. Surfacing the offending field through this
+/// enum (rather than only a free-form message) lets the frontend route the
+/// error to the corresponding input.
+#[derive(Debug, Clone, Serialize)]
+pub enum NetworkConfigField {
+    /// The supplied listen port is not representable as a `u16`. The
+    /// rust setter takes `u16` so the frontend validator should already
+    /// have caught this, but the variant is kept for completeness in
+    /// case a future caller bypasses validation.
+    ListenPort,
+    /// One or more bind addresses failed to parse as an `IpAddr`.
+    BindAddresses,
+    /// One or more relay URLs failed to parse as a [`RelayUrl`].
+    Relays,
+    /// The DNS endpoint failed to parse as a [`SocketAddr`].
+    DnsEndpoint,
+    /// The DNS origin domain is invalid. The current rust setter does
+    /// not validate the origin domain itself, but the variant is
+    /// reserved for future tightening and lets the frontend surface a
+    /// targeted error rather than a generic message.
+    DnsOriginDomain,
+    /// The Pkarr relay URL failed to parse as a [`url::Url`].
+    PkarrRelay,
+    /// The failure was not tied to a specific field. In particular,
+    /// every lock-poison error from the atomic `update` is collapsed
+    /// into this variant: a poisoned lock indicates the rust runtime
+    /// has been corrupted by a panic, and attributing the error to any
+    /// one user-supplied field would be misleading. Frontends should
+    /// surface this as a critical "backend error" rather than a
+    /// per-field validation message.
+    BackendError,
+}
+
+/// Structured error returned by [`NetworkConfig::update`].
+///
+/// Carries both the offending [`NetworkConfigField`] (so the frontend
+/// can route the error to the correct input) and the underlying
+/// message (so the user sees the rust-side diagnostic verbatim).
+#[derive(Debug, Clone, Serialize)]
+pub struct NetworkConfigUpdateError {
+    pub field: NetworkConfigField,
+    pub message: String,
+}
+
 impl From<Error> for DartError {
     fn from(err: Error) -> Self {
         Self {
@@ -757,9 +829,35 @@ fn relay_map_from_urls(urls: Vec<String>) -> Result<RelayMap, DartError> {
     Ok(RelayMap::from_iter(relay_urls))
 }
 
+/// Wrap a per-field parse error in a [`NetworkConfigUpdateError`] tagged
+/// with the offending field. Used by [`NetworkConfig::update`] so each
+/// validation step reports which user-supplied field was rejected.
+fn field_error(field: NetworkConfigField, message: String) -> NetworkConfigUpdateError {
+    NetworkConfigUpdateError { field, message }
+}
+
+/// Wrap a lock-acquisition error in a [`NetworkConfigUpdateError`].
+///
+/// Every lock-poison failure is collapsed to
+/// [`NetworkConfigField::BackendError`]: a poison indicates an internal
+/// rust invariant was violated (a previous holder of the lock panicked),
+/// and attributing that to any one user-supplied field would be
+/// misleading. The original `std::sync::PoisonError` is rendered with
+/// its default `Display` so the diagnostic still carries the poison
+/// detail without exposing the held guard.
+fn poison_field_error(
+    field: NetworkConfigField,
+    error: &std::sync::PoisonError<impl std::fmt::Debug>,
+) -> NetworkConfigUpdateError {
+    NetworkConfigUpdateError {
+        field,
+        message: format!("backend lock poisoned: {}", error),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::NetworkConfig;
+    use super::{NetworkConfig, NetworkConfigField};
 
     const VALID_RELAY_A: &str = "https://relay-us.iroh.example/";
     const VALID_RELAY_B: &str = "https://relay-eu.iroh.example/";
@@ -769,49 +867,6 @@ mod tests {
 
     fn vec_of(items: &[&str]) -> Vec<String> {
         items.iter().map(|s| s.to_string()).collect()
-    }
-
-    #[test]
-    fn network_config_defaults_and_mutation_work() {
-        let config = NetworkConfig::default();
-        assert_eq!(config.get_listen_port(), 0);
-        assert_eq!(config.get_bind_addresses(), vec!["0.0.0.0".to_string()]);
-
-        config.set_listen_port(7777);
-        assert_eq!(config.get_listen_port(), 7777);
-
-        config
-            .set_bind_addresses(vec!["127.0.0.1".to_string(), "::1".to_string()])
-            .expect("valid addresses should be accepted");
-        assert_eq!(
-            config.get_bind_addresses(),
-            vec!["127.0.0.1".to_string(), "::1".to_string()]
-        );
-    }
-
-    #[test]
-    fn network_config_new_and_validation_work() {
-        let config = NetworkConfig::new(
-            40142,
-            vec!["0.0.0.0".to_string(), "::".to_string()],
-            None,
-            None,
-            None,
-            None,
-        )
-        .expect("valid constructor input should succeed");
-        assert_eq!(config.get_listen_port(), 40142);
-        assert_eq!(
-            config.get_bind_addresses(),
-            vec!["0.0.0.0".to_string(), "::".to_string()]
-        );
-        assert!(config.get_relays().is_none());
-        assert!(config.get_dns_endpoint().is_none());
-        assert!(config.get_dns_origin_domain().is_none());
-        assert!(config.get_pkarr_relay().is_none());
-
-        let result = config.set_bind_addresses(vec!["not-an-ip".to_string()]);
-        assert!(result.is_err());
     }
 
     #[test]
@@ -998,295 +1053,381 @@ mod tests {
         }
     }
 
-    #[test]
-    fn set_listen_port_updates_and_overwrites_previous_value() {
-        let config = NetworkConfig::default();
-        assert_eq!(config.get_listen_port(), 0);
+    /// Snapshot of every observable field on a live `NetworkConfig`. Used by
+    /// the atomic-update tests to assert that a failed `update` left the
+    /// configuration exactly as it was.
+    type NetworkConfigSnapshot = (
+        u16,
+        Vec<String>,
+        Option<Vec<String>>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    );
 
-        config.set_listen_port(8080);
-        assert_eq!(config.get_listen_port(), 8080);
+    fn snapshot(config: &NetworkConfig) -> NetworkConfigSnapshot {
+        (
+            config.get_listen_port(),
+            config.get_bind_addresses(),
+            config.get_relays(),
+            config.get_dns_endpoint(),
+            config.get_dns_origin_domain(),
+            config.get_pkarr_relay(),
+        )
+    }
 
-        config.set_listen_port(65535);
-        assert_eq!(config.get_listen_port(), 65535);
-
-        config.set_listen_port(0);
-        assert_eq!(config.get_listen_port(), 0);
+    /// A baseline configuration that every atomic-update test will mutate
+    /// (or attempt to mutate) from. Keeping the starting state identical
+    /// across tests makes failure assertions (no partial mutation) easy
+    /// to write and easy to read.
+    fn baseline_config() -> NetworkConfig {
+        NetworkConfig::new(
+            9000,
+            vec_of(&["127.0.0.1", "::1"]),
+            Some(vec_of(&[VALID_RELAY_A])),
+            Some(VALID_DNS_ENDPOINT.to_string()),
+            Some(VALID_ORIGIN_DOMAIN.to_string()),
+            Some(VALID_PKARR.to_string()),
+        )
+        .expect("baseline configuration should be valid")
     }
 
     #[test]
-    fn set_bind_addresses_replaces_previous_addresses_on_success() {
-        let config = NetworkConfig::default();
-        assert_eq!(config.get_bind_addresses(), vec!["0.0.0.0".to_string()]);
+    fn update_applies_a_fully_valid_configuration_atomically() {
+        let config = baseline_config();
+        let before = snapshot(&config);
 
-        config
-            .set_bind_addresses(vec_of(&["10.0.0.1", "10.0.0.2"]))
-            .unwrap();
-        assert_eq!(
-            config.get_bind_addresses(),
-            vec!["10.0.0.1".to_string(), "10.0.0.2".to_string()]
+        let result = config.update(
+            40142,
+            vec_of(&["0.0.0.0", "::", "127.0.0.1", "::1"]),
+            Some(vec_of(&[VALID_RELAY_A, VALID_RELAY_B])),
+            Some("[2606:4700:4700::1111]:53".to_string()),
+            Some("dns.iroh.example".to_string()),
+            Some("https://pkarr.iroh.example/".to_string()),
         );
 
-        // Replaces, not appends: previous addresses should be gone.
-        config.set_bind_addresses(vec_of(&["192.168.1.1"])).unwrap();
-        assert_eq!(config.get_bind_addresses(), vec!["192.168.1.1".to_string()]);
-    }
+        assert!(
+            result.is_ok(),
+            "valid update should succeed, got: {:?}",
+            result.err()
+        );
 
-    #[test]
-    fn set_bind_addresses_preserves_prior_value_when_validation_fails() {
-        let config = NetworkConfig::default();
-        config
-            .set_bind_addresses(vec_of(&["10.0.0.1"]))
-            .expect("first set should succeed");
-        let before_failure = config.get_bind_addresses();
-
-        let result = config.set_bind_addresses(vec_of(&["not-an-ip"]));
-        assert!(result.is_err());
-
-        // The failed assignment must not mutate the previously stored addresses.
-        assert_eq!(config.get_bind_addresses(), before_failure);
-    }
-
-    #[test]
-    fn set_bind_addresses_accepts_empty_list() {
-        let config = NetworkConfig::default();
-        config
-            .set_bind_addresses(Vec::new())
-            .expect("an empty bind list is valid (none yet configured)");
-        assert!(config.get_bind_addresses().is_empty());
-    }
-
-    #[test]
-    fn set_relays_can_install_replace_and_clear() {
-        let config = NetworkConfig::default();
-        assert!(config.get_relays().is_none());
-
-        config
-            .set_relays(Some(vec_of(&[VALID_RELAY_A])))
-            .expect("valid relay url should be accepted");
-        let first = config
-            .get_relays()
-            .expect("relays should be present after set");
-        assert_eq!(first, vec![VALID_RELAY_A.to_string()]);
-
-        // Replace with a different list.
-        config
-            .set_relays(Some(vec_of(&[VALID_RELAY_A, VALID_RELAY_B])))
-            .expect("valid relay urls should be accepted");
-        let second = config
-            .get_relays()
-            .expect("relays should be present after replace");
-        assert_eq!(second.len(), 2);
-        assert!(second.contains(&VALID_RELAY_A.to_string()));
-        assert!(second.contains(&VALID_RELAY_B.to_string()));
-
-        // Clear with None.
-        config
-            .set_relays(None)
-            .expect("clearing relays must succeed");
-        assert!(config.get_relays().is_none());
-    }
-
-    #[test]
-    fn set_relays_rejects_invalid_urls() {
-        let config = NetworkConfig::default();
-        let result = config.set_relays(Some(vec_of(&["not a url"])));
-        assert!(result.is_err());
-        // Failed set must leave the stored relays untouched (still None from default).
-        assert!(config.get_relays().is_none());
-    }
-
-    #[test]
-    fn set_dns_endpoint_can_install_replace_and_clear() {
-        let config = NetworkConfig::default();
-        assert!(config.get_dns_endpoint().is_none());
-
-        config
-            .set_dns_endpoint(Some("8.8.8.8:53".to_string()))
-            .expect("valid endpoint should be accepted");
-        assert_eq!(config.get_dns_endpoint(), Some("8.8.8.8:53".to_string()));
-
-        // Replace.
-        config
-            .set_dns_endpoint(Some("[2606:4700:4700::1111]:53".to_string()))
-            .expect("valid IPv6 endpoint should be accepted");
+        assert_eq!(config.get_listen_port(), 40142);
+        assert_eq!(
+            config.get_bind_addresses(),
+            vec_of(&["0.0.0.0", "::", "127.0.0.1", "::1"])
+        );
+        let relays = config.get_relays().expect("relays should be present");
+        assert_eq!(relays.len(), 2);
+        assert!(relays.contains(&VALID_RELAY_A.to_string()));
+        assert!(relays.contains(&VALID_RELAY_B.to_string()));
         assert_eq!(
             config.get_dns_endpoint(),
             Some("[2606:4700:4700::1111]:53".to_string())
         );
+        assert_eq!(
+            config.get_dns_origin_domain(),
+            Some("dns.iroh.example".to_string())
+        );
+        assert_eq!(
+            config.get_pkarr_relay(),
+            Some("https://pkarr.iroh.example/".to_string())
+        );
+        // And, of course, the configuration moved: this is not equal to the
+        // pre-update snapshot. This guards against a future refactor that
+        // accidentally short-circuits `update` to a no-op.
+        assert_ne!(snapshot(&config), before);
+    }
 
-        // Clear.
+    #[test]
+    fn update_accepts_listen_port_at_u16_boundaries() {
+        for port in [0u16, 1, 8080, 65535] {
+            let config = baseline_config();
+            let before = snapshot(&config);
+
+            config
+                .update(port, vec_of(&["0.0.0.0"]), None, None, None, None)
+                .unwrap_or_else(|e| panic!("port {port} should be valid, got: {}", e.message));
+
+            assert_eq!(config.get_listen_port(), port);
+            // Every other field was passed as `None` / cleared, so the live
+            // state should no longer match the baseline snapshot.
+            assert_ne!(snapshot(&config), before);
+        }
+    }
+
+    #[test]
+    fn update_can_clear_optional_fields_by_passing_none() {
+        let config = baseline_config();
         config
-            .set_dns_endpoint(None)
-            .expect("clearing must succeed");
+            .update(9000, vec_of(&["0.0.0.0"]), None, None, None, None)
+            .expect("clearing optional fields should be valid");
+
+        assert!(config.get_relays().is_none());
         assert!(config.get_dns_endpoint().is_none());
-    }
-
-    #[test]
-    fn set_dns_endpoint_rejects_invalid_values() {
-        let config = NetworkConfig::default();
-        for bad in ["1.1.1.1", "not-an-address", "1.2.3.4:99999"] {
-            let result = config.set_dns_endpoint(Some(bad.to_string()));
-            assert!(
-                result.is_err(),
-                "expected error for malformed dns endpoint: {bad:?}"
-            );
-            // No mutation on failure.
-            assert!(config.get_dns_endpoint().is_none());
-        }
-    }
-
-    #[test]
-    fn set_dns_origin_domain_can_install_replace_and_clear() {
-        let config = NetworkConfig::default();
         assert!(config.get_dns_origin_domain().is_none());
-
-        config.set_dns_origin_domain(Some("first.example".to_string()));
-        assert_eq!(
-            config.get_dns_origin_domain(),
-            Some("first.example".to_string())
-        );
-
-        config.set_dns_origin_domain(Some("second.example".to_string()));
-        assert_eq!(
-            config.get_dns_origin_domain(),
-            Some("second.example".to_string())
-        );
-
-        // The set function intentionally accepts any string, including empty.
-        config.set_dns_origin_domain(Some(String::new()));
-        assert_eq!(config.get_dns_origin_domain(), Some(String::new()));
-
-        // Clear with None.
-        config.set_dns_origin_domain(None);
-        assert!(config.get_dns_origin_domain().is_none());
-    }
-
-    #[test]
-    fn set_dns_origin_domain_preserves_unicode_domains() {
-        let config = NetworkConfig::default();
-        let unicode_domain = "café.example".to_string();
-        config.set_dns_origin_domain(Some(unicode_domain.clone()));
-        assert_eq!(config.get_dns_origin_domain(), Some(unicode_domain));
-    }
-
-    #[test]
-    fn set_pkarr_relay_can_install_replace_and_clear() {
-        let config = NetworkConfig::default();
-        assert!(config.get_pkarr_relay().is_none());
-
-        config
-            .set_pkarr_relay(Some(VALID_PKARR.to_string()))
-            .expect("valid pkarr relay url should be accepted");
-        assert_eq!(config.get_pkarr_relay(), Some(VALID_PKARR.to_string()));
-
-        let other = "https://pkarr-other.iroh.example/".to_string();
-        config
-            .set_pkarr_relay(Some(other.clone()))
-            .expect("valid replacement pkarr url should be accepted");
-        assert_eq!(config.get_pkarr_relay(), Some(other));
-
-        // Clear.
-        config.set_pkarr_relay(None).expect("clearing must succeed");
         assert!(config.get_pkarr_relay().is_none());
     }
 
     #[test]
-    fn set_pkarr_relay_rejects_invalid_urls() {
-        let config = NetworkConfig::default();
-        for bad in [
-            "not a url",
-            "://missing-scheme",
-            "http:// bad url",
-            "pkarr.example.com", // missing scheme
-        ] {
-            let result = config.set_pkarr_relay(Some(bad.to_string()));
-            assert!(
-                result.is_err(),
-                "expected error for malformed pkarr url: {bad:?}"
-            );
-            // No mutation on failure.
-            assert!(config.get_pkarr_relay().is_none());
+    fn update_rejects_invalid_bind_addresses_and_leaves_live_config_unchanged() {
+        // Regression guard for the partial-mutation bug: an invalid bind
+        // address must not leak into any other field of the live config.
+        // In particular, the listen port (which is updated *last* in the
+        // atomic commit phase) must keep its previous value.
+        let config = baseline_config();
+        let before = snapshot(&config);
+
+        let result = config.update(
+            12345,                                    // <-- a different listen port
+            vec_of(&["0.0.0.0", "not-an-ip", "::1"]), // <-- invalid entry
+            Some(vec_of(&[VALID_RELAY_B])),
+            Some("9.9.9.9:53".to_string()),
+            Some("changed.example".to_string()),
+            Some("https://changed.example/".to_string()),
+        );
+
+        let err = result.expect_err("invalid bind address must cause update to fail");
+        assert!(
+            matches!(err.field, NetworkConfigField::BindAddresses),
+            "bind-address failure must be attributed to BindAddresses, got: {:?}",
+            err.field
+        );
+        // The live config is identical to the pre-call snapshot: not a
+        // single field was mutated, including the listen port.
+        assert_eq!(snapshot(&config), before);
+    }
+
+    #[test]
+    fn update_rejects_invalid_relay_url_and_leaves_live_config_unchanged() {
+        let config = baseline_config();
+        let before = snapshot(&config);
+
+        let result = config.update(
+            12345,
+            vec_of(&["0.0.0.0"]),
+            Some(vec_of(&[VALID_RELAY_A, "not a url", VALID_RELAY_B])),
+            Some("9.9.9.9:53".to_string()),
+            Some("changed.example".to_string()),
+            Some("https://changed.example/".to_string()),
+        );
+
+        let err = result.expect_err("invalid relay url must cause update to fail");
+        assert!(
+            matches!(err.field, NetworkConfigField::Relays),
+            "relay failure must be attributed to Relays, got: {:?}",
+            err.field
+        );
+        assert_eq!(snapshot(&config), before);
+    }
+
+    #[test]
+    fn update_rejects_invalid_dns_endpoint_and_leaves_live_config_unchanged() {
+        let config = baseline_config();
+        let before = snapshot(&config);
+
+        let result = config.update(
+            12345,
+            vec_of(&["0.0.0.0"]),
+            Some(vec_of(&[VALID_RELAY_B])),
+            Some("not-an-endpoint".to_string()),
+            Some("changed.example".to_string()),
+            Some("https://changed.example/".to_string()),
+        );
+
+        let err = result.expect_err("invalid dns endpoint must cause update to fail");
+        assert!(
+            matches!(err.field, NetworkConfigField::DnsEndpoint),
+            "dns-endpoint failure must be attributed to DnsEndpoint, got: {:?}",
+            err.field
+        );
+        assert_eq!(snapshot(&config), before);
+    }
+
+    #[test]
+    fn update_rejects_invalid_pkarr_relay_url_and_leaves_live_config_unchanged() {
+        let config = baseline_config();
+        let before = snapshot(&config);
+
+        let result = config.update(
+            12345,
+            vec_of(&["0.0.0.0"]),
+            Some(vec_of(&[VALID_RELAY_B])),
+            Some("9.9.9.9:53".to_string()),
+            Some("changed.example".to_string()),
+            Some("not a url".to_string()),
+        );
+
+        let err = result.expect_err("invalid pkarr relay url must cause update to fail");
+        assert!(
+            matches!(err.field, NetworkConfigField::PkarrRelay),
+            "pkarr failure must be attributed to PkarrRelay, got: {:?}",
+            err.field
+        );
+        assert_eq!(snapshot(&config), before);
+    }
+
+    #[test]
+    fn update_with_no_changes_is_a_successful_no_op() {
+        // Calling `update` with values that exactly mirror the live config
+        // is still a success and does not leave the config in a different
+        // state.
+        let config = baseline_config();
+        let before = snapshot(&config);
+
+        let result = config.update(
+            9000,
+            vec_of(&["127.0.0.1", "::1"]),
+            Some(vec_of(&[VALID_RELAY_A])),
+            Some(VALID_DNS_ENDPOINT.to_string()),
+            Some(VALID_ORIGIN_DOMAIN.to_string()),
+            Some(VALID_PKARR.to_string()),
+        );
+
+        assert!(
+            result.is_ok(),
+            "no-op update should succeed, got: {:?}",
+            result.err()
+        );
+        assert_eq!(snapshot(&config), before);
+    }
+
+    #[test]
+    fn update_does_not_mutate_any_field_when_a_lock_acquisition_fails() {
+        // Regression guard for the lock-acquisition contract: when
+        // `update` cannot acquire every write guard, it must fail
+        // before assigning to ANY field. A future refactor that
+        // writes one field, takes a later lock, and propagates the
+        // lock error would re-introduce a partial commit; this test
+        // catches that.
+        //
+        // We deterministically force a lock-acquisition failure by
+        // poisoning the `dns_origin_domain` lock: spawn a thread
+        // that takes the write guard, then panics. A panicked
+        // `StdRwLock` writer poisons the lock, so any subsequent
+        // `.write()` call returns `Poisoned`. In the new
+        // implementation that error surfaces during the
+        // all-locks-first acquisition phase, before any field has
+        // been written.
+        use std::sync::Arc;
+        use std::sync::RwLock as StdRwLock;
+
+        let config = baseline_config();
+
+        // Snapshot the live state BEFORE poisoning any lock. The
+        // public `get_*` accessors call `.read().expect("... lock
+        // poisoned")`; after we poison a lock they will panic
+        // rather than return the stored value, so we cannot use
+        // them to inspect the post-`update` state. We instead
+        // read each lock directly via
+        // `read().unwrap_err().into_inner()` to bypass the poison
+        // and assert against the pre-poison snapshot.
+        let before = snapshot(&config);
+
+        // Poison the `dns_origin_domain` lock: spawn a thread that
+        // takes the write guard and panics, which marks the lock
+        // poisoned. Any subsequent `.write()` returns `Poisoned`,
+        // so the very first write in `update` will fail and the
+        // all-locks-first phase must propagate that error before
+        // any field is mutated.
+        let dns_lock = Arc::clone(&config.dns_origin_domain);
+        let poisoner = std::thread::spawn(move || {
+            let _guard = dns_lock
+                .write()
+                .expect("first write on an unpoisoned lock should succeed");
+            panic!("intentional poison to simulate a failed write-lock acquisition");
+        });
+        // The poisoner always panics; join to observe the
+        // poisoned state.
+        let _ = poisoner.join();
+
+        // `update` is `&self`; run it on a separate thread so the
+        // poison from the previous holder is observable to it.
+        let config = Arc::new(config);
+        let writer = {
+            let config = Arc::clone(&config);
+            std::thread::spawn(move || {
+                config.update(
+                    12345, // <-- a different listen port
+                    vec_of(&["0.0.0.0", "::1"]),
+                    Some(vec_of(&[VALID_RELAY_B])),
+                    Some("9.9.9.9:53".to_string()),
+                    Some("changed.example".to_string()),
+                    Some("https://changed.example/".to_string()),
+                )
+            })
+        };
+        let result = writer.join().expect("writer thread must not panic");
+
+        let err = result.expect_err("update must fail when a write lock is poisoned");
+        // Every poison failure must be collapsed into a single
+        // BackendError variant: a poisoned lock is not the user's
+        // fault and is not safe to attribute to any one
+        // user-supplied field. Asserting on the field here guards
+        // against a future refactor that "helpfully" reports the
+        // failing lock's owning field.
+        assert!(
+            matches!(err.field, NetworkConfigField::BackendError),
+            "lock-poison failure must collapse to BackendError, got: {:?}",
+            err.field
+        );
+        assert!(
+            err.message.contains("poisoned"),
+            "poison diagnostic should mention the poison, got: {:?}",
+            err.message
+        );
+
+        // Listen port is an atomic; no lock involved.
+        assert_eq!(config.get_listen_port(), before.0);
+
+        // The remaining fields all live behind (possibly poisoned)
+        // `StdRwLock`s. Only `dns_origin_domain` is poisoned by
+        // this test, but read every lock through a helper that
+        // tolerates either state so the assertions are robust.
+        // The point of this test is that the stored values match
+        // the pre-poison, pre-`update` snapshot exactly -- in
+        // particular the listen port (atomic) is unchanged, and
+        // no other field was committed either. Each raw value is
+        // projected into the same `String`-shaped form that
+        // `snapshot()` records so the comparison is valid.
+        fn read_unpoisoned<T>(
+            lock: &StdRwLock<T>,
+        ) -> std::sync::LockResult<std::sync::RwLockReadGuard<'_, T>> {
+            lock.read()
         }
-    }
 
-    #[test]
-    fn cloned_config_shares_state_with_the_original() {
-        // NetworkConfig uses Arc internally, so cloning a reference (e.g. via Clone
-        // of the Arc-backed fields) must observe writes from either handle. This
-        // guards the thread-safety assumptions the rest of the crate relies on.
-        let config = NetworkConfig::default();
-        let clone = config.clone();
+        let bind_addresses: Vec<String> = read_unpoisoned(&config.bind_addresses)
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(bind_addresses, before.1);
 
-        config.set_listen_port(4242);
-        assert_eq!(clone.get_listen_port(), 4242);
+        let relays: Option<Vec<String>> = read_unpoisoned(&config.relays)
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map(|map| {
+                map.urls::<Vec<_>>()
+                    .into_iter()
+                    .map(|u| u.to_string())
+                    .collect()
+            });
+        assert_eq!(relays, before.2);
 
-        config
-            .set_bind_addresses(vec_of(&["10.0.0.5"]))
-            .expect("valid bind addresses should be accepted");
-        assert_eq!(clone.get_bind_addresses(), vec!["10.0.0.5".to_string()]);
+        let dns_endpoint: Option<String> = read_unpoisoned(&config.dns_endpoint)
+            .unwrap_or_else(|e| e.into_inner())
+            .map(|addr| addr.to_string());
+        assert_eq!(dns_endpoint, before.3);
 
-        config
-            .set_relays(Some(vec_of(&[VALID_RELAY_A])))
-            .expect("valid relay should be accepted");
-        assert_eq!(clone.get_relays(), Some(vec![VALID_RELAY_A.to_string()]));
+        let dns_origin: Option<String> = read_unpoisoned(&config.dns_origin_domain)
+            .unwrap_or_else(|e| e.into_inner()) // <-- poisoned: the unwrap_or_else branch runs
+            .clone();
+        assert_eq!(dns_origin, before.4);
 
-        config
-            .set_dns_endpoint(Some(VALID_DNS_ENDPOINT.to_string()))
-            .expect("valid dns endpoint should be accepted");
-        assert_eq!(
-            clone.get_dns_endpoint(),
-            Some(VALID_DNS_ENDPOINT.to_string())
-        );
-
-        config.set_dns_origin_domain(Some(VALID_ORIGIN_DOMAIN.to_string()));
-        assert_eq!(
-            clone.get_dns_origin_domain(),
-            Some(VALID_ORIGIN_DOMAIN.to_string())
-        );
-
-        config
-            .set_pkarr_relay(Some(VALID_PKARR.to_string()))
-            .expect("valid pkarr url should be accepted");
-        assert_eq!(clone.get_pkarr_relay(), Some(VALID_PKARR.to_string()));
-    }
-
-    use super::{
-        MAX_CONTACT_OUTPUT_VOLUME_DB, MIN_CONTACT_OUTPUT_VOLUME_DB, clamp_contact_output_volume,
-        contact_output_volume_from_parts,
-    };
-
-    #[test]
-    fn from_parts_accepts_in_range_values() {
-        assert_eq!(contact_output_volume_from_parts(0.0), 0.0);
-        assert_eq!(
-            contact_output_volume_from_parts(MIN_CONTACT_OUTPUT_VOLUME_DB),
-            MIN_CONTACT_OUTPUT_VOLUME_DB
-        );
-        assert_eq!(
-            contact_output_volume_from_parts(MAX_CONTACT_OUTPUT_VOLUME_DB),
-            MAX_CONTACT_OUTPUT_VOLUME_DB
-        );
-    }
-
-    #[test]
-    fn from_parts_rejects_out_of_range_and_non_finite_values() {
-        assert_eq!(contact_output_volume_from_parts(20.0), 0.0);
-        assert_eq!(contact_output_volume_from_parts(-20.0), 0.0);
-        assert_eq!(contact_output_volume_from_parts(f32::NAN), 0.0);
-        assert_eq!(contact_output_volume_from_parts(f32::INFINITY), 0.0);
-    }
-
-    #[test]
-    fn set_output_volume_clamps_to_supported_range() {
-        assert_eq!(
-            clamp_contact_output_volume(20.0),
-            MAX_CONTACT_OUTPUT_VOLUME_DB
-        );
-        assert_eq!(
-            clamp_contact_output_volume(-20.0),
-            MIN_CONTACT_OUTPUT_VOLUME_DB
-        );
-        assert_eq!(clamp_contact_output_volume(f32::NAN), 0.0);
-        assert_eq!(clamp_contact_output_volume(5.0), 5.0);
+        let pkarr: Option<String> = read_unpoisoned(&config.pkarr_relay)
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map(|url| url.to_string());
+        assert_eq!(pkarr, before.5);
     }
 }

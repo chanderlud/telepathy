@@ -250,9 +250,12 @@ where
 
                             let self_clone = self.clone();
                             handles.push(spawn_task(async move {
-                                self_clone
+                                if let Err(error) = self_clone
                                     .initialize_session(connection.remote_id(), connection, None)
-                                    .await;
+                                    .await
+                                {
+                                    error!(event = "session_init_failed", error = %error);
+                                }
                             }))
                         }
                         Err(error) => {
@@ -355,8 +358,12 @@ where
             result = connect_future => {
                 if let Some(connection) = result {
                     info!(event = "connect_succeeded", peer.id = %peer);
-                    self.initialize_session(peer, connection, Some(generation))
-                        .await;
+                    if let Err(error) = self
+                        .initialize_session(peer, connection, Some(generation))
+                        .await
+                    {
+                        error!(event = "session_init_failed", error = %error);
+                    }
                 } else {
                     warn!(event = "connect_abandoned", peer.id = %peer);
                     self.emit_outbound_status(
@@ -377,7 +384,7 @@ where
         peer: PublicKey,
         connection: Connection,
         outbound_generation: Option<u64>,
-    ) {
+    ) -> Result<()> {
         let session_generation = match outbound_generation {
             Some(generation) => generation,
             None => self.get_outbound_generation(peer).await,
@@ -427,7 +434,7 @@ where
                 );
                 state.teardown().await;
                 connection.close(VarInt::from_u32(0), &[]);
-                return;
+                return Ok(());
             }
         }
 
@@ -454,16 +461,19 @@ where
         });
 
         // seed the initial per-contact output volume
-        self.core_state.set_peer_output_volume(&contact);
+        self.core_state.set_peer_output_volume(&contact)?;
 
-        self.session_outer(peer, &connection, &state, &contact, message_channel)
+        let _ = self
+            .session_outer(peer, &connection, &state, &contact, message_channel)
             .await;
 
         // gracefully close the connection
         connection.close(VarInt::from_u32(0), &[]);
 
         // release any pending negotiation owned by this session
-        self.core_state.call_slot.release_if_pending_for_peer(peer);
+        self.core_state
+            .call_slot
+            .release_if_pending_for_peer(peer)?;
 
         // if the state exists and has the same id, clean it up
         // if a new session state already exists with a new ID, we don't want to clean it up
@@ -471,7 +481,7 @@ where
         if states.get(&peer).map(|s| s.id == state.id).unwrap_or(false) {
             states.remove(&peer);
             // clean up output volume state
-            self.core_state.reset_peer_output_volume(&contact.peer_id);
+            self.core_state.reset_peer_output_volume(&contact.peer_id)?;
         }
         drop(states);
 
@@ -481,6 +491,7 @@ where
         }
 
         info!(event = "session_cleaned_up", session.id = %state.id);
+        Ok(())
     }
 
     /// Runs session_inner as many times as needed, performs cleanup if needed
@@ -501,7 +512,7 @@ where
         state: &Arc<SessionState>,
         contact: &Contact,
         mut message_channel: (Sender<ProtocolMessage>, Receiver<ProtocolMessage>),
-    ) {
+    ) -> Result<()> {
         let stream_result = if connection.side().is_client() {
             Span::current().record("session.role", "dialer");
             connection.open_bi().await
@@ -514,7 +525,7 @@ where
             Ok(streams) => streams,
             Err(error) => {
                 error!(event = "session_stream_failure", error = ?error, peer.id = %peer);
-                return;
+                return Ok(());
             }
         };
 
@@ -562,7 +573,7 @@ where
                 (Err(error), room_only) => {
                     let peer = contact.peer_id;
                     let call_slot = &self.core_state.call_slot;
-                    if call_slot.direct_peer() == Some(peer)
+                    if call_slot.direct_peer()? == Some(peer)
                         && call_slot.current() == CallSlotState::ActiveDirect
                         && !room_only
                         && !self.is_in_room(&peer).await
@@ -571,7 +582,7 @@ where
                         self.callbacks
                             .call_state(CallState::CallEnded(error.to_string(), false))
                             .await;
-                        call_slot.release();
+                        call_slot.release()?;
                     }
 
                     if room_only || error.is_session_critical() {
@@ -584,6 +595,7 @@ where
                 }
             }
         }
+        Ok(())
     }
 
     /// Routes a negotiated call into [`room_handshake`] or [`call_handshake`] depending on call kind.
@@ -603,7 +615,7 @@ where
                 .await?;
             Ok(HandshakeDispatch::Completed)
         } else if let Some(slot) = pending_slot.take() {
-            slot.into_handshake();
+            slot.into_handshake()?;
             match self
                 .call_handshake(
                     io.send,
@@ -645,7 +657,7 @@ where
             debug_assert!(!call_slot.occupied() || call_slot.current() == CallSlotState::RoomCall);
             Ok(IncomingSlotDecision::RejectedNotInRoom)
         } else {
-            match PendingDirectCallSlot::try_acquire_incoming(call_slot, peer) {
+            match PendingDirectCallSlot::try_acquire_incoming(call_slot, peer)? {
                 Some(slot) => Ok(IncomingSlotDecision::Acquired(slot)),
                 None => {
                     info!(event = "call_busy_sent_call_already_active");
@@ -843,18 +855,18 @@ where
                 if let Some(cancel) = cancel_prompt {
                     cancel.notify_one();
                 }
-                abort_negotiation_session_stopped(io.send, &mut pending_slot, call_slot).await;
+                abort_negotiation_session_stopped(io.send, &mut pending_slot, call_slot).await?;
                 Ok(IncomingNegotiationOutcome::SessionStopped)
             }
             accept_result = accept_future => {
                 if !accept_result? {
                     if io.state.stop_session.is_cancelled() {
                         abort_negotiation_session_stopped(io.send, &mut pending_slot, call_slot)
-                            .await;
+                            .await?;
                         return Ok(IncomingNegotiationOutcome::SessionStopped);
                     }
                     write_message(io.send, &ProtocolMessage::Reject).await?;
-                    release_pending_and_assert_idle(&mut pending_slot, call_slot);
+                    release_pending_and_assert_idle(&mut pending_slot, call_slot)?;
                     return Ok(IncomingNegotiationOutcome::ContinueSession);
                 }
 
@@ -896,7 +908,7 @@ where
                             },
                         )
                         .await?;
-                        release_pending_and_assert_idle(&mut pending_slot, call_slot);
+                        release_pending_and_assert_idle(&mut pending_slot, call_slot)?;
                         Err(error)
                     }
                 }
@@ -907,7 +919,7 @@ where
                 if let Some(cancel) = cancel_prompt {
                     cancel.notify_one();
                 }
-                release_pending_and_assert_idle(&mut pending_slot, call_slot);
+                release_pending_and_assert_idle(&mut pending_slot, call_slot)?;
                 let message = result?;
                 warn!(event = "accept_prompt_interrupted_by_message", ?message);
                 Ok(IncomingNegotiationOutcome::ContinueSession)
@@ -936,7 +948,7 @@ where
                 return Ok(OutgoingNegotiationOutcome::CallEnded);
             }
         } else {
-            match PendingDirectCallSlot::try_acquire_outgoing(call_slot, peer) {
+            match PendingDirectCallSlot::try_acquire_outgoing(call_slot, peer)? {
                 Some(slot) => pending_slot = Some(slot),
                 None => {
                     warn!(event = "call_slot_busy_outgoing", peer.id = %peer);
@@ -961,7 +973,7 @@ where
                 self.callbacks
                     .call_state(CallState::CallEnded(error.to_string(), false))
                     .await;
-                release_pending_and_assert_idle(&mut pending_slot, call_slot);
+                release_pending_and_assert_idle(&mut pending_slot, call_slot)?;
                 return Err(error);
             }
         };
@@ -987,13 +999,13 @@ where
             select! {
                 _ = io.state.stop_session.cancelled() => {
                     info!(event = "session_stopped_waiting_hello_ack");
-                    release_pending_and_assert_idle(&mut pending_slot, call_slot);
+                    release_pending_and_assert_idle(&mut pending_slot, call_slot)?;
                     return Ok(OutgoingNegotiationOutcome::SessionStopped);
                 }
                 _ = io.state.end_call.notified() => {
                     info!(event = "end_call_notified_waiting_hello_ack");
                     write_message(io.send, &ProtocolMessage::Goodbye { reason: None }).await?;
-                    release_pending_and_assert_idle(&mut pending_slot, call_slot);
+                    release_pending_and_assert_idle(&mut pending_slot, call_slot)?;
                     return Ok(OutgoingNegotiationOutcome::CallEnded);
                 }
                 result = timeout(hello_timeout, read_message(io.recv)) => {
@@ -1013,7 +1025,7 @@ where
                                     true,
                                 ))
                                 .await;
-                            release_pending_and_assert_idle(&mut pending_slot, call_slot);
+                            release_pending_and_assert_idle(&mut pending_slot, call_slot)?;
                             return Ok(OutgoingNegotiationOutcome::CallEnded);
                         }
                         Ok(Err(error)) => return Err(error),
@@ -1041,14 +1053,14 @@ where
                                     release_pending_and_assert_idle(
                                         &mut pending_slot,
                                         call_slot,
-                                    );
+                                    )?;
                                     return Ok(OutgoingNegotiationOutcome::CallEnded);
                                 }
                                 HelloResponse::EndedSilently => {
                                     release_pending_and_assert_idle(
                                         &mut pending_slot,
                                         call_slot,
-                                    );
+                                    )?;
                                     return Ok(OutgoingNegotiationOutcome::CallEnded);
                                 }
                                 HelloResponse::Continue => continue,
@@ -1158,7 +1170,7 @@ where
         // stop_io must always cancel, even when the call fails
         let stop_io = CancellationToken::new();
         let call_slot = &self.core_state.call_slot;
-        if !call_slot.transition_pending_to_active_for_peer(call_state.peer) {
+        if !call_slot.transition_pending_to_active_for_peer(call_state.peer)? {
             if state.stop_session.is_cancelled() {
                 info!(
                     event = "call_handshake_slot_released_session_stopped",
@@ -1177,7 +1189,7 @@ where
                 event = "call_handshake_slot_transition_failed",
                 peer.id = %call_state.peer
             );
-            call_slot.release_if_pending_for_peer(call_state.peer);
+            call_slot.release_if_pending_for_peer(call_state.peer)?;
             return Err(ErrorKind::CallAlreadyActive.into());
         }
         // show the overlay
@@ -1202,7 +1214,7 @@ where
         // ensure that all background i/o threads are stopped
         stop_io.cancel();
         // the call has ended
-        call_slot.release_if_state(CallSlotState::ActiveDirect);
+        call_slot.release_if_state(CallSlotState::ActiveDirect)?;
         // hide the overlay
         self.overlay.hide();
         // send a goodbye message on errors
@@ -1717,7 +1729,7 @@ where
         self.room_state.write().await.take();
         self.core_state
             .call_slot
-            .release_if_state(CallSlotState::RoomCall);
+            .release_if_state(CallSlotState::RoomCall)?;
         // cleanup sessions blocked by room
         end_sessions.cancel();
         // join statistics collector
@@ -1838,56 +1850,58 @@ struct PendingDirectCallSlot<'a> {
 
 impl<'a> PendingDirectCallSlot<'a> {
     /// Acquires or matches an incoming direct-call pending slot for `peer`.
-    fn try_acquire_incoming(call_slot: &'a CallSlot, peer: PublicKey) -> Option<Self> {
-        match call_slot.try_acquire_or_match(CallSlotState::PendingIncoming, peer) {
-            CallSlotAcquireResult::Acquired => Some(Self {
+    fn try_acquire_incoming(call_slot: &'a CallSlot, peer: PublicKey) -> Result<Option<Self>> {
+        match call_slot.try_acquire_or_match(CallSlotState::PendingIncoming, peer)? {
+            CallSlotAcquireResult::Acquired => Ok(Some(Self {
                 call_slot,
                 peer,
                 release_on_failure: true,
-            }),
-            CallSlotAcquireResult::Matched => Some(Self {
+            })),
+            CallSlotAcquireResult::Matched => Ok(Some(Self {
                 call_slot,
                 peer,
                 release_on_failure: false,
-            }),
-            CallSlotAcquireResult::Failed => None,
+            })),
+            CallSlotAcquireResult::Failed => Ok(None),
         }
     }
 
     /// Acquires or matches an outgoing direct-call pending slot for `peer`.
-    fn try_acquire_outgoing(call_slot: &'a CallSlot, peer: PublicKey) -> Option<Self> {
-        match call_slot.try_acquire_or_match(CallSlotState::PendingOutgoing, peer) {
-            CallSlotAcquireResult::Acquired | CallSlotAcquireResult::Matched => Some(Self {
+    fn try_acquire_outgoing(call_slot: &'a CallSlot, peer: PublicKey) -> Result<Option<Self>> {
+        match call_slot.try_acquire_or_match(CallSlotState::PendingOutgoing, peer)? {
+            CallSlotAcquireResult::Acquired | CallSlotAcquireResult::Matched => Ok(Some(Self {
                 call_slot,
                 peer,
                 release_on_failure: true,
-            }),
-            CallSlotAcquireResult::Failed => None,
+            })),
+            CallSlotAcquireResult::Failed => Ok(None),
         }
     }
 
     /// Releases the pending slot when negotiation fails before handshake.
-    fn release(self) {
+    fn release(self) -> Result<()> {
         // no-op when release_on_failure is false; peer owns the slot in the Matched-incoming case
         if self.release_on_failure {
-            self.call_slot.release_if_pending_for_peer(self.peer);
+            self.call_slot.release_if_pending_for_peer(self.peer)?;
             debug_assert_eq!(self.call_slot.current(), CallSlotState::Idle);
         }
+        Ok(())
     }
 
     /// Transfers slot ownership to [`call_handshake`] without releasing.
-    fn into_handshake(self) {
+    fn into_handshake(self) -> Result<()> {
         debug_assert!(matches!(
             self.call_slot.current(),
             CallSlotState::PendingIncoming | CallSlotState::PendingOutgoing
         ));
-        debug_assert_eq!(self.call_slot.direct_peer(), Some(self.peer));
+        debug_assert_eq!(self.call_slot.direct_peer()?, Some(self.peer));
         let Self {
             call_slot,
             peer: _,
             release_on_failure,
         } = self;
         debug_assert!(release_on_failure || call_slot.current() == CallSlotState::PendingOutgoing);
+        Ok(())
     }
 }
 
@@ -1949,11 +1963,12 @@ fn should_keep_new_session(local_peer: &PublicKey, peer: &PublicKey, new_is_clie
 fn release_pending_and_assert_idle(
     pending_slot: &mut Option<PendingDirectCallSlot<'_>>,
     call_slot: &CallSlot,
-) {
+) -> Result<()> {
     if let Some(slot) = pending_slot.take() {
-        slot.release();
+        slot.release()?;
     }
     debug_assert!(!call_slot.occupied() || call_slot.current() == CallSlotState::RoomCall);
+    Ok(())
 }
 
 /// Resets the keep-alive timer and asserts the call slot is idle or in a room call after handshake.
@@ -1972,7 +1987,7 @@ async fn abort_negotiation_session_stopped(
     send: &mut FramedWrite<SendStream, LengthDelimitedCodec>,
     pending_slot: &mut Option<PendingDirectCallSlot<'_>>,
     call_slot: &CallSlot,
-) {
+) -> Result<()> {
     _ = write_message(
         send,
         &ProtocolMessage::Goodbye {
@@ -1980,7 +1995,8 @@ async fn abort_negotiation_session_stopped(
         },
     )
     .await;
-    release_pending_and_assert_idle(pending_slot, call_slot);
+    release_pending_and_assert_idle(pending_slot, call_slot)?;
+    Ok(())
 }
 
 #[cfg(test)]

@@ -69,7 +69,7 @@ impl Telepathy {
     }
 
     /// Attempts to start a call through an existing session
-    pub async fn start_call(&self, contact: &Contact) -> std::result::Result<(), DartError> {
+    pub async fn start_call(&self, contact: &Contact) -> Result<(), DartError> {
         self.handle
             .start_call(contact)
             .await
@@ -82,10 +82,7 @@ impl Telepathy {
     }
 
     /// The only entry point into participating in a room
-    pub async fn join_room(
-        &self,
-        member_strings: Vec<String>,
-    ) -> std::result::Result<(), DartError> {
+    pub async fn join_room(&self, member_strings: Vec<String>) -> Result<(), DartError> {
         self.handle
             .join_room(member_strings)
             .await
@@ -93,7 +90,7 @@ impl Telepathy {
     }
 
     /// Restarts the session manager
-    pub async fn restart_manager(&self) -> std::result::Result<(), DartError> {
+    pub async fn restart_manager(&self) -> Result<(), DartError> {
         self.handle.restart_manager().await.map_err(DartError::from)
     }
 
@@ -103,7 +100,7 @@ impl Telepathy {
     }
 
     /// Sets the signing key (called when the profile changes)
-    pub async fn set_identity(&self, key: Vec<u8>) -> std::result::Result<(), DartError> {
+    pub async fn set_identity(&self, key: Vec<u8>) -> Result<(), DartError> {
         self.handle
             .set_identity(
                 &(key
@@ -120,7 +117,7 @@ impl Telepathy {
     }
 
     /// Blocks while an audio test is running
-    pub async fn audio_test(&self) -> std::result::Result<(), DartError> {
+    pub async fn audio_test(&self) -> Result<(), DartError> {
         self.handle.audio_test().await.map_err(DartError::from)
     }
 
@@ -135,7 +132,7 @@ impl Telepathy {
     }
 
     /// Sends a chat message
-    pub async fn send_chat(&self, message: &mut ChatMessage) -> std::result::Result<(), DartError> {
+    pub async fn send_chat(&self, message: &mut ChatMessage) -> Result<(), DartError> {
         self.handle
             .send_chat(message)
             .await
@@ -157,13 +154,17 @@ impl Telepathy {
     }
 
     #[frb(sync)]
-    pub fn set_output_volume(&self, decibel: f32) {
-        self.handle.set_output_volume(decibel)
+    pub fn set_output_volume(&self, decibel: f32) -> Result<(), DartError> {
+        self.handle
+            .set_output_volume(decibel)
+            .map_err(DartError::from)
     }
 
     #[frb(sync)]
-    pub fn set_contact_output_volume(&self, contact: &Contact) {
-        self.handle.set_contact_output_volume(contact)
+    pub fn set_contact_output_volume(&self, contact: &Contact) -> Result<(), DartError> {
+        self.handle
+            .set_contact_output_volume(contact)
+            .map_err(DartError::from)
     }
 
     #[frb(sync)]
@@ -216,13 +217,11 @@ impl Telepathy {
     }
 
     /// Lists the input and output devices
-    pub fn list_devices(
-        &self,
-    ) -> std::result::Result<(Vec<AudioDevice>, Vec<AudioDevice>), DartError> {
+    pub fn list_devices(&self) -> Result<(Vec<AudioDevice>, Vec<AudioDevice>), DartError> {
         self.handle.list_devices().map_err(DartError::from)
     }
 
-    pub async fn set_model(&self, model: Option<Vec<u8>>) -> std::result::Result<(), DartError> {
+    pub async fn set_model(&self, model: Option<Vec<u8>>) -> Result<(), DartError> {
         self.handle.set_model(model).await.map_err(DartError::from)
     }
 }

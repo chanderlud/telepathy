@@ -2,7 +2,8 @@
 use crate::types::Capabilities;
 use crate::types::{RecordingConfig, ScreenshareConfig};
 use bytes::Bytes;
-use iroh::endpoint::Connection;
+use futures_util::{SinkExt, StreamExt};
+use iroh::endpoint::{RecvStream, SendStream};
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 use regex::Regex;
 use speedy::{Readable, Writable};
@@ -14,8 +15,6 @@ use std::process::{ExitStatus, Output};
 use std::str::FromStr;
 #[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
-#[cfg(not(target_family = "wasm"))]
-use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
 #[cfg(not(target_family = "wasm"))]
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -25,6 +24,7 @@ use tokio::process::Command;
 use tokio::select;
 #[cfg(not(target_family = "wasm"))]
 use tokio::sync::Notify;
+use tokio_util::codec::LengthDelimitedCodec;
 #[cfg(not(target_family = "wasm"))]
 use tracing::{error, info, instrument};
 
@@ -421,11 +421,12 @@ impl PlaybackConfig {
 #[cfg(not(target_family = "wasm"))]
 #[instrument(name = "screenshare.record", skip_all)]
 pub(crate) async fn record(
-    connection: Connection,
+    stream: SendStream,
     stop: Arc<Notify>,
-    bandwidth: Arc<AtomicUsize>,
     config: RecordingConfig,
 ) -> Result<()> {
+    let mut transport = LengthDelimitedCodec::builder().new_write(stream);
+
     info!(event = "screenshare_record_start", ?config);
 
     let mut command = config.make_command(false);
@@ -449,8 +450,7 @@ pub(crate) async fn record(
                 break;
             }
 
-            bandwidth.fetch_add(read, Relaxed);
-            if let Err(error) = connection.send_datagram(Bytes::copy_from_slice(&frame[..read])) {
+            if let Err(error) = transport.send(Bytes::copy_from_slice(&frame[..read])).await {
                 error!("Failed to write frame to ffmpeg {}", error);
                 break;
             }
@@ -474,13 +474,14 @@ pub(crate) async fn record(
 #[cfg(not(target_family = "wasm"))]
 #[instrument(name = "screenshare.playback", skip_all)]
 pub(crate) async fn playback(
-    connection: Connection,
+    stream: RecvStream,
     stop: Arc<Notify>,
-    bandwidth: Arc<AtomicUsize>,
     encoder: String,
     width: u32,
     height: u32,
 ) -> Result<()> {
+    let mut transport = LengthDelimitedCodec::builder().new_read(stream);
+
     info!("Starting screen playback");
     let encoder = Encoder::from_str(&encoder).map_err(|_| ErrorKind::InvalidEncoder)?;
     let decoders = encoder.decoders();
@@ -523,8 +524,7 @@ pub(crate) async fn playback(
     let mut stdin = child.stdin.take().expect("Failed to capture stdin");
 
     let future = async {
-        while let Ok(message) = connection.read_datagram().await {
-            bandwidth.fetch_add(message.len(), Relaxed);
+        while let Some(Ok(message)) = transport.next().await {
             if let Err(error) = stdin.write(&message).await {
                 error!("Failed to write frame to ffmpeg {}", error);
                 break;

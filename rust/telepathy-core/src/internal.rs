@@ -115,7 +115,7 @@ where
             .inner
             .core_state
             .call_slot
-            .try_acquire(CallSlotState::PendingOutgoing, Some(contact.peer_id))
+            .try_acquire(CallSlotState::PendingOutgoing, Some(contact.peer_id))?
         {
             return Err(ErrorKind::CallAlreadyActive.into());
         }
@@ -128,13 +128,13 @@ where
             .get(&contact.peer_id)
             .cloned()
         else {
-            self.inner.core_state.call_slot.release();
+            self.inner.core_state.call_slot.release()?;
             return Err(ErrorKind::NoSessionForContact.into());
         };
 
         #[cfg(target_family = "wasm")]
         if let Err(error) = self.inner.init_web_audio().await {
-            self.inner.core_state.call_slot.release();
+            self.inner.core_state.call_slot.release()?;
             return Err(error);
         }
 
@@ -150,7 +150,7 @@ where
         } else if let Some(room_state) = self.inner.room_state.read().await.as_ref() {
             debug!("ending room");
             room_state.end_call.notify_one();
-        } else if let Some(peer) = self.inner.core_state.call_slot.direct_peer()
+        } else if let Ok(Some(peer)) = self.inner.core_state.call_slot.direct_peer()
             && let Some(session_state) = self.inner.session_states.read().await.get(&peer)
         {
             debug!("ending call");
@@ -166,14 +166,14 @@ where
             .inner
             .core_state
             .call_slot
-            .try_acquire(CallSlotState::RoomCall, None)
+            .try_acquire(CallSlotState::RoomCall, None)?
         {
             return Err(ErrorKind::CallAlreadyActive.into());
         }
 
         #[cfg(target_family = "wasm")]
         if let Err(error) = self.inner.init_web_audio().await {
-            self.inner.core_state.call_slot.release();
+            self.inner.core_state.call_slot.release()?;
             return Err(error);
         }
 
@@ -192,7 +192,7 @@ where
         let call_state = match self.inner.setup_call(SecretKey::generate().public()).await {
             Ok(state) => state,
             Err(error) => {
-                self.inner.core_state.call_slot.release();
+                self.inner.core_state.call_slot.release()?;
                 return Err(error);
             }
         };
@@ -250,7 +250,7 @@ where
             // wait for a new manager to start
             self.inner.core_state.manager_active.notified().await;
             // ensure volume cache resets fully
-            self.inner.core_state.reset_peer_output_volumes();
+            self.inner.core_state.reset_peer_output_volumes()?;
             // start a session for all contacts
             for contact in self.inner.callbacks.get_contacts().await {
                 self.start_session(&contact).await;
@@ -280,13 +280,21 @@ where
     /// Stops a specific session (called when a contact is deleted)
     pub async fn stop_session(&self, contact: &Contact) {
         // clear volume cache entry for contact
-        self.inner
+        if let Err(error) = self
+            .inner
             .core_state
-            .reset_peer_output_volume(&contact.peer_id);
-        self.inner
+            .reset_peer_output_volume(&contact.peer_id)
+        {
+            error!("reset_peer_output_volume failed: {}", error);
+        }
+        if let Err(error) = self
+            .inner
             .core_state
             .call_slot
-            .release_if_pending_for_peer(contact.peer_id);
+            .release_if_pending_for_peer(contact.peer_id)
+        {
+            error!("release_if_pending_for_peer failed: {}", error);
+        }
         if let Some(state) = self
             .inner
             .session_states
@@ -304,7 +312,7 @@ where
             .inner
             .core_state
             .call_slot
-            .try_acquire(CallSlotState::AudioTest, None)
+            .try_acquire(CallSlotState::AudioTest, None)?
         {
             return Err(ErrorKind::CallAlreadyActive.into());
         }
@@ -317,7 +325,7 @@ where
         if let Err(error) = self.inner.init_web_audio().await {
             // clean up state before propagating error
             self.inner.core_state.end_audio_test.lock().await.take();
-            self.inner.core_state.call_slot.release();
+            self.inner.core_state.call_slot.release()?;
             return Err(error);
         }
 
@@ -344,9 +352,9 @@ where
             Err(error) => Err(error),
         };
 
-        self.inner.core_state.reset_peer_output_volume(&peer_id);
+        self.inner.core_state.reset_peer_output_volume(&peer_id)?;
         self.inner.core_state.end_audio_test.lock().await.take();
-        self.inner.core_state.call_slot.release();
+        self.inner.core_state.call_slot.release()?;
         result
     }
 
@@ -432,12 +440,12 @@ where
         self.inner.core_state.set_input_volume(decibel)
     }
 
-    pub fn set_output_volume(&self, decibel: f32) {
-        self.inner.core_state.set_output_volume(decibel);
+    pub fn set_output_volume(&self, decibel: f32) -> Result<()> {
+        self.inner.core_state.set_output_volume(decibel)
     }
 
-    pub fn set_contact_output_volume(&self, contact: &Contact) {
-        self.inner.core_state.set_peer_output_volume(contact);
+    pub fn set_contact_output_volume(&self, contact: &Contact) -> Result<()> {
+        self.inner.core_state.set_peer_output_volume(contact)
     }
 
     pub fn set_deafened(&self, deafened: bool) {

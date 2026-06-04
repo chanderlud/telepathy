@@ -422,6 +422,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ManagerState dco_decode_manager_state(dynamic raw);
 
   @protected
+  NetworkConfigField dco_decode_network_config_field(dynamic raw);
+
+  @protected
+  NetworkConfigUpdateError dco_decode_network_config_update_error(dynamic raw);
+
+  @protected
   String? dco_decode_opt_String(dynamic raw);
 
   @protected
@@ -791,6 +797,14 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   ManagerState sse_decode_manager_state(SseDeserializer deserializer);
+
+  @protected
+  NetworkConfigField sse_decode_network_config_field(
+      SseDeserializer deserializer);
+
+  @protected
+  NetworkConfigUpdateError sse_decode_network_config_update_error(
+      SseDeserializer deserializer);
 
   @protected
   String? sse_decode_opt_String(SseDeserializer deserializer);
@@ -1215,6 +1229,14 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_manager_state(ManagerState self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_network_config_field(
+      NetworkConfigField self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_network_config_update_error(
+      NetworkConfigUpdateError self, SseSerializer serializer);
 
   @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer);

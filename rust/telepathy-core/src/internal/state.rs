@@ -1,4 +1,6 @@
+use crate::internal::Result;
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
+use crate::internal::error::ErrorKind;
 use crate::internal::messages::{AudioHeader, ProtocolMessage, RoomMessage};
 use crate::types::{CodecConfig, Contact, NetworkConfig, ScreenshareConfig, SessionStatus};
 use atomic_float::AtomicF32;
@@ -88,15 +90,19 @@ impl CallSlot {
         CallSlotState::from_u8(self.state.load(Acquire)).unwrap_or(CallSlotState::Idle)
     }
 
-    pub(crate) fn direct_peer(&self) -> Option<PublicKey> {
-        *self
+    pub(crate) fn direct_peer(&self) -> Result<Option<PublicKey>> {
+        Ok(*self
             .direct_peer
             .lock()
-            .expect("call slot direct peer mutex poisoned")
+            .map_err(|_| ErrorKind::Poison("call slot direct peer mutex poisoned"))?)
     }
 
     /// Atomically claims the call slot from idle.
-    pub(crate) fn try_acquire(&self, state: CallSlotState, peer: Option<PublicKey>) -> bool {
+    pub(crate) fn try_acquire(
+        &self,
+        state: CallSlotState,
+        peer: Option<PublicKey>,
+    ) -> Result<bool> {
         debug_assert_ne!(state, CallSlotState::Idle);
         if self
             .state
@@ -107,11 +113,12 @@ impl CallSlot {
                 *self
                     .direct_peer
                     .lock()
-                    .expect("call slot direct peer mutex poisoned") = Some(peer);
+                    .map_err(|_| ErrorKind::Poison("call slot direct peer mutex poisoned"))? =
+                    Some(peer);
             }
-            true
+            Ok(true)
         } else {
-            false
+            Ok(false)
         }
     }
 
@@ -126,16 +133,16 @@ impl CallSlot {
         &self,
         state: CallSlotState,
         peer: PublicKey,
-    ) -> CallSlotAcquireResult {
+    ) -> Result<CallSlotAcquireResult> {
         debug_assert_ne!(state, CallSlotState::Idle);
         loop {
             let direct_peer_snapshot = *self
                 .direct_peer
                 .lock()
-                .expect("call slot direct peer mutex poisoned");
+                .map_err(|_| ErrorKind::Poison("call slot direct peer mutex poisoned"))?;
             let current = self.current();
             if Self::slot_matches_for_peer(state, current, peer, direct_peer_snapshot) {
-                return CallSlotAcquireResult::Matched;
+                return Ok(CallSlotAcquireResult::Matched);
             }
 
             if current == CallSlotState::Idle
@@ -147,15 +154,16 @@ impl CallSlot {
                 *self
                     .direct_peer
                     .lock()
-                    .expect("call slot direct peer mutex poisoned") = Some(peer);
-                return CallSlotAcquireResult::Acquired;
+                    .map_err(|_| ErrorKind::Poison("call slot direct peer mutex poisoned"))? =
+                    Some(peer);
+                return Ok(CallSlotAcquireResult::Acquired);
             }
 
             if self.current() == CallSlotState::Idle {
                 continue;
             }
 
-            return CallSlotAcquireResult::Failed;
+            return Ok(CallSlotAcquireResult::Failed);
         }
     }
 
@@ -176,18 +184,18 @@ impl CallSlot {
         state == CallSlotState::PendingIncoming && current == CallSlotState::PendingOutgoing
     }
 
-    pub(crate) fn transition_pending_to_active_for_peer(&self, peer: PublicKey) -> bool {
+    pub(crate) fn transition_pending_to_active_for_peer(&self, peer: PublicKey) -> Result<bool> {
         loop {
             let current = self.current();
             match current {
                 CallSlotState::PendingIncoming | CallSlotState::PendingOutgoing
-                    if self.direct_peer() == Some(peer) =>
+                    if self.direct_peer()? == Some(peer) =>
                 {
                     if self.try_transition(current, CallSlotState::ActiveDirect) {
-                        return true;
+                        return Ok(true);
                     }
                 }
-                _ => return false,
+                _ => return Ok(false),
             }
         }
     }
@@ -198,36 +206,37 @@ impl CallSlot {
             .is_ok()
     }
 
-    pub(crate) fn release(&self) {
+    pub(crate) fn release(&self) -> Result<()> {
         self.state.store(CallSlotState::Idle as u8, Release);
         *self
             .direct_peer
             .lock()
-            .expect("call slot direct peer mutex poisoned") = None;
+            .map_err(|_| ErrorKind::Poison("call slot direct peer mutex poisoned"))? = None;
+        Ok(())
     }
 
-    pub(crate) fn release_if_state(&self, expected: CallSlotState) -> bool {
+    pub(crate) fn release_if_state(&self, expected: CallSlotState) -> Result<bool> {
         if self.current() == expected {
-            self.release();
-            true
+            self.release()?;
+            Ok(true)
         } else {
             warn!(
                 event = "call_slot_release_skipped",
                 ?expected,
                 actual = ?self.current()
             );
-            false
+            Ok(false)
         }
     }
 
-    pub(crate) fn release_if_pending_for_peer(&self, peer: PublicKey) {
+    pub(crate) fn release_if_pending_for_peer(&self, peer: PublicKey) -> Result<()> {
         let current = self.current();
         if matches!(
             current,
             CallSlotState::PendingIncoming | CallSlotState::PendingOutgoing
         ) {
-            if self.direct_peer() == Some(peer) {
-                self.release();
+            if self.direct_peer()? == Some(peer) {
+                self.release()?;
             } else {
                 warn!(
                     event = "call_slot_release_skipped_peer_mismatch",
@@ -236,6 +245,7 @@ impl CallSlot {
                 );
             }
         }
+        Ok(())
     }
 }
 
@@ -344,18 +354,21 @@ impl CoreState {
     }
 
     /// returns the volume multiplier to share with the output processor
-    pub(crate) fn output_volume_for_peer(&self, peer: PublicKey) -> Arc<AtomicF32> {
-        self.get_peer_volume(peer).multiplier
+    pub(crate) fn output_volume_for_peer(&self, peer: PublicKey) -> Result<Arc<AtomicF32>> {
+        Ok(self.get_peer_volume(peer)?.multiplier)
     }
 
     /// updates the base output volume in decibels
     /// all peer output volumes are updated with the new base
-    pub(crate) fn set_output_volume(&self, decibel: f32) {
-        let lock = self.output_lock.lock();
+    pub(crate) fn set_output_volume(&self, decibel: f32) -> Result<()> {
+        let lock = self
+            .output_lock
+            .lock()
+            .map_err(|_| ErrorKind::Poison("output lock mutex poisoned"))?;
         let peer_volume_lock = self
             .peer_output_volumes
             .lock()
-            .expect("peer output volume mutex poisoned");
+            .map_err(|_| ErrorKind::Poison("peer output volume mutex poisoned"))?;
         let old_decibel = self.output_volume.swap(decibel, Relaxed);
         let offset = decibel - old_decibel;
         for peer in peer_volume_lock.values() {
@@ -363,43 +376,51 @@ impl CoreState {
             peer.multiplier.store(db_to_multiplier(new_volume), Relaxed);
         }
         drop(lock);
+        Ok(())
     }
 
     /// updates the peer output volume for a contact
-    pub(crate) fn set_peer_output_volume(&self, contact: &Contact) {
-        let lock = self.output_lock.lock();
+    pub(crate) fn set_peer_output_volume(&self, contact: &Contact) -> Result<()> {
+        let lock = self
+            .output_lock
+            .lock()
+            .map_err(|_| ErrorKind::Poison("output lock mutex poisoned"))?;
         let global_volume = self.output_volume.load(Relaxed);
-        let peer_volume = self.get_peer_volume(contact.peer_id);
+        let peer_volume = self.get_peer_volume(contact.peer_id)?;
         let new_volume = global_volume + contact.output_volume;
         peer_volume.volume.store(new_volume, Relaxed);
         peer_volume
             .multiplier
             .store(db_to_multiplier(new_volume), Relaxed);
         drop(lock);
+        Ok(())
     }
 
-    pub(crate) fn reset_peer_output_volumes(&self) {
+    pub(crate) fn reset_peer_output_volumes(&self) -> Result<()> {
         self.peer_output_volumes
             .lock()
-            .expect("peer output volume mutex poisoned")
+            .map_err(|_| ErrorKind::Poison("peer output volume mutex poisoned"))?
             .clear();
+        Ok(())
     }
 
-    pub(crate) fn reset_peer_output_volume(&self, peer: &PublicKey) {
+    pub(crate) fn reset_peer_output_volume(&self, peer: &PublicKey) -> Result<()> {
         self.peer_output_volumes
             .lock()
-            .expect("peer output volume mutex poisoned")
+            .map_err(|_| ErrorKind::Poison("peer output volume mutex poisoned"))?
             .remove(peer);
+        Ok(())
     }
 
-    fn get_peer_volume(&self, peer: PublicKey) -> PeerVolume {
-        self.peer_output_volumes
+    fn get_peer_volume(&self, peer: PublicKey) -> Result<PeerVolume> {
+        Ok(self
+            .peer_output_volumes
             .lock()
-            .expect("peer output volume mutex poisoned")
+            .map_err(|_| ErrorKind::Poison("peer output volume mutex poisoned"))?
             .entry(peer)
             // peers from rooms will not have a cached output volume
             .or_insert_with(|| PeerVolume::new(self.output_volume.load(Relaxed)))
-            .clone()
+            .clone())
     }
 }
 
@@ -620,14 +641,21 @@ mod call_slot_tests {
         let slot = CallSlot::default();
         let peer = SecretKey::generate().public();
 
-        assert!(slot.try_acquire(CallSlotState::PendingOutgoing, Some(peer)));
+        assert!(
+            slot.try_acquire(CallSlotState::PendingOutgoing, Some(peer))
+                .unwrap()
+        );
         assert_eq!(slot.current(), CallSlotState::PendingOutgoing);
-        assert_eq!(slot.direct_peer(), Some(peer));
-        assert!(!slot.try_acquire(CallSlotState::PendingIncoming, Some(peer)));
+        assert_eq!(slot.direct_peer().unwrap(), Some(peer));
+        assert!(
+            !slot
+                .try_acquire(CallSlotState::PendingIncoming, Some(peer))
+                .unwrap()
+        );
 
-        slot.release();
+        slot.release().unwrap();
         assert_eq!(slot.current(), CallSlotState::Idle);
-        assert_eq!(slot.direct_peer(), None);
+        assert_eq!(slot.direct_peer().unwrap(), None);
     }
 
     #[test]
@@ -635,10 +663,13 @@ mod call_slot_tests {
         let slot = CallSlot::default();
         let peer = SecretKey::generate().public();
 
-        assert!(slot.try_acquire(CallSlotState::PendingIncoming, Some(peer)));
+        assert!(
+            slot.try_acquire(CallSlotState::PendingIncoming, Some(peer))
+                .unwrap()
+        );
         assert!(slot.try_transition(CallSlotState::PendingIncoming, CallSlotState::ActiveDirect));
         assert_eq!(slot.current(), CallSlotState::ActiveDirect);
-        assert_eq!(slot.direct_peer(), Some(peer));
+        assert_eq!(slot.direct_peer().unwrap(), Some(peer));
     }
 
     #[test]
@@ -647,11 +678,14 @@ mod call_slot_tests {
         let peer = SecretKey::generate().public();
         let other = SecretKey::generate().public();
 
-        assert!(slot.try_acquire(CallSlotState::PendingOutgoing, Some(peer)));
-        slot.release_if_pending_for_peer(other);
+        assert!(
+            slot.try_acquire(CallSlotState::PendingOutgoing, Some(peer))
+                .unwrap()
+        );
+        slot.release_if_pending_for_peer(other).unwrap();
         assert_eq!(slot.current(), CallSlotState::PendingOutgoing);
 
-        slot.release_if_pending_for_peer(peer);
+        slot.release_if_pending_for_peer(peer).unwrap();
         assert_eq!(slot.current(), CallSlotState::Idle);
     }
 
@@ -661,7 +695,8 @@ mod call_slot_tests {
         let peer = SecretKey::generate().public();
 
         assert_eq!(
-            slot.try_acquire_or_match(CallSlotState::PendingOutgoing, peer),
+            slot.try_acquire_or_match(CallSlotState::PendingOutgoing, peer)
+                .unwrap(),
             CallSlotAcquireResult::Acquired
         );
         assert_eq!(slot.current(), CallSlotState::PendingOutgoing);
@@ -672,9 +707,13 @@ mod call_slot_tests {
         let slot = CallSlot::default();
         let peer = SecretKey::generate().public();
 
-        assert!(slot.try_acquire(CallSlotState::PendingOutgoing, Some(peer)));
+        assert!(
+            slot.try_acquire(CallSlotState::PendingOutgoing, Some(peer))
+                .unwrap()
+        );
         assert_eq!(
-            slot.try_acquire_or_match(CallSlotState::PendingOutgoing, peer),
+            slot.try_acquire_or_match(CallSlotState::PendingOutgoing, peer)
+                .unwrap(),
             CallSlotAcquireResult::Matched
         );
     }
@@ -684,9 +723,13 @@ mod call_slot_tests {
         let slot = CallSlot::default();
         let peer = SecretKey::generate().public();
 
-        assert!(slot.try_acquire(CallSlotState::PendingOutgoing, Some(peer)));
+        assert!(
+            slot.try_acquire(CallSlotState::PendingOutgoing, Some(peer))
+                .unwrap()
+        );
         assert_eq!(
-            slot.try_acquire_or_match(CallSlotState::PendingIncoming, peer),
+            slot.try_acquire_or_match(CallSlotState::PendingIncoming, peer)
+                .unwrap(),
             CallSlotAcquireResult::Matched
         );
         assert_eq!(slot.current(), CallSlotState::PendingOutgoing);
@@ -698,9 +741,13 @@ mod call_slot_tests {
         let peer = SecretKey::generate().public();
         let other = SecretKey::generate().public();
 
-        assert!(slot.try_acquire(CallSlotState::PendingOutgoing, Some(peer)));
+        assert!(
+            slot.try_acquire(CallSlotState::PendingOutgoing, Some(peer))
+                .unwrap()
+        );
         assert_eq!(
-            slot.try_acquire_or_match(CallSlotState::PendingOutgoing, other),
+            slot.try_acquire_or_match(CallSlotState::PendingOutgoing, other)
+                .unwrap(),
             CallSlotAcquireResult::Failed
         );
     }
@@ -710,8 +757,11 @@ mod call_slot_tests {
         let slot = CallSlot::default();
         let peer = SecretKey::generate().public();
 
-        assert!(slot.try_acquire(CallSlotState::PendingOutgoing, Some(peer)));
-        assert!(slot.transition_pending_to_active_for_peer(peer));
+        assert!(
+            slot.try_acquire(CallSlotState::PendingOutgoing, Some(peer))
+                .unwrap()
+        );
+        assert!(slot.transition_pending_to_active_for_peer(peer).unwrap());
         assert_eq!(slot.current(), CallSlotState::ActiveDirect);
     }
 
@@ -724,7 +774,10 @@ mod call_slot_tests {
         let peer_a = SecretKey::generate().public();
         let peer_b = SecretKey::generate().public();
 
-        assert!(slot.try_acquire(CallSlotState::PendingOutgoing, Some(peer_a)));
+        assert!(
+            slot.try_acquire(CallSlotState::PendingOutgoing, Some(peer_a))
+                .unwrap()
+        );
 
         let start = Arc::new(Barrier::new(2));
         let done = Arc::new(Barrier::new(2));
@@ -735,8 +788,11 @@ mod call_slot_tests {
             thread::spawn(move || {
                 for _ in 0..5_000 {
                     start.wait();
-                    slot.release();
-                    assert!(slot.try_acquire(CallSlotState::PendingOutgoing, Some(peer_b)));
+                    slot.release().unwrap();
+                    assert!(
+                        slot.try_acquire(CallSlotState::PendingOutgoing, Some(peer_b))
+                            .unwrap()
+                    );
                     done.wait();
                 }
             })
@@ -744,7 +800,9 @@ mod call_slot_tests {
 
         for _ in 0..5_000 {
             start.wait();
-            let result = slot.try_acquire_or_match(CallSlotState::PendingOutgoing, peer_a);
+            let result = slot
+                .try_acquire_or_match(CallSlotState::PendingOutgoing, peer_a)
+                .unwrap();
             assert_ne!(
                 result,
                 CallSlotAcquireResult::Matched,

@@ -280,10 +280,10 @@ async fn handle_command(
             telepathy.set_input_volume(value);
             CommandOutcome::AckOk
         }
-        Command::SetOutputVolumeDb { value } => {
-            telepathy.set_output_volume(value);
-            CommandOutcome::AckOk
-        }
+        Command::SetOutputVolumeDb { value } => match telepathy.set_output_volume(value) {
+            Ok(()) => CommandOutcome::AckOk,
+            Err(err) => CommandOutcome::AckErr(err),
+        },
         Command::SetRmsThresholdDb { value } => {
             telepathy.set_rms_threshold(value);
             CommandOutcome::AckOk
