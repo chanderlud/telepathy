@@ -70,9 +70,6 @@
 //! let devices = host.list_all_devices().unwrap();
 //! println!("Input devices: {:?}", devices.input_devices);
 //! println!("Output devices: {:?}", devices.output_devices);
-//!
-//! // Get the default input device
-//! let input_device = host.get_default_input_device().unwrap();
 //! ```
 //!
 //! ### Audio Input
