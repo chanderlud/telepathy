@@ -48,7 +48,7 @@ class TextInput extends StatelessWidget {
     // Lerp the error color toward black so the outline darkens slightly on
     // hover while still clearly signalling the error state.
     final errorHoverColor = Color.lerp(errorColor, Colors.black, 0.16)!;
-    
+
     final InputBorder border = errorText == null
         ? const OutlineInputBorder(
             borderRadius: BorderRadius.all(Radius.circular(10.0)),
@@ -57,8 +57,7 @@ class TextInput extends StatelessWidget {
             final hovered = states.contains(WidgetState.hovered);
             final focused = states.contains(WidgetState.focused);
             return OutlineInputBorder(
-              borderRadius:
-                  const BorderRadius.all(Radius.circular(10.0)),
+              borderRadius: const BorderRadius.all(Radius.circular(10.0)),
               borderSide: BorderSide(
                 color: hovered ? errorHoverColor : errorColor,
                 width: focused ? 2 : 1,

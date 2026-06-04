@@ -95,14 +95,15 @@ class NetworkSettingsController with ChangeNotifier {
       // override previously-configured values, which is not what
       // "skip this group" means.
       final int newListenPort = stored.listenPort ?? defaultListenPort;
-      final List<String> newBindAddresses = (stored.bindAddresses != null &&
-              stored.bindAddresses!.isNotEmpty)
-          ? stored.bindAddresses!
-          : defaultBindAddresses;
-      final List<String>? newRelays =
-          (stored.customRelaysEnabled && stored.relays != null && stored.relays!.isNotEmpty)
-              ? stored.relays
-              : null;
+      final List<String> newBindAddresses =
+          (stored.bindAddresses != null && stored.bindAddresses!.isNotEmpty)
+              ? stored.bindAddresses!
+              : defaultBindAddresses;
+      final List<String>? newRelays = (stored.customRelaysEnabled &&
+              stored.relays != null &&
+              stored.relays!.isNotEmpty)
+          ? stored.relays
+          : null;
       final String? newDnsEndpoint = (stored.customDnsEnabled &&
               stored.dnsEndpoint != null &&
               stored.dnsEndpoint!.isNotEmpty &&
@@ -110,9 +111,8 @@ class NetworkSettingsController with ChangeNotifier {
               stored.dnsOriginDomain!.isNotEmpty)
           ? stored.dnsEndpoint
           : null;
-      final String? newDnsOriginDomain = newDnsEndpoint != null
-          ? stored.dnsOriginDomain
-          : null;
+      final String? newDnsOriginDomain =
+          newDnsEndpoint != null ? stored.dnsOriginDomain : null;
       final String? newPkarrRelay =
           stored.customPkarrEnabled ? stored.pkarrRelay : null;
 
