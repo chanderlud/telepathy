@@ -4,6 +4,7 @@ use iroh::PublicKey;
 use iroh::endpoint::Connection;
 use serde::Serialize;
 use speedy::{Readable, Writable};
+use uuid::Uuid;
 
 pub(crate) const SESSION_STOPPED_REASON: &str = "session stopped";
 
@@ -79,6 +80,9 @@ pub(crate) enum RoomMessage {
 
         /// established early call state
         state: EarlyCallState,
+
+        /// ID for the corresponding session
+        session_id: Uuid,
     },
     Leave {
         peer: PublicKey,

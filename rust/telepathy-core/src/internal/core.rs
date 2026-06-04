@@ -611,8 +611,15 @@ where
         let call_slot = &self.core_state.call_slot;
         if is_in_room {
             debug_assert_eq!(call_slot.current(), CallSlotState::RoomCall);
-            self.room_handshake(io.send, io.recv, io.connection, call_state)
-                .await?;
+            self.room_handshake(
+                io.send,
+                io.recv,
+                io.connection,
+                &io.state.stop_session,
+                call_state,
+                io.state.id,
+            )
+            .await?;
             Ok(HandshakeDispatch::Completed)
         } else if let Some(slot) = pending_slot.take() {
             slot.into_handshake()?;
@@ -1080,8 +1087,6 @@ where
         fields(peer.id = %contact.peer_id, room.hash = field::Empty)
     )]
     async fn session_inner(&self, contact: &Contact, io: &mut SessionIo<'_>) -> Result<bool> {
-        let local_room_hash = self.room_hash().await;
-        Span::current().record("room.hash", field::debug(local_room_hash));
         info!(event = "session_waiting_for_event");
 
         select! {
@@ -1116,6 +1121,8 @@ where
                     }
                 }
 
+                let local_room_hash = self.room_hash().await;
+                Span::current().record("room.hash", field::debug(local_room_hash));
                 let is_in_room = self.is_in_room(&contact.peer_id).await;
                 let outcome = self
                     .negotiate_incoming_call(
@@ -1133,6 +1140,8 @@ where
                 Ok(outcome.to_outcome())
             }
             _ = io.state.start_call.notified() => {
+                let local_room_hash = self.room_hash().await;
+                Span::current().record("room.hash", field::debug(local_room_hash));
                 let outcome = self
                     .negotiate_outgoing_call(
                         io,
@@ -1464,7 +1473,9 @@ where
         send: &mut FramedWrite<SendStream, LengthDelimitedCodec>,
         recv: &mut FramedRead<RecvStream, LengthDelimitedCodec>,
         connection: &Connection,
+        stop_session: &CancellationToken,
         call_state: EarlyCallState,
+        session_id: Uuid,
     ) -> Result<()> {
         let peer_id = call_state.peer;
         let connection_id = connection.stable_id();
@@ -1480,12 +1491,18 @@ where
             .send(RoomMessage::Join {
                 connection: connection.clone(),
                 state: call_state,
+                session_id,
             })
             .await
             .map_err(|_| ErrorKind::RoomStateMissing)?;
 
         loop {
             select! {
+                _ = stop_session.cancelled() => {
+                    info!(event = "room_session_stopped_sending_goodbye", peer.id = %peer_id);
+                    _ = write_message(send, &ProtocolMessage::Goodbye { reason: None }).await;
+                    break
+                }
                 _ = cancel.cancelled() => {
                     // try to say goodbye
                     info!(event = "room_cancelled_sending_goodbye", peer.id = %peer_id);
@@ -1580,7 +1597,17 @@ where
             select! {
                 message = receiver.recv() => {
                     match message {
-                        Some(RoomMessage::Join { connection, state }) => {
+                        Some(RoomMessage::Join { connection, state, session_id }) => {
+                            if let Some(session) = self.session_states.read().await.get(&state.peer) {
+                                if session.id != session_id {
+                                    warn!(event = "room_join_stale_session", peer.id = %state.peer);
+                                    continue;
+                                }
+                            } else {
+                                warn!(event = "room_join_missing_session", peer.id = %state.peer);
+                                continue;
+                            }
+
                             let connection_id = connection.stable_id();
                             info!(
                                 event = "room_join_received",
@@ -1611,7 +1638,13 @@ where
                                     old_connection
                                         .connection
                                         .close(VarInt::from_u32(0), b"replaced");
-                                    old_connection.handle.await??;
+                                    match old_connection.handle.await {
+                                        Ok(Ok(())) => {}
+                                        Ok(Err(error)) => {
+                                            warn!(event = "room_output_closed_on_replacement", ?error);
+                                        }
+                                        Err(error) => return Err(error.into()),
+                                    }
                                 }
                                 peer_connections.remove(&state.peer);
                             }
@@ -1669,7 +1702,13 @@ where
                                     peer_connections.remove(&peer);
                                     if let Some(connection) = connections.remove(&connection_id) {
                                         connection_sender.remove(&connection.connection);
-                                        connection.handle.await??;
+                                        match connection.handle.await {
+                                            Ok(Ok(())) => (),
+                                            Ok(Err(error)) => {
+                                                warn!(event = "room_output_closed_on_leave", ?error);
+                                            }
+                                            Err(error) => return Err(error.into()),
+                                        }
                                         info!(
                                             event = "room_connection_cleaned_up",
                                             peer.id = %peer,
@@ -1722,7 +1761,13 @@ where
         input_handle.await??;
         // join output tasks, dropping output helpers to close
         for connection in connections.into_values() {
-            connection.handle.await??;
+            match connection.handle.await {
+                Ok(Ok(())) => (),
+                Ok(Err(error)) => {
+                    warn!(event = "room_output_closed_on_teardown", ?error);
+                }
+                Err(error) => return Err(error.into()),
+            }
         }
         debug!(event = "room_processing_teardown_done");
         // cleanup room state

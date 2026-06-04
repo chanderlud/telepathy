@@ -306,13 +306,14 @@ impl NetworkConfig {
 
     #[cfg(feature = "integration-testing")]
     pub fn mock(
+        listen_port: u16,
         relay_map: &RelayMap,
         dns_endpoint: Option<&str>,
         dns_origin_domain: Option<&str>,
         pkarr_relay: Option<Url>,
     ) -> Self {
         Self {
-            listen_port: Arc::new(AtomicU16::new(0)),
+            listen_port: Arc::new(AtomicU16::new(listen_port)),
             bind_addresses: Arc::new(StdRwLock::new(vec![IpAddr::V4(Ipv4Addr::UNSPECIFIED)])),
             relays: Arc::new(StdRwLock::new(Some(relay_map.clone()))),
             dns_endpoint: Arc::new(StdRwLock::new(dns_endpoint.and_then(|s| s.parse().ok()))),
