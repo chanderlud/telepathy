@@ -51,7 +51,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "--test-iterations",
         action="store",
         type=int,
-        default=4,
+        default=8,
         help="Run each collected test this many times.",
     )
 
