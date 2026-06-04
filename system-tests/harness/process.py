@@ -56,6 +56,7 @@ class CliProcess:
         self._stdout_log: list[dict] = []
         self._pending: dict[str, asyncio.Future[dict]] = {}
         self._events: asyncio.Queue[dict] = asyncio.Queue()
+        self.identity: object | None = None
 
     async def start(self) -> None:
         args = ["--listen-port", str(self.listen_port)]

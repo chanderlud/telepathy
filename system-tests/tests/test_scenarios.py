@@ -5,6 +5,7 @@ import base64
 import re
 import urllib.error
 import urllib.request
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -27,6 +28,12 @@ SCENARIOS_ROOT = Path(__file__).resolve().parents[1] / "scenarios"
 class TestIdentity:
     secret_key_b64: str
     peer_id_hex: str
+
+
+@dataclass(frozen=True)
+class RoomCliGroup:
+    actors: dict[str, CliProcess]
+    topology: TopologyManager
 
 NETWORK_PROFILES = [
     NetworkProfile(
@@ -62,6 +69,9 @@ NETWORK_PROFILES = [
         seed=103,
     ),
 ]
+
+ROOM_THREE_ACTORS = ["alice", "bob", "carol"]
+ROOM_TWENTY_ACTORS = [f"peer{index:02d}" for index in range(1, 21)]
 
 
 def _generate_identity() -> TestIdentity:
@@ -114,7 +124,8 @@ def _manager_state_from_event(message: dict) -> str | None:
 
 
 def _peer_id_to_z32(peer_id_hex: str) -> str:
-    return zbase32.encode(bytes.fromhex(peer_id_hex))
+    encode = getattr(zbase32, "encode")
+    return encode(bytes.fromhex(peer_id_hex))
 
 
 def _pkarr_record_url(relay_base: str, peer_id_hex: str) -> str:
@@ -220,11 +231,264 @@ async def wait_for_relay_ready(actor: CliProcess, timeout: float = 30.0) -> dict
     )
 
 
+def _status_name(status: object) -> str | None:
+    if isinstance(status, str):
+        return status
+    if isinstance(status, dict) and len(status) == 1:
+        only_key = next(iter(status.keys()))
+        if isinstance(only_key, str):
+            return only_key
+    return None
+
+
+def _room_peer_from_state(message: dict, state_name: str) -> str | None:
+    if message.get("kind") != "event" or message.get("type") != "call_state":
+        return None
+    state = message.get("state")
+    if isinstance(state, dict) and state.get(state_name) is not None:
+        peer = state.get(state_name)
+        if isinstance(peer, str):
+            return peer
+    return None
+
+
+def _latest_session_statuses(messages: list[dict]) -> dict[str, str]:
+    statuses: dict[str, str] = {}
+    for message in messages:
+        if message.get("kind") != "event" or message.get("type") != "session_status":
+            continue
+        peer = message.get("peer")
+        if not isinstance(peer, str):
+            continue
+        status_name = _status_name(message.get("status"))
+        if status_name:
+            statuses[peer] = status_name
+    return statuses
+
+
+def _settled_room_members(messages: list[dict]) -> set[str]:
+    members: set[str] = set()
+    for message in messages:
+        joined = _room_peer_from_state(message, "RoomJoin")
+        if joined is not None:
+            members.add(joined)
+            continue
+        left = _room_peer_from_state(message, "RoomLeave")
+        if left is not None:
+            members.discard(left)
+    return members
+
+
+def _error_events(messages: list[dict]) -> list[dict]:
+    return [
+        message
+        for message in messages
+        if message.get("kind") == "event" and message.get("type") in {"error", "Error"}
+    ]
+
+
+def _room_mesh_missing(actors: dict[str, CliProcess]) -> list[str]:
+    peer_ids = {
+        name: actor.identity_peer_id
+        for name, actor in actors.items()
+        if isinstance(actor.identity_peer_id, str)
+    }
+    missing: list[str] = []
+
+    for name, actor in actors.items():
+        own_peer_id = peer_ids.get(name)
+        if own_peer_id is None:
+            missing.append(f"{name}: missing identity_peer_id")
+            continue
+
+        expected_peers = {peer_id for peer_id in peer_ids.values() if peer_id != own_peer_id}
+        messages = actor.stdout_lines()
+        if errors := _error_events(messages):
+            missing.append(f"{name}: emitted error events {errors}")
+
+        statuses = _latest_session_statuses(messages)
+        connected = {
+            peer_id
+            for peer_id, status in statuses.items()
+            if peer_id in expected_peers and status == "Connected"
+        }
+        if connected != expected_peers:
+            missing.append(
+                f"{name}: connected peers missing {sorted(expected_peers - connected)}; "
+                f"unexpected statuses {statuses}"
+            )
+
+        room_members = _settled_room_members(messages)
+        if room_members != expected_peers:
+            missing.append(
+                f"{name}: settled room members expected {sorted(expected_peers)} "
+                f"got {sorted(room_members)}"
+            )
+
+    return missing
+
+
+async def wait_for_room_mesh_connected(
+    actors: dict[str, CliProcess],
+    *,
+    timeout: float = 120.0,
+    stability_window: float = 2.0,
+) -> None:
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    last_missing: list[str] = []
+
+    while loop.time() < deadline:
+        last_missing = _room_mesh_missing(actors)
+        if not last_missing:
+            await asyncio.sleep(stability_window)
+            settled_missing = _room_mesh_missing(actors)
+            if not settled_missing:
+                return
+            last_missing = settled_missing
+        await asyncio.sleep(0.2)
+
+    diagnostics = "\n".join(last_missing) if last_missing else "no diagnostics captured"
+    raise AssertionError(f"room mesh did not settle within {timeout:.1f}s:\n{diagnostics}")
+
+
+async def _start_cli_group(
+    *,
+    topology: TopologyManager,
+    binaries: dict[str, str],
+    actor_names: list[str],
+) -> dict[str, CliProcess]:
+    actors: dict[str, CliProcess] = {}
+    for actor_name, namespace in zip(actor_names, topology.client_namespaces):
+        actors[actor_name] = CliProcess(
+            binary_path=binaries["cli"],
+            namespace=namespace,
+            listen_port=0,
+            bind_addresses=["0.0.0.0"],
+            relay_url=topology.relay_url(namespace),
+            dns_endpoint=topology.dns_endpoint(namespace),
+            dns_origin_domain=topology.dns_origin_domain(namespace),
+            pkarr_relay=topology.pkarr_relay(namespace),
+        )
+
+    await asyncio.gather(*(actor.start() for actor in actors.values()))
+    await asyncio.gather(
+        *(_set_identity_on_actor(actor, _generate_identity()) for actor in actors.values())
+    )
+    start_manager_responses = await asyncio.gather(
+        *(actor.send({"cmd": "start_manager", "args": {}}) for actor in actors.values())
+    )
+    for actor_name, response in zip(actors, start_manager_responses):
+        assert response.get("ok") is True, f"{actor_name} start_manager failed: {response}"
+
+    await asyncio.gather(*(wait_for_relay_ready(actor) for actor in actors.values()))
+    await wait_for_pkarr_published(
+        [(actor, actor.namespace) for actor in actors.values()],
+        topology,
+        timeout=30.0,
+    )
+    return actors
+
+
+async def _terminate_actors(actors: dict[str, CliProcess]) -> None:
+    await asyncio.gather(*(actor.terminate() for actor in reversed(list(actors.values()))))
+
+
+async def _add_contact(owner: CliProcess, contact_id: str, peer_id: str) -> None:
+    response = await owner.send(
+        {
+            "cmd": "add_contact",
+            "args": {"contact_id": contact_id, "peer_id": peer_id},
+        }
+    )
+    assert response.get("ok") is True, f"add_contact {contact_id} failed: {response}"
+
+
+async def _add_all_contacts(actors: dict[str, CliProcess]) -> None:
+    tasks = []
+    for owner_name, owner in actors.items():
+        for contact_name, contact in actors.items():
+            if contact_name == owner_name:
+                continue
+            peer_id = contact.identity_peer_id
+            if not isinstance(peer_id, str):
+                raise AssertionError(f"{contact_name} missing identity_peer_id")
+            tasks.append(_add_contact(owner, contact_name, peer_id))
+    await asyncio.gather(*tasks)
+
+
+async def _add_sparse_room_contacts(actors: dict[str, CliProcess]) -> None:
+    actor_items = list(actors.items())
+    tasks = []
+    for index, (owner_name, owner) in enumerate(actor_items[:10]):
+        contact_names = {
+            actor_items[(index + 1) % len(actor_items)][0],
+            actor_items[(index + 5) % len(actor_items)][0],
+        }
+        for contact_name in contact_names:
+            contact = actors[contact_name]
+            peer_id = contact.identity_peer_id
+            if not isinstance(peer_id, str):
+                raise AssertionError(f"{contact_name} missing identity_peer_id")
+            tasks.append(_add_contact(owner, contact_name, peer_id))
+    await asyncio.gather(*tasks)
+
+
+async def _join_room_from_all(actors: dict[str, CliProcess], *, timeout: float = 60.0) -> None:
+    members = sorted(
+        peer_id
+        for actor in actors.values()
+        if isinstance((peer_id := actor.identity_peer_id), str)
+    )
+    if len(members) != len(actors):
+        raise AssertionError("cannot join room before all actors have identities")
+
+    responses = await asyncio.gather(
+        *(
+            asyncio.wait_for(
+                actor.send({"cmd": "join_room", "args": {"members": members}}),
+                timeout=timeout,
+            )
+            for actor in actors.values()
+        )
+    )
+    for actor_name, response in zip(actors, responses):
+        assert response.get("ok") is True, f"{actor_name} join_room failed: {response}"
+
+
+async def _room_cli_group_fixture(
+    *,
+    profile: NetworkProfile,
+    worker_tag: str,
+    binaries: dict[str, str],
+    actor_names: list[str],
+) -> AsyncIterator[RoomCliGroup]:
+    topology = TopologyManager(worker_id=f"{worker_tag}-room-{len(actor_names)}")
+    actors: dict[str, CliProcess] = {}
+    try:
+        await topology.setup(num_clients=len(actor_names), profile=profile)
+        if not topology.client_namespaces:
+            pytest.skip(
+                "topology setup did not create client namespaces; "
+                "network namespace privileges (CAP_NET_ADMIN / ip netns) are required"
+            )
+        actors = await _start_cli_group(
+            topology=topology,
+            binaries=binaries,
+            actor_names=actor_names,
+        )
+        yield RoomCliGroup(actors=actors, topology=topology)
+    finally:
+        if actors:
+            await _terminate_actors(actors)
+        await topology.teardown()
+
+
 @pytest_asyncio.fixture
 async def topology(
     profile: NetworkProfile,
     worker_tag: str,
-) -> TopologyManager:
+) -> AsyncIterator[TopologyManager]:
     manager = TopologyManager(worker_id=worker_tag)
     try:
         await manager.setup(num_clients=2, profile=profile)
@@ -243,7 +507,7 @@ async def cli_pair(
     topology: TopologyManager,
     binaries: dict[str, str],
     request: pytest.FixtureRequest,
-) -> dict[str, CliProcess]:
+) -> AsyncIterator[dict[str, CliProcess]]:
     alice_namespace = topology.client_namespaces[0]
     bob_namespace = topology.client_namespaces[1]
 
@@ -304,6 +568,36 @@ async def cli_pair(
         await alice.terminate()
 
 
+@pytest_asyncio.fixture
+async def room_cli_three(
+    profile: NetworkProfile,
+    worker_tag: str,
+    binaries: dict[str, str],
+) -> AsyncIterator[RoomCliGroup]:
+    async for group in _room_cli_group_fixture(
+        profile=profile,
+        worker_tag=worker_tag,
+        binaries=binaries,
+        actor_names=ROOM_THREE_ACTORS,
+    ):
+        yield group
+
+
+@pytest_asyncio.fixture
+async def room_cli_twenty(
+    profile: NetworkProfile,
+    worker_tag: str,
+    binaries: dict[str, str],
+) -> AsyncIterator[RoomCliGroup]:
+    async for group in _room_cli_group_fixture(
+        profile=profile,
+        worker_tag=worker_tag,
+        binaries=binaries,
+        actor_names=ROOM_TWENTY_ACTORS,
+    ):
+        yield group
+
+
 async def _run_scenario(name: str, actors: dict[str, CliProcess]) -> None:
     runner = ScenarioRunner()
     scenario = runner.load(SCENARIOS_ROOT / name)
@@ -313,6 +607,33 @@ async def _run_scenario(name: str, actors: dict[str, CliProcess]) -> None:
         if isinstance(peer_id, str):
             variables[f"{actor_name}.peer_id"] = peer_id
     await runner.run(scenario, actors, initial_variables=variables)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("profile", NETWORK_PROFILES, ids=lambda profile: profile.name)
+async def test_room_three_all_contacts_full_mesh(
+    room_cli_three: RoomCliGroup,
+    profile: NetworkProfile,
+) -> None:
+    _ = profile, room_cli_three.topology
+    await _run_scenario("room_three_all_contacts.yaml", room_cli_three.actors)
+    await wait_for_room_mesh_connected(room_cli_three.actors, timeout=120.0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("profile", [NETWORK_PROFILES[0]], ids=lambda profile: profile.name)
+async def test_room_twenty_partial_contacts_full_mesh(
+    room_cli_twenty: RoomCliGroup,
+    profile: NetworkProfile,
+) -> None:
+    _ = profile, room_cli_twenty.topology
+    await _add_sparse_room_contacts(room_cli_twenty.actors)
+    await _join_room_from_all(room_cli_twenty.actors, timeout=90.0)
+    await wait_for_room_mesh_connected(
+        room_cli_twenty.actors,
+        timeout=300.0,
+        stability_window=5.0,
+    )
 
 
 @pytest.mark.asyncio
