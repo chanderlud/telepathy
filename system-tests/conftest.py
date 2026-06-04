@@ -214,7 +214,7 @@ def record_test_artifacts(request: pytest.FixtureRequest) -> Any:
         payload["profile"] = _serialize_profile(profile)
     if topology is not None:
         payload["topology"] = _serialize_topology(topology)
-    for fixture_name in ("cli_pair", "room_cli_three", "room_cli_twenty"):
+    for fixture_name in ("cli_pair", "room_cli_three", "room_cli_four", "room_cli_twenty"):
         serialized = _serialize_cli_fixture(funcargs.get(fixture_name))
         if serialized is not None:
             payload[fixture_name] = serialized

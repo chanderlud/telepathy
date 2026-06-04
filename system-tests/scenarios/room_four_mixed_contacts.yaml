@@ -1,0 +1,108 @@
+name: room_four_mixed_contacts
+steps:
+  - actor: alice
+    expect_event:
+      type: ready
+      timeout: 10.0
+      match:
+        version: "*"
+  - actor: bob
+    expect_event:
+      type: ready
+      timeout: 10.0
+      match:
+        version: "*"
+  - actor: carol
+    expect_event:
+      type: ready
+      timeout: 10.0
+      match:
+        version: "*"
+  - actor: dave
+    expect_event:
+      type: ready
+      timeout: 10.0
+      match:
+        version: "*"
+  - concurrent:
+      - actor: alice
+        send:
+          cmd: add_contact
+          args:
+            contact_id: bob
+            peer_id: ${bob.peer_id}
+        expect_ack:
+          ok: true
+      - actor: bob
+        send:
+          cmd: add_contact
+          args:
+            contact_id: alice
+            peer_id: ${alice.peer_id}
+        expect_ack:
+          ok: true
+      - actor: bob
+        send:
+          cmd: add_contact
+          args:
+            contact_id: carol
+            peer_id: ${carol.peer_id}
+        expect_ack:
+          ok: true
+      - actor: carol
+        send:
+          cmd: add_contact
+          args:
+            contact_id: dave
+            peer_id: ${dave.peer_id}
+        expect_ack:
+          ok: true
+  - concurrent:
+      - actor: alice
+        send:
+          cmd: join_room
+          args:
+            members:
+              - ${alice.peer_id}
+              - ${bob.peer_id}
+              - ${carol.peer_id}
+              - ${dave.peer_id}
+        send_timeout: 30.0
+        expect_ack:
+          ok: true
+      - actor: bob
+        send:
+          cmd: join_room
+          args:
+            members:
+              - ${alice.peer_id}
+              - ${bob.peer_id}
+              - ${carol.peer_id}
+              - ${dave.peer_id}
+        send_timeout: 30.0
+        expect_ack:
+          ok: true
+      - actor: carol
+        send:
+          cmd: join_room
+          args:
+            members:
+              - ${alice.peer_id}
+              - ${bob.peer_id}
+              - ${carol.peer_id}
+              - ${dave.peer_id}
+        send_timeout: 30.0
+        expect_ack:
+          ok: true
+      - actor: dave
+        send:
+          cmd: join_room
+          args:
+            members:
+              - ${alice.peer_id}
+              - ${bob.peer_id}
+              - ${carol.peer_id}
+              - ${dave.peer_id}
+        send_timeout: 30.0
+        expect_ack:
+          ok: true

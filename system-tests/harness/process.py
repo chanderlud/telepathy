@@ -200,6 +200,29 @@ class CliProcess:
             with suppress(asyncio.CancelledError):
                 await self._stderr_task
 
+    async def crash(self) -> None:
+        if self._proc is None:
+            return
+
+        if self._proc.returncode is None:
+            self._proc.kill()
+            with suppress(Exception):
+                await self._proc.wait()
+
+        for pending in self._pending.values():
+            if not pending.done():
+                pending.set_exception(RuntimeError("CLI process crashed"))
+        self._pending.clear()
+
+        if self._stdout_task is not None:
+            self._stdout_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._stdout_task
+        if self._stderr_task is not None:
+            self._stderr_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._stderr_task
+
     async def restart(self) -> None:
         await self.terminate()
 

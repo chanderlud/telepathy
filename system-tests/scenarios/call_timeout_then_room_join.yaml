@@ -1,0 +1,135 @@
+name: call_timeout_then_room_join
+steps:
+  - actor: alice
+    expect_event:
+      type: ready
+      timeout: 10.0
+      match:
+        version: "*"
+  - actor: bob
+    expect_event:
+      type: ready
+      timeout: 10.0
+      match:
+        version: "*"
+  - actor: carol
+    expect_event:
+      type: ready
+      timeout: 10.0
+      match:
+        version: "*"
+  - concurrent:
+      - actor: alice
+        send:
+          cmd: add_contact
+          args:
+            contact_id: bob
+            peer_id: ${bob.peer_id}
+        expect_ack:
+          ok: true
+      - actor: bob
+        send:
+          cmd: add_contact
+          args:
+            contact_id: alice
+            peer_id: ${alice.peer_id}
+        expect_ack:
+          ok: true
+      - actor: alice
+        send:
+          cmd: add_contact
+          args:
+            contact_id: carol
+            peer_id: ${carol.peer_id}
+        expect_ack:
+          ok: true
+      - actor: carol
+        send:
+          cmd: add_contact
+          args:
+            contact_id: alice
+            peer_id: ${alice.peer_id}
+        expect_ack:
+          ok: true
+  - concurrent:
+      - actor: alice
+        send:
+          cmd: start_session
+          args:
+            contact_id: bob
+        expect_ack:
+          ok: true
+      - actor: bob
+        send:
+          cmd: start_session
+          args:
+            contact_id: alice
+        expect_ack:
+          ok: true
+  - actor: alice
+    expect_event:
+      type: session_status
+      timeout: 45.0
+      match:
+        status: Connected
+        peer: ${bob.peer_id}
+  - actor: bob
+    expect_event:
+      type: session_status
+      timeout: 45.0
+      match:
+        status: Connected
+        peer: ${alice.peer_id}
+  - actor: alice
+    send:
+      cmd: start_call
+      args:
+        contact_id: bob
+    expect_ack:
+      ok: true
+  - actor: bob
+    expect_event:
+      type: accept_call_prompt
+      timeout: 20.0
+      match:
+        contact_id: alice
+  - actor: alice
+    expect_event:
+      type: call_state
+      timeout: 15.0
+      match:
+        state: CallEnded
+  - concurrent:
+      - actor: alice
+        send:
+          cmd: join_room
+          args:
+            members:
+              - ${alice.peer_id}
+              - ${bob.peer_id}
+              - ${carol.peer_id}
+        send_timeout: 30.0
+        expect_ack:
+          ok: true
+      - actor: bob
+        send:
+          cmd: join_room
+          args:
+            members:
+              - ${alice.peer_id}
+              - ${bob.peer_id}
+              - ${carol.peer_id}
+        send_timeout: 30.0
+        expect_ack:
+          ok: true
+      - actor: carol
+        send:
+          cmd: join_room
+          args:
+            members:
+              - ${alice.peer_id}
+              - ${bob.peer_id}
+              - ${carol.peer_id}
+        send_timeout: 30.0
+        expect_ack:
+          ok: true

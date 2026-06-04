@@ -71,6 +71,7 @@ NETWORK_PROFILES = [
 ]
 
 ROOM_THREE_ACTORS = ["alice", "bob", "carol"]
+ROOM_FOUR_ACTORS = ["alice", "bob", "carol", "dave"]
 ROOM_TWENTY_ACTORS = [f"peer{index:02d}" for index in range(1, 21)]
 
 
@@ -435,13 +436,7 @@ async def _add_sparse_room_contacts(actors: dict[str, CliProcess]) -> None:
 
 
 async def _join_room_from_all(actors: dict[str, CliProcess], *, timeout: float = 60.0) -> None:
-    members = sorted(
-        peer_id
-        for actor in actors.values()
-        if isinstance((peer_id := actor.identity_peer_id), str)
-    )
-    if len(members) != len(actors):
-        raise AssertionError("cannot join room before all actors have identities")
+    members = _room_member_peer_ids(actors)
 
     responses = await asyncio.gather(
         *(
@@ -454,6 +449,48 @@ async def _join_room_from_all(actors: dict[str, CliProcess], *, timeout: float =
     )
     for actor_name, response in zip(actors, responses):
         assert response.get("ok") is True, f"{actor_name} join_room failed: {response}"
+
+
+def _room_member_peer_ids(actors: dict[str, CliProcess]) -> list[str]:
+    members = sorted(
+        peer_id
+        for actor in actors.values()
+        if isinstance((peer_id := actor.identity_peer_id), str)
+    )
+    if len(members) != len(actors):
+        raise AssertionError("cannot build room members before all actors have identities")
+    return members
+
+
+async def _join_room_from_actor(
+    actor_name: str,
+    actor: CliProcess,
+    members: list[str],
+    *,
+    timeout: float = 60.0,
+) -> dict:
+    response = await asyncio.wait_for(
+        actor.send({"cmd": "join_room", "args": {"members": members}}),
+        timeout=timeout,
+    )
+    assert response.get("ok") is True, f"{actor_name} join_room failed: {response}"
+    return response
+
+
+def _assert_ack_error_contains(response: dict, expected: str) -> None:
+    assert response.get("ok") is False, f"expected failed ack, got {response}"
+    error = response.get("error")
+    assert isinstance(error, str), f"expected string error in {response}"
+    assert expected in error, f"expected {expected!r} in error {error!r}"
+
+
+def _has_error_event(messages: list[dict]) -> bool:
+    for message in messages:
+        if message.get("kind") != "event":
+            continue
+        if message.get("type") in {"Error", "error"}:
+            return True
+    return False
 
 
 async def _room_cli_group_fixture(
@@ -584,6 +621,21 @@ async def room_cli_three(
 
 
 @pytest_asyncio.fixture
+async def room_cli_four(
+    profile: NetworkProfile,
+    worker_tag: str,
+    binaries: dict[str, str],
+) -> AsyncIterator[RoomCliGroup]:
+    async for group in _room_cli_group_fixture(
+        profile=profile,
+        worker_tag=worker_tag,
+        binaries=binaries,
+        actor_names=ROOM_FOUR_ACTORS,
+    ):
+        yield group
+
+
+@pytest_asyncio.fixture
 async def room_cli_twenty(
     profile: NetworkProfile,
     worker_tag: str,
@@ -634,6 +686,130 @@ async def test_room_twenty_partial_contacts_full_mesh(
         timeout=300.0,
         stability_window=5.0,
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("profile", [NETWORK_PROFILES[0]], ids=lambda profile: profile.name)
+async def test_room_four_mixed_contacts_full_mesh(
+    room_cli_four: RoomCliGroup,
+    profile: NetworkProfile,
+) -> None:
+    _ = profile, room_cli_four.topology
+    await _run_scenario("room_four_mixed_contacts.yaml", room_cli_four.actors)
+    await wait_for_room_mesh_connected(room_cli_four.actors, timeout=120.0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("profile", [NETWORK_PROFILES[0]], ids=lambda profile: profile.name)
+async def test_room_call_timeout_then_room_join_full_mesh(
+    room_cli_three: RoomCliGroup,
+    profile: NetworkProfile,
+) -> None:
+    _ = profile, room_cli_three.topology
+    await _run_scenario("call_timeout_then_room_join.yaml", room_cli_three.actors)
+    await wait_for_room_mesh_connected(room_cli_three.actors, timeout=120.0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("profile", [NETWORK_PROFILES[0]], ids=lambda profile: profile.name)
+async def test_room_end_releases_call_slot_for_rejoin(
+    room_cli_three: RoomCliGroup,
+    profile: NetworkProfile,
+) -> None:
+    _ = profile, room_cli_three.topology
+    actors = room_cli_three.actors
+    members = _room_member_peer_ids(actors)
+
+    await _add_all_contacts(actors)
+    await _join_room_from_all(actors, timeout=60.0)
+    await wait_for_room_mesh_connected(actors, timeout=120.0)
+
+    duplicate_response = await actors["alice"].send(
+        {"cmd": "join_room", "args": {"members": members}}
+    )
+    _assert_ack_error_contains(duplicate_response, "A call is already active")
+
+    await asyncio.gather(
+        *(actor.send({"cmd": "end_call", "args": {}}) for actor in actors.values())
+    )
+    await asyncio.sleep(1.0)
+
+    await _join_room_from_all(actors, timeout=60.0)
+    await wait_for_room_mesh_connected(actors, timeout=120.0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("profile", [NETWORK_PROFILES[0]], ids=lambda profile: profile.name)
+async def test_room_peer_leave_and_rejoin(
+    room_cli_four: RoomCliGroup,
+    profile: NetworkProfile,
+) -> None:
+    _ = profile, room_cli_four.topology
+    actors = room_cli_four.actors
+    members = _room_member_peer_ids(actors)
+
+    await _add_all_contacts(actors)
+    await _join_room_from_all(actors, timeout=60.0)
+    await wait_for_room_mesh_connected(actors, timeout=120.0)
+
+    leaving = actors["carol"]
+    leave_response = await leaving.send({"cmd": "end_call", "args": {}})
+    assert leave_response.get("ok") is True, f"carol end_call failed: {leave_response}"
+
+    remaining = {name: actor for name, actor in actors.items() if name != "carol"}
+    await wait_for_room_mesh_connected(remaining, timeout=120.0)
+
+    await _join_room_from_actor("carol", leaving, members, timeout=60.0)
+    await wait_for_room_mesh_connected(actors, timeout=120.0)
+    assert not _has_error_event(leaving.stdout_lines())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("profile", [NETWORK_PROFILES[0]], ids=lambda profile: profile.name)
+async def test_room_peer_hard_crash_relaunch_and_rejoin(
+    room_cli_four: RoomCliGroup,
+    profile: NetworkProfile,
+) -> None:
+    _ = profile
+    actors = room_cli_four.actors
+
+    await _add_all_contacts(actors)
+    await _join_room_from_all(actors, timeout=60.0)
+    await wait_for_room_mesh_connected(actors, timeout=120.0)
+
+    crashed = actors["dave"]
+    crashed_identity = getattr(crashed, "identity", None)
+    if not isinstance(crashed_identity, Identity):
+        raise AssertionError("dave identity missing before crash")
+
+    await crashed.crash()
+    remaining = {name: actor for name, actor in actors.items() if name != "dave"}
+    await wait_for_room_mesh_connected(remaining, timeout=120.0)
+
+    await crashed.restart()
+    await _set_identity_on_actor(crashed, crashed_identity)
+    restart_manager_response = await crashed.send({"cmd": "start_manager", "args": {}})
+    assert restart_manager_response.get("ok") is True, (
+        f"dave start_manager after crash failed: {restart_manager_response}"
+    )
+    await wait_for_relay_ready(crashed)
+    await wait_for_pkarr_published(
+        [(crashed, crashed.namespace)],
+        room_cli_four.topology,
+        timeout=30.0,
+    )
+
+    dave_peer_id = crashed.identity_peer_id
+    if not isinstance(dave_peer_id, str):
+        raise AssertionError("dave missing identity_peer_id after restart")
+    await asyncio.gather(
+        *(_add_contact(actor, "dave", dave_peer_id) for actor in remaining.values())
+    )
+    await _add_all_contacts({"dave": crashed, **remaining})
+
+    members = _room_member_peer_ids(actors)
+    await _join_room_from_actor("dave", crashed, members, timeout=60.0)
+    await wait_for_room_mesh_connected(actors, timeout=120.0)
 
 
 @pytest.mark.asyncio
