@@ -25,7 +25,7 @@ SCENARIOS_ROOT = Path(__file__).resolve().parents[1] / "scenarios"
 
 
 @dataclass(frozen=True)
-class TestIdentity:
+class Identity:
     secret_key_b64: str
     peer_id_hex: str
 
@@ -74,7 +74,7 @@ ROOM_THREE_ACTORS = ["alice", "bob", "carol"]
 ROOM_TWENTY_ACTORS = [f"peer{index:02d}" for index in range(1, 21)]
 
 
-def _generate_identity() -> TestIdentity:
+def _generate_identity() -> Identity:
     private_key = Ed25519PrivateKey.generate()
     secret_key = private_key.private_bytes(
         encoding=serialization.Encoding.Raw,
@@ -85,13 +85,13 @@ def _generate_identity() -> TestIdentity:
         encoding=serialization.Encoding.Raw,
         format=serialization.PublicFormat.Raw,
     )
-    return TestIdentity(
+    return Identity(
         secret_key_b64=base64.b64encode(secret_key).decode("ascii"),
         peer_id_hex=public_key.hex(),
     )
 
 
-async def _set_identity(actor: CliProcess, identity: TestIdentity) -> str:
+async def _set_identity(actor: CliProcess, identity: Identity) -> str:
     response = await actor.send(
         {
             "cmd": "set_identity",
@@ -103,7 +103,7 @@ async def _set_identity(actor: CliProcess, identity: TestIdentity) -> str:
     return identity.peer_id_hex
 
 
-async def _set_identity_on_actor(actor: CliProcess, identity: TestIdentity) -> str:
+async def _set_identity_on_actor(actor: CliProcess, identity: Identity) -> str:
     peer_id = await _set_identity(actor, identity)
     actor.identity = identity
     actor.identity_peer_id = peer_id
@@ -823,7 +823,7 @@ async def test_session_client_disappears_and_reappears(
     await asyncio.sleep(2.0)
     await bob.restart()
     bob_identity = getattr(bob, "identity", None)
-    if not isinstance(bob_identity, TestIdentity):
+    if not isinstance(bob_identity, Identity):
         raise AssertionError("bob identity missing before restart")
     await _set_identity_on_actor(bob, bob_identity)
 
