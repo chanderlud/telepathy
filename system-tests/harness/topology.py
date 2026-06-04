@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import re
 from dataclasses import dataclass
 
@@ -41,10 +42,36 @@ class TopologyManager:
         if worker_id == "master":
             return 0
 
-        match = re.search(r"(\d+)$", worker_id)
-        if not match:
+        numbers = [int(match.group(0)) for match in re.finditer(r"\d+", worker_id)]
+        if not numbers:
             return 0
-        return int(match.group(1))
+        if len(numbers) == 1:
+            return numbers[0]
+        return numbers[-1] * 256 + numbers[0]
+
+    @staticmethod
+    def _interface_names(worker_index: int, index: int) -> tuple[str, str]:
+        return f"vr{worker_index}_{index}", f"vc{worker_index}_{index}"
+
+    @staticmethod
+    def _client_addresses(
+        worker_index: int,
+        num_clients: int,
+        index: int,
+    ) -> tuple[str, str]:
+        subnet_index = worker_index * max(1, num_clients) + index
+        test_network = ipaddress.ip_network("10.0.0.0/8")
+        subnet_size = 4
+        max_subnets = test_network.num_addresses // subnet_size
+        if subnet_index >= max_subnets:
+            raise ValueError(
+                f"topology subnet index {subnet_index} exceeds {test_network} capacity"
+            )
+
+        subnet_address = int(test_network.network_address) + subnet_index * subnet_size
+        subnet = ipaddress.ip_network((subnet_address, 30))
+        gateway_ip, client_ip = subnet.hosts()
+        return str(gateway_ip), str(client_ip)
 
     async def _run(self, *args: str) -> None:
         proc = await asyncio.create_subprocess_exec(
@@ -80,13 +107,16 @@ class TopologyManager:
             self._iptables_available = False
             return 1
         stdout, stderr = await proc.communicate()
-        if check and proc.returncode != 0:
+        returncode = proc.returncode
+        if returncode is None:
+            raise RuntimeError(f"command did not exit: iptables {' '.join(args)}")
+        if check and returncode != 0:
             raise RuntimeError(
                 f"command failed: iptables {' '.join(args)}\n"
                 f"stdout: {stdout.decode(errors='replace')}\n"
                 f"stderr: {stderr.decode(errors='replace')}"
             )
-        return proc.returncode
+        return returncode
 
     async def _allow_forwarding(self, iface: str) -> None:
         """Inserts FORWARD ACCEPT rules so traffic to/from `iface` is routed.
@@ -158,12 +188,15 @@ class TopologyManager:
                 )
 
             for index, client_ns in enumerate(self.client_namespaces):
-                gateway_iface = f"vr{self._worker_index}_{index}"
-                client_iface = f"vc{self._worker_index}_{index}"
-                worker_subnet_offset = self._worker_index * max(1, num_clients)
-                subnet_octet = 10 + worker_subnet_offset + index
-                gateway_ip = f"10.0.{subnet_octet}.1"
-                client_ip = f"10.0.{subnet_octet}.2"
+                gateway_iface, client_iface = self._interface_names(
+                    self._worker_index,
+                    index,
+                )
+                gateway_ip, client_ip = self._client_addresses(
+                    self._worker_index,
+                    num_clients,
+                    index,
+                )
 
                 self._gateway_ips[client_ns] = gateway_ip
                 self._client_ifaces[client_ns] = client_iface
