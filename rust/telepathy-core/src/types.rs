@@ -57,7 +57,7 @@ pub struct Contact {
     pub(crate) nickname: String,
 
     /// The public/verifying key for the contact
-    pub(crate) peer_id: PublicKey,
+    pub peer_id: PublicKey,
 
     pub(crate) output_volume: f32,
 

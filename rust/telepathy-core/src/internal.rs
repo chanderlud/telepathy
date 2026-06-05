@@ -17,7 +17,9 @@ use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::core::TelepathyCore;
 use crate::internal::error::{Error, ErrorKind};
 use crate::internal::messages::{Attachment, ProtocolMessage};
-use crate::internal::state::{CallSlotState, EarlyCallState, RoomState, SessionState};
+use crate::internal::state::{
+    CallSlotAcquireResult, CallSlotState, EarlyCallState, RoomState, SessionState,
+};
 pub(crate) use crate::internal::utils::{JoinHandle, spawn_task};
 use crate::overlay::Overlay;
 use crate::types::{ChatMessage, CodecConfig, Contact, NetworkConfig, ScreenshareConfig};
@@ -111,15 +113,6 @@ where
 
     /// Attempts to start a call through an existing session
     pub async fn start_call(&self, contact: &Contact) -> Result<()> {
-        if !self
-            .inner
-            .core_state
-            .call_slot
-            .try_acquire(CallSlotState::PendingOutgoing, Some(contact.peer_id))?
-        {
-            return Err(ErrorKind::CallAlreadyActive.into());
-        }
-
         let Some(state) = self
             .inner
             .session_states
@@ -128,18 +121,37 @@ where
             .get(&contact.peer_id)
             .cloned()
         else {
-            self.inner.core_state.call_slot.release()?;
             return Err(ErrorKind::NoSessionForContact.into());
         };
 
+        let slot_result = self
+            .inner
+            .core_state
+            .call_slot
+            .try_acquire_or_match(CallSlotState::PendingOutgoing, contact.peer_id)?;
+
+        if slot_result == CallSlotAcquireResult::Failed {
+            return Err(ErrorKind::CallAlreadyActive.into());
+        }
+
         #[cfg(target_family = "wasm")]
         if let Err(error) = self.inner.init_web_audio().await {
-            self.inner.core_state.call_slot.release()?;
+            if slot_result == CallSlotAcquireResult::Acquired {
+                self.inner
+                    .core_state
+                    .call_slot
+                    .release_if_pending_for_peer(contact.peer_id)?;
+            }
             return Err(error);
         }
 
-        state.start_call.notify_one();
-        Ok(())
+        // Same-peer retry of an outgoing dial (the session is already negotiating the call)
+        if matches!(slot_result, CallSlotAcquireResult::MatchedPendingOutgoing) {
+            Ok(())
+        } else {
+            state.start_call.notify_one();
+            Ok(())
+        }
     }
 
     /// Ends the current audio test, room, or call in that order

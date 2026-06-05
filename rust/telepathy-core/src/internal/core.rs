@@ -1874,10 +1874,11 @@ enum HelloResponse {
 
 /// Owns a direct-call pending slot from acquisition until handshake entry or explicit release.
 ///
-/// `release_on_failure` is `false` for an incoming [`CallSlotAcquireResult::Matched`] slot
-/// (the peer already holds the matching outgoing pending slot). Outgoing acquisition sets it
-/// for both `Acquired` and `Matched`. [`Self::into_handshake`] does not release the slot;
-/// handshake code transitions it to active.
+/// `release_on_failure` is `false` for an incoming `Matched*` slot — the peer already holds
+/// the matching pending slot (outgoing in the simultaneous-dial case) and is responsible
+/// for its lifecycle. Outgoing acquisition sets it for both `Acquired` and `Matched*`.
+/// [`Self::into_handshake`] does not release the slot; handshake code transitions it to
+/// active.
 struct PendingDirectCallSlot<'a> {
     call_slot: &'a CallSlot,
     peer: PublicKey,
@@ -1893,7 +1894,9 @@ impl<'a> PendingDirectCallSlot<'a> {
                 peer,
                 release_on_failure: true,
             })),
-            CallSlotAcquireResult::Matched => Ok(Some(Self {
+            // The peer already holds the matching pending slot; do not release on failure.
+            CallSlotAcquireResult::MatchedPendingIncoming
+            | CallSlotAcquireResult::MatchedPendingOutgoing => Ok(Some(Self {
                 call_slot,
                 peer,
                 release_on_failure: false,
@@ -1905,7 +1908,9 @@ impl<'a> PendingDirectCallSlot<'a> {
     /// Acquires or matches an outgoing direct-call pending slot for `peer`.
     fn try_acquire_outgoing(call_slot: &'a CallSlot, peer: PublicKey) -> Result<Option<Self>> {
         match call_slot.try_acquire_or_match(CallSlotState::PendingOutgoing, peer)? {
-            CallSlotAcquireResult::Acquired | CallSlotAcquireResult::Matched => Ok(Some(Self {
+            CallSlotAcquireResult::Acquired
+            | CallSlotAcquireResult::MatchedPendingIncoming
+            | CallSlotAcquireResult::MatchedPendingOutgoing => Ok(Some(Self {
                 call_slot,
                 peer,
                 release_on_failure: true,

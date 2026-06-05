@@ -28,7 +28,7 @@ type SharedDeviceId = Arc<Mutex<Option<String>>>;
 
 /// Per-state lifecycle for the global call slot. Only one non-idle state may be held at a time.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum CallSlotState {
+pub enum CallSlotState {
     Idle,
     PendingIncoming,
     PendingOutgoing,
@@ -38,12 +38,20 @@ pub(crate) enum CallSlotState {
 }
 
 /// Result of [`CallSlot::try_acquire_or_match`].
+///
+/// `Matched*` variants report which pending state the held slot was in. The caller asked for
+/// `state` (the first argument to `try_acquire_or_match`) and the held slot was already in a
+/// compatible pending state; the variant identifies that held state so the caller can decide
+/// whether the match is the same direction (idempotent retry) or the opposite direction
+/// (e.g. accepting a peer's incoming prompt while asking for an outgoing slot).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum CallSlotAcquireResult {
+pub enum CallSlotAcquireResult {
     /// The slot was idle and is now `state` for `peer`.
     Acquired,
-    /// The slot was already in a compatible state for `peer`.
-    Matched,
+    /// The slot was already pending incoming for `peer`.
+    MatchedPendingIncoming,
+    /// The slot was already pending outgoing for `peer`.
+    MatchedPendingOutgoing,
     /// The slot is held by another call or peer.
     Failed,
 }
@@ -61,10 +69,10 @@ pub(crate) enum CallSlotAcquireResult {
 /// produce snapshots with different generations, so a stale snapshot cannot accidentally match
 /// a newer owner that happens to share the same state and peer.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) struct CallSlotSnapshot {
-    pub(crate) state: CallSlotState,
-    pub(crate) direct_peer: Option<PublicKey>,
-    pub(crate) generation: u64,
+pub struct CallSlotSnapshot {
+    pub state: CallSlotState,
+    pub direct_peer: Option<PublicKey>,
+    pub generation: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -77,7 +85,7 @@ struct CallSlotInner {
 }
 
 #[derive(Clone)]
-pub(crate) struct CallSlot {
+pub struct CallSlot {
     inner: Arc<StdMutex<CallSlotInner>>,
 }
 
@@ -94,7 +102,7 @@ impl Default for CallSlot {
 }
 
 impl CallSlot {
-    pub(crate) fn current(&self) -> CallSlotState {
+    pub fn current(&self) -> CallSlotState {
         self.inner
             .lock()
             .map(|inner| inner.state)
@@ -109,7 +117,7 @@ impl CallSlot {
     /// released and the slot re-acquired by a different call between the two reads. The
     /// `generation` token additionally distinguishes release/reacquire cycles that would
     /// otherwise appear identical (same state, same peer).
-    pub(crate) fn snapshot(&self) -> Result<CallSlotSnapshot> {
+    pub fn snapshot(&self) -> Result<CallSlotSnapshot> {
         let inner = self
             .inner
             .lock()
@@ -122,11 +130,7 @@ impl CallSlot {
     }
 
     /// Atomically claims the call slot from idle, bumping the ownership generation.
-    pub(crate) fn try_acquire(
-        &self,
-        state: CallSlotState,
-        peer: Option<PublicKey>,
-    ) -> Result<bool> {
+    pub fn try_acquire(&self, state: CallSlotState, peer: Option<PublicKey>) -> Result<bool> {
         let mut inner = self
             .inner
             .lock()
@@ -147,15 +151,17 @@ impl CallSlot {
     ///
     /// Succeeds when:
     /// - the slot is idle and becomes `state` for `peer`, or
-    /// - the slot is already `state` for `peer`, or
-    /// - `state` is [`CallSlotState::PendingIncoming`] and the slot is
-    ///   [`CallSlotState::PendingOutgoing`] for the same `peer` (simultaneous dial).
+    /// - `state` is a pending direct-call state and the slot is already pending for
+    ///   the same `peer` (including simultaneous dial).
     ///
     /// On `Acquired` the ownership generation is bumped so a stale snapshot from a prior
-    /// owner can never match this new acquisition. On `Matched` the existing generation is
+    /// owner can never match this new acquisition. On `Matched*` the existing generation is
     /// preserved so the matched peer observes the same ownership token the original acquirer
-    /// would have used.
-    pub(crate) fn try_acquire_or_match(
+    /// would have used. The `Matched*` variant reports the held pending state, so callers
+    /// that asked for `PendingOutgoing` can distinguish a same-peer retry
+    /// (`MatchedPendingOutgoing`, idempotent) from accepting a peer's incoming prompt
+    /// (`MatchedPendingIncoming`).
+    pub fn try_acquire_or_match(
         &self,
         state: CallSlotState,
         peer: PublicKey,
@@ -164,8 +170,10 @@ impl CallSlot {
             .inner
             .lock()
             .map_err(|_| ErrorKind::Poison("call slot mutex poisoned"))?;
-        if Self::slot_matches_for_peer(state, inner.state, peer, inner.direct_peer) {
-            return Ok(CallSlotAcquireResult::Matched);
+        if let Some(matched) =
+            Self::matched_pending_for_peer(state, inner.state, peer, inner.direct_peer)
+        {
+            return Ok(matched);
         }
 
         if inner.state == CallSlotState::Idle {
@@ -178,24 +186,46 @@ impl CallSlot {
         Ok(CallSlotAcquireResult::Failed)
     }
 
-    fn slot_matches_for_peer(
+    /// Returns the [`CallSlotAcquireResult::Matched*`] variant for the held pending state when
+    /// `state` is a pending direct-call state and the slot is already compatible for `peer`,
+    /// otherwise `None`. Reports the held state so callers can distinguish a same-direction
+    /// retry from a cross-direction (e.g. simultaneous-dial) match.
+    fn matched_pending_for_peer(
         state: CallSlotState,
         current: CallSlotState,
         peer: PublicKey,
         direct_peer: Option<PublicKey>,
-    ) -> bool {
+    ) -> Option<CallSlotAcquireResult> {
         if direct_peer != Some(peer) {
-            return false;
+            return None;
         }
 
-        if current == state {
-            return true;
+        match (state, current) {
+            (CallSlotState::PendingOutgoing, CallSlotState::PendingOutgoing) => {
+                Some(CallSlotAcquireResult::MatchedPendingOutgoing)
+            }
+            (CallSlotState::PendingIncoming, CallSlotState::PendingIncoming) => {
+                Some(CallSlotAcquireResult::MatchedPendingIncoming)
+            }
+            (CallSlotState::PendingIncoming, CallSlotState::PendingOutgoing)
+            | (CallSlotState::PendingOutgoing, CallSlotState::PendingIncoming) => {
+                // Cross-direction match: report the held state (the slot the call will run
+                // against) so the caller can decide whether to notify.
+                match current {
+                    CallSlotState::PendingIncoming => {
+                        Some(CallSlotAcquireResult::MatchedPendingIncoming)
+                    }
+                    CallSlotState::PendingOutgoing => {
+                        Some(CallSlotAcquireResult::MatchedPendingOutgoing)
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
         }
-
-        state == CallSlotState::PendingIncoming && current == CallSlotState::PendingOutgoing
     }
 
-    pub(crate) fn transition_pending_to_active_for_peer(&self, peer: PublicKey) -> Result<bool> {
+    pub fn transition_pending_to_active_for_peer(&self, peer: PublicKey) -> Result<bool> {
         let mut inner = self
             .inner
             .lock()
@@ -212,7 +242,7 @@ impl CallSlot {
         }
     }
 
-    pub(crate) fn release(&self) -> Result<()> {
+    pub fn release(&self) -> Result<()> {
         let mut inner = self
             .inner
             .lock()
@@ -230,7 +260,7 @@ impl CallSlot {
     /// generation check additionally guards against release/reacquire cycles that reuse the
     /// same `(state, peer)` pair — a stale snapshot from the prior owner will not match the
     /// post-reacquire slot.
-    pub(crate) fn release_if_match(&self, expected: CallSlotSnapshot) -> Result<bool> {
+    pub fn release_if_match(&self, expected: CallSlotSnapshot) -> Result<bool> {
         let mut inner = self
             .inner
             .lock()
@@ -254,7 +284,7 @@ impl CallSlot {
         }
     }
 
-    pub(crate) fn release_if_pending_for_peer(&self, peer: PublicKey) -> Result<()> {
+    pub fn release_if_pending_for_peer(&self, peer: PublicKey) -> Result<()> {
         let mut inner = self
             .inner
             .lock()
@@ -297,7 +327,7 @@ pub struct CoreState {
     pub identity: Arc<RwLock<Option<SecretKey>>>,
 
     /// Authoritative global call-slot guard covering negotiation and active calls.
-    pub(crate) call_slot: CallSlot,
+    pub call_slot: CallSlot,
 
     /// used to end an audio test, if there is one
     pub(crate) end_audio_test: Arc<Mutex<Option<Arc<Notify>>>>,
@@ -748,7 +778,7 @@ mod call_slot_tests {
     }
 
     #[test]
-    fn call_slot_try_acquire_or_match_already_held() {
+    fn call_slot_try_acquire_or_match_same_pending_state_matches() {
         let slot = CallSlot::default();
         let peer = SecretKey::generate().public();
 
@@ -759,12 +789,24 @@ mod call_slot_tests {
         assert_eq!(
             slot.try_acquire_or_match(CallSlotState::PendingOutgoing, peer)
                 .unwrap(),
-            CallSlotAcquireResult::Matched
+            CallSlotAcquireResult::MatchedPendingOutgoing
+        );
+
+        let slot = CallSlot::default();
+        let peer = SecretKey::generate().public();
+        assert!(
+            slot.try_acquire(CallSlotState::PendingIncoming, Some(peer))
+                .unwrap()
+        );
+        assert_eq!(
+            slot.try_acquire_or_match(CallSlotState::PendingIncoming, peer)
+                .unwrap(),
+            CallSlotAcquireResult::MatchedPendingIncoming
         );
     }
 
     #[test]
-    fn call_slot_try_acquire_or_match_simultaneous_dial() {
+    fn call_slot_try_acquire_or_match_incoming_matches_existing_outgoing() {
         let slot = CallSlot::default();
         let peer = SecretKey::generate().public();
 
@@ -772,12 +814,41 @@ mod call_slot_tests {
             slot.try_acquire(CallSlotState::PendingOutgoing, Some(peer))
                 .unwrap()
         );
+        let before = slot.snapshot().unwrap();
+        // held state is reported by the matched variant so the caller can decide whether to
+        // notify on top of an already-pending outgoing request.
         assert_eq!(
             slot.try_acquire_or_match(CallSlotState::PendingIncoming, peer)
                 .unwrap(),
-            CallSlotAcquireResult::Matched
+            CallSlotAcquireResult::MatchedPendingOutgoing
         );
-        assert_eq!(slot.current(), CallSlotState::PendingOutgoing);
+        let after = slot.snapshot().unwrap();
+        assert_eq!(after, before);
+        assert_eq!(after.state, CallSlotState::PendingOutgoing);
+        assert_eq!(after.direct_peer, Some(peer));
+    }
+
+    #[test]
+    fn call_slot_try_acquire_or_match_outgoing_matches_existing_incoming() {
+        let slot = CallSlot::default();
+        let peer = SecretKey::generate().public();
+
+        assert!(
+            slot.try_acquire(CallSlotState::PendingIncoming, Some(peer))
+                .unwrap()
+        );
+        let before = slot.snapshot().unwrap();
+        // held state is reported by the matched variant so the caller can distinguish
+        // "accept the incoming prompt" (MatchedPendingIncoming) from a same-direction retry.
+        assert_eq!(
+            slot.try_acquire_or_match(CallSlotState::PendingOutgoing, peer)
+                .unwrap(),
+            CallSlotAcquireResult::MatchedPendingIncoming
+        );
+        let after = slot.snapshot().unwrap();
+        assert_eq!(after, before);
+        assert_eq!(after.state, CallSlotState::PendingIncoming);
+        assert_eq!(after.direct_peer, Some(peer));
     }
 
     #[test]
@@ -795,6 +866,48 @@ mod call_slot_tests {
                 .unwrap(),
             CallSlotAcquireResult::Failed
         );
+    }
+
+    #[test]
+    fn call_slot_try_acquire_or_match_different_peer_pending_direct_fails() {
+        let slot = CallSlot::default();
+        let peer = SecretKey::generate().public();
+        let other = SecretKey::generate().public();
+
+        assert!(
+            slot.try_acquire(CallSlotState::PendingIncoming, Some(peer))
+                .unwrap()
+        );
+        let before = slot.snapshot().unwrap();
+        assert_eq!(
+            slot.try_acquire_or_match(CallSlotState::PendingOutgoing, other)
+                .unwrap(),
+            CallSlotAcquireResult::Failed
+        );
+        assert_eq!(slot.snapshot().unwrap(), before);
+    }
+
+    #[test]
+    fn call_slot_try_acquire_or_match_does_not_match_active_room_or_audio_test() {
+        let peer = SecretKey::generate().public();
+
+        for state in [
+            CallSlotState::ActiveDirect,
+            CallSlotState::RoomCall,
+            CallSlotState::AudioTest,
+        ] {
+            let slot = CallSlot::default();
+            assert!(slot.try_acquire(state, Some(peer)).unwrap());
+            let before = slot.snapshot().unwrap();
+
+            assert_eq!(
+                slot.try_acquire_or_match(CallSlotState::PendingOutgoing, peer)
+                    .unwrap(),
+                CallSlotAcquireResult::Failed,
+                "{state:?} must not match a pending outgoing request"
+            );
+            assert_eq!(slot.snapshot().unwrap(), before);
+        }
     }
 
     #[test]
@@ -820,14 +933,14 @@ mod call_slot_tests {
         use std::time::Duration;
 
         // The refactor this test guards against must keep `try_acquire_or_match` from
-        // returning `Matched` for a peer that has already released the slot, even when
+        // returning `Matched*` for a peer that has already released the slot, even when
         // a competing thread is racing to release and re-acquire it for a different
         // peer.
         //
         // The observer thread waits until the releaser has *committed* peer_b as
         // the new owner — meaning the releaser's `try_acquire(peer_b)` has
         // already returned `true` — and only then evaluates
-        // `try_acquire_or_match` for peer_a. A `Matched` here would mean the
+        // `try_acquire_or_match` for peer_a. A `Matched*` here would mean the
         // ownership transition from peer_a to peer_b was lost — the exact
         // regression this test guards against.
         //
@@ -836,7 +949,7 @@ mod call_slot_tests {
         // releaser's start-up is jittered per iteration so the scheduler
         // exercises different timings across the 1024 iterations. The
         // observer's single post-signal call is the one that asserts the
-        // invariant: a `Matched` after peer_b has taken the slot is a bug.
+        // invariant: a `Matched*` after peer_b has taken the slot is a bug.
         const ITERATIONS: usize = 1024;
 
         let slot = Arc::new(CallSlot::default());
@@ -845,7 +958,7 @@ mod call_slot_tests {
 
         for iteration in 0..ITERATIONS {
             // Reset the slot: each iteration must start from a clean state where peer_a
-            // is the only owner, otherwise we cannot attribute a `Matched` to a lost
+            // is the only owner, otherwise we cannot attribute a `Matched*` to a lost
             // ownership transition.
             assert_eq!(slot.current(), CallSlotState::Idle);
             assert_eq!(slot.snapshot().unwrap().direct_peer, None);
@@ -890,7 +1003,7 @@ mod call_slot_tests {
 
             // Observer thread: wait until peer_b has committed, then call
             // `try_acquire_or_match` for the old owner peer_a. The result must
-            // be `Failed` because the slot is now owned by peer_b. A `Matched`
+            // be `Failed` because the slot is now owned by peer_b. A `Matched*`
             // here would mean the ownership transition from peer_a to peer_b
             // was lost — the exact regression this test guards against.
             let observer_slot = Arc::clone(&slot);
@@ -906,7 +1019,11 @@ mod call_slot_tests {
                 let result = observer_slot
                     .try_acquire_or_match(CallSlotState::PendingOutgoing, peer_a)
                     .unwrap();
-                if result == CallSlotAcquireResult::Matched {
+                if matches!(
+                    result,
+                    CallSlotAcquireResult::MatchedPendingIncoming
+                        | CallSlotAcquireResult::MatchedPendingOutgoing
+                ) {
                     observer_out.store(true, Ordering::SeqCst);
                 }
             });
@@ -916,7 +1033,7 @@ mod call_slot_tests {
 
             assert!(
                 !observer_matched.load(Ordering::SeqCst),
-                "iteration {iteration}: try_acquire_or_match returned Matched for peer_a \
+                "iteration {iteration}: try_acquire_or_match returned Matched* for peer_a \
                  after peer_a had already released and peer_b had re-acquired the slot"
             );
 
@@ -1215,11 +1332,13 @@ mod call_slot_tests {
         assert!(outgoing_generation > 0);
 
         // Incoming call for the same peer matches (simultaneous dial); the generation MUST
-        // be preserved so both sides observe the same ownership token.
+        // be preserved so both sides observe the same ownership token. The variant reports
+        // the held pending state so the caller can tell this is matching a peer's outgoing
+        // request rather than a same-direction retry.
         assert_eq!(
             slot.try_acquire_or_match(CallSlotState::PendingIncoming, peer)
                 .unwrap(),
-            CallSlotAcquireResult::Matched
+            CallSlotAcquireResult::MatchedPendingOutgoing
         );
         let matched = slot.snapshot().unwrap();
         assert_eq!(matched.generation, outgoing_generation);

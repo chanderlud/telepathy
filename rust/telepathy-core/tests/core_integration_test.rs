@@ -11,11 +11,13 @@ use telepathy_audio::devices::{MockAudioHost, MockAudioInput, MockAudioOutput};
 use telepathy_audio::internal::traits::{AudioInput, AudioOutput};
 use telepathy_core::internal::TelepathyHandle;
 use telepathy_core::internal::callbacks::{MockCoreCallbacks, MockCoreStatisticsCallback};
+use telepathy_core::internal::state::CallSlotState;
 use telepathy_core::overlay::Overlay;
 use telepathy_core::types::Contact;
 use telepathy_core::types::{
     CallState, CodecConfig, ManagerState, NetworkConfig, ScreenshareConfig, SessionStatus,
 };
+use tokio::sync::Notify;
 use tokio::time::{interval, sleep};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -103,6 +105,30 @@ enum RoomEventKind {
     Leave,
 }
 
+#[derive(Debug, Clone, Default)]
+struct PendingAcceptProbe {
+    opened: Arc<AtomicUsize>,
+    cancelled: Arc<AtomicUsize>,
+    opened_notify: Arc<Notify>,
+    cancelled_notify: Arc<Notify>,
+}
+
+impl PendingAcceptProbe {
+    async fn wait_opened(&self) {
+        wait_for_counter(&self.opened, &self.opened_notify, 1, "accept prompt opened").await;
+    }
+
+    async fn wait_cancelled(&self) {
+        wait_for_counter(
+            &self.cancelled,
+            &self.cancelled_notify,
+            1,
+            "accept prompt cancelled",
+        )
+        .await;
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn session_collision_doesnt_fail() {
     init_test_tracing();
@@ -188,6 +214,226 @@ async fn session_collision_doesnt_fail() {
     a_session.start_call.notify_one();
 
     tokio::time::sleep(Duration::from_secs(5)).await;
+
+    client_a.telepathy.shutdown().await;
+    client_b.telepathy.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn call_simultaneous_dial_matches_pending_incoming_and_connects() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+
+    let codec_config = CodecConfig::new(true, true, 5.0);
+
+    let key_a = SecretKey::generate();
+    let key_b = SecretKey::generate();
+    let contact_a = Contact::new("client-a".to_string(), key_a.public().to_string())
+        .expect("contact a invalid");
+    let contact_b = Contact::new("client-b".to_string(), key_b.public().to_string())
+        .expect("contact b invalid");
+
+    let call_states_a = Arc::new(Mutex::new(Vec::new()));
+    let call_states_b = Arc::new(Mutex::new(Vec::new()));
+    let accept_probe_b = PendingAcceptProbe::default();
+
+    let client_a = build_client(
+        relay_map,
+        key_a,
+        vec![contact_b.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_a.clone(),
+        next_listen_port(),
+    )
+    .await;
+
+    let client_b = build_client_with_accept_probe(
+        relay_map,
+        key_b,
+        vec![contact_a.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_b.clone(),
+        next_listen_port(),
+        accept_probe_b.clone(),
+    )
+    .await;
+
+    client_a.telepathy.start_session(&contact_b).await;
+    client_b.telepathy.start_session(&contact_a).await;
+
+    wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
+
+    client_a
+        .telepathy
+        .start_call(&contact_b)
+        .await
+        .expect("alice should start the outgoing call");
+    accept_probe_b.wait_opened().await;
+
+    client_b
+        .telepathy
+        .start_call(&contact_a)
+        .await
+        .expect("bob should match the pending incoming call");
+
+    wait_for_connected(&call_states_a, "alice").await;
+    wait_for_connected(&call_states_b, "bob").await;
+    accept_probe_b.wait_cancelled().await;
+
+    let states_a = call_state_snapshot(&call_states_a);
+    let states_b = call_state_snapshot(&call_states_b);
+    assert_no_busy_end(&states_a, "alice");
+    assert_no_busy_end(&states_b, "bob");
+    assert_no_call_ended_before_connected(&states_a, "alice");
+    assert_no_call_ended_before_connected(&states_b, "bob");
+    assert_eq!(accept_probe_b.opened.load(Relaxed), 1);
+    assert_eq!(accept_probe_b.cancelled.load(Relaxed), 1);
+
+    client_a.telepathy.end_call().await;
+    client_a.telepathy.shutdown().await;
+    client_b.telepathy.shutdown().await;
+}
+
+/// Regression test for the repeated-`start_call` queueing bug.
+///
+/// Calling `start_call` again while the first outgoing dial to the same peer is still pending
+/// must be an idempotent local start: the second call returns success, does not send another
+/// `state.start_call.notify_one()`, and does not queue a stale permit that re-enters
+/// `negotiate_outgoing_call` after the present call ends. Without the fix the queued permit
+/// would re-fire the dial after teardown and the slot would briefly leave `Idle` for a
+/// phantom second negotiation.
+#[tokio::test(flavor = "multi_thread")]
+async fn repeated_start_call_same_outgoing_does_not_queue_stale_permit() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+
+    let codec_config = CodecConfig::new(true, true, 5.0);
+
+    let key_a = SecretKey::generate();
+    let key_b = SecretKey::generate();
+    let contact_a = Contact::new("client-a".to_string(), key_a.public().to_string())
+        .expect("contact a invalid");
+    let contact_b = Contact::new("client-b".to_string(), key_b.public().to_string())
+        .expect("contact b invalid");
+
+    let call_states_a = Arc::new(Mutex::new(Vec::new()));
+    let call_states_b = Arc::new(Mutex::new(Vec::new()));
+
+    let client_a = build_client(
+        relay_map,
+        key_a,
+        vec![contact_b.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_a.clone(),
+        next_listen_port(),
+    )
+    .await;
+
+    let client_b = build_client(
+        relay_map,
+        key_b,
+        vec![contact_a.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_b.clone(),
+        next_listen_port(),
+    )
+    .await;
+
+    client_a.telepathy.start_session(&contact_b).await;
+    client_b.telepathy.start_session(&contact_a).await;
+    wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
+
+    // First outgoing dial. Slot moves Idle -> PendingOutgoing; the session task
+    // observes the notify and starts negotiating.
+    client_a
+        .telepathy
+        .start_call(&contact_b)
+        .await
+        .expect("first start_call should succeed");
+    // Second outgoing dial to the same peer while the first is still pending. The slot is
+    // already PendingOutgoing for this peer, so the second call must be an idempotent
+    // match: Ok(()), no extra notify.
+    client_a
+        .telepathy
+        .start_call(&contact_b)
+        .await
+        .expect("second start_call to same peer must succeed as an idempotent local start");
+
+    // The call should connect normally — the second match must not have corrupted the
+    // negotiation in any way.
+    wait_for_connected(&call_states_a, "alice").await;
+    wait_for_connected(&call_states_b, "bob").await;
+
+    let states_a = call_state_snapshot(&call_states_a);
+    let states_b = call_state_snapshot(&call_states_b);
+    assert_no_busy_end(&states_a, "alice");
+    assert_no_busy_end(&states_b, "bob");
+    assert_no_call_ended_before_connected(&states_a, "alice");
+    assert_no_call_ended_before_connected(&states_b, "bob");
+
+    // End the call cleanly. With the bug, the second start_call's queued notify permit
+    // would re-enter negotiate_outgoing_call after the slot becomes Idle, briefly
+    // re-acquiring it for a phantom second dial.
+    client_a.telepathy.end_call().await;
+
+    wait_for_slot_idle(&client_a, &contact_b.peer_id.to_string()).await;
+
+    // Stability window: any phantom second dial would have re-acquired the slot within
+    // a few hundred ms. Without the bug, the slot must remain Idle because no permit was
+    // queued.
+    sleep(Duration::from_secs(2)).await;
+
+    let final_snapshot = client_a
+        .telepathy
+        .inner
+        .core_state
+        .call_slot
+        .snapshot()
+        .expect("call slot snapshot should succeed after teardown");
+    assert_eq!(
+        final_snapshot.state,
+        CallSlotState::Idle,
+        "slot must remain Idle after the call ended; a stale second start_call permit would have re-acquired it for a phantom negotiation. snapshot={:?}",
+        final_snapshot
+    );
+
+    // Defensive secondary check: a phantom second negotiation would have produced a
+    // second end-to-end hello-ack timeout or hello failure, which manifests as an extra
+    // CallEnded before any second Connected. Verify the call-state log shows the single
+    // expected Connected -> ended transition, not a phantom re-dial.
+    let states_a_after = call_state_snapshot(&call_states_a);
+    let connected_count = states_a_after
+        .iter()
+        .filter(|state| matches!(state, CallState::Connected))
+        .count();
+    assert_eq!(
+        connected_count, 1,
+        "exactly one Connected event should be observed; got {connected_count} in {states_a_after:?}"
+    );
 
     client_a.telepathy.shutdown().await;
     client_b.telepathy.shutdown().await;
@@ -872,7 +1118,6 @@ fn init_test_tracing() {
     TEST_TRACING_INIT.call_once(|| {
         let _ = tracing_subscriber::fmt()
             .with_test_writer()
-            .map_event_format(|e| e.json())
             .with_env_filter(
                 EnvFilter::try_from_default_env()
                     .unwrap_or_else(|_| EnvFilter::new("telepathy_core=info")),
@@ -908,14 +1153,75 @@ where
     I: Send + Sync + 'static,
     O: Send + Sync + 'static,
 {
+    build_client_with_accept_probe_option(
+        relay_map,
+        identity,
+        contacts,
+        codec_config,
+        host,
+        call_states,
+        listen_port,
+        None,
+    )
+    .await
+}
+
+async fn build_client_with_accept_probe<H, I, O>(
+    relay_map: &RelayMap,
+    identity: SecretKey,
+    contacts: Vec<Contact>,
+    codec_config: &CodecConfig,
+    host: H,
+    call_states: Arc<Mutex<Vec<CallState>>>,
+    listen_port: u16,
+    accept_probe: PendingAcceptProbe,
+) -> ClientHarness<H, I, O>
+where
+    H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
+    I: Send + Sync + 'static,
+    O: Send + Sync + 'static,
+{
+    build_client_with_accept_probe_option(
+        relay_map,
+        identity,
+        contacts,
+        codec_config,
+        host,
+        call_states,
+        listen_port,
+        Some(accept_probe),
+    )
+    .await
+}
+
+async fn build_client_with_accept_probe_option<H, I, O>(
+    relay_map: &RelayMap,
+    identity: SecretKey,
+    contacts: Vec<Contact>,
+    codec_config: &CodecConfig,
+    host: H,
+    call_states: Arc<Mutex<Vec<CallState>>>,
+    listen_port: u16,
+    accept_probe: Option<PendingAcceptProbe>,
+) -> ClientHarness<H, I, O>
+where
+    H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
+    I: Send + Sync + 'static,
+    O: Send + Sync + 'static,
+{
     let network_config = NetworkConfig::mock(listen_port, relay_map, None, None, None);
     let screenshare = ScreenshareConfig::default();
     let overlay = Overlay::default();
 
     let is_active = Arc::new(AtomicBool::new(false));
     let is_relayed = Arc::new(AtomicBool::new(false));
-    let mock =
-        construct_mock_callbacks(contacts, is_active.clone(), is_relayed.clone(), call_states);
+    let mock = construct_mock_callbacks(
+        contacts,
+        is_active.clone(),
+        is_relayed.clone(),
+        call_states,
+        accept_probe,
+    );
 
     let mut telepathy: MockTelepathyHandle<H, I, O> = TelepathyHandle::new(
         host,
@@ -942,6 +1248,7 @@ fn construct_mock_callbacks(
     is_active: Arc<AtomicBool>,
     is_relayed: Arc<AtomicBool>,
     call_states: Arc<Mutex<Vec<CallState>>>,
+    accept_probe: Option<PendingAcceptProbe>,
 ) -> MockCoreCallbacks<MockCoreStatisticsCallback> {
     let mut mock: MockCoreCallbacks<MockCoreStatisticsCallback> = MockCoreCallbacks::new();
 
@@ -990,11 +1297,27 @@ fn construct_mock_callbacks(
         })
     });
 
-    // immediately accepts prompt for calls
-    mock.expect_get_accept_handle().returning(move |_, _, _| {
-        info!("accept call called");
-        tokio::spawn(async move { true })
-    });
+    if let Some(probe) = accept_probe {
+        mock.expect_get_accept_handle()
+            .returning(move |_, _, cancel| {
+                info!("accept call called with pending probe");
+                let probe = probe.clone();
+                let cancel = cancel.clone();
+                tokio::spawn(async move {
+                    probe.opened.fetch_add(1, Relaxed);
+                    probe.opened_notify.notify_waiters();
+                    cancel.notified().await;
+                    probe.cancelled.fetch_add(1, Relaxed);
+                    probe.cancelled_notify.notify_waiters();
+                    false
+                })
+            });
+    } else {
+        mock.expect_get_accept_handle().returning(move |_, _, _| {
+            info!("accept call called");
+            tokio::spawn(async move { true })
+        });
+    }
 
     mock.expect_call_state().returning(move |state| {
         info!("got call state: {state:?}");
@@ -1057,6 +1380,66 @@ fn sorted_room_members(a: &Contact, b: &Contact) -> Vec<String> {
 
 fn call_state_snapshot(call_states: &Arc<Mutex<Vec<CallState>>>) -> Vec<CallState> {
     call_states.lock().unwrap().clone()
+}
+
+async fn wait_for_counter(counter: &AtomicUsize, notify: &Notify, expected: usize, label: &str) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    loop {
+        if counter.load(Relaxed) >= expected {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for {label} count to reach {expected}, got {}",
+            counter.load(Relaxed)
+        );
+        tokio::select! {
+            _ = notify.notified() => {}
+            _ = sleep(Duration::from_millis(100)) => {}
+        }
+    }
+}
+
+async fn wait_for_connected(call_states: &Arc<Mutex<Vec<CallState>>>, label: &str) {
+    let mut poll = interval(Duration::from_millis(100));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    loop {
+        poll.tick().await;
+        let states = call_state_snapshot(call_states);
+        if states
+            .iter()
+            .any(|state| matches!(state, CallState::Connected))
+        {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for {label} call state to connect; states were {states:?}"
+        );
+    }
+}
+
+fn assert_no_busy_end(states: &[CallState], label: &str) {
+    assert!(
+        !states.iter().any(|state| matches!(
+            state,
+            CallState::CallEnded(reason, true) if reason == "A call is already active"
+        )),
+        "{label} observed busy call end: {states:?}"
+    );
+}
+
+fn assert_no_call_ended_before_connected(states: &[CallState], label: &str) {
+    let connected_index = states
+        .iter()
+        .position(|state| matches!(state, CallState::Connected))
+        .unwrap_or_else(|| panic!("{label} never connected: {states:?}"));
+    assert!(
+        !states[..connected_index]
+            .iter()
+            .any(|state| matches!(state, CallState::CallEnded(_, _))),
+        "{label} observed CallEnded before Connected: {states:?}"
+    );
 }
 
 fn room_event_sequence(states: &[CallState], peer: &str) -> Vec<RoomEventKind> {
@@ -1172,4 +1555,31 @@ fn next_listen_port() -> u16 {
         "integration test listen port allocation exceeded the 40000..=40100 range"
     );
     port
+}
+
+async fn wait_for_slot_idle<H, I, O>(client: &ClientHarness<H, I, O>, _peer: &str)
+where
+    H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
+    I: Send + Sync + 'static,
+    O: Send + Sync + 'static,
+{
+    let mut poll = interval(Duration::from_millis(50));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        poll.tick().await;
+        let snapshot = client
+            .telepathy
+            .inner
+            .core_state
+            .call_slot
+            .snapshot()
+            .expect("call slot snapshot should succeed");
+        if snapshot.state == CallSlotState::Idle {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for call slot to become Idle; last snapshot={snapshot:?}"
+        );
+    }
 }
