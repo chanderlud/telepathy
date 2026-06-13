@@ -113,44 +113,62 @@ where
 
     /// Attempts to start a call through an existing session
     pub async fn start_call(&self, contact: &Contact) -> Result<()> {
-        let Some(state) = self
-            .inner
-            .session_states
-            .read()
-            .await
-            .get(&contact.peer_id)
-            .cloned()
-        else {
-            return Err(ErrorKind::NoSessionForContact.into());
+        // The session presence check and the pending-slot acquisition are
+        // atomic: both happen under the same `session_states` read lock
+        // guard, so the slot can only be acquired for a session that is
+        // currently in the map.
+        // The subsequent `notify_one` is a separate, best-effort operation:
+        // if the session has been removed in the meantime (after the guard
+        // is released), the acquired slot is released and `NoSessionForContact`
+        // is returned to avoid leaking the slot.
+        let slot_result = {
+            let state_lock = self.inner.session_states.read().await;
+            if state_lock.get(&contact.peer_id).is_none() {
+                return Err(ErrorKind::NoSessionForContact.into());
+            }
+            self.inner
+                .core_state
+                .call_slot
+                .try_acquire_or_match(CallSlotState::PendingOutgoing, contact.peer_id)?
         };
-
-        let slot_result = self
-            .inner
-            .core_state
-            .call_slot
-            .try_acquire_or_match(CallSlotState::PendingOutgoing, contact.peer_id)?;
 
         if slot_result == CallSlotAcquireResult::Failed {
             return Err(ErrorKind::CallAlreadyActive.into());
         }
 
+        // The slot is already `PendingOutgoing` for this peer, meaning the session task
+        // has already consumed the original `notify_one` and is currently negotiating the
+        // outgoing call. No additional notification is needed — the negotiation is already
+        // in progress.
+        if matches!(slot_result, CallSlotAcquireResult::MatchedPendingOutgoing) {
+            return Ok(());
+        }
+
         #[cfg(target_family = "wasm")]
-        if let Err(error) = self.inner.init_web_audio().await {
-            if slot_result == CallSlotAcquireResult::Acquired {
+        {
+            if let Err(error) = self.inner.init_web_audio().await {
                 self.inner
                     .core_state
                     .call_slot
                     .release_if_pending_for_peer(contact.peer_id)?;
+                return Err(error);
             }
-            return Err(error);
         }
 
-        // Same-peer retry of an outgoing dial (the session is already negotiating the call)
-        if matches!(slot_result, CallSlotAcquireResult::MatchedPendingOutgoing) {
-            Ok(())
-        } else {
+        let state_lock = self.inner.session_states.read().await;
+        if let Some(state) = state_lock.get(&contact.peer_id) {
             state.start_call.notify_one();
             Ok(())
+        } else {
+            warn!(
+                event = "start_call_no_current_session_releasing_slot",
+                peer.id = %contact.peer_id,
+            );
+            self.inner
+                .core_state
+                .call_slot
+                .release_if_pending_for_peer(contact.peer_id)?;
+            Err(ErrorKind::NoSessionForContact.into())
         }
     }
 
@@ -315,6 +333,15 @@ where
         {
             error!("reset_peer_output_volume failed: {}", error);
         }
+        // remove the session entry from the map under the write lock before releasing
+        // the call slot, so a replacement session that has already entered the map
+        // cannot be clobbered by the slot release.
+        let removed_state = self
+            .inner
+            .session_states
+            .write()
+            .await
+            .remove(&contact.peer_id);
         if let Err(error) = self
             .inner
             .core_state
@@ -323,13 +350,7 @@ where
         {
             error!("release_if_pending_for_peer failed: {}", error);
         }
-        if let Some(state) = self
-            .inner
-            .session_states
-            .write()
-            .await
-            .remove(&contact.peer_id)
-        {
+        if let Some(state) = removed_state {
             state.stop_session.cancel();
         }
     }

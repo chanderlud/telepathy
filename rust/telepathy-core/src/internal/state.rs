@@ -307,6 +307,34 @@ impl CallSlot {
         }
         Ok(())
     }
+
+    /// Clears a `PendingIncoming` or `PendingOutgoing` slot, regardless of which peer
+    /// (if any) currently owns it, in a single lock acquisition.
+    ///
+    /// This is the terminal-clear path used by [`TelepathyCore::reset_sessions`] and is
+    /// only safe to call when no `SessionState` in `session_states` is allowed to own
+    /// the pending direct-call slot anymore (the per-session ownership invariant in
+    /// [`crate::internal::core::TelepathyCore`] guarantees that a drained session cannot
+    /// re-acquire a pending slot). Active non-pending states (`Idle`, `ActiveDirect`,
+    /// `RoomCall`, `AudioTest`) are left untouched so terminal teardown can never
+    /// clobber a live call.
+    pub fn clear_pending_direct(&self) -> Result<bool> {
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| ErrorKind::Poison("call slot mutex poisoned"))?;
+        if matches!(
+            inner.state,
+            CallSlotState::PendingIncoming | CallSlotState::PendingOutgoing
+        ) {
+            inner.state = CallSlotState::Idle;
+            inner.direct_peer = None;
+            inner.generation = inner.generation.saturating_add(1);
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
 }
 
 #[derive(Clone, Default)]
@@ -589,6 +617,11 @@ impl SessionState {
         }
     }
 
+    /// Returns the unique identifier for this session state.
+    pub fn id(&self) -> Uuid {
+        self.id
+    }
+
     pub(crate) async fn teardown(&self) {
         // stops any call
         self.end_call.notify_one();
@@ -761,6 +794,75 @@ mod call_slot_tests {
         assert_eq!(slot.current(), CallSlotState::PendingOutgoing);
 
         slot.release_if_pending_for_peer(peer).unwrap();
+        assert_eq!(slot.current(), CallSlotState::Idle);
+    }
+
+    #[test]
+    fn call_slot_clear_pending_direct_clears_pending_incoming() {
+        let slot = CallSlot::default();
+        let peer = SecretKey::generate().public();
+
+        assert!(
+            slot.try_acquire(CallSlotState::PendingIncoming, Some(peer))
+                .unwrap()
+        );
+        assert!(slot.clear_pending_direct().unwrap());
+        assert_eq!(slot.current(), CallSlotState::Idle);
+        assert_eq!(slot.snapshot().unwrap().direct_peer, None);
+    }
+
+    #[test]
+    fn call_slot_clear_pending_direct_clears_pending_outgoing() {
+        let slot = CallSlot::default();
+        let peer = SecretKey::generate().public();
+
+        assert!(
+            slot.try_acquire(CallSlotState::PendingOutgoing, Some(peer))
+                .unwrap()
+        );
+        assert!(slot.clear_pending_direct().unwrap());
+        assert_eq!(slot.current(), CallSlotState::Idle);
+        assert_eq!(slot.snapshot().unwrap().direct_peer, None);
+    }
+
+    #[test]
+    fn call_slot_clear_pending_direct_leaves_active_direct_untouched() {
+        let slot = CallSlot::default();
+        let peer = SecretKey::generate().public();
+
+        assert!(
+            slot.try_acquire(CallSlotState::ActiveDirect, Some(peer))
+                .unwrap()
+        );
+        assert!(!slot.clear_pending_direct().unwrap());
+        assert_eq!(slot.current(), CallSlotState::ActiveDirect);
+        assert_eq!(slot.snapshot().unwrap().direct_peer, Some(peer));
+    }
+
+    #[test]
+    fn call_slot_clear_pending_direct_leaves_room_call_untouched() {
+        let slot = CallSlot::default();
+
+        assert!(slot.try_acquire(CallSlotState::RoomCall, None).unwrap());
+        assert!(!slot.clear_pending_direct().unwrap());
+        assert_eq!(slot.current(), CallSlotState::RoomCall);
+        assert_eq!(slot.snapshot().unwrap().direct_peer, None);
+    }
+
+    #[test]
+    fn call_slot_clear_pending_direct_leaves_audio_test_untouched() {
+        let slot = CallSlot::default();
+
+        assert!(slot.try_acquire(CallSlotState::AudioTest, None).unwrap());
+        assert!(!slot.clear_pending_direct().unwrap());
+        assert_eq!(slot.current(), CallSlotState::AudioTest);
+        assert_eq!(slot.snapshot().unwrap().direct_peer, None);
+    }
+
+    #[test]
+    fn call_slot_clear_pending_direct_on_idle_is_noop() {
+        let slot = CallSlot::default();
+        assert!(!slot.clear_pending_direct().unwrap());
         assert_eq!(slot.current(), CallSlotState::Idle);
     }
 

@@ -471,23 +471,30 @@ where
         // gracefully close the connection
         connection.close(VarInt::from_u32(0), &[]);
 
-        // release any pending negotiation owned by this session
-        self.core_state
-            .call_slot
-            .release_if_pending_for_peer(peer)?;
-
-        // if the state exists and has the same id, clean it up
-        // if a new session state already exists with a new ID, we don't want to clean it up
+        // Determine whether this session is still the current map entry for `peer`. If a newer
+        // session has already replaced us (collision-loser cleanup), we MUST NOT touch
+        // call-slot state, output volume, or emit Inactive
         let mut states = self.session_states.write().await;
-        if states.get(&peer).map(|s| s.id == state.id).unwrap_or(false) {
+        let still_current = states.get(&peer).map(|s| s.id == state.id).unwrap_or(false);
+        if still_current {
+            // release any pending negotiation owned by this session
+            self.core_state
+                .call_slot
+                .release_if_pending_for_peer(peer)?;
             states.remove(&peer);
             // clean up output volume state
             self.core_state.reset_peer_output_volume(&contact.peer_id)?;
+        } else {
+            debug!(
+                event = "session_cleanup_skipped_replaced",
+                peer.id = %peer,
+                session.id = %state.id
+            );
         }
         drop(states);
 
         // avoid sending session statuses for dummy contacts
-        if !contact.is_room_only {
+        if still_current && !contact.is_room_only {
             self.emit_inactive(peer, session_generation).await;
         }
 
@@ -545,6 +552,26 @@ where
         // the dialer for room sessions always starts a call
         if self.is_in_room(&peer).await && connection.side().is_client() {
             state.start_call.notify_one();
+        } else {
+            // Re-arm a pending outgoing call intent that may have been notified to a stale
+            // session for this peer. Without this, a session-collision replacement loses the
+            // user's start_call intent
+            match self.core_state.call_slot.snapshot()? {
+                snapshot
+                    if snapshot.state == CallSlotState::PendingOutgoing
+                        && snapshot.direct_peer == Some(peer) =>
+                {
+                    info!(
+                        event = "session_rearmed_pending_outgoing",
+                        peer.id = %peer,
+                        session.id = %state.id
+                    );
+                    if is_session_still_current(&self.session_states, peer, state.id).await {
+                        state.start_call.notify_one();
+                    }
+                }
+                _ => {}
+            }
         }
 
         let mut io = SessionIo {
@@ -651,19 +678,32 @@ where
         send: &mut FramedWrite<SendStream, LengthDelimitedCodec>,
         call_slot: &'a CallSlot,
         peer: PublicKey,
-        is_in_room: bool,
-        peer_room_hash: Option<u64>,
-        local_room_hash: Option<u64>,
+        session_id: Uuid,
+        room: IncomingRoomDecision,
     ) -> Result<IncomingSlotDecision<'a>> {
         // Three cases: matching room call (peer already in our room) -> room handshake;
         // mismatched room call -> reject; direct call -> try to acquire the direct call slot.
-        if is_in_room && peer_room_hash == local_room_hash {
+        if room.is_in_room && room.peer_room_hash == room.local_room_hash {
             Ok(IncomingSlotDecision::RoomMatch)
-        } else if peer_room_hash.is_some() {
+        } else if room.peer_room_hash.is_some() {
             info!(event = "room_call_rejected_not_in_room");
             write_message(send, &ProtocolMessage::Reject).await?;
             Ok(IncomingSlotDecision::RejectedNotInRoom)
         } else {
+            // A direct-call pending slot may only be acquired by a session that is still
+            // the current map entry for `peer` and whose `stop_session` token has not
+            // been canceled.
+            if !is_session_still_current(&self.session_states, peer, session_id).await {
+                // A stale session (e.g. replaced by a collision winner or drained by
+                // `reset_sessions`) MUST still send a terminal response on the wire so the
+                // remote dialer does not wait through the full `HELLO_TIMEOUT` for a reply
+                // that will never come. `Busy` is the appropriate wire response here: from
+                // the caller's perspective this peer is unavailable for a new direct call
+                // because the owning session is no longer current.
+                info!(event = "incoming_call_skipped_stale_session", peer.id = %peer);
+                write_message(send, &ProtocolMessage::Busy).await?;
+                return Ok(IncomingSlotDecision::StaleSession);
+            }
             match PendingDirectCallSlot::try_acquire_incoming(call_slot, peer)? {
                 Some(slot) => Ok(IncomingSlotDecision::Acquired(slot)),
                 None => {
@@ -806,20 +846,38 @@ where
         let mut cancel_prompt = None;
         let mut accept_handle = None;
 
+        // Honor cancellation before acquiring any pending direct-call slot
+        if io.state.stop_session.is_cancelled() {
+            info!(event = "incoming_call_cancelled_before_acquire");
+            return Ok(IncomingNegotiationOutcome::SessionStopped);
+        }
+
         match self
             .acquire_incoming_call_slot(
                 io.send,
                 call_slot,
                 peer,
-                args.is_in_room,
-                args.peer_room_hash,
-                args.local_room_hash,
+                io.state.id,
+                IncomingRoomDecision {
+                    is_in_room: args.is_in_room,
+                    peer_room_hash: args.peer_room_hash,
+                    local_room_hash: args.local_room_hash,
+                },
             )
             .await?
         {
             IncomingSlotDecision::RoomMatch => {}
             IncomingSlotDecision::RejectedNotInRoom | IncomingSlotDecision::Busy => {
                 return Ok(IncomingNegotiationOutcome::ContinueSession);
+            }
+            // `StaleSession` is terminal for the session task: this session is no longer the
+            // current map entry for the peer (replaced by a collision winner or drained by
+            // `reset_sessions`), so processing further messages on it is pointless and risks
+            // acting on stale state. Unlike `Busy` — a transient state for a still-valid
+            // session that may legitimately receive more traffic — a stale session must
+            // exit the session loop immediately after the wire response is sent.
+            IncomingSlotDecision::StaleSession => {
+                return Ok(IncomingNegotiationOutcome::SessionStopped);
             }
             IncomingSlotDecision::Acquired(slot) => {
                 pending_slot = Some(slot);
@@ -860,18 +918,37 @@ where
                 if let Some(cancel) = cancel_prompt {
                     cancel.notify_one();
                 }
-                abort_negotiation_session_stopped(io.send, &mut pending_slot).await?;
+                abort_negotiation_session_stopped(
+                    &self.session_states,
+                    peer,
+                    io.state.id,
+                    io.send,
+                    &mut pending_slot,
+                )
+                .await?;
                 Ok(IncomingNegotiationOutcome::SessionStopped)
             }
             accept_result = accept_future => {
                 if !accept_result? {
                     if io.state.stop_session.is_cancelled() {
-                        abort_negotiation_session_stopped(io.send, &mut pending_slot)
-                            .await?;
+                        abort_negotiation_session_stopped(
+                            &self.session_states,
+                            peer,
+                            io.state.id,
+                            io.send,
+                            &mut pending_slot,
+                        )
+                        .await?;
                         return Ok(IncomingNegotiationOutcome::SessionStopped);
                     }
                     write_message(io.send, &ProtocolMessage::Reject).await?;
-                    release_pending(&mut pending_slot)?;
+                    release_pending(
+                        &self.session_states,
+                        peer,
+                        io.state.id,
+                        &mut pending_slot,
+                    )
+                    .await?;
                     return Ok(IncomingNegotiationOutcome::ContinueSession);
                 }
 
@@ -913,7 +990,13 @@ where
                             },
                         )
                         .await?;
-                        release_pending(&mut pending_slot)?;
+                        release_pending(
+                            &self.session_states,
+                            peer,
+                            io.state.id,
+                            &mut pending_slot,
+                        )
+                        .await?;
                         Err(error)
                     }
                 }
@@ -924,7 +1007,13 @@ where
                 if let Some(cancel) = cancel_prompt {
                     cancel.notify_one();
                 }
-                release_pending(&mut pending_slot)?;
+                release_pending(
+                    &self.session_states,
+                    peer,
+                    io.state.id,
+                    &mut pending_slot,
+                )
+                .await?;
                 let message = result?;
                 warn!(event = "accept_prompt_interrupted_by_message", ?message);
                 Ok(IncomingNegotiationOutcome::ContinueSession)
@@ -946,12 +1035,32 @@ where
         let is_in_room = args.room_hash.is_some();
         let mut pending_slot = None;
 
-        if is_in_room {
+        // Honor cancellation before acquiring any pending direct-call slot
+        if io.state.stop_session.is_cancelled() {
+            info!(event = "outgoing_call_cancelled_before_acquire");
+            return Ok(OutgoingNegotiationOutcome::SessionStopped);
+        } else if is_in_room {
             if call_slot.current() != CallSlotState::RoomCall {
                 warn!(event = "outgoing_room_call_without_room_slot");
                 return Ok(OutgoingNegotiationOutcome::CallEnded);
             }
         } else {
+            // Per the per-session ownership invariant, a direct-call pending slot may
+            // only be acquired (or matched) by a session that is still the current map
+            // entry for `peer`. A session that has been replaced by a collision
+            // replacement (or drained by `reset_sessions`) must not be allowed to
+            // re-pend a slot — its replacement session will take over via the
+            // `session_rearmed_pending_outgoing` path in `session_outer`.
+            if !is_session_still_current(&self.session_states, peer, io.state.id).await {
+                info!(event = "outgoing_call_skipped_stale_session", peer.id = %peer);
+                self.callbacks
+                    .call_state(CallState::CallEnded(
+                        "A call is already active".to_string(),
+                        true,
+                    ))
+                    .await;
+                return Ok(OutgoingNegotiationOutcome::CallEnded);
+            }
             match PendingDirectCallSlot::try_acquire_outgoing(call_slot, peer)? {
                 Some(slot) => pending_slot = Some(slot),
                 None => {
@@ -974,7 +1083,7 @@ where
                 self.callbacks
                     .call_state(CallState::CallEnded(error.to_string(), false))
                     .await;
-                release_pending(&mut pending_slot)?;
+                release_pending(&self.session_states, peer, io.state.id, &mut pending_slot).await?;
                 return Err(error);
             }
         };
@@ -1000,13 +1109,25 @@ where
             select! {
                 _ = io.state.stop_session.cancelled() => {
                     info!(event = "session_stopped_waiting_hello_ack");
-                    release_pending(&mut pending_slot)?;
+                    release_pending(
+                        &self.session_states,
+                        peer,
+                        io.state.id,
+                        &mut pending_slot,
+                    )
+                    .await?;
                     return Ok(OutgoingNegotiationOutcome::SessionStopped);
                 }
                 _ = io.state.end_call.notified() => {
                     info!(event = "end_call_notified_waiting_hello_ack");
                     write_message(io.send, &ProtocolMessage::Goodbye { reason: None }).await?;
-                    release_pending(&mut pending_slot)?;
+                    release_pending(
+                        &self.session_states,
+                        peer,
+                        io.state.id,
+                        &mut pending_slot,
+                    )
+                    .await?;
                     return Ok(OutgoingNegotiationOutcome::CallEnded);
                 }
                 result = timeout(hello_timeout, read_message(io.recv)) => {
@@ -1026,7 +1147,13 @@ where
                                     true,
                                 ))
                                 .await;
-                            release_pending(&mut pending_slot)?;
+                            release_pending(
+                                &self.session_states,
+                                peer,
+                                io.state.id,
+                                &mut pending_slot,
+                            )
+                            .await?;
                             return Ok(OutgoingNegotiationOutcome::CallEnded);
                         }
                         Ok(Err(error)) => return Err(error),
@@ -1051,11 +1178,23 @@ where
                                     self.callbacks
                                         .call_state(CallState::CallEnded(message, true))
                                         .await;
-                                    release_pending(&mut pending_slot)?;
+                                    release_pending(
+                                        &self.session_states,
+                                        peer,
+                                        io.state.id,
+                                        &mut pending_slot,
+                                    )
+                                    .await?;
                                     return Ok(OutgoingNegotiationOutcome::CallEnded);
                                 }
                                 HelloResponse::EndedSilently => {
-                                    release_pending(&mut pending_slot)?;
+                                    release_pending(
+                                        &self.session_states,
+                                        peer,
+                                        io.state.id,
+                                        &mut pending_slot,
+                                    )
+                                    .await?;
                                     return Ok(OutgoingNegotiationOutcome::CallEnded);
                                 }
                                 HelloResponse::Continue => continue,
@@ -1186,7 +1325,11 @@ where
                 event = "call_handshake_slot_transition_failed",
                 peer.id = %call_state.peer
             );
-            call_slot.release_if_pending_for_peer(call_state.peer)?;
+            // Release only if this session is still the current map entry for the peer;
+            // a collision-loser cleanup must not clobber the replacement session's slot.
+            if is_session_still_current(&self.session_states, call_state.peer, state.id).await {
+                call_slot.release_if_pending_for_peer(call_state.peer)?;
+            }
             return Err(ErrorKind::CallAlreadyActive.into());
         }
         // capture the expected active-direct slot ownership immediately after the transition
@@ -1837,6 +1980,17 @@ struct IncomingCallArgs<'a> {
     local_room_hash: Option<u64>,
 }
 
+/// Room-decision inputs to [`TelepathyCore::acquire_incoming_call_slot`].
+///
+/// Bundles the three values that decide whether the incoming `Hello` matches our
+/// current room (room handshake) or a direct call. Kept separate from
+/// [`IncomingCallArgs`] so the slot-acquisition signature stays compact.
+struct IncomingRoomDecision {
+    is_in_room: bool,
+    peer_room_hash: Option<u64>,
+    local_room_hash: Option<u64>,
+}
+
 /// Per-call inputs for [`TelepathyCore::negotiate_outgoing_call`].
 struct OutgoingCallArgs<'a> {
     contact: &'a Contact,
@@ -1858,6 +2012,10 @@ enum IncomingSlotDecision<'a> {
     RejectedNotInRoom,
     /// Direct-call slot is busy; `Busy` already sent.
     Busy,
+    /// Session is no longer the current map entry for the peer (collision-replacement
+    /// loser or drained by `reset_sessions`); `Busy` already sent to give the remote
+    /// dialer an immediate terminal response.
+    StaleSession,
     Acquired(PendingDirectCallSlot<'a>),
 }
 
@@ -1983,16 +2141,69 @@ fn should_keep_new_session(local_peer: &PublicKey, peer: &PublicKey, new_is_clie
     new_is_client == (local_peer < peer)
 }
 
-/// Releases a pending direct-call slot and asserts the global slot is idle or in a room call.
-fn release_pending(pending_slot: &mut Option<PendingDirectCallSlot<'_>>) -> Result<()> {
+/// Returns `true` if `session_id` is still the current map entry for `peer` in
+/// `session_states`. Used to gate call-slot releases caused by session tasks so that a
+/// collision-loser cleanup cannot tear down a slot owned by a replacement session.
+async fn is_session_still_current(
+    session_states: &Arc<RwLock<HashMap<PublicKey, Arc<SessionState>>>>,
+    peer: PublicKey,
+    session_id: Uuid,
+) -> bool {
+    session_states
+        .read()
+        .await
+        .get(&peer)
+        .map(|s| s.id == session_id)
+        .unwrap_or(false)
+}
+
+/// Releases a pending direct-call slot only if the owning session is still the current
+/// map entry for `peer` in `session_states`.
+///
+/// A collision-loser session that is being torn down MUST NOT release a slot now owned by
+/// the replacement session: the replacement session will re-arm and take ownership via
+/// the `session_rearmed_pending_outgoing` path in `session_outer` and run its own
+/// terminal cleanup. Calling `release_if_pending_for_peer` here would clobber that intent
+/// and leave the replacement session waiting forever for a notify that never arrives.
+///
+/// Explicit terminal operations (e.g. `stop_session`, manager reset, shutdown) clear
+/// `session_states` before invoking release, so `is_session_still_current` is `false` for
+/// those paths and this function becomes a no-op as expected.
+async fn release_pending(
+    session_states: &Arc<RwLock<HashMap<PublicKey, Arc<SessionState>>>>,
+    peer: PublicKey,
+    session_id: Uuid,
+    pending_slot: &mut Option<PendingDirectCallSlot<'_>>,
+) -> Result<()> {
+    // Two independent silent no-op conditions below MUST be preserved together:
+    //
+    // 1. `is_session_still_current` returns `false` -> we exit early to protect a
+    //    replacement session's slot. A collision-loser / drained session must not
+    //    clobber the slot now owned by its replacement.
+    //
+    // 2. `PendingDirectCallSlot::release_on_failure` is `false`
+    //    (matched-incoming / simultaneous-dial) -> `slot.release()` is itself a
+    //    no-op, because the outgoing peer owns the slot and is responsible for
+    //    its lifecycle. Removing this guard (e.g. by "simplifying"
+    //    `release_on_failure` to always release) would let an incoming
+    //    `Matched*` session tear down the outgoing peer's slot — a silent
+    //    slot-clobbering bug.
+    if !is_session_still_current(session_states, peer, session_id).await {
+        return Ok(());
+    }
+
     if let Some(slot) = pending_slot.take() {
         slot.release()?;
     }
     Ok(())
 }
 
-/// Sends a session-stopped `Goodbye`, releases any pending slot, and asserts idle/room post-condition.
+/// Sends a session-stopped `Goodbye`, releases any pending slot only if the owning
+/// session is still the current map entry, and asserts the post-condition.
 async fn abort_negotiation_session_stopped(
+    session_states: &Arc<RwLock<HashMap<PublicKey, Arc<SessionState>>>>,
+    peer: PublicKey,
+    session_id: Uuid,
     send: &mut FramedWrite<SendStream, LengthDelimitedCodec>,
     pending_slot: &mut Option<PendingDirectCallSlot<'_>>,
 ) -> Result<()> {
@@ -2003,7 +2214,7 @@ async fn abort_negotiation_session_stopped(
         },
     )
     .await;
-    release_pending(pending_slot)?;
+    release_pending(session_states, peer, session_id, pending_slot).await?;
     Ok(())
 }
 

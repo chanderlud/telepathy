@@ -20,7 +20,7 @@
 ## Test Execution Rules
 
 - Unit tests may be executed directly with `cargo test --manifest-path ./rust/Cargo.toml`
-- Integration tests must be executed with `cargo test --manifest-path ./rust/Cargo.toml --test core_integration_test`
+- Integration tests must be executed with `cargo test --manifest-path ./rust/Cargo.toml --test core_integration_test --features integration-testing`
 - System tests must be manually executed in WSL by the developer, prompt them to do so
 
 ## Flutter Rust Bridge Rules

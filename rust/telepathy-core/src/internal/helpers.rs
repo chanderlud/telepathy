@@ -557,13 +557,40 @@ where
 
     /// Ends all sessions & restores session_states to default
     pub(crate) async fn reset_sessions(&self) {
+        // Phase 1: drain the current `session_states` map. Removing the entries under
+        // the write lock establishes the per-session ownership invariant: no session
+        // task can re-acquire a pending direct-call slot for a peer whose session is
+        // no longer the current map entry.
         let sessions: Vec<_> = {
             let mut states = self.session_states.write().await;
             states.drain().map(|(_, session)| session).collect()
         };
-        for session in sessions {
+
+        for session in &sessions {
             session.teardown().await;
         }
+
+        // Phase 2: take the write lock as a terminal barrier. Any session task that
+        // somehow raced past the drain above will have observed an empty map and
+        // abandoned its acquisition. Now that the barrier has been observed, no
+        // remaining session can own a pending direct-call slot, so the slot can be
+        // atomically cleared without any per-session guard. The clear leaves
+        // `Idle`/`ActiveDirect`/`RoomCall`/`AudioTest` untouched.
+        //
+        // The write-lock barrier is a secondary defense. The primary defense against
+        // a session task that has already passed `is_session_still_current` is the
+        // `stop_session.is_cancelled()` check at the entry of `negotiate_outgoing_call`
+        // and `negotiate_incoming_call`. Both guards must be preserved together.
+        {
+            let _states = self.session_states.write().await;
+            if let Err(error) = self.core_state.call_slot.clear_pending_direct() {
+                warn!(
+                    event = "reset_sessions_pending_clear_failed",
+                    error = %error
+                );
+            }
+        }
+
         self.outbound_attempts.write().await.clear();
     }
 }
