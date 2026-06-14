@@ -639,6 +639,18 @@ impl SessionState {
         }
     }
 
+    /// Test-only constructor that creates a fresh `SessionState` with a
+    /// unique `id` and a dummy `message_sender`. Used by integration tests
+    /// to simulate a "fresh replacement session" entry in `session_states`
+    /// without actually dialing a new connection. The dummy sender has no
+    /// attached receiver and is never written to in test scenarios, so the
+    /// dropped-on-drop sender is sufficient.
+    #[cfg(feature = "integration-testing")]
+    pub fn new_for_test() -> Self {
+        let (tx, _rx) = tokio::sync::mpsc::channel::<ProtocolMessage>(1);
+        Self::new(&tx)
+    }
+
     /// Returns the unique identifier for this session state.
     pub fn id(&self) -> Uuid {
         self.id

@@ -679,6 +679,7 @@ where
     async fn acquire_incoming_call_slot<'a>(
         &self,
         send: &mut FramedWrite<SendStream, LengthDelimitedCodec>,
+        connection: &Connection,
         call_slot: &'a CallSlot,
         peer: PublicKey,
         session_id: Uuid,
@@ -698,13 +699,22 @@ where
             // been canceled.
             if !is_session_still_current(&self.session_states, peer, session_id).await {
                 // A stale session (e.g. replaced by a collision winner or drained by
-                // `reset_sessions`) MUST still send a terminal response on the wire so the
-                // remote dialer does not wait through the full `HELLO_TIMEOUT` for a reply
-                // that will never come. `Busy` is the appropriate wire response here: from
-                // the caller's perspective this peer is unavailable for a new direct call
-                // because the owning session is no longer current.
+                // `reset_sessions`) must not respond as if the peer is busy — that would
+                // be a lie, because from the caller's perspective the peer is reachable
+                // (a fresh session may be ready to serve on its own connection). The
+                // session exits without writing anything. If a fresh session exists in
+                // the map for this peer, it owns/closes the relevant connection and
+                // will serve the dialer on its own connection, so we leave it alone.
+                // Otherwise, nothing else will close this connection, so we close it
+                // here so the dialer learns the session is over via a transport close
+                // instead of waiting the full `HELLO_TIMEOUT` for a `HelloAck` that
+                // will never come.
                 info!(event = "incoming_call_skipped_stale_session", peer.id = %peer);
-                write_message(send, &ProtocolMessage::Busy).await?;
+                let states = self.session_states.read().await;
+                if states.get(&peer).is_none() {
+                    connection.close(VarInt::from_u32(0), &[]);
+                }
+                drop(states);
                 return Ok(IncomingSlotDecision::StaleSession);
             }
             match PendingDirectCallSlot::try_acquire_incoming(call_slot, peer)? {
@@ -858,6 +868,7 @@ where
         match self
             .acquire_incoming_call_slot(
                 io.send,
+                io.connection,
                 call_slot,
                 peer,
                 io.state.id,
@@ -877,8 +888,13 @@ where
             // current map entry for the peer (replaced by a collision winner or drained by
             // `reset_sessions`), so processing further messages on it is pointless and risks
             // acting on stale state. Unlike `Busy` — a transient state for a still-valid
-            // session that may legitimately receive more traffic — a stale session must
-            // exit the session loop immediately after the wire response is sent.
+            // session that may legitimately receive more traffic — a stale session exits
+            // the session loop without writing a wire response. The dialer is informed via
+            // connection teardown: if a fresh session exists for the peer it owns/closes
+            // the relevant connection and serves the dialer on its own connection; if no
+            // fresh session exists, `acquire_incoming_call_slot` already closed this
+            // connection so the dialer sees a transport close instead of waiting the
+            // full `HELLO_TIMEOUT` for a `HelloAck` that will never come.
             IncomingSlotDecision::StaleSession => {
                 return Ok(IncomingNegotiationOutcome::SessionStopped);
             }
@@ -2028,8 +2044,12 @@ enum IncomingSlotDecision<'a> {
     /// Direct-call slot is busy; `Busy` already sent.
     Busy,
     /// Session is no longer the current map entry for the peer (collision-replacement
-    /// loser or drained by `reset_sessions`); `Busy` already sent to give the remote
-    /// dialer an immediate terminal response.
+    /// loser or drained by `reset_sessions`); NO wire response is sent. The dialer is
+    /// informed via connection teardown: a fresh replacement session (if any) owns
+    /// its own connection and serves the dialer there; if no fresh session exists,
+    /// the connection was closed in `acquire_incoming_call_slot` so the dialer
+    /// observes a transport close rather than waiting for a `HelloAck` that will
+    /// never come.
     StaleSession,
     Acquired(PendingDirectCallSlot<'a>),
 }
