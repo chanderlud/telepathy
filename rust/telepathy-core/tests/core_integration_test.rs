@@ -1,8 +1,9 @@
 #![cfg(feature = "integration-testing")]
 
+use iroh::address_lookup::memory::MemoryLookup;
 use iroh::{PublicKey, RelayMap, SecretKey};
 use std::sync::atomic::Ordering::Relaxed;
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicUsize};
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::{Arc, Mutex, Once, OnceLock};
 use std::thread;
 use std::time::Duration;
@@ -26,7 +27,13 @@ use uuid::Uuid;
 static TEST_TRACING_INIT: Once = Once::new();
 static RELAY_INIT: Once = Once::new();
 static RELAY_DETAILS: OnceLock<RelayMap> = OnceLock::new();
-static NEXT_LISTEN_PORT: AtomicU16 = AtomicU16::new(40000);
+/// Single shared in-process address lookup. Initialised alongside the
+/// relay server so every test client sees the same `BTreeMap`.
+///
+/// `setup_endpoint` calls `add_endpoint_info(endpoint.addr())` against
+/// this lookup right after binding, so any client that dials another
+/// will resolve that peer's `EndpointInfo` from the same map.
+static SHARED_ADDRESS_LOOKUP: OnceLock<MemoryLookup> = OnceLock::new();
 
 const SEQUENCED_STEP: f32 = 1.0 / 4096.0;
 const DEFAULT_SAMPLE_RATE: u32 = 48_000;
@@ -169,7 +176,6 @@ async fn session_collision_doesnt_fail() {
             DEFAULT_SAMPLE_RATE,
         ),
         Default::default(),
-        next_listen_port(),
     )
     .await;
 
@@ -185,7 +191,6 @@ async fn session_collision_doesnt_fail() {
             DEFAULT_SAMPLE_RATE,
         ),
         Default::default(),
-        next_listen_port(),
     )
     .await;
 
@@ -233,6 +238,117 @@ async fn session_collision_doesnt_fail() {
     client_b.telepathy.shutdown().await;
 }
 
+/// Locks in the in-process `MemoryLookup` address discovery path.
+///
+/// `shared_relay_map()` boots the relay server and the shared
+/// `MemoryLookup` is initialised in the same `Once`. After both
+/// clients bind, `setup_endpoint` registers each peer's `addr()`
+/// against the shared lookup, so the dial that follows can resolve
+/// the remote peer without reaching the n0 PKARR relay. The
+/// assertions verify both that the registration happened (the
+/// lookup contains entries for both peers) and that the resulting
+/// end-to-end call reaches `Connected` — the regression scenario is
+/// the in-process lookup silently failing and the dial hanging
+/// until `HELLO_TIMEOUT`.
+#[tokio::test(flavor = "multi_thread")]
+async fn memory_address_lookup_resolves_peer_over_relay() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+    let lookup = shared_address_lookup();
+
+    let codec_config = CodecConfig::new(true, true, 5.0);
+
+    let key_a = SecretKey::generate();
+    let key_b = SecretKey::generate();
+    let contact_a = Contact::new("lookup-client-a".to_string(), key_a.public().to_string())
+        .expect("contact a invalid");
+    let contact_b = Contact::new("lookup-client-b".to_string(), key_b.public().to_string())
+        .expect("contact b invalid");
+
+    let call_states_a = Arc::new(Mutex::new(Vec::new()));
+    let call_states_b = Arc::new(Mutex::new(Vec::new()));
+    let accept_probe_b = PendingAcceptProbe::default();
+
+    let client_a = build_client(
+        relay_map,
+        key_a,
+        vec![contact_b.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_a.clone(),
+    )
+    .await;
+
+    let client_b = build_client_with_accept_probe(
+        relay_map,
+        key_b,
+        vec![contact_a.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_b.clone(),
+        accept_probe_b.clone(),
+    )
+    .await;
+
+    // `setup_endpoint` is expected to register each peer's `addr()` in the
+    // shared `MemoryLookup` immediately after `bind()`. The lookup must
+    // therefore hold entries for both public keys before any dial is
+    // attempted. This is the assertion that locks in the new code path:
+    // a regression where the registration step is skipped (e.g. by
+    // re-introducing the PkarrPublisher branch) would leave these
+    // lookups empty and the dial would hang on `HELLO_TIMEOUT`.
+    assert!(
+        lookup.get_endpoint_info(contact_a.get_peer_id()).is_some(),
+        "shared MemoryLookup must contain an entry for client-a after bind"
+    );
+    assert!(
+        lookup.get_endpoint_info(contact_b.get_peer_id()).is_some(),
+        "shared MemoryLookup must contain an entry for client-b after bind"
+    );
+
+    client_a.telepathy.start_session(&contact_b).await;
+    client_b.telepathy.start_session(&contact_a).await;
+    wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
+
+    client_a
+        .telepathy
+        .start_call(&contact_b)
+        .await
+        .expect("alice should start the outgoing call");
+    accept_probe_b.wait_opened().await;
+
+    client_b
+        .telepathy
+        .start_call(&contact_a)
+        .await
+        .expect("bob should match the pending incoming call");
+
+    wait_for_connected(&call_states_a, "alice").await;
+    wait_for_connected(&call_states_b, "bob").await;
+    accept_probe_b.wait_cancelled().await;
+
+    let states_a = call_state_snapshot(&call_states_a);
+    let states_b = call_state_snapshot(&call_states_b);
+    assert_no_busy_end(&states_a, "alice");
+    assert_no_busy_end(&states_b, "bob");
+    assert_no_call_ended_before_connected(&states_a, "alice");
+    assert_no_call_ended_before_connected(&states_b, "bob");
+
+    client_a.telepathy.end_call().await;
+    client_a.telepathy.shutdown().await;
+    client_b.telepathy.shutdown().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn call_simultaneous_dial_matches_pending_incoming_and_connects() {
     init_test_tracing();
@@ -263,7 +379,6 @@ async fn call_simultaneous_dial_matches_pending_incoming_and_connects() {
             DEFAULT_SAMPLE_RATE,
         ),
         call_states_a.clone(),
-        next_listen_port(),
     )
     .await;
 
@@ -279,7 +394,6 @@ async fn call_simultaneous_dial_matches_pending_incoming_and_connects() {
             DEFAULT_SAMPLE_RATE,
         ),
         call_states_b.clone(),
-        next_listen_port(),
         accept_probe_b.clone(),
     )
     .await;
@@ -357,7 +471,6 @@ async fn repeated_start_call_same_outgoing_does_not_queue_stale_permit() {
             DEFAULT_SAMPLE_RATE,
         ),
         call_states_a.clone(),
-        next_listen_port(),
     )
     .await;
 
@@ -373,7 +486,6 @@ async fn repeated_start_call_same_outgoing_does_not_queue_stale_permit() {
             DEFAULT_SAMPLE_RATE,
         ),
         call_states_b.clone(),
-        next_listen_port(),
     )
     .await;
 
@@ -491,7 +603,6 @@ async fn reset_sessions_clears_pending_outgoing_slot() {
             DEFAULT_SAMPLE_RATE,
         ),
         call_states_a.clone(),
-        next_listen_port(),
     )
     .await;
 
@@ -507,7 +618,6 @@ async fn reset_sessions_clears_pending_outgoing_slot() {
             DEFAULT_SAMPLE_RATE,
         ),
         call_states_b.clone(),
-        next_listen_port(),
     )
     .await;
 
@@ -614,7 +724,6 @@ async fn reset_sessions_clears_pending_incoming_slot() {
             DEFAULT_SAMPLE_RATE,
         ),
         call_states_a.clone(),
-        next_listen_port(),
     )
     .await;
 
@@ -630,7 +739,6 @@ async fn reset_sessions_clears_pending_incoming_slot() {
             DEFAULT_SAMPLE_RATE,
         ),
         call_states_b.clone(),
-        next_listen_port(),
         accept_probe_b.clone(),
     )
     .await;
@@ -750,7 +858,6 @@ async fn reset_sessions_drains_queued_start_call_after_terminal_force_clear() {
             DEFAULT_SAMPLE_RATE,
         ),
         call_states_a.clone(),
-        next_listen_port(),
     )
     .await;
 
@@ -766,7 +873,6 @@ async fn reset_sessions_drains_queued_start_call_after_terminal_force_clear() {
             DEFAULT_SAMPLE_RATE,
         ),
         call_states_b.clone(),
-        next_listen_port(),
     )
     .await;
 
@@ -894,7 +1000,6 @@ async fn restart_manager_recovers_slot_respawns_sessions_and_allows_fresh_start_
             DEFAULT_SAMPLE_RATE,
         ),
         call_states_a.clone(),
-        next_listen_port(),
         None,
         ManagerLifecycle::Restartable,
     )
@@ -912,7 +1017,6 @@ async fn restart_manager_recovers_slot_respawns_sessions_and_allows_fresh_start_
             DEFAULT_SAMPLE_RATE,
         ),
         call_states_b.clone(),
-        next_listen_port(),
     )
     .await;
 
@@ -1032,6 +1136,7 @@ async fn restart_manager_recovers_slot_respawns_sessions_and_allows_fresh_start_
     client_b.telepathy.shutdown().await;
 }
 
+// TODO i dont like how this edge case is being handled, plus this test doesnt work :)
 /// Regression test for the wire response on a stale-session `Hello`.
 ///
 /// The listener-side session that receives an incoming `Hello` runs an
@@ -1079,7 +1184,6 @@ async fn stale_session_receives_hello_sends_immediate_busy_response() {
             DEFAULT_SAMPLE_RATE,
         ),
         call_states_a.clone(),
-        next_listen_port(),
     )
     .await;
 
@@ -1095,7 +1199,6 @@ async fn stale_session_receives_hello_sends_immediate_busy_response() {
             DEFAULT_SAMPLE_RATE,
         ),
         call_states_b.clone(),
-        next_listen_port(),
     )
     .await;
 
@@ -1336,7 +1439,6 @@ async fn audio_frames_play_in_order() {
             DEFAULT_SAMPLE_RATE,
         ),
         Default::default(),
-        next_listen_port(),
     )
     .await;
 
@@ -1352,7 +1454,6 @@ async fn audio_frames_play_in_order() {
             DEFAULT_SAMPLE_RATE,
         ),
         Default::default(),
-        next_listen_port(),
     )
     .await;
 
@@ -1440,7 +1541,6 @@ async fn room_two_peers_join_emits_remote_room_join() {
             DEFAULT_SAMPLE_RATE,
         ),
         call_states_a.clone(),
-        next_listen_port(),
     )
     .await;
 
@@ -1456,7 +1556,6 @@ async fn room_two_peers_join_emits_remote_room_join() {
             DEFAULT_SAMPLE_RATE,
         ),
         call_states_b.clone(),
-        next_listen_port(),
     )
     .await;
 
@@ -1522,7 +1621,6 @@ async fn room_two_peers_join_remains_stable_without_leave() {
             DEFAULT_SAMPLE_RATE,
         ),
         call_states_a.clone(),
-        next_listen_port(),
     )
     .await;
 
@@ -1538,7 +1636,6 @@ async fn room_two_peers_join_remains_stable_without_leave() {
             DEFAULT_SAMPLE_RATE,
         ),
         call_states_b.clone(),
-        next_listen_port(),
     )
     .await;
 
@@ -1612,7 +1709,6 @@ async fn room_peer_disconnect_emits_room_leave_once() {
             DEFAULT_SAMPLE_RATE,
         ),
         call_states_a.clone(),
-        next_listen_port(),
     )
     .await;
 
@@ -1628,7 +1724,6 @@ async fn room_peer_disconnect_emits_room_leave_once() {
             DEFAULT_SAMPLE_RATE,
         ),
         Arc::new(Mutex::new(Vec::new())),
-        next_listen_port(),
     )
     .await;
 
@@ -1702,7 +1797,6 @@ async fn room_peer_disconnect_then_rejoin_emits_leave_then_join() {
             DEFAULT_SAMPLE_RATE,
         ),
         call_states_a.clone(),
-        next_listen_port(),
     )
     .await;
 
@@ -1718,7 +1812,6 @@ async fn room_peer_disconnect_then_rejoin_emits_leave_then_join() {
             DEFAULT_SAMPLE_RATE,
         ),
         Arc::new(Mutex::new(Vec::new())),
-        next_listen_port(),
     )
     .await;
 
@@ -1799,7 +1892,6 @@ async fn room_multiple_quick_reconnects_do_not_emit_stale_room_leave() {
             DEFAULT_SAMPLE_RATE,
         ),
         call_states_a.clone(),
-        next_listen_port(),
     )
     .await;
 
@@ -1815,7 +1907,6 @@ async fn room_multiple_quick_reconnects_do_not_emit_stale_room_leave() {
             DEFAULT_SAMPLE_RATE,
         ),
         Arc::new(Mutex::new(Vec::new())),
-        next_listen_port(),
     )
     .await;
 
@@ -1909,7 +2000,6 @@ async fn room_reconnect_does_not_emit_stale_room_leave() {
             DEFAULT_SAMPLE_RATE,
         ),
         call_states_a.clone(),
-        next_listen_port(),
     )
     .await;
 
@@ -1925,7 +2015,6 @@ async fn room_reconnect_does_not_emit_stale_room_leave() {
             DEFAULT_SAMPLE_RATE,
         ),
         Arc::new(Mutex::new(Vec::new())),
-        next_listen_port(),
     )
     .await;
 
@@ -1983,6 +2072,734 @@ async fn room_reconnect_does_not_emit_stale_room_leave() {
     );
 }
 
+/// Happy-path regression for the room path.
+///
+/// Two mutual contacts both `join_room`. Asserts each side emits
+/// `CallState::Connected` and exactly one `RoomJoin` for the peer, and
+/// that the call slot is `RoomCall` on both clients. This is the
+/// baseline test for the room-generation token: the new `RoomState` is
+/// installed once, no `end_call` -> `join_room` cycle happens, and the
+/// `room_owner`/`room_generation` invariants the controller enforces at
+/// teardown must hold.
+#[tokio::test(flavor = "multi_thread")]
+async fn two_client_room_join_connects_and_reports_join() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+
+    let codec_config = CodecConfig::new(true, true, 5.0);
+
+    let key_a = SecretKey::generate();
+    let key_b = SecretKey::generate();
+    let contact_a = Contact::new("room-client-a".to_string(), key_a.public().to_string())
+        .expect("contact a invalid");
+    let contact_b = Contact::new("room-client-b".to_string(), key_b.public().to_string())
+        .expect("contact b invalid");
+
+    let peer_a = contact_a.get_peer_id().to_string();
+    let peer_b = contact_b.get_peer_id().to_string();
+    let call_states_a = Arc::new(Mutex::new(Vec::new()));
+    let call_states_b = Arc::new(Mutex::new(Vec::new()));
+    let room_members = sorted_room_members(&contact_a, &contact_b);
+
+    let client_a = build_client(
+        relay_map,
+        key_a,
+        vec![contact_b.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_a.clone(),
+    )
+    .await;
+
+    let client_b = build_client(
+        relay_map,
+        key_b,
+        vec![contact_a.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_b.clone(),
+    )
+    .await;
+
+    client_a.telepathy.start_session(&contact_b).await;
+    client_b.telepathy.start_session(&contact_a).await;
+    wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
+
+    client_a
+        .telepathy
+        .join_room(room_members.clone())
+        .await
+        .expect("client a should join room");
+    client_b
+        .telepathy
+        .join_room(room_members)
+        .await
+        .expect("client b should join room");
+
+    // Both clients move the slot into `RoomCall` and install a `RoomState`.
+    wait_for_slot_room_call(&client_a, "client_a_pre_join").await;
+    wait_for_slot_room_call(&client_b, "client_b_pre_join").await;
+
+    // Capture the room-generation token captured by the controller so the
+    // teardown's `release_if_match` can be checked for the right owner.
+    // `RoomCall` does not carry a generation snapshot directly, but the
+    // `RoomState` does; reading it here is a white-box check that
+    // `join_room` bumped the counter and stored a matching value.
+    let generation_a = client_a
+        .telepathy
+        .inner
+        .current_room_generation()
+        .await
+        .expect("client_a should have an installed RoomState after wait_for_slot_room_call");
+    let generation_b = client_b
+        .telepathy
+        .inner
+        .current_room_generation()
+        .await
+        .expect("client_b should have an installed RoomState after wait_for_slot_room_call");
+    assert!(
+        generation_a > 0,
+        "client_a room generation should be a positive value after join_room; got {generation_a}"
+    );
+    assert!(
+        generation_b > 0,
+        "client_b room generation should be a positive value after join_room; got {generation_b}"
+    );
+
+    wait_for_connected(&call_states_a, "alice").await;
+    wait_for_connected(&call_states_b, "bob").await;
+    wait_for_room_join_count(&call_states_a, &peer_b, 1).await;
+    wait_for_room_join_count(&call_states_b, &peer_a, 1).await;
+    wait_for_no_extra_room_leave(&call_states_a, &peer_b, 0, Duration::from_secs(1)).await;
+    wait_for_no_extra_room_leave(&call_states_b, &peer_a, 0, Duration::from_secs(1)).await;
+
+    let states_a = call_state_snapshot(&call_states_a);
+    let states_b = call_state_snapshot(&call_states_b);
+    assert_eq!(
+        room_join_count(&states_a, &peer_b),
+        1,
+        "client a should observe exactly one RoomJoin for client b; got states={states_a:?}"
+    );
+    assert_eq!(
+        room_join_count(&states_b, &peer_a),
+        1,
+        "client b should observe exactly one RoomJoin for client a; got states={states_b:?}"
+    );
+    assert_eq!(
+        room_leave_count(&states_a, &peer_b),
+        0,
+        "client a should not observe a RoomLeave while the room is stable; got states={states_a:?}"
+    );
+    assert_eq!(
+        room_leave_count(&states_b, &peer_a),
+        0,
+        "client b should not observe a RoomLeave while the room is stable; got states={states_b:?}"
+    );
+    assert_room_event_sequence(&states_a, &peer_b, &[RoomEventKind::Join]);
+    assert_room_event_sequence(&states_b, &peer_a, &[RoomEventKind::Join]);
+
+    client_a.telepathy.shutdown().await;
+    client_b.telepathy.shutdown().await;
+}
+
+/// Regression test for the `end_call` -> `join_room` cycle (R1).
+///
+/// Joins a room on both clients, waits for `RoomJoin`, calls `end_call()`
+/// on both, then re-joins. The post-rejoin must produce a *second*
+/// `RoomJoin` (not be lost to a stale `room_state` carry-over) and must
+/// not emit a spurious `RoomLeave` after the second `RoomJoin` — that
+/// was the exact failure mode in the system-test artifact
+/// `test_room_end_releases_call_slot_for_rejoin`.
+#[tokio::test(flavor = "multi_thread")]
+async fn room_end_releases_slot_and_allows_rejoin() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+
+    let codec_config = CodecConfig::new(true, true, 5.0);
+
+    let key_a = SecretKey::generate();
+    let key_b = SecretKey::generate();
+    let contact_a = Contact::new("room-client-a".to_string(), key_a.public().to_string())
+        .expect("contact a invalid");
+    let contact_b = Contact::new("room-client-b".to_string(), key_b.public().to_string())
+        .expect("contact b invalid");
+
+    let peer_a = contact_a.get_peer_id().to_string();
+    let peer_b = contact_b.get_peer_id().to_string();
+    let call_states_a = Arc::new(Mutex::new(Vec::new()));
+    let call_states_b = Arc::new(Mutex::new(Vec::new()));
+    let room_members = sorted_room_members(&contact_a, &contact_b);
+
+    let client_a = build_client(
+        relay_map,
+        key_a,
+        vec![contact_b.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_a.clone(),
+    )
+    .await;
+
+    let client_b = build_client(
+        relay_map,
+        key_b,
+        vec![contact_a.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_b.clone(),
+    )
+    .await;
+
+    client_a.telepathy.start_session(&contact_b).await;
+    client_b.telepathy.start_session(&contact_a).await;
+    wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
+
+    // First join: both sides acquire `RoomCall` and install a `RoomState`.
+    client_a
+        .telepathy
+        .join_room(room_members.clone())
+        .await
+        .expect("client a should join room (first)");
+    client_b
+        .telepathy
+        .join_room(room_members.clone())
+        .await
+        .expect("client b should join room (first)");
+    wait_for_room_join_count(&call_states_a, &peer_b, 1).await;
+    wait_for_room_join_count(&call_states_b, &peer_a, 1).await;
+    let first_generation_a = client_a
+        .telepathy
+        .inner
+        .current_room_generation()
+        .await
+        .expect("client_a should have RoomState after first join");
+    let first_generation_b = client_b
+        .telepathy
+        .inner
+        .current_room_generation()
+        .await
+        .expect("client_b should have RoomState after first join");
+
+    // Tear the room down via the public `end_call` API. `wait_for_slot_idle`
+    // is the state-driven precondition for the rejoin: the controller's
+    // teardown must have cleared the slot and the `RoomState` so a fresh
+    // `join_room` can re-acquire both atomically.
+    client_a.telepathy.end_call().await;
+    client_b.telepathy.end_call().await;
+    wait_for_slot_idle(&client_a, &peer_a).await;
+    wait_for_slot_idle(&client_b, &peer_b).await;
+    let after_end_a = client_a
+        .telepathy
+        .inner
+        .current_room_generation()
+        .await
+        .is_none();
+    let after_end_b = client_b
+        .telepathy
+        .inner
+        .current_room_generation()
+        .await
+        .is_none();
+    assert!(
+        after_end_a,
+        "client_a room_state should be cleared after end_call; a stale controller would still be holding the entry"
+    );
+    assert!(
+        after_end_b,
+        "client_b room_state should be cleared after end_call; a stale controller would still be holding the entry"
+    );
+
+    // Re-join. The new room must have a strictly greater generation
+    // (counter-bumped in `join_room`) and a fresh `RoomState` must be
+    // installed. Asserting both captures the R1 fix: a stale controller's
+    // late teardown must not clobber the new room.
+    client_a
+        .telepathy
+        .join_room(room_members.clone())
+        .await
+        .expect("client a should re-join room");
+    client_b
+        .telepathy
+        .join_room(room_members.clone())
+        .await
+        .expect("client b should re-join room");
+    wait_for_room_join_count(&call_states_a, &peer_b, 2).await;
+    wait_for_room_join_count(&call_states_b, &peer_a, 2).await;
+    let second_generation_a = client_a
+        .telepathy
+        .inner
+        .current_room_generation()
+        .await
+        .expect("client_a should have RoomState after re-join");
+    let second_generation_b = client_b
+        .telepathy
+        .inner
+        .current_room_generation()
+        .await
+        .expect("client_b should have RoomState after re-join");
+    assert!(
+        second_generation_a > first_generation_a,
+        "re-join should bump the room generation; first={first_generation_a}, second={second_generation_a}"
+    );
+    assert!(
+        second_generation_b > first_generation_b,
+        "re-join should bump the room generation; first={first_generation_b}, second={second_generation_b}"
+    );
+
+    // Critical: the post-rejoin window must not produce a spurious
+    // `RoomLeave` after the second `RoomJoin`. This is the exact
+    // failure mode the system test artifacts reported.
+    wait_for_no_extra_room_leave(&call_states_a, &peer_b, 0, Duration::from_secs(3)).await;
+    wait_for_no_extra_room_leave(&call_states_b, &peer_a, 0, Duration::from_secs(3)).await;
+
+    let states_a = call_state_snapshot(&call_states_a);
+    let states_b = call_state_snapshot(&call_states_b);
+    assert_eq!(
+        room_leave_count(&states_a, &peer_b),
+        0,
+        "client a should not observe a RoomLeave for client b across the end_call -> join_room cycle; got states={states_a:?}"
+    );
+    assert_eq!(
+        room_leave_count(&states_b, &peer_a),
+        0,
+        "client b should not observe a RoomLeave for client a across the end_call -> join_room cycle; got states={states_b:?}"
+    );
+    // The exact ordered sequence we are locking in: Join, Join (no Leave).
+    // The intermediate `end_call` -> `join_room` cycle is observed only
+    // as a stable slot state transition (we asserted `Idle` above), not
+    // as a wire `RoomLeave` event — the controller tears the room down
+    // locally without emitting a `RoomLeave` callback to the UI.
+    assert_room_event_sequence(
+        &states_a,
+        &peer_b,
+        &[RoomEventKind::Join, RoomEventKind::Join],
+    );
+    assert_room_event_sequence(
+        &states_b,
+        &peer_a,
+        &[RoomEventKind::Join, RoomEventKind::Join],
+    );
+
+    client_a.telepathy.shutdown().await;
+    client_b.telepathy.shutdown().await;
+}
+
+/// Primary regression test for the failing system-test artifact
+/// `test_room_peer_leave_and_rejoin` (R2/R5).
+///
+/// Three clients in a room. One client `end_call()`s (leaves). The
+/// remaining two observe exactly one `RoomLeave(leaver)`. The leaver
+/// then `join_room`s again, and the remaining two observe a *second*
+/// `RoomJoin(leaver)` and — critically — no extra `RoomLeave` after it.
+/// The exact ordered sequence `[Join, Leave, Join]` for the leaver on
+/// each remaining client is what locks in the fix: a stale
+/// connection_id-keyed `Leave` after a rejoin would emit a
+/// `RoomLeave(leaver)` after the `RoomJoin(leaver)`, producing
+/// `[Join, Leave, Join, Leave]` and breaking the mesh.
+///
+/// **Slot-busy constraint and test shape:** the R2 race the system-test
+/// artifact described is a fast in-place `end_call` -> `join_room` on
+/// the *same* transport, where a stale `Leave` keyed by the previous
+/// `connection_id` races the new `Join` inside the same
+/// `room_controller` loop. The production guard against that race lives
+/// in `room_controller`'s `RoomMessage::Leave` arm: it matches
+/// `peer_connections[peer] == leave.connection_id` and only emits
+/// `RoomLeave` for the still-active connection, otherwise logging
+/// `room_leave_stale_connection` and dropping the stale `Leave`. We
+/// cannot exercise that in-place race in this integration test because
+/// a fast `end_call` -> `join_room` while the other two clients are
+/// still in `RoomCall` is blocked at the public API layer: the new
+/// `join_room` has to be sequenced after a transport teardown on the
+/// leaver so the receiving peers free the slot for the new
+/// `room_handshake`. So this test reproduces the same race shape in
+/// the closest way the integration harness allows: a real
+/// `stop_session`/`start_session` for the leaver's two sessions,
+/// which produces a fresh `connection_id` on both sides. The new
+/// `Join` on the fresh transport and the previously-emitted `Leave`
+/// from the old transport are now keyed by *different* connection
+/// ids on the receiving peers, which is exactly the condition the
+/// `room_leave_stale_connection` branch detects. The 3-second
+/// post-rejoin stability window + `room_leave_count` assertion is
+/// the concrete guard: if the controller ever regressed to emitting
+/// `RoomLeave` for a stale `connection_id`, the post-rejoin window
+/// would see a second `RoomLeave(C)` on A and B and the assertion
+/// would fail.
+///
+/// The disconnect/reconnect pattern is also already covered by the
+/// narrower 2-client `room_peer_disconnect_then_rejoin_emits_leave_then_join`
+/// and `room_reconnect_does_not_emit_stale_room_leave` tests. This
+/// test's added value over those is the 3-client mesh: the leaver
+/// has two peers, both of which must observe the exact
+/// `[Join, Leave, Join]` ordering, and the room-generation token
+/// must stay monotonic across the leave-and-rejoin cycle.
+#[tokio::test(flavor = "multi_thread")]
+async fn room_peer_leave_and_rejoin_reestablishes_mesh() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+
+    let codec_config = CodecConfig::new(true, true, 5.0);
+
+    let key_a = SecretKey::generate();
+    let key_b = SecretKey::generate();
+    let key_c = SecretKey::generate();
+    let contact_a = Contact::new("room-client-a".to_string(), key_a.public().to_string())
+        .expect("contact a invalid");
+    let contact_b = Contact::new("room-client-b".to_string(), key_b.public().to_string())
+        .expect("contact b invalid");
+    let contact_c = Contact::new("room-client-c".to_string(), key_c.public().to_string())
+        .expect("contact c invalid");
+
+    let peer_a = contact_a.get_peer_id().to_string();
+    let peer_b = contact_b.get_peer_id().to_string();
+    let peer_c = contact_c.get_peer_id().to_string();
+    let call_states_a = Arc::new(Mutex::new(Vec::new()));
+    let call_states_b = Arc::new(Mutex::new(Vec::new()));
+    let call_states_c = Arc::new(Mutex::new(Vec::new()));
+
+    // Sorted three-member room, matching how production callers sort the
+    // member list before passing it to `join_room`.
+    let mut room_members = vec![peer_a.clone(), peer_b.clone(), peer_c.clone()];
+    room_members.sort();
+
+    // `ManagerLifecycle::Single` is safe for all three clients here, even
+    // though C undergoes two `stop_session`/`start_session` cycles mid-test
+    // (one per contact, A and B). The mock's `manager_state` expectation
+    // counts the *manager* state machine events (`Starting`/`Active` on
+    // boot, `Stopped` on shutdown, `Failed` on session-manager error), not
+    // per-peer session lifecycle events. `stop_session` removes a
+    // `SessionState` from the `session_states` map and cancels the
+    // per-session token; `start_session` sends a public key to the
+    // session-manager channel to spawn a new `SessionState`. Neither
+    // path calls `callbacks.manager_state(...)` — the only call sites
+    // are `start_manager` (`Starting`/`Active`/`Failed`) and the
+    // `session_manager` loop's teardown (`Stopped`, only on
+    // `shutdown`/`restart_manager`). Each test client boots once and
+    // shuts down once, so the strict `Single` mock expectation of
+    // `2` (`Starting`+`Active`) + `1` (`Stopped`) holds. If a future
+    // refactor makes `stop_session`/`start_session` plumb through
+    // `manager_state` (e.g. a transient `Failed` on session-manager
+    // error), this test would trip the strict mock and would need to
+    // be switched to `ManagerLifecycle::Restartable` for all three
+    // clients — but the failure mode would be a mockall
+    // "called 0 time(s)" panic on `Stopped` or
+    // `times(2)`/`times(0)` mismatch on `Starting`/`Active`, both of
+    // which are easy to attribute.
+    let client_a = build_client(
+        relay_map,
+        key_a,
+        vec![contact_b.clone(), contact_c.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_a.clone(),
+    )
+    .await;
+
+    let client_b = build_client(
+        relay_map,
+        key_b,
+        vec![contact_a.clone(), contact_c.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_b.clone(),
+    )
+    .await;
+
+    let client_c = build_client(
+        relay_map,
+        key_c,
+        vec![contact_a.clone(), contact_b.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_c.clone(),
+    )
+    .await;
+
+    client_a.telepathy.start_session(&contact_b).await;
+    client_a.telepathy.start_session(&contact_c).await;
+    client_b.telepathy.start_session(&contact_a).await;
+    client_b.telepathy.start_session(&contact_c).await;
+    client_c.telepathy.start_session(&contact_a).await;
+    client_c.telepathy.start_session(&contact_b).await;
+    wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
+    wait_for_sessions(&client_a, &contact_c, &client_c, &contact_a).await;
+    wait_for_sessions(&client_b, &contact_c, &client_c, &contact_b).await;
+
+    // All three join the same room. The `join_room` API auto-accepts
+    // (no accept prompt for room calls), so `build_client` is sufficient
+    // and a single `ManagerLifecycle::Single` mock works.
+    client_a
+        .telepathy
+        .join_room(room_members.clone())
+        .await
+        .expect("client a should join room");
+    client_b
+        .telepathy
+        .join_room(room_members.clone())
+        .await
+        .expect("client b should join room");
+    client_c
+        .telepathy
+        .join_room(room_members.clone())
+        .await
+        .expect("client c should join room");
+
+    // Each client must see the other two join the mesh.
+    wait_for_room_join_count(&call_states_a, &peer_b, 1).await;
+    wait_for_room_join_count(&call_states_a, &peer_c, 1).await;
+    wait_for_room_join_count(&call_states_b, &peer_a, 1).await;
+    wait_for_room_join_count(&call_states_b, &peer_c, 1).await;
+    wait_for_room_join_count(&call_states_c, &peer_a, 1).await;
+    wait_for_room_join_count(&call_states_c, &peer_b, 1).await;
+    wait_for_no_extra_room_leave(&call_states_a, &peer_b, 0, Duration::from_secs(1)).await;
+    wait_for_no_extra_room_leave(&call_states_a, &peer_c, 0, Duration::from_secs(1)).await;
+    wait_for_no_extra_room_leave(&call_states_b, &peer_a, 0, Duration::from_secs(1)).await;
+    wait_for_no_extra_room_leave(&call_states_b, &peer_c, 0, Duration::from_secs(1)).await;
+    wait_for_no_extra_room_leave(&call_states_c, &peer_a, 0, Duration::from_secs(1)).await;
+    wait_for_no_extra_room_leave(&call_states_c, &peer_b, 0, Duration::from_secs(1)).await;
+
+    // Client C leaves the room via `end_call`, then does a full
+    // `stop_session`/`start_session` for both A and B before
+    // `join_room` again. The `end_call` alone cannot be followed by an
+    // in-place `join_room` here because A and B are still in `RoomCall`
+    // for the existing room and the new `room_handshake` on either
+    // side would race the still-active slot. A transport teardown
+    // for the leaver's two peers is what clears the slot on the
+    // listening side and lets the new `room_controller` install a
+    // fresh `RoomState`. This is the same pattern as the existing
+    // `room_peer_disconnect_then_rejoin_emits_leave_then_join` test;
+    // see the test's docstring for why this is the closest the
+    // integration harness can get to the R2 in-place `end_call`
+    // ->`join_room` race.
+    client_c.telepathy.end_call().await;
+    wait_for_slot_idle(&client_c, &peer_c).await;
+    wait_for_room_leave_count(&call_states_a, &peer_c, 1).await;
+    wait_for_room_leave_count(&call_states_b, &peer_c, 1).await;
+    // Stability window: no extra `RoomLeave(C)` should arrive from a
+    // late `Leave` message produced by the previous transport. The
+    // 1-second window is sized to absorb relay-contention jitter
+    // (single in-flight `Leave` only) without masking a regression
+    // where the old transport's `Leave` arrives after the new
+    // transport's `Join` (the R2 failure mode).
+    wait_for_no_extra_room_leave(&call_states_a, &peer_c, 1, Duration::from_secs(1)).await;
+    wait_for_no_extra_room_leave(&call_states_b, &peer_c, 1, Duration::from_secs(1)).await;
+
+    let after_leave_a = call_state_snapshot(&call_states_a);
+    let after_leave_b = call_state_snapshot(&call_states_b);
+    assert_eq!(
+        room_leave_count(&after_leave_a, &peer_c),
+        1,
+        "client a should observe exactly one RoomLeave(C) after C's end_call; got states={after_leave_a:?}"
+    );
+    assert_eq!(
+        room_leave_count(&after_leave_b, &peer_c),
+        1,
+        "client b should observe exactly one RoomLeave(C) after C's end_call; got states={after_leave_b:?}"
+    );
+
+    // Re-join: tear down C's sessions to A and B, re-establish them
+    // (a fresh `connection_id` on both sides), then `join_room`. The
+    // remaining two clients must observe a *second* `RoomJoin(C)` and
+    // — critically — no extra `RoomLeave(C)` after it. The fresh
+    // transport means the new `Join` is keyed by a different
+    // `connection_id` than the old `Leave` from `end_call`, which is
+    // the exact condition the `room_leave_stale_connection` branch in
+    // `room_controller` is meant to detect (see `internal/core.rs`).
+    // The 3-second post-rejoin window is the concrete guard: a
+    // regression where the controller emitted `RoomLeave` for a
+    // stale `connection_id` would surface as a second
+    // `RoomLeave(C)` on A or B inside that window and trip the
+    // assertion below.
+    client_c.is_active.store(false, Relaxed);
+    client_c.telepathy.stop_session(&contact_a).await;
+    client_c.telepathy.stop_session(&contact_b).await;
+    client_c.telepathy.start_session(&contact_a).await;
+    client_c.telepathy.start_session(&contact_b).await;
+    wait_for_sessions(&client_c, &contact_a, &client_a, &contact_c).await;
+    wait_for_sessions(&client_c, &contact_b, &client_b, &contact_c).await;
+    client_c
+        .telepathy
+        .join_room(room_members.clone())
+        .await
+        .expect("client c should re-join room");
+    wait_for_room_join_count(&call_states_a, &peer_c, 2).await;
+    wait_for_room_join_count(&call_states_b, &peer_c, 2).await;
+    // Stability window for the rejoin. A 3-second window is the
+    // integration-test analog of the post-rejoin wait used in
+    // `room_peer_disconnect_then_rejoin_emits_leave_then_join`; it
+    // catches a stale `Leave` from the previous transport that races
+    // the new `Join` handler. The window is large enough to absorb
+    // relay-contention jitter on a single in-flight stale `Leave`,
+    // and small enough that a regression producing multiple
+    // `RoomLeave` events after the second `Join` cannot hide inside
+    // it.
+    wait_for_no_extra_room_leave(&call_states_a, &peer_c, 1, Duration::from_secs(3)).await;
+    wait_for_no_extra_room_leave(&call_states_b, &peer_c, 1, Duration::from_secs(3)).await;
+
+    let states_a = call_state_snapshot(&call_states_a);
+    let states_b = call_state_snapshot(&call_states_b);
+    assert_eq!(
+        room_leave_count(&states_a, &peer_c),
+        1,
+        "client a should observe exactly one RoomLeave(C) across leave+rejoin; got states={states_a:?}"
+    );
+    assert_eq!(
+        room_leave_count(&states_b, &peer_c),
+        1,
+        "client b should observe exactly one RoomLeave(C) across leave+rejoin; got states={states_b:?}"
+    );
+    // The exact ordered sequence we are locking in for the leaver. The
+    // exact bug being guarded against would produce a fourth
+    // `RoomLeave(C)` after the second `RoomJoin(C)` (or a spurious
+    // interleaving), failing this assertion.
+    assert_room_event_sequence(
+        &states_a,
+        &peer_c,
+        &[
+            RoomEventKind::Join,
+            RoomEventKind::Leave,
+            RoomEventKind::Join,
+        ],
+    );
+    assert_room_event_sequence(
+        &states_b,
+        &peer_c,
+        &[
+            RoomEventKind::Join,
+            RoomEventKind::Leave,
+            RoomEventKind::Join,
+        ],
+    );
+
+    client_a.telepathy.shutdown().await;
+    client_b.telepathy.shutdown().await;
+    client_c.telepathy.shutdown().await;
+}
+
+/// Slot-contention regression for the room path.
+///
+/// A single client already in a room has the call slot acquired as
+/// `RoomCall`; a second `join_room` must return `Err(CallAlreadyActive)`.
+/// After `end_call()` and `wait_for_slot_idle`, a fresh `join_room`
+/// succeeds and re-acquires `RoomCall`. This guards the
+/// `try_acquire(RoomCall)` contention check and the clean release path
+/// that releases the slot on `end_call`/`shutdown` teardown.
+#[tokio::test(flavor = "multi_thread")]
+async fn room_duplicate_join_is_busy_then_idempotent() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+
+    let codec_config = CodecConfig::new(true, true, 5.0);
+
+    let key_a = SecretKey::generate();
+    let key_b = SecretKey::generate();
+    let contact_a = Contact::new("room-client-a".to_string(), key_a.public().to_string())
+        .expect("contact a invalid");
+    let contact_b = Contact::new("room-client-b".to_string(), key_b.public().to_string())
+        .expect("contact b invalid");
+
+    let peer_a = contact_a.get_peer_id().to_string();
+    let room_members = sorted_room_members(&contact_a, &contact_b);
+
+    let client_a = build_client(
+        relay_map,
+        key_a,
+        vec![contact_b.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        Default::default(),
+    )
+    .await;
+
+    // First `join_room` succeeds and acquires `RoomCall`.
+    client_a
+        .telepathy
+        .join_room(room_members.clone())
+        .await
+        .expect("first join_room should succeed");
+    wait_for_slot_room_call(&client_a, "after first join").await;
+
+    // Second `join_room` while the slot is still `RoomCall` must fail
+    // with the production `CallAlreadyActive` error. We do not assert
+    // on the exact `ErrorKind` here (the public error type wraps it),
+    // only that the call returns `Err` — a regression where the second
+    // `join_room` silently succeeded would clobber the previous room's
+    // `RoomState` and break the controller.
+    let second = client_a.telepathy.join_room(room_members.clone()).await;
+    assert!(
+        second.is_err(),
+        "second join_room while the slot is RoomCall must return Err; got {second:?}"
+    );
+
+    // `end_call` releases the slot. The state-driven `wait_for_slot_idle`
+    // is the precondition for the next `join_room` to succeed.
+    client_a.telepathy.end_call().await;
+    wait_for_slot_idle(&client_a, &peer_a).await;
+
+    // Re-join after the slot is released. The new room must install a
+    // fresh `RoomState` and re-acquire `RoomCall`. The generation must
+    // be strictly greater than the first room's (counter-bumped in
+    // `join_room`).
+    let first_generation = 1u64; // the first room's generation was 1
+    client_a
+        .telepathy
+        .join_room(room_members)
+        .await
+        .expect("post-end_call join_room should succeed");
+    wait_for_slot_room_call(&client_a, "after post-end_call join").await;
+    let second_generation = client_a
+        .telepathy
+        .inner
+        .current_room_generation()
+        .await
+        .expect("client_a should have RoomState after post-end_call join");
+    assert!(
+        second_generation > first_generation,
+        "post-end_call join_room should bump the room generation; first={first_generation}, second={second_generation}"
+    );
+
+    client_a.telepathy.shutdown().await;
+}
+
 fn init_test_tracing() {
     TEST_TRACING_INIT.call_once(|| {
         let _ = tracing_subscriber::fmt()
@@ -1997,6 +2814,10 @@ fn init_test_tracing() {
 
 fn shared_relay_map() -> &'static RelayMap {
     RELAY_INIT.call_once(|| {
+        // Initialise the shared address lookup eagerly so every test
+        // client that reads `shared_address_lookup` afterwards observes
+        // a populated `MemoryLookup` instead of a fresh one per call.
+        SHARED_ADDRESS_LOOKUP.get_or_init(MemoryLookup::new);
         tokio::spawn(async move {
             let server = iroh::test_utils::run_relay_server().await.unwrap();
             RELAY_DETAILS.get_or_init(|| server.0);
@@ -2008,6 +2829,19 @@ fn shared_relay_map() -> &'static RelayMap {
     RELAY_DETAILS.wait()
 }
 
+/// Returns the test-binary-wide `MemoryLookup`. Initialised the first
+/// time `shared_relay_map` runs (which is the first test in the binary
+/// that touches networking), and reused by every subsequent call so
+/// address resolution works across all clients.
+fn shared_address_lookup() -> &'static MemoryLookup {
+    // `shared_relay_map()` is the canonical initialiser; calling it
+    // first guarantees the lookup is populated before we hand it back.
+    let _ = shared_relay_map();
+    SHARED_ADDRESS_LOOKUP
+        .get()
+        .expect("shared_address_lookup called before shared_relay_map initialisation")
+}
+
 async fn build_client<H, I, O>(
     relay_map: &RelayMap,
     identity: SecretKey,
@@ -2015,7 +2849,6 @@ async fn build_client<H, I, O>(
     codec_config: &CodecConfig,
     host: H,
     call_states: Arc<Mutex<Vec<CallState>>>,
-    listen_port: u16,
 ) -> ClientHarness<H, I, O>
 where
     H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
@@ -2029,7 +2862,6 @@ where
         codec_config,
         host,
         call_states,
-        listen_port,
         None,
         ManagerLifecycle::Single,
     )
@@ -2043,7 +2875,6 @@ async fn build_client_with_accept_probe<H, I, O>(
     codec_config: &CodecConfig,
     host: H,
     call_states: Arc<Mutex<Vec<CallState>>>,
-    listen_port: u16,
     accept_probe: PendingAcceptProbe,
 ) -> ClientHarness<H, I, O>
 where
@@ -2058,7 +2889,6 @@ where
         codec_config,
         host,
         call_states,
-        listen_port,
         Some(accept_probe),
         ManagerLifecycle::Single,
     )
@@ -2072,7 +2902,6 @@ async fn build_client_with_options<H, I, O>(
     codec_config: &CodecConfig,
     host: H,
     call_states: Arc<Mutex<Vec<CallState>>>,
-    listen_port: u16,
     accept_probe: Option<PendingAcceptProbe>,
     lifecycle: ManagerLifecycle,
 ) -> ClientHarness<H, I, O>
@@ -2081,7 +2910,14 @@ where
     I: Send + Sync + 'static,
     O: Send + Sync + 'static,
 {
-    let network_config = NetworkConfig::mock(listen_port, relay_map, None, None, None);
+    let network_config = NetworkConfig::mock(
+        0,
+        relay_map,
+        None,
+        None,
+        None,
+        Some(shared_address_lookup().clone()),
+    );
     let screenshare = ScreenshareConfig::default();
     let overlay = Overlay::default();
 
@@ -2598,15 +3434,6 @@ async fn wait_for_stable_session_pair<HA, IA, OA, HB, IB, OB>(
     }
 }
 
-fn next_listen_port() -> u16 {
-    let port = NEXT_LISTEN_PORT.fetch_add(1, Relaxed);
-    assert!(
-        port <= 40100,
-        "integration test listen port allocation exceeded the 40000..=40100 range"
-    );
-    port
-}
-
 /// Waits until the call slot transitions to `PendingOutgoing` for `peer`.
 ///
 /// This is the state-driven replacement for a fixed settle sleep: the
@@ -2669,6 +3496,37 @@ where
         assert!(
             tokio::time::Instant::now() < deadline,
             "timed out waiting for call slot to become Idle for peer {peer}; last snapshot={snapshot:?}"
+        );
+    }
+}
+
+/// Waits until the call slot is in `RoomCall` state, indicating that
+/// `join_room` has installed a `RoomState` and acquired the slot for the
+/// room. Mirrors `wait_for_slot_idle` and `wait_for_slot_pending_outgoing`
+/// for the room-specific slot state.
+async fn wait_for_slot_room_call<H, I, O>(client: &ClientHarness<H, I, O>, label: &str)
+where
+    H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
+    I: Send + Sync + 'static,
+    O: Send + Sync + 'static,
+{
+    let mut poll = interval(Duration::from_millis(50));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        poll.tick().await;
+        let snapshot = client
+            .telepathy
+            .inner
+            .core_state
+            .call_slot
+            .snapshot()
+            .expect("call slot snapshot should succeed");
+        if snapshot.state == CallSlotState::RoomCall {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for call slot to reach RoomCall for {label}; last snapshot={snapshot:?}"
         );
     }
 }

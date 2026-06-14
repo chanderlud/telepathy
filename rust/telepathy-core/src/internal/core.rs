@@ -228,7 +228,7 @@ where
                     break;
                 }
                 Some(incoming) = endpoint.accept() => {
-                    info!(event = "incoming_connection", incoming = ?incoming);
+                    info!(event = "incoming_connection", remote_addr = ?incoming.remote_addr());
 
                     let accepting = match incoming.accept() {
                         Ok(accepting) => accepting,
@@ -468,15 +468,18 @@ where
             .session_outer(peer, &connection, &state, &contact, message_channel)
             .await;
 
-        // gracefully close the connection
-        connection.close(VarInt::from_u32(0), &[]);
-
         // Determine whether this session is still the current map entry for `peer`. If a newer
-        // session has already replaced us (collision-loser cleanup), we MUST NOT touch
-        // call-slot state, output volume, or emit Inactive
+        // session has already replaced us (collision-loser cleanup, reset_sessions drain, or
+        // test-driven map removal that produces a "stale" session), the connection is owned by
+        // the active replacement session, so we MUST NOT close it. We also MUST NOT touch
+        // call-slot state, output volume, or emit Inactive — all of those are owned by the
+        // replacement session.
         let mut states = self.session_states.write().await;
         let still_current = states.get(&peer).map(|s| s.id == state.id).unwrap_or(false);
         if still_current {
+            // this session still owns the connection — close it before tearing down our
+            // per-session state
+            connection.close(VarInt::from_u32(0), &[]);
             // release any pending negotiation owned by this session
             self.core_state
                 .call_slot
@@ -1211,7 +1214,7 @@ where
     #[instrument(
         name = "session.iter",
         skip_all,
-        fields(peer.id = %contact.peer_id, room.hash = field::Empty)
+        fields(peer.id = %contact.peer_id, room.hash = field::Empty, room.generation = field::Empty)
     )]
     async fn session_inner(&self, contact: &Contact, io: &mut SessionIo<'_>) -> Result<bool> {
         info!(event = "session_waiting_for_event");
@@ -1248,9 +1251,9 @@ where
                     }
                 }
 
-                let local_room_hash = self.room_hash().await;
-                Span::current().record("room.hash", field::debug(local_room_hash));
-                let is_in_room = self.is_in_room(&contact.peer_id).await;
+                let room_snapshot = self.room_snapshot_for_peer(&contact.peer_id).await;
+                Span::current().record("room.hash", field::debug(room_snapshot.local_room_hash));
+                Span::current().record("room.generation", room_snapshot.room_generation);
                 let outcome = self
                     .negotiate_incoming_call(
                         io,
@@ -1259,22 +1262,23 @@ where
                             remote_audio_header,
                             peer_room_hash,
                             other_ringtone,
-                            is_in_room,
-                            local_room_hash,
+                            is_in_room: room_snapshot.is_in_room,
+                            local_room_hash: room_snapshot.local_room_hash,
                         },
                     )
                     .await?;
                 Ok(outcome.to_outcome())
             }
             _ = io.state.start_call.notified() => {
-                let local_room_hash = self.room_hash().await;
-                Span::current().record("room.hash", field::debug(local_room_hash));
+                let room_snapshot = self.room_snapshot_for_peer(&contact.peer_id).await;
+                Span::current().record("room.hash", field::debug(room_snapshot.local_room_hash));
+                Span::current().record("room.generation", room_snapshot.room_generation);
                 let outcome = self
                     .negotiate_outgoing_call(
                         io,
                         OutgoingCallArgs {
                             contact,
-                            room_hash: local_room_hash,
+                            room_hash: room_snapshot.local_room_hash,
                         },
                     )
                     .await?;
@@ -1614,11 +1618,8 @@ where
         let peer_id = call_state.peer;
         let connection_id = connection.stable_id();
         let (sender, cancel) = self
-            .room_state
-            .read()
+            .room_handshake_snapshot()
             .await
-            .as_ref()
-            .map(|s| (s.sender.clone(), s.cancel.clone()))
             .ok_or(ErrorKind::RoomStateMissing)?;
 
         sender
@@ -1678,7 +1679,7 @@ where
     #[instrument(
         name = "room.controller",
         skip_all,
-        fields(room.hash = field::Empty)
+        fields(room.hash = field::Empty, room.generation = room_generation)
     )]
     pub(crate) async fn room_controller(
         &self,
@@ -1687,6 +1688,7 @@ where
         stop_io: &CancellationToken,
         end_call: Arc<Notify>,
         room_owner: CallSlotSnapshot,
+        room_generation: u64,
     ) -> Result<()> {
         let room_hash = self.room_hash().await;
         Span::current().record("room.hash", field::debug(room_hash));
@@ -1747,7 +1749,7 @@ where
                             info!(
                                 event = "room_join_received",
                                 peer.id = %state.peer,
-                                connection.id = connection_id
+                                connection.id = connection_id,
                             );
 
                             if connections.contains_key(&connection_id) {
@@ -1905,8 +1907,21 @@ where
             }
         }
         debug!(event = "room_processing_teardown_done");
-        // cleanup room state
-        self.room_state.write().await.take();
+        // cleanup room state ONLY if still the currently installed `room_state`
+        {
+            let mut room_guard = self.room_state.write().await;
+            if room_guard
+                .as_ref()
+                .is_some_and(|state| state.generation == room_generation)
+            {
+                let _ = room_guard.take();
+            } else {
+                info!(
+                    event = "room_state_take_skipped_stale_generation",
+                    room.generation = room_generation
+                );
+            }
+        }
         // release only against the exact `room_owner` snapshot
         self.core_state.call_slot.release_if_match(room_owner)?;
         // cleanup sessions blocked by room

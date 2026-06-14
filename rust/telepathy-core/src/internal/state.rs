@@ -7,8 +7,9 @@ use atomic_float::AtomicF32;
 use iroh::endpoint::{Connection, Path};
 use iroh::{PublicKey, SecretKey, TransportAddr};
 use std::collections::HashMap;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::atomic::Ordering::Relaxed;
-use std::sync::atomic::{AtomicBool, AtomicUsize};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 use telepathy_audio::RnnModel;
@@ -19,7 +20,7 @@ use tokio::sync::{Mutex, Notify, RwLock};
 #[cfg(not(target_family = "wasm"))]
 use tokio::time::interval;
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 #[cfg(target_family = "wasm")]
 use wasmtimer::tokio::interval;
@@ -357,6 +358,13 @@ pub struct CoreState {
     /// Authoritative global call-slot guard covering negotiation and active calls.
     pub call_slot: CallSlot,
 
+    /// Monotonic room-generation counter. Bumped on every `join_room`
+    /// acquisition, before the new `RoomState` is published. This is the room
+    /// analog of `CallSlot::generation` and is captured into `RoomState` so
+    /// `room_handshake` and `room_controller` can validate against the
+    /// currently installed room.
+    pub(crate) next_room_generation: Arc<AtomicU64>,
+
     /// used to end an audio test, if there is one
     pub(crate) end_audio_test: Arc<Mutex<Option<Arc<Notify>>>>,
 
@@ -522,6 +530,20 @@ pub(crate) struct RoomState {
     pub(crate) end_call: Arc<Notify>,
 
     pub(crate) early_state: EarlyCallState,
+
+    /// Monotonic ownership token bumped every time a new room is established.
+    pub(crate) generation: u64,
+}
+
+impl RoomState {
+    /// Computes the room hash from the current member list
+    pub(crate) fn room_hash(&self) -> u64 {
+        self.peers.iter().fold(0u64, |acc, peer| {
+            let mut hasher = DefaultHasher::new();
+            peer.hash(&mut hasher);
+            acc ^ hasher.finish()
+        })
+    }
 }
 
 #[derive(Clone)]
@@ -663,7 +685,7 @@ impl SessionState {
                     let mut primary_connection: Option<Path> = None;
 
                     for path in paths.iter() {
-                        info!(event = "connection_path", path = ?path);
+                        debug!(event = "connection_path", path = ?path);
                         let stats = path.stats();
 
                         // the connection with the most bandwidth should be considered primary

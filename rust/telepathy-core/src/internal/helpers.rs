@@ -1,7 +1,7 @@
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::core::TelepathyCore;
 use crate::internal::error::ErrorKind;
-use crate::internal::messages::{AudioHeader, ProtocolMessage, StartScreenshare};
+use crate::internal::messages::{AudioHeader, ProtocolMessage, RoomMessage, StartScreenshare};
 #[cfg(not(target_family = "wasm"))]
 use crate::internal::screenshare;
 use crate::internal::state::{EarlyCallState, StatisticsCollectorState};
@@ -13,7 +13,6 @@ use bytes::Bytes;
 use iroh::address_lookup::PkarrPublisher;
 use iroh::endpoint::{default_relay_mode, presets};
 use iroh::{Endpoint, PublicKey, RelayMode, SecretKey};
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -31,7 +30,9 @@ use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 use tokio::select;
 use tokio::sync::Notify;
-use tracing::{debug, error, info, instrument, warn};
+use tokio::sync::mpsc::Sender;
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, error, instrument, trace, warn};
 use url::Url;
 
 impl<C, S, H, I, O> TelepathyCore<C, S, H, I, O>
@@ -51,7 +52,7 @@ where
             return Err(ErrorKind::NoIdentityAvailable.into());
         };
 
-        info!(event = "endpoint_launch", config = ?self.core_state.network_config);
+        trace!(event = "endpoint_launch", config = ?self.core_state.network_config);
         self.callbacks.manager_state(ManagerState::Starting).await;
 
         let mut endpoint_builder = Endpoint::builder(presets::Empty)
@@ -159,11 +160,44 @@ where
 
         #[cfg(feature = "integration-testing")]
         {
+            // Integration tests opt out of the n0 PKARR / DNS address discovery path
+            // and register a shared in-process `MemoryLookup` instead.
+            let lookup = self
+                .core_state
+                .network_config
+                .address_lookup
+                .read()
+                .map_err(|_| ErrorKind::Poison("address_lookup"))?
+                .clone();
+
+            if let Some(lookup) = lookup {
+                endpoint_builder = endpoint_builder
+                    .clear_address_lookup()
+                    .address_lookup(lookup.clone());
+            }
+
+            // Integration tests use a local relay without signed certificates
             endpoint_builder =
                 endpoint_builder.ca_roots_config(iroh::tls::CaRootsConfig::insecure_skip_verify());
         }
 
         let endpoint = endpoint_builder.bind().await?;
+
+        // Register this endpoint's own `addr()` (relay URL + direct addrs) into
+        // the shared `MemoryLookup` so other in-process peers can resolve it.
+        #[cfg(feature = "integration-testing")]
+        {
+            if let Some(shared_lookup) = self
+                .core_state
+                .network_config
+                .address_lookup
+                .read()
+                .map_err(|_| ErrorKind::Poison("address_lookup"))?
+                .clone()
+            {
+                shared_lookup.add_endpoint_info(endpoint.addr());
+            }
+        }
 
         select! {
             _ = self.restart_manager.notified() => {
@@ -421,6 +455,12 @@ where
         }
     }
 
+    /// Returns the generation of the currently installed `RoomState`, or
+    /// `None` if no room is active.
+    pub async fn current_room_generation(&self) -> Option<u64> {
+        self.room_state.read().await.as_ref().map(|s| s.generation)
+    }
+
     /// helper method to check if a peer is in the current room
     pub(crate) async fn is_in_room(&self, peer_id: &PublicKey) -> bool {
         self.room_state
@@ -432,13 +472,43 @@ where
     }
 
     pub(crate) async fn room_hash(&self) -> Option<u64> {
-        self.room_state.read().await.as_ref().map(|state| {
-            state.peers.iter().fold(0u64, |acc, peer| {
-                let mut hasher = DefaultHasher::new();
-                peer.hash(&mut hasher);
-                acc ^ hasher.finish()
-            })
-        })
+        self.room_state
+            .read()
+            .await
+            .as_ref()
+            .map(|state| state.room_hash())
+    }
+
+    /// Atomic snapshot of `(local_room_hash, is_in_room_for_peer, room_generation)`
+    pub(crate) async fn room_snapshot_for_peer(
+        &self,
+        peer_id: &PublicKey,
+    ) -> RoomNegotiationSnapshot {
+        let room_guard = self.room_state.read().await;
+        match room_guard.as_ref() {
+            Some(state) => RoomNegotiationSnapshot {
+                local_room_hash: Some(state.room_hash()),
+                is_in_room: state.peers.contains(peer_id),
+                room_generation: state.generation,
+            },
+            None => RoomNegotiationSnapshot {
+                local_room_hash: None,
+                is_in_room: false,
+                room_generation: 0,
+            },
+        }
+    }
+
+    /// Atomic snapshot of `(sender, cancel)` for the current `room_state`,
+    /// or `None` if no room is currently active.
+    pub(crate) async fn room_handshake_snapshot(
+        &self,
+    ) -> Option<(Sender<RoomMessage>, CancellationToken)> {
+        self.room_state
+            .read()
+            .await
+            .as_ref()
+            .map(|s| (s.sender.clone(), s.cancel.clone()))
     }
 
     pub(crate) async fn peer_id(&self) -> PublicKey {
@@ -598,6 +668,13 @@ where
 pub(crate) struct OutputHelper<O> {
     _handle: AudioOutputHandle<O>,
     sender: Option<kanal::Sender<Bytes>>,
+}
+
+/// Atomic snapshot of room-related values
+pub(crate) struct RoomNegotiationSnapshot {
+    pub(crate) local_room_hash: Option<u64>,
+    pub(crate) is_in_room: bool,
+    pub(crate) room_generation: u64,
 }
 
 impl<O> OutputHelper<O> {

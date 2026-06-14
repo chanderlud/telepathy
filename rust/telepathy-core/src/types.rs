@@ -9,6 +9,8 @@ use atomic_float::AtomicF32;
 use chrono::{DateTime, Local, SecondsFormat, Utc};
 use iroh::RelayMap;
 use iroh::RelayUrl;
+#[cfg(feature = "integration-testing")]
+use iroh::address_lookup::memory::MemoryLookup;
 pub use iroh::{PublicKey, SecretKey};
 use serde::{Serialize, Serializer};
 use speedy::{Readable, Writable};
@@ -261,6 +263,10 @@ pub struct NetworkConfig {
     pub(crate) dns_origin_domain: Arc<StdRwLock<Option<String>>>,
 
     pub(crate) pkarr_relay: Arc<StdRwLock<Option<Url>>>,
+
+    /// Test-only in-process address discovery.
+    #[cfg(feature = "integration-testing")]
+    pub(crate) address_lookup: Arc<StdRwLock<Option<MemoryLookup>>>,
 }
 
 impl NetworkConfig {
@@ -301,6 +307,8 @@ impl NetworkConfig {
             dns_endpoint: Arc::new(StdRwLock::new(dns_endpoint_value)),
             dns_origin_domain: Arc::new(StdRwLock::new(dns_origin_domain)),
             pkarr_relay: Arc::new(StdRwLock::new(pkarr_relay_value)),
+            #[cfg(feature = "integration-testing")]
+            address_lookup: Arc::new(StdRwLock::new(None)),
         })
     }
 
@@ -311,6 +319,7 @@ impl NetworkConfig {
         dns_endpoint: Option<&str>,
         dns_origin_domain: Option<&str>,
         pkarr_relay: Option<Url>,
+        address_lookup: Option<MemoryLookup>,
     ) -> Self {
         Self {
             listen_port: Arc::new(AtomicU16::new(listen_port)),
@@ -319,6 +328,7 @@ impl NetworkConfig {
             dns_endpoint: Arc::new(StdRwLock::new(dns_endpoint.and_then(|s| s.parse().ok()))),
             dns_origin_domain: Arc::new(StdRwLock::new(dns_origin_domain.map(String::from))),
             pkarr_relay: Arc::new(StdRwLock::new(pkarr_relay)),
+            address_lookup: Arc::new(StdRwLock::new(address_lookup)),
         }
     }
 
@@ -464,6 +474,24 @@ impl NetworkConfig {
             .map(ToString::to_string)
             .collect()
     }
+
+    /// Returns a clone of the test-only address lookup
+    #[cfg(feature = "integration-testing")]
+    pub fn get_address_lookup(&self) -> Option<MemoryLookup> {
+        self.address_lookup
+            .read()
+            .expect("address_lookup lock poisoned")
+            .clone()
+    }
+
+    /// Replaces the test-only address lookup
+    #[cfg(feature = "integration-testing")]
+    pub fn set_address_lookup(&self, lookup: Option<MemoryLookup>) {
+        *self
+            .address_lookup
+            .write()
+            .expect("address_lookup lock poisoned") = lookup;
+    }
 }
 
 impl Default for NetworkConfig {
@@ -475,6 +503,8 @@ impl Default for NetworkConfig {
             dns_endpoint: Arc::new(StdRwLock::new(None)),
             dns_origin_domain: Arc::new(StdRwLock::new(None)),
             pkarr_relay: Arc::new(StdRwLock::new(None)),
+            #[cfg(feature = "integration-testing")]
+            address_lookup: Arc::new(StdRwLock::new(None)),
         }
     }
 }

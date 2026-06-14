@@ -242,6 +242,13 @@ where
                 return Err(error);
             }
         };
+        // acquire fresh generation for the new state
+        let room_generation = self
+            .inner
+            .core_state
+            .next_room_generation
+            .fetch_add(1, Relaxed)
+            .saturating_add(1);
         // set room state
         let old_state_option = self.inner.room_state.write().await.replace(RoomState {
             peers: members.clone(),
@@ -249,6 +256,7 @@ where
             cancel: cancel.clone(),
             end_call: end_call.clone(),
             early_state: call_state.clone(),
+            generation: room_generation,
         });
         // clean up old state
         if let Some(old_state) = old_state_option {
@@ -271,7 +279,14 @@ where
             async move {
                 let stop_io = Default::default();
                 if let Err(error) = self_clone
-                    .room_controller(receiver, cancel, &stop_io, end_call, room_owner)
+                    .room_controller(
+                        receiver,
+                        cancel,
+                        &stop_io,
+                        end_call,
+                        room_owner,
+                        room_generation,
+                    )
                     .await
                 {
                     error!("error in room controller: {:?}", error);
