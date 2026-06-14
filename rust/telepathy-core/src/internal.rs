@@ -304,12 +304,16 @@ where
         if self.inner.core_state.call_slot.current() != CallSlotState::Idle {
             Err(ErrorKind::ManagerRestartDuringCall.into())
         } else {
+            // pre-register the readiness awaiter before triggering the restart.
+            let manager_ready = self.inner.core_state.manager_active.notified();
+            tokio::pin!(manager_ready);
+            manager_ready.as_mut().enable();
             // reset sessions so manager can clean up
             self.inner.reset_sessions().await;
             // restart the manager
             self.inner.restart_manager.notify_one();
             // wait for a new manager to start
-            self.inner.core_state.manager_active.notified().await;
+            manager_ready.await;
             // ensure volume cache resets fully
             self.inner.core_state.reset_peer_output_volumes()?;
             // start a session for all contacts
