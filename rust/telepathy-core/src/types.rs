@@ -426,12 +426,11 @@ impl NetworkConfig {
         self.listen_port.load(Relaxed)
     }
 
-    // TODO all getters can panic on posion
     #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
     pub fn get_pkarr_relay(&self) -> Option<String> {
         self.pkarr_relay
             .read()
-            .expect("pkarr_relay lock poisoned")
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .as_ref()
             .map(|url| url.to_string())
     }
@@ -440,7 +439,7 @@ impl NetworkConfig {
     pub fn get_relays(&self) -> Option<Vec<String>> {
         self.relays
             .read()
-            .expect("relays lock poisoned")
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .as_ref()
             .map(|map| {
                 map.urls::<Vec<_>>()
@@ -454,7 +453,7 @@ impl NetworkConfig {
     pub fn get_dns_endpoint(&self) -> Option<String> {
         self.dns_endpoint
             .read()
-            .expect("dns_endpoint lock poisoned")
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .map(|addr| addr.to_string())
     }
 
@@ -462,7 +461,7 @@ impl NetworkConfig {
     pub fn get_dns_origin_domain(&self) -> Option<String> {
         self.dns_origin_domain
             .read()
-            .expect("dns_origin_domain lock poisoned")
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()
     }
 
@@ -470,7 +469,7 @@ impl NetworkConfig {
     pub fn get_bind_addresses(&self) -> Vec<String> {
         self.bind_addresses
             .read()
-            .expect("bind_addresses lock poisoned")
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .iter()
             .map(ToString::to_string)
             .collect()
@@ -481,7 +480,7 @@ impl NetworkConfig {
     pub fn get_address_lookup(&self) -> Option<MemoryLookup> {
         self.address_lookup
             .read()
-            .expect("address_lookup lock poisoned")
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()
     }
 
