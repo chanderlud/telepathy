@@ -49,7 +49,7 @@ objc2-foundation = "*"
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 getrandom = { version = "0.3", features = ["wasm_js"] }
-iroh = { version = "1.0.0-rc.1", default-features = false }
+iroh = { version = "1", default-features = false }
 ring = { version = "0.17", features = ["wasm32_unknown_unknown_js"] }
 rustls = { version = "0.23", features = ["ring"], default-features = false }
 tokio = { version = "1", features = ["time", "io-util", "macros", "rt"] }
@@ -58,7 +58,7 @@ uuid = { version = "1", features = ["v4", "js"] }
 wasmtimer = "0.4"
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
-iroh = { version = "1.0.0-rc.1", features = ["tls-aws-lc-rs"] }
+iroh = { version = "1", features = ["tls-aws-lc-rs"] }
 rustls = { version = "0.23", features = ["aws-lc-rs"] }
 tracing-appender = "0.2"
 tracing-panic = "0.1"

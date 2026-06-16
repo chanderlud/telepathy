@@ -178,7 +178,7 @@ where
 
             // Integration tests use a local relay without signed certificates
             endpoint_builder =
-                endpoint_builder.ca_roots_config(iroh::tls::CaRootsConfig::insecure_skip_verify());
+                endpoint_builder.ca_tls_config(iroh::tls::CaTlsConfig::insecure_skip_verify());
         }
 
         let endpoint = endpoint_builder.bind().await?;

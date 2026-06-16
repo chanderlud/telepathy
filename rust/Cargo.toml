@@ -10,9 +10,3 @@ resolver = "2"
 opt-level = 3
 lto = true
 codegen-units = 1
-
-# TODO once iroh 1.0 lands these patches should be removed
-[patch.crates-io]
-noq = { git = "https://github.com/n0-computer/noq", branch = "flub/initial-padding" }
-noq-proto = { git = "https://github.com/n0-computer/noq", branch = "flub/initial-padding" }
-noq-udp = { git = "https://github.com/n0-computer/noq", branch = "flub/initial-padding" }
