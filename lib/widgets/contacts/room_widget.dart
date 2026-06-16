@@ -193,8 +193,8 @@ class RoomWidgetState extends State<RoomWidget> {
           ),
           contentPadding:
               const EdgeInsets.only(bottom: 25, left: 25, right: 25),
-          titlePadding: const EdgeInsets.only(
-              top: 25, left: 25, right: 25, bottom: 20),
+          titlePadding:
+              const EdgeInsets.only(top: 25, left: 25, right: 25, bottom: 20),
           children: [
             TextInput(
                 enabled: !stateController.isActiveRoom(widget.room),
@@ -257,4 +257,3 @@ class RoomWidgetState extends State<RoomWidget> {
         false;
   }
 }
-
