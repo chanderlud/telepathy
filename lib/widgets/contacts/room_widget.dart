@@ -138,10 +138,7 @@ class RoomWidgetState extends State<RoomWidget> {
                   TextInput(
                       enabled: !stateController.isActiveRoom(widget.room),
                       controller: _nicknameInput,
-                      labelText: 'Nickname',
-                      onChanged: (value) {
-                        widget.room.nickname = value;
-                      }),
+                      labelText: 'Nickname'),
                   const SizedBox(height: 20),
                   Button(
                     text: 'Save',
