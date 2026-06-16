@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import 'package:flutter/services.dart' hide TextInput;
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:provider/provider.dart';
 import 'package:telepathy/controllers/index.dart';
@@ -8,6 +8,7 @@ import 'package:telepathy/models/index.dart';
 import 'package:telepathy/core/rust/player.dart';
 import 'package:telepathy/core/rust/types.dart';
 import 'package:telepathy/core/rust/flutter.dart';
+import 'package:telepathy/widgets/common/index.dart';
 
 class RoomWidget extends StatefulWidget {
   final Room room;
@@ -23,11 +24,33 @@ class RoomWidget extends StatefulWidget {
 
 class RoomWidgetState extends State<RoomWidget> {
   bool isHovered = false;
+  late TextEditingController _nicknameInput;
+
+  @override
+  void initState() {
+    super.initState();
+    _nicknameInput = TextEditingController(text: widget.room.nickname);
+  }
+
+  @override
+  void didUpdateWidget(RoomWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.room != oldWidget.room) {
+      _nicknameInput.text = widget.room.nickname;
+    }
+  }
+
+  @override
+  void dispose() {
+    _nicknameInput.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    final stateController = context.read<StateController>();
+    final stateController = context.watch<StateController>();
     final telepathy = context.read<Telepathy>();
+    final profilesController = context.read<ProfilesController>();
     final player = context.read<SoundPlayer>();
 
     return InkWell(
@@ -37,7 +60,11 @@ class RoomWidgetState extends State<RoomWidget> {
           isHovered = hover;
         });
       },
-      onTap: () {},
+      onTap: () => _showEditDialog(
+        context,
+        stateController: stateController,
+        profilesController: profilesController,
+      ),
       hoverColor: Colors.transparent,
       child: Container(
         margin: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
@@ -125,5 +152,108 @@ class RoomWidgetState extends State<RoomWidget> {
         ),
       ),
     );
+  }
+
+  Future<void> _showEditDialog(
+    BuildContext context, {
+    required StateController stateController,
+    required ProfilesController profilesController,
+  }) {
+    return showDialog(
+      barrierDismissible: false,
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return SimpleDialog(
+          title: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text('Edit Room'),
+              IconButton(
+                onPressed: () async {
+                  if (!stateController.isActiveRoom(widget.room)) {
+                    bool confirm = await _confirmDelete(dialogContext);
+                    if (confirm) {
+                      profilesController.removeRoom(widget.room);
+                    }
+                    if (dialogContext.mounted) {
+                      Navigator.pop(dialogContext);
+                    }
+                  } else {
+                    showErrorDialog(
+                      dialogContext,
+                      'Warning',
+                      'Cannot delete a room while in an active call',
+                    );
+                  }
+                },
+                icon: SvgPicture.asset('assets/icons/Trash.svg',
+                    semanticsLabel: 'Delete room icon'),
+              ),
+            ],
+          ),
+          contentPadding:
+              const EdgeInsets.only(bottom: 25, left: 25, right: 25),
+          titlePadding:
+              const EdgeInsets.only(top: 25, left: 25, right: 25, bottom: 20),
+          children: [
+            TextInput(
+                enabled: !stateController.isActiveRoom(widget.room),
+                controller: _nicknameInput,
+                labelText: 'Nickname'),
+            const SizedBox(height: 20),
+            Button(
+              text: 'Save',
+              onPressed: () {
+                if (stateController.isActiveRoom(widget.room)) {
+                  showErrorDialog(dialogContext, 'Warning',
+                      'Cannot rename a room while in an active call');
+                  return;
+                }
+
+                setState(() {
+                  widget.room.nickname = _nicknameInput.text;
+                });
+                profilesController.saveRooms();
+                Navigator.pop(dialogContext);
+              },
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<bool> _confirmDelete(BuildContext context) async {
+    return await showDialog<bool>(
+          context: context,
+          builder: (BuildContext dialogContext) {
+            return SimpleDialog(
+              title: const Text('Warning'),
+              contentPadding:
+                  const EdgeInsets.only(bottom: 25, left: 25, right: 25),
+              titlePadding: const EdgeInsets.only(
+                  top: 25, left: 25, right: 25, bottom: 20),
+              children: [
+                const Text('Are you sure you want to delete this room?'),
+                const SizedBox(height: 20),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    Button(
+                      text: 'Cancel',
+                      onPressed: () => Navigator.pop(dialogContext, false),
+                    ),
+                    const SizedBox(width: 10),
+                    Button(
+                      text: 'Delete',
+                      onPressed: () => Navigator.pop(dialogContext, true),
+                    ),
+                  ],
+                ),
+              ],
+            );
+          },
+        ) ??
+        false;
   }
 }

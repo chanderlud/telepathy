@@ -2,15 +2,21 @@ use crate::AudioDevice;
 use crate::internal::TelepathyHandle;
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::{JoinHandle, spawn_task};
-use crate::types::{CallState, ChatMessage, Contact, FrontendNotify, SessionStatus, Statistics};
-use libp2p::PeerId;
+use crate::types::{
+    CallState, ChatMessage, Contact, FrontendNotify, ManagerState, SessionStatus, Statistics,
+};
+use iroh::PublicKey;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-#[cfg(feature = "mock-audio")]
-use telepathy_audio::MockAudioHost;
-#[cfg(not(feature = "mock-audio"))]
+#[cfg(not(feature = "integration-testing"))]
+use telepathy_audio::Stream;
+#[cfg(not(feature = "integration-testing"))]
 use telepathy_audio::devices::CpalAudioHost;
+#[cfg(feature = "integration-testing")]
+use telepathy_audio::devices::MockAudioHost;
+#[cfg(not(feature = "integration-testing"))]
+use telepathy_audio::io::SendStream;
 use tokio::sync::{Notify, oneshot, watch};
 
 type NativeFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
@@ -20,10 +26,20 @@ type NativeAcceptCall = Arc<
     dyn Fn(String, Option<Vec<u8>>, oneshot::Sender<bool>, watch::Receiver<bool>) + Send + Sync,
 >;
 
-#[cfg(not(feature = "mock-audio"))]
-type NativeHandle = TelepathyHandle<NativeCallbacks, NativeStatisticsCallback, CpalAudioHost>;
-#[cfg(feature = "mock-audio")]
-type NativeHandle = TelepathyHandle<NativeCallbacks, NativeStatisticsCallback, MockAudioHost>;
+#[cfg(not(feature = "integration-testing"))]
+type NativeHandle =
+    TelepathyHandle<NativeCallbacks, NativeStatisticsCallback, CpalAudioHost, Stream, SendStream>;
+#[cfg(feature = "integration-testing")]
+type NativeHandle = TelepathyHandle<
+    NativeCallbacks,
+    NativeStatisticsCallback,
+    MockAudioHost<
+        telepathy_audio::devices::MockAudioInput,
+        telepathy_audio::devices::MockAudioOutput,
+    >,
+    (),
+    (),
+>;
 
 /// Rust-native runtime client for `telepathy-core`.
 ///
@@ -90,7 +106,11 @@ impl NativeTelepathy {
 
     pub async fn set_identity(&self, key: Vec<u8>) -> Result<(), String> {
         self.handle
-            .set_identity(key)
+            .set_identity(
+                &(key
+                    .try_into()
+                    .map_err(|_| crate::types::IDENTITY_KEY_LENGTH_MESSAGE.to_string())?),
+            )
             .await
             .map_err(|e| e.to_string())
     }
@@ -131,12 +151,16 @@ impl NativeTelepathy {
         self.handle.set_input_volume(decibel);
     }
 
-    pub fn set_output_volume(&self, decibel: f32) {
-        self.handle.set_output_volume(decibel);
+    pub fn set_output_volume(&self, decibel: f32) -> Result<(), String> {
+        self.handle
+            .set_output_volume(decibel)
+            .map_err(|e| e.to_string())
     }
 
-    pub fn set_contact_output_volume(&self, contact: &Contact) {
-        self.handle.set_contact_output_volume(contact);
+    pub fn set_contact_output_volume(&self, contact: &Contact) -> Result<(), String> {
+        self.handle
+            .set_contact_output_volume(contact)
+            .map_err(|e| e.to_string())
     }
 
     pub fn set_deafened(&self, deafened: bool) {
@@ -220,7 +244,7 @@ pub struct NativeCallbacks {
     get_contacts: NativeMethod<(), Vec<Contact>>,
     statistics: NativeVoid<Statistics>,
     message_received: NativeVoid<ChatMessage>,
-    manager_active: NativeVoid<(bool, bool)>,
+    manager_active: NativeVoid<ManagerState>,
     screenshare_started: NativeVoid<(FrontendNotify, bool)>,
 }
 
@@ -237,7 +261,7 @@ impl NativeCallbacks {
         get_contacts: impl Fn(()) -> NativeFuture<Vec<Contact>> + Send + Sync + 'static,
         statistics: impl Fn(Statistics) -> NativeFuture<()> + Send + Sync + 'static,
         message_received: impl Fn(ChatMessage) -> NativeFuture<()> + Send + Sync + 'static,
-        manager_active: impl Fn((bool, bool)) -> NativeFuture<()> + Send + Sync + 'static,
+        manager_active: impl Fn(ManagerState) -> NativeFuture<()> + Send + Sync + 'static,
         screenshare_started: impl Fn((FrontendNotify, bool)) -> NativeFuture<()> + Send + Sync + 'static,
     ) -> Self {
         Self {
@@ -255,7 +279,7 @@ impl NativeCallbacks {
 }
 
 impl CoreCallbacks<NativeStatisticsCallback> for NativeCallbacks {
-    async fn session_status(&self, status: SessionStatus, peer: PeerId) {
+    async fn session_status(&self, status: SessionStatus, peer: PublicKey) {
         (self.session_status)((peer.to_string(), status)).await
     }
 
@@ -267,8 +291,8 @@ impl CoreCallbacks<NativeStatisticsCallback> for NativeCallbacks {
         (self.get_contacts)(()).await
     }
 
-    async fn manager_active(&self, active: bool, restartable: bool) {
-        (self.manager_active)((active, restartable)).await
+    async fn manager_state(&self, state: ManagerState) {
+        (self.manager_active)(state).await
     }
 
     async fn screenshare_started(&self, stop: FrontendNotify, sender: bool) {

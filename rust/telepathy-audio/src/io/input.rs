@@ -48,13 +48,12 @@
 //! use telepathy_audio::devices::CpalAudioHost;
 //! use telepathy_audio::io::AudioInputBuilder;
 //! use telepathy_audio::platform::web_audio::WebAudioWrapper;
-//! use std::sync::Arc;
 //!
 //! // WebAudioWrapper::new() is async and must be called on the main thread
 //! let wrapper = WebAudioWrapper::new().await.unwrap();
 //! let host = CpalAudioHost::new();
 //! let input = AudioInputBuilder::new()
-//!     .web_audio_wrapper(&wrapper)
+//!     .web_audio_wrapper(wrapper)
 //!     .volume(1.0)
 //!     .callback(|data| {
 //!         println!("Received {} bytes", data.as_ref().len());
@@ -70,89 +69,43 @@ use crate::internal::processor::input_processor;
 use crate::internal::state::InputProcessorState;
 use crate::internal::thread::{self, JoinHandle};
 use crate::internal::traits::AudioInput;
-#[cfg(all(not(target_family = "wasm"), not(feature = "mock-audio")))]
-use crate::internal::traits::{CHANNEL_SIZE, RingBufferInput};
 use crate::io::StreamErrorCallback;
 use crate::io::traits::AudioDataSink;
-#[cfg(all(not(target_family = "wasm"), feature = "mock-audio"))]
-use crate::mock::MockAudioInput;
 #[cfg(target_family = "wasm")]
 use crate::platform::web_audio::WebAudioWrapper;
 use crate::sea::encoder::{EncoderSettings, SeaEncoder};
 use atomic_float::AtomicF32;
-#[cfg(all(not(target_family = "wasm"), not(feature = "mock-audio")))]
-use cpal::Sample;
-#[cfg(all(not(target_family = "wasm"), not(feature = "mock-audio")))]
-use cpal::SampleFormat;
-#[cfg(all(not(target_family = "wasm"), not(feature = "mock-audio")))]
-use cpal::traits::{DeviceTrait, StreamTrait};
 use nnnoiseless::{DenoiseState, RnnModel};
-#[cfg(all(not(target_family = "wasm"), not(feature = "mock-audio")))]
-use rtrb::RingBuffer;
 use std::sync::Arc;
-#[cfg(all(not(target_family = "wasm"), not(feature = "mock-audio")))]
+#[cfg(not(target_family = "wasm"))]
 use std::sync::Condvar;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use tracing::{debug, error};
 
-/// Configuration for audio input processing.
+/// Configuration for an audio input stream. Prefer [`AudioInputBuilder`].
 ///
-/// This struct holds all configuration options for an audio input stream.
-/// Use [`AudioInputBuilder`] for a more ergonomic way to construct these options.
-///
-/// ## Sample Rate Behavior
-///
-/// When `denoise_enabled` is `true`, the processor upsamples to 48kHz for
-/// RNNoise processing and outputs 48kHz frames (no downsample back to device
-/// rate). When `denoise_enabled` is `false`, the processor passes through at
-/// the device's native sample rate. The encoder sample rate automatically
-/// matches the processor's output rate.
+/// When `denoise_enabled` is `true` the processor upsamples to 48 kHz for
+/// RNNoise and outputs 48 kHz; otherwise it passes through at the device's
+/// native rate. The encoder sample rate always matches the processor's output.
 pub struct AudioInputConfig {
-    /// Device ID for input device selection.
-    ///
-    /// When `None`, uses the system's default input device.
-    /// When `Some(id)`, attempts to find the device with that ID,
-    /// falling back to default if not found.
+    /// Input device ID; `None` selects the system default.
     pub device_id: Option<String>,
-    /// Custom noise suppression model bytes.
-    ///
-    /// When `None`, uses the default RNNoise model.
-    /// When `Some(bytes)`, loads a custom RNN model from the provided bytes.
+    /// Optional custom RNNoise model. `None` uses the default model.
     pub denoise_model: Option<RnnModel>,
-    /// Input volume multiplier (1.0 = unity gain).
-    ///
-    /// Values less than 1.0 reduce volume, greater than 1.0 amplify.
+    /// Input gain. 1.0 = unity; values < 1.0 attenuate, > 1.0 amplify.
     pub volume: f32,
-    /// RMS threshold for silence detection.
-    ///
-    /// Audio frames with RMS below this threshold are treated as silence.
-    /// A value of 0.0 disables silence detection.
+    /// RMS threshold for silence detection. 0.0 disables it.
     pub rms_threshold: f32,
-    /// Whether codec encoding is enabled.
-    ///
-    /// When enabled, audio is encoded using the SEA codec before being
-    /// passed to the callback.
+    /// When true, the SEA codec encodes the processor output.
     pub codec_enabled: bool,
-    /// Codec bit rate mode.
+    /// Codec bitrate mode.
     pub codec_mode: CodecBitrateMode,
-    /// Residual bits for codec quality (typically 2.0-8.0).
-    ///
-    /// Higher values provide better quality but larger encoded size.
+    /// Codec residual bits (typically 2.0–8.0). Higher = better, larger.
     pub codec_residual_bits: f32,
-    /// Optional callback for stream errors.
-    ///
-    /// When set, the callback receives the underlying CPAL stream error.
-    /// When unset, stream errors are logged by default.
+    /// Stream-error callback; `None` falls back to a default log path.
     pub error_callback: Option<StreamErrorCallback>,
-    /// Optional output sample rate override (only used when denoise is disabled).
-    ///
-    /// When set and `denoise_enabled` is `false`, the processor will resample
-    /// to this rate instead of passing through at the device's native rate.
-    /// This is useful for matching network requirements (e.g., 48kHz) without
-    /// the CPU overhead of noise suppression.
-    ///
-    /// When `denoise_enabled` is `true`, this field is ignored and output is
-    /// always 48kHz (RNNoise requirement).
+    /// Output rate override (only when denoise is disabled). When denoise is
+    /// enabled, output is always 48 kHz and this field is ignored.
     pub output_sample_rate: Option<u32>,
 }
 
@@ -309,6 +262,14 @@ where
         self
     }
 
+    /// Sets a shared atomic for the current RMS level, enabling real-time monitoring.
+    ///
+    /// When provided, the processor writes the computed RMS of each processed frame
+    /// into this atomic, allowing external code to read the live input level without
+    /// additional synchronization.
+    ///
+    /// Use this when you need to display an input level meter or drive silence
+    /// detection from outside the builder.
     pub fn rms_shared(mut self, shared: &Arc<AtomicF32>) -> Self {
         self.shared_rms = Some(shared.clone());
         self
@@ -371,20 +332,18 @@ where
     /// The wrapper must be initialized on the main thread during a user interaction
     /// (e.g., a button click) to satisfy browser autoplay policies.
     ///
-    /// Create the wrapper using [`WebAudioWrapper::new()`] before building the input:
+    /// The wrapper is consumed (moved) into the builder.
     ///
-    /// ```rust,no_run
-    /// # #[cfg(target_family = "wasm")]
+    /// ```rust,ignore
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// use telepathy_audio::devices::CpalAudioHost;
     /// use telepathy_audio::io::AudioInputBuilder;
     /// use telepathy_audio::platform::web_audio::WebAudioWrapper;
-    /// use std::sync::Arc;
     ///
     /// let host = CpalAudioHost::new();
     /// let wrapper = WebAudioWrapper::new().await?;
     /// let input = AudioInputBuilder::new()
-    ///     .web_audio_wrapper(&wrapper)
+    ///     .web_audio_wrapper(wrapper)
     ///     .callback(|data| { /* process audio */ })
     ///     .build(&host)?;
     /// # Ok(())
@@ -435,31 +394,30 @@ where
     /// Common initialization logic shared between native and WASM builds.
     ///
     /// This method handles all shared setup steps:
-    /// - Creates shared atomic state (input_volume, rms_threshold, muted, rms_sender)
-    /// - Uses the configured sink for inter-thread / cross-component delivery
-    /// - Calculates output sample rate and resampling ratio with the following precedence:
-    ///   1. **Denoise enabled**: Always 48kHz (RNNoise requirement)
-    ///   2. **Custom output_sample_rate**: Uses the specified rate
-    ///   3. **Neither**: Uses device's native sample rate (pass-through)
-    /// - Creates denoiser if needed (DenoiseState with optional custom model)
-    /// - Creates InputProcessorState for atomic state management
-    /// - Creates encoder if codec is enabled (sample rate matches processor output)
-    /// - Spawns processor thread (calls `input_processor` with calculated ratio)
-    /// - Calls the sink directly from the processor thread
+    /// - Resolves shared atomics (input_volume, rms_threshold, muted, rms_sender),
+    ///   using caller-supplied `Arc`s when provided or creating new ones otherwise
+    /// - Calculates the output sample rate with the following precedence:
+    ///   1. **Denoise enabled**: Always 48 kHz (RNNoise requirement)
+    ///   2. **Custom `output_sample_rate`**: Uses the specified rate
+    ///   3. **Neither**: Passes through at the device's native rate (`input_rate`)
+    /// - Creates a [`DenoiseState`] if a denoise model was configured
+    /// - Creates an [`InputProcessorState`] for atomic state management
+    /// - Creates a [`SeaEncoder`] if codec encoding is enabled (sample rate matches output rate)
+    /// - Spawns the processor thread via [`input_processor`]
     ///
     /// # Type Parameters
     ///
-    /// * `I` - Type implementing `AudioInput` trait (e.g., `RingBufferInput`, `WebAudioInput`)
+    /// * `I` - Type implementing [`AudioInput`] (e.g., `RingBufferInput`, `WebAudioInput`)
     ///
     /// # Arguments
     ///
-    /// * `processor_input` - The audio input source for the processor
+    /// * `processor_input` - The audio input source for the processor thread
     /// * `input_rate` - Device's native sample rate in Hz
     ///
     /// # Returns
     ///
-    /// Returns `Result<InputBuildContext, AudioError>` containing handles and state for the created threads,
-    /// or an error if codec initialization fails.
+    /// Returns `Result<InputBuildContext, Error>` containing the shared atomics and
+    /// processor thread handle, or an error if codec initialization or thread spawning fails.
     fn build_common<I: AudioInput + Send + 'static>(
         self,
         processor_input: I,
@@ -482,7 +440,6 @@ where
 
         // create denoiser if needed
         let denoiser = self.config.denoise_model.map(DenoiseState::from_model);
-        // build input processor state
         let state = InputProcessorState::new(
             &input_volume,
             &rms_threshold,
@@ -490,13 +447,11 @@ where
             rms_sender,
             DEFAULT_POOL_CAPACITY,
         );
-        // determine the output sample rate
         let output_rate = if denoiser.is_some() {
             48_000
         } else {
             self.config.output_sample_rate.unwrap_or(input_rate)
         };
-        // create the encoder if needed
         let encoder = if self.config.codec_enabled {
             Some(SeaEncoder::new(
                 1,
@@ -537,148 +492,43 @@ where
 
     /// Builds and starts the audio input stream.
     ///
-    /// This method creates and configures all necessary processing threads
-    /// and returns an `AudioInputHandle` for controlling the stream.
+    /// Delegates device opening to the provided [`AudioHost`] implementation via
+    /// [`AudioHost::open_input`], then spawns the processor thread and returns a
+    /// handle for controlling the running stream.
+    ///
+    /// The type parameter `I` is the host's associated `InputStream` type (e.g.,
+    /// `cpal::Stream` for [`CpalAudioHost`]). It is inferred automatically.
     ///
     /// # Errors
     ///
     /// Returns an error if:
-    /// - No sink was set
-    /// - The device cannot be found
-    /// - The stream cannot be created
-    /// - The device uses an unsupported sample format
-    #[cfg(all(not(target_family = "wasm"), not(feature = "mock-audio")))]
-    pub fn build(mut self, host: &impl AudioHost) -> Result<AudioInputHandle, Error> {
+    /// - No sink was set via [`callback`](Self::callback) or [`sink`](Self::sink)
+    /// - The host fails to open the input device (see [`AudioHost::open_input`])
+    /// - Codec initialization fails (invalid encoder settings)
+    /// - The processor thread cannot be spawned
+    #[cfg(not(target_family = "wasm"))]
+    pub fn build<I>(
+        mut self,
+        host: &impl AudioHost<InputStream = I>,
+    ) -> Result<AudioInputHandle<I>, Error>
+    where
+        I: Send + 'static,
+    {
         if self.sink.is_none() {
             return Err(Error::Config(
                 "a data sink must be set via callback() or sink()".to_string(),
             ));
         }
 
-        // Get the input device
-        let device_handle = host.get_input_device(self.config.device_id.as_deref())?;
-
-        let device = device_handle.device();
-        let config = device.default_input_config()?;
-
-        let input_channels = config.channels() as usize;
-        let device_sample_rate = config.sample_rate();
-        let sample_format = config.sample_format();
-
-        // Create ring buffer for cpal stream to processor
-        let (input_producer, input_consumer) = RingBuffer::<f32>::new(CHANNEL_SIZE);
-        // Create condvar to wake input processor when the ring buffer changes
-        let input_notify = Arc::new(Condvar::new());
-        // Create sender for input stream to input processor
-        let input_sender = RingBufferSender {
-            producer: input_producer,
-            notify: input_notify.clone(),
-        };
-        // Create processor input and extract error callback before consuming self
-        let processor_input = RingBufferInput::new(input_consumer, input_notify);
+        // Open the input
         let error_callback = self.config.error_callback.take();
+        let (processor_input, input_rate, stream) =
+            host.open_input(self.config.device_id.as_deref(), error_callback)?;
         // Build common components (channels, threads, state)
-        let context = self.build_common(processor_input, device_sample_rate)?;
-
-        // Build the audio stream with the appropriate sample format
-        let stream = match sample_format {
-            SampleFormat::I8 => build_input_stream_with_format::<i8>(
-                device,
-                &config.into(),
-                input_sender,
-                input_channels,
-                error_callback,
-            )?,
-            SampleFormat::I16 => build_input_stream_with_format::<i16>(
-                device,
-                &config.into(),
-                input_sender,
-                input_channels,
-                error_callback,
-            )?,
-            SampleFormat::I32 => build_input_stream_with_format::<i32>(
-                device,
-                &config.into(),
-                input_sender,
-                input_channels,
-                error_callback,
-            )?,
-            SampleFormat::I64 => build_input_stream_with_format_64::<i64>(
-                device,
-                &config.into(),
-                input_sender,
-                input_channels,
-                error_callback,
-            )?,
-            SampleFormat::U8 => build_input_stream_with_format::<u8>(
-                device,
-                &config.into(),
-                input_sender,
-                input_channels,
-                error_callback,
-            )?,
-            SampleFormat::U16 => build_input_stream_with_format::<u16>(
-                device,
-                &config.into(),
-                input_sender,
-                input_channels,
-                error_callback,
-            )?,
-            SampleFormat::U32 => build_input_stream_with_format::<u32>(
-                device,
-                &config.into(),
-                input_sender,
-                input_channels,
-                error_callback,
-            )?,
-            SampleFormat::U64 => build_input_stream_with_format_64::<u64>(
-                device,
-                &config.into(),
-                input_sender,
-                input_channels,
-                error_callback,
-            )?,
-            SampleFormat::F32 => build_input_stream_with_format::<f32>(
-                device,
-                &config.into(),
-                input_sender,
-                input_channels,
-                error_callback,
-            )?,
-            SampleFormat::F64 => build_input_stream_with_format_64::<f64>(
-                device,
-                &config.into(),
-                input_sender,
-                input_channels,
-                error_callback,
-            )?,
-            _ => return Err(Error::Config("Unsupported sample format".to_string())),
-        };
-
-        stream.play()?;
+        let context = self.build_common(processor_input, input_rate)?;
 
         Ok(AudioInputHandle {
             _stream: Some(stream),
-            _processor_handle: Some(context.processor_handle),
-            input_volume: context.input_volume,
-            rms_threshold: context.rms_threshold,
-            muted: context.muted,
-        })
-    }
-
-    /// Builds and starts the audio input stream using in-process mock audio.
-    #[cfg(all(not(target_family = "wasm"), feature = "mock-audio"))]
-    pub fn build(self, _host: &impl AudioHost) -> Result<AudioInputHandle, Error> {
-        if self.sink.is_none() {
-            return Err(Error::Config(
-                "a data sink must be set via callback() or sink()".to_string(),
-            ));
-        }
-
-        let context = self.build_common(MockAudioInput::new(48_000), 48_000)?;
-
-        Ok(AudioInputHandle {
-            _stream: None,
             _processor_handle: Some(context.processor_handle),
             input_volume: context.input_volume,
             rms_threshold: context.rms_threshold,
@@ -690,38 +540,40 @@ where
     ///
     /// On WASM targets, a [`WebAudioWrapper`] must be set via
     /// [`web_audio_wrapper`](Self::web_audio_wrapper) before calling this method.
-    /// The wrapper handles the Web Audio API setup including microphone access
+    /// The wrapper handles Web Audio API setup including microphone access
     /// and AudioWorklet registration.
+    ///
+    /// The `host` argument is accepted for API symmetry with the native `build`
+    /// but is not used on WASM; audio routing is handled entirely by the wrapper.
     ///
     /// # Errors
     ///
     /// Returns an error if:
-    /// - No sink was set
-    /// - No `WebAudioWrapper` was set via [`web_audio_wrapper`](Self::web_audio_wrapper)
-    /// - Common build steps fail (codec initialization, thread spawning, etc.)
+    /// - No sink was set via [`callback`](Self::callback) or [`sink`](Self::sink)
+    /// - No [`WebAudioWrapper`] was provided via [`web_audio_wrapper`](Self::web_audio_wrapper)
+    /// - Codec initialization fails
+    /// - The processor thread cannot be spawned
     ///
     /// # Example
     ///
-    /// ```rust,no_run
-    /// # #[cfg(target_family = "wasm")]
-    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// ```rust,ignore
     /// use telepathy_audio::devices::CpalAudioHost;
     /// use telepathy_audio::io::AudioInputBuilder;
     /// use telepathy_audio::platform::web_audio::WebAudioWrapper;
-    /// use std::sync::Arc;
     ///
     /// let host = CpalAudioHost::new();
-    /// // wrapper must be created ahead of time on the main thread
-    /// let wrapper = WebAudioWrapper::new().await;
+    /// // Must be called on the main thread during a user interaction
+    /// let wrapper = WebAudioWrapper::new().await?;
     /// let input = AudioInputBuilder::new()
-    ///     .web_audio_wrapper(&wrapper)
+    ///     .web_audio_wrapper(wrapper)
     ///     .callback(|data| { /* process audio */ })
     ///     .build(&host)?;
-    /// # Ok(())
-    /// # }
     /// ```
     #[cfg(target_family = "wasm")]
-    pub fn build(mut self, _host: &impl AudioHost) -> Result<AudioInputHandle, Error> {
+    pub fn build<I>(
+        mut self,
+        _host: &impl AudioHost<InputStream = I>,
+    ) -> Result<AudioInputHandle<I>, Error> {
         if self.sink.is_none() {
             return Err(Error::Config(
                 "a data sink must be set via callback() or sink()".to_string(),
@@ -744,6 +596,7 @@ where
         web_audio.resume();
 
         Ok(AudioInputHandle {
+            _stream: None,
             _web_audio: Some(web_audio),
             _processor_handle: Some(context.processor_handle),
             input_volume: context.input_volume,
@@ -755,35 +608,11 @@ where
 
 /// Handle to a running audio input stream.
 ///
-/// This handle allows controlling the audio input (mute/unmute, volume)
-/// and automatically cleans up resources when dropped.
-///
-/// ## Lifecycle
-///
-/// - **Creation**: Created by [`AudioInputBuilder::build`] on all platforms
-/// - **Running**: Audio is captured, processed (with optional encoding), and delivered via the configured sink
-/// - **Cleanup**: When dropped, the handle drops the underlying audio stream, causing the processor to observe EOF
-///
-/// ## Thread Safety
-///
-/// All control methods (`mute`, `unmute`, `set_volume`, etc.) are thread-safe
-/// and can be called from any thread. They use atomic operations internally.
-///
-/// ## Platform Differences
-///
-/// - **Native**: Uses cpal stream and rtrb ring buffer for input communication
-/// - **WASM**: Uses a pre-set `WebAudioWrapper`
-///   and Web Audio API; the wrapper must be provided via
-///   `AudioInputBuilder::web_audio_wrapper` before calling `build()`
-///
-/// ## Drop vs stop()
-///
-/// Calling `drop` (implicit when handle goes out of scope) and `stop()` have
-/// the same effect. Use `stop()` when you need to explicitly wait for cleanup
-/// completion in a specific code location.
-pub struct AudioInputHandle {
-    #[cfg(not(target_family = "wasm"))]
-    _stream: Option<cpal::Stream>,
+/// All control methods (`mute`, `unmute`, `set_volume`, …) are thread-safe via
+/// the underlying atomics. Dropping the handle tears down the stream and
+/// signals the processor to exit; there is no separate cleanup call.
+pub struct AudioInputHandle<S> {
+    _stream: Option<S>,
     #[cfg(target_family = "wasm")]
     _web_audio: Option<WebAudioWrapper>,
     _processor_handle: Option<JoinHandle<()>>,
@@ -792,7 +621,7 @@ pub struct AudioInputHandle {
     muted: Arc<AtomicBool>,
 }
 
-impl AudioInputHandle {
+impl<S> AudioInputHandle<S> {
     /// Mutes the audio input.
     ///
     /// When muted, no audio data will be processed or sent to the callback.
@@ -844,133 +673,15 @@ pub enum CodecBitrateMode {
 /// Lock free sender for native targets
 ///
 /// Crucially, when the sender is dropped, the input processor is woken up
-#[cfg(all(not(target_family = "wasm"), not(feature = "mock-audio")))]
-struct RingBufferSender {
-    producer: rtrb::Producer<f32>,
-    notify: Arc<Condvar>,
+#[cfg(not(target_family = "wasm"))]
+pub(crate) struct RingBufferSender {
+    pub(crate) producer: rtrb::Producer<f32>,
+    pub(crate) notify: Arc<Condvar>,
 }
 
-#[cfg(all(not(target_family = "wasm"), not(feature = "mock-audio")))]
+#[cfg(not(target_family = "wasm"))]
 impl Drop for RingBufferSender {
     fn drop(&mut self) {
         self.notify.notify_one();
     }
-}
-
-/// Builds an input stream with automatic sample format conversion.
-///
-/// This helper function creates a cpal input stream that converts the device's
-/// native sample format T to f32 for the processing pipeline using cpal's
-/// `to_float_sample()` method.
-///
-/// # Type Parameters
-///
-/// * `T` - The device's native sample format (e.g., i16, f32, u16)
-///
-/// # Arguments
-///
-/// * `device` - The cpal device to build the stream on
-/// * `config` - Stream configuration (sample rate, channels, etc.)
-/// * `input_producer` - Ring buffer producer for f32 samples to the processor
-/// * `input_channels` - Number of input channels
-/// * `error_callback` - Optional callback for stream errors
-#[cfg(all(not(target_family = "wasm"), not(feature = "mock-audio")))]
-fn build_input_stream_with_format<T>(
-    device: &cpal::Device,
-    config: &cpal::StreamConfig,
-    mut input_sender: RingBufferSender,
-    input_channels: usize,
-    mut error_callback: Option<StreamErrorCallback>,
-) -> Result<cpal::Stream, Error>
-where
-    T: Sample<Float = f32> + cpal::SizedSample + Send + 'static,
-{
-    use cpal::traits::DeviceTrait;
-
-    let stream = device.build_input_stream(
-        config,
-        move |data: &[T], _: &_| {
-            input_stream_helper(
-                &mut input_sender,
-                input_channels,
-                data.len(),
-                data.chunks(input_channels).map(|frame| {
-                    // Convert device format T to f32
-                    frame[0].to_float_sample()
-                }),
-            );
-        },
-        move |err| {
-            if let Some(callback) = error_callback.as_mut() {
-                callback(err);
-            } else {
-                error!(error = %err, "input_stream_error");
-            }
-        },
-        None,
-    )?;
-
-    Ok(stream)
-}
-
-/// Builds an input stream for 64-bit sample formats (i64, u64, f64).
-///
-/// These types use f64 as their intermediate float type, so we need a separate
-/// helper that converts f64 to f32.
-#[cfg(all(not(target_family = "wasm"), not(feature = "mock-audio")))]
-fn build_input_stream_with_format_64<T>(
-    device: &cpal::Device,
-    config: &cpal::StreamConfig,
-    mut input_sender: RingBufferSender,
-    input_channels: usize,
-    mut error_callback: Option<StreamErrorCallback>,
-) -> Result<cpal::Stream, Error>
-where
-    T: Sample<Float = f64> + cpal::SizedSample + Send + 'static,
-{
-    use cpal::traits::DeviceTrait;
-
-    let stream = device.build_input_stream(
-        config,
-        move |data: &[T], _: &_| {
-            input_stream_helper(
-                &mut input_sender,
-                input_channels,
-                data.len(),
-                data.chunks(input_channels).map(|frame| {
-                    // Convert device format T to f64, then to f32
-                    let sample_f64 = frame[0].to_float_sample();
-                    sample_f64 as f32
-                }),
-            );
-        },
-        move |err| {
-            if let Some(callback) = error_callback.as_mut() {
-                callback(err);
-            } else {
-                error!(error = %err, "input_stream_error");
-            }
-        },
-        None,
-    )?;
-
-    Ok(stream)
-}
-
-#[cfg(all(not(target_family = "wasm"), not(feature = "mock-audio")))]
-fn input_stream_helper(
-    input_sender: &mut RingBufferSender,
-    input_channels: usize,
-    data_len: usize,
-    sample_iter: impl Iterator<Item = f32>,
-) {
-    let Ok(chunk) = input_sender
-        .producer
-        .write_chunk_uninit(data_len / input_channels)
-    else {
-        return;
-    };
-
-    chunk.fill_from_iter(sample_iter);
-    input_sender.notify.notify_one();
 }

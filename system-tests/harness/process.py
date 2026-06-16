@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
-import re
 import signal
 import uuid
 from contextlib import suppress
@@ -17,6 +15,7 @@ _UNIT_COMMANDS = {
     "audio_test",
     "list_devices",
 }
+_SUBPROCESS_STREAM_LIMIT = 1024 * 1024
 
 
 def _build_exec_args(
@@ -27,177 +26,26 @@ def _build_exec_args(
     return [binary, *args]
 
 
-class RelayProcess:
-    def __init__(
-        self,
-        binary_path: str,
-        namespace: str | None = None,
-        listen_addr: str = "127.0.0.1:40142",
-    ) -> None:
-        self.binary_path = binary_path
-        self.namespace = namespace
-        self.listen_addr = listen_addr
-        self.peer_id: str | None = None
-
-        self._proc: asyncio.subprocess.Process | None = None
-        self._stdout_task: asyncio.Task[None] | None = None
-        self._stderr_task: asyncio.Task[None] | None = None
-        self._stdout_log: list[str] = []
-        self._stderr_log: list[str] = []
-
-    async def start(self) -> None:
-        exec_args = _build_exec_args(self.namespace, self.binary_path, [])
-        env = dict(os.environ)
-        env.setdefault("RUST_LOG", "relay_server=info,libp2p=warn")
-        self._proc = await asyncio.create_subprocess_exec(
-            *exec_args,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=env,
-        )
-        self._stdout_task = asyncio.create_task(self._drain_stdout())
-        self._stderr_task = asyncio.create_task(self._drain_stderr())
-        try:
-            await self._wait_for_peer_id(timeout=15.0)
-        except Exception:
-            await self.terminate()
-            raise
-
-    async def _wait_for_peer_id(self, timeout: float) -> None:
-        assert self._proc is not None
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + timeout
-
-        while self.peer_id is None:
-            self._extract_peer_id_from_logs()
-            if self.peer_id is not None:
-                return
-
-            if self._proc.returncode is not None:
-                # Catch a last log line that may have arrived after the
-                # previous extraction pass but before this returncode check.
-                self._extract_peer_id_from_logs()
-                if self.peer_id is not None:
-                    return
-                stdout = "\n".join(self._stdout_log)
-                stderr = "\n".join(self._stderr_log)
-                raise RuntimeError(
-                    f"relay process exited before peer id was detected "
-                    f"(code={self._proc.returncode})\n"
-                    f"stdout:\n{stdout}\n"
-                    f"stderr:\n{stderr}"
-                )
-
-            remaining = deadline - loop.time()
-            if remaining <= 0:
-                # Avoid a deadline race where the peer id lands in logs right
-                # as timeout is reached.
-                self._extract_peer_id_from_logs()
-                if self.peer_id is not None:
-                    return
-                stdout = "\n".join(self._stdout_log)
-                stderr = "\n".join(self._stderr_log)
-                raise TimeoutError(
-                    "timed out waiting for relay peer id from relay logs.\n"
-                    f"stdout:\n{stdout}\n"
-                    f"stderr:\n{stderr}"
-                )
-            await asyncio.sleep(min(0.05, remaining))
-        self._extract_peer_id_from_logs()
-
-    def _extract_peer_id_from_logs(self) -> None:
-        if self.peer_id is not None:
-            return
-        for line in (*self._stdout_log, *self._stderr_log):
-            marker = "peer.id="
-            marker_pos = line.find(marker)
-            if marker_pos == -1:
-                continue
-            remainder = line[marker_pos + len(marker) :].strip()
-            if not remainder:
-                continue
-            token = remainder.split()[0].strip().strip('"')
-            if token:
-                self.peer_id = token
-                return
-
-    async def _drain_stdout(self) -> None:
-        assert self._proc is not None
-        assert self._proc.stdout is not None
-        while True:
-            line = await self._proc.stdout.readline()
-            if not line:
-                break
-            text = line.decode(errors="replace").rstrip("\n")
-            self._stdout_log.append(text)
-            self._maybe_capture_peer_id(text)
-
-    async def _drain_stderr(self) -> None:
-        assert self._proc is not None
-        assert self._proc.stderr is not None
-
-        while True:
-            line = await self._proc.stderr.readline()
-            if not line:
-                break
-            text = line.decode(errors="replace").rstrip("\n")
-            self._stderr_log.append(text)
-            self._maybe_capture_peer_id(text)
-
-    def _maybe_capture_peer_id(self, line: str) -> None:
-        if self.peer_id is not None:
-            return
-        marker = "peer.id="
-        marker_pos = line.find(marker)
-        if marker_pos == -1:
-            return
-        remainder = line[marker_pos + len(marker) :].strip()
-        if not remainder:
-            return
-        token = remainder.split()[0].strip().strip('"')
-        if token:
-            self.peer_id = token
-
-    def stderr_lines(self) -> list[str]:
-        return list(self._stderr_log)
-
-    def stdout_lines(self) -> list[str]:
-        return list(self._stdout_log)
-
-    async def terminate(self) -> None:
-        if self._proc is None:
-            return
-        if self._proc.returncode is None:
-            self._proc.send_signal(signal.SIGTERM)
-            try:
-                await asyncio.wait_for(self._proc.wait(), timeout=5.0)
-            except asyncio.TimeoutError:
-                self._proc.kill()
-                with suppress(Exception):
-                    await self._proc.wait()
-        if self._stderr_task is not None:
-            self._stderr_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await self._stderr_task
-        if self._stdout_task is not None:
-            self._stdout_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await self._stdout_task
-
-
 class CliProcess:
     def __init__(
         self,
         binary_path: str,
         namespace: str,
-        relay_addr: str,
-        relay_peer: str,
+        listen_port: int,
+        bind_addresses: list[str],
+        relay_url: str | None = None,
+        dns_endpoint: str | None = None,
+        dns_origin_domain: str | None = None,
+        pkarr_relay: str | None = None,
     ) -> None:
         self.binary_path = binary_path
         self.namespace = namespace
-        self.relay_addr = relay_addr
-        self.relay_peer = relay_peer
+        self.listen_port = listen_port
+        self.bind_addresses = bind_addresses
+        self.relay_url = relay_url
+        self.dns_endpoint = dns_endpoint
+        self.dns_origin_domain = dns_origin_domain
+        self.pkarr_relay = pkarr_relay
 
         self._proc: asyncio.subprocess.Process | None = None
         self._stderr_task: asyncio.Task[None] | None = None
@@ -208,20 +56,27 @@ class CliProcess:
         self._stdout_log: list[dict] = []
         self._pending: dict[str, asyncio.Future[dict]] = {}
         self._events: asyncio.Queue[dict] = asyncio.Queue()
+        self.identity: object | None = None
 
     async def start(self) -> None:
-        args = [
-            "--relay",
-            self.relay_addr,
-            "--relay-peer",
-            self.relay_peer,
-        ]
+        args = ["--listen-port", str(self.listen_port)]
+        for bind_address in self.bind_addresses:
+            args.extend(["--bind-address", bind_address])
+        if self.relay_url is not None:
+            args.extend(["--relay-url", self.relay_url])
+        if self.dns_endpoint is not None:
+            args.extend(["--dns-endpoint", self.dns_endpoint])
+        if self.dns_origin_domain is not None:
+            args.extend(["--dns-origin-domain", self.dns_origin_domain])
+        if self.pkarr_relay is not None:
+            args.extend(["--pkarr-relay", self.pkarr_relay])
         exec_args = _build_exec_args(self.namespace, self.binary_path, args)
         self._proc = await asyncio.create_subprocess_exec(
             *exec_args,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            limit=_SUBPROCESS_STREAM_LIMIT,
         )
         self._stderr_task = asyncio.create_task(self._drain_stderr())
         self._stdout_task = asyncio.create_task(self._drain_stdout())
@@ -272,7 +127,11 @@ class CliProcess:
         assert self._proc is not None
         assert self._proc.stderr is not None
         while True:
-            line = await self._proc.stderr.readline()
+            try:
+                line = await self._proc.stderr.readline()
+            except ValueError as error:
+                self._stderr_log.append(f"stderr line exceeded stream limit: {error}")
+                continue
             if not line:
                 break
             self._stderr_log.append(line.decode(errors="replace").rstrip("\n"))
@@ -281,7 +140,11 @@ class CliProcess:
         assert self._proc is not None
         assert self._proc.stdout is not None
         while True:
-            line = await self._proc.stdout.readline()
+            try:
+                line = await self._proc.stdout.readline()
+            except ValueError as error:
+                self._stderr_log.append(f"stdout line exceeded stream limit: {error}")
+                continue
             if not line:
                 break
 
@@ -326,6 +189,29 @@ class CliProcess:
         for pending in self._pending.values():
             if not pending.done():
                 pending.set_exception(RuntimeError("CLI process terminated"))
+        self._pending.clear()
+
+        if self._stdout_task is not None:
+            self._stdout_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._stdout_task
+        if self._stderr_task is not None:
+            self._stderr_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._stderr_task
+
+    async def crash(self) -> None:
+        if self._proc is None:
+            return
+
+        if self._proc.returncode is None:
+            self._proc.kill()
+            with suppress(Exception):
+                await self._proc.wait()
+
+        for pending in self._pending.values():
+            if not pending.done():
+                pending.set_exception(RuntimeError("CLI process crashed"))
         self._pending.clear()
 
         if self._stdout_task is not None:

@@ -9,8 +9,8 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'types.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `new`, `serialize_peer_id`, `serialize_timestamp_rfc3339_utc`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `minimum_bytes_needed`, `read_from`, `write_to`
+// These functions are ignored because they are not marked as `pub`: `clamp_contact_output_volume`, `contact_output_volume_from_parts`, `contact_output_volume_in_range`, `field_error`, `new`, `parse_bind_addresses`, `poison_field_error`, `relay_map_from_urls`, `serialize_timestamp_rfc3339_utc`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `minimum_bytes_needed`, `read_from`, `write_to`
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Capabilities>>
 abstract class Capabilities implements RustOpaqueInterface {
@@ -26,11 +26,11 @@ abstract class Capabilities implements RustOpaqueInterface {
 abstract class ChatMessage implements RustOpaqueInterface {
   List<(String, Uint8List)> attachments();
 
-  PeerId get receiver;
+  PublicKey get receiver;
 
   String get text;
 
-  set receiver(PeerId receiver);
+  set receiver(PublicKey receiver);
 
   set text(String text);
 
@@ -75,6 +75,8 @@ abstract class Contact implements RustOpaqueInterface {
           peerId: peerId,
           outputVolume: outputVolume);
 
+  Future<PublicKey> getPeerId();
+
   String id();
 
   bool idEq({required List<int> id});
@@ -110,18 +112,56 @@ abstract class NetworkConfig implements RustOpaqueInterface {
   static Future<NetworkConfig> default_() =>
       RustLib.instance.api.crateTypesNetworkConfigDefault();
 
-  Future<String> getRelayAddress();
+  List<String> getBindAddresses();
 
-  Future<String> getRelayId();
+  String? getDnsEndpoint();
+
+  String? getDnsOriginDomain();
+
+  int getListenPort();
+
+  String? getPkarrRelay();
+
+  List<String>? getRelays();
 
   factory NetworkConfig(
-          {required String relayAddress, required String relayId}) =>
+          {required int listenPort,
+          required List<String> bindAddresses,
+          List<String>? relays,
+          String? dnsEndpoint,
+          String? dnsOriginDomain,
+          String? pkarrRelay}) =>
       RustLib.instance.api.crateTypesNetworkConfigNew(
-          relayAddress: relayAddress, relayId: relayId);
+          listenPort: listenPort,
+          bindAddresses: bindAddresses,
+          relays: relays,
+          dnsEndpoint: dnsEndpoint,
+          dnsOriginDomain: dnsOriginDomain,
+          pkarrRelay: pkarrRelay);
 
-  Future<void> setRelayAddress({required String relayAddress});
-
-  Future<void> setRelayId({required String relayId});
+  /// Atomically validate every field and apply the new configuration.
+  ///
+  /// Each field is parsed and validated up front (without mutating any
+  /// shared state) before any write is attempted. If validation fails
+  /// for any field, no writes occur and the live `NetworkConfig` is
+  /// left exactly as it was. This is the only safe way for callers to
+  /// update a multi-field configuration: the per-field setters above
+  /// can leave the live config partially mutated if a later setter
+  /// rejects its value.
+  ///
+  /// On failure the returned [`NetworkConfigUpdateError`] identifies
+  /// which field was rejected so the frontend can route the error to
+  /// the correct input. A poisoned lock is collapsed into
+  /// [`NetworkConfigField::BackendError`]: a poison indicates the rust
+  /// runtime has been corrupted by a panic, and attributing that to
+  /// any one user-supplied field would be misleading.
+  void update(
+      {required int listenPort,
+      required List<String> bindAddresses,
+      List<String>? relays,
+      String? dnsEndpoint,
+      String? dnsOriginDomain,
+      String? pkarrRelay});
 }
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<RecordingConfig>>
@@ -193,6 +233,83 @@ class DartError implements FrbException {
       identical(this, other) ||
       other is DartError &&
           runtimeType == other.runtimeType &&
+          message == other.message;
+}
+
+enum ManagerState {
+  stopped,
+  starting,
+  active,
+  failed,
+  ;
+}
+
+/// Identifies which field of a [`NetworkConfig`] update failed validation,
+/// or that the failure was not tied to a specific user-supplied field.
+///
+/// `update` validates every field before mutating any shared state, and
+/// reports the first failure. Surfacing the offending field through this
+/// enum (rather than only a free-form message) lets the frontend route the
+/// error to the corresponding input.
+enum NetworkConfigField {
+  /// The supplied listen port is not representable as a `u16`. The
+  /// rust setter takes `u16` so the frontend validator should already
+  /// have caught this, but the variant is kept for completeness in
+  /// case a future caller bypasses validation.
+  listenPort,
+
+  /// One or more bind addresses failed to parse as an `IpAddr`.
+  bindAddresses,
+
+  /// One or more relay URLs failed to parse as a [`RelayUrl`].
+  relays,
+
+  /// The DNS endpoint failed to parse as a [`SocketAddr`].
+  dnsEndpoint,
+
+  /// The DNS origin domain is invalid. The current rust setter does
+  /// not validate the origin domain itself, but the variant is
+  /// reserved for future tightening and lets the frontend surface a
+  /// targeted error rather than a generic message.
+  dnsOriginDomain,
+
+  /// The Pkarr relay URL failed to parse as a [`url::Url`].
+  pkarrRelay,
+
+  /// The failure was not tied to a specific field. In particular,
+  /// every lock-poison error from the atomic `update` is collapsed
+  /// into this variant: a poisoned lock indicates the rust runtime
+  /// has been corrupted by a panic, and attributing the error to any
+  /// one user-supplied field would be misleading. Frontends should
+  /// surface this as a critical "backend error" rather than a
+  /// per-field validation message.
+  backendError,
+  ;
+}
+
+/// Structured error returned by [`NetworkConfig::update`].
+///
+/// Carries both the offending [`NetworkConfigField`] (so the frontend
+/// can route the error to the correct input) and the underlying
+/// message (so the user sees the rust-side diagnostic verbatim).
+class NetworkConfigUpdateError implements FrbException {
+  final NetworkConfigField field;
+  final String message;
+
+  const NetworkConfigUpdateError({
+    required this.field,
+    required this.message,
+  });
+
+  @override
+  int get hashCode => field.hashCode ^ message.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is NetworkConfigUpdateError &&
+          runtimeType == other.runtimeType &&
+          field == other.field &&
           message == other.message;
 }
 

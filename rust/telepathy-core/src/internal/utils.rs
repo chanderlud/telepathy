@@ -1,35 +1,30 @@
 use crate::internal::callbacks::CoreStatisticsCallback;
 use crate::internal::error::{Error, ErrorKind};
 use crate::internal::messages::ProtocolMessage;
-use crate::internal::sockets::{TIMESTAMP_BUFFER_CAPACITY, Transport, TransportStream};
-use crate::internal::state::{ConnectionState, StatisticsCollectorState};
+use crate::internal::state::StatisticsCollectorState;
 use crate::overlay::{CONNECTED, LATENCY, LOSS};
 use crate::types::Statistics;
+use bytes::Bytes;
 #[cfg(feature = "flutter")]
 pub use flutter_rust_bridge::JoinHandle;
+use futures_util::{SinkExt, StreamExt};
+use iroh::endpoint::{RecvStream, SendStream};
 use kanal::AsyncReceiver;
-use libp2p::bytes::Bytes;
-use libp2p::futures::{Sink, SinkExt, StreamExt};
-use libp2p::swarm::ConnectionId;
 use speedy::{Readable, Writable};
-use std::collections::HashMap;
 use std::future::Future;
-use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::time::Duration;
 use telepathy_audio::internal::buffer_pool::PooledBuffer;
 use telepathy_audio::io::traits::ClosedOrFailed;
 use telepathy_audio::io::{AudioDataSink, AudioDataSource};
-use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::select;
 use tokio::sync::Notify;
 #[cfg(all(feature = "native", not(feature = "flutter")))]
 pub use tokio::task::JoinHandle;
 #[cfg(not(target_family = "wasm"))]
 use tokio::time::interval;
-use tokio_util::codec::LengthDelimitedCodec;
-use tokio_util::compat::FuturesAsyncReadCompatExt;
+use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 #[cfg(target_family = "wasm")]
@@ -77,14 +72,6 @@ impl AudioDataSource for KanalSource {
     }
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Debug)]
-enum Locality {
-    Loopback = 0,
-    Lan = 1,
-    Public = 2,
-    Unknown = 3,
-}
-
 /// Returns the percentage of the max input volume in the window compared to the max volume
 pub(crate) fn level_from_window(local_max: f32, max: &mut f32) -> f32 {
     *max = max.max(local_max);
@@ -97,14 +84,10 @@ pub(crate) fn level_from_window(local_max: f32, max: &mut f32) -> f32 {
 }
 
 /// Writes a message to the stream
-pub(crate) async fn write_message<W>(
-    transport: &mut Transport<W>,
+pub(crate) async fn write_message(
+    transport: &mut FramedWrite<SendStream, LengthDelimitedCodec>,
     message: &ProtocolMessage,
-) -> Result<()>
-where
-    W: AsyncWrite + Unpin,
-    Transport<W>: Sink<Bytes> + Unpin,
-{
+) -> Result<()> {
     let buffer = message.write_to_vec()?;
     transport
         .send(Bytes::from(buffer))
@@ -113,8 +96,8 @@ where
 }
 
 /// Reads a message from the stream
-pub(crate) async fn read_message<R: AsyncRead + Unpin>(
-    transport: &mut Transport<R>,
+pub(crate) async fn read_message(
+    transport: &mut FramedRead<RecvStream, LengthDelimitedCodec>,
 ) -> Result<ProtocolMessage> {
     if let Some(Ok(buffer)) = transport.next().await {
         let message = ProtocolMessage::read_from_buffer(&buffer[..])?;
@@ -205,69 +188,6 @@ pub(crate) async fn loopback(
             },
         }
     }
-}
-
-pub(crate) fn stream_to_audio_transport(stream: libp2p::Stream) -> Transport<TransportStream> {
-    LengthDelimitedCodec::builder()
-        .max_frame_length(TIMESTAMP_BUFFER_CAPACITY)
-        .length_field_type::<u16>()
-        .new_framed(stream.compat())
-}
-
-fn classify_locality(addr: Option<IpAddr>) -> Locality {
-    match addr {
-        Some(IpAddr::V4(v4)) => {
-            if v4.is_loopback() {
-                Locality::Loopback
-            } else if v4.is_private() || v4.is_link_local() {
-                Locality::Lan
-            } else {
-                Locality::Public
-            }
-        }
-        Some(IpAddr::V6(v6)) => {
-            if v6.is_loopback() {
-                Locality::Loopback
-            } else if v6.is_unique_local() || v6.is_unicast_link_local() {
-                Locality::Lan
-            } else {
-                Locality::Public
-            }
-        }
-        None => Locality::Unknown,
-    }
-}
-
-/// Pick the best connection according to:
-/// - non-relayed > relayed, then loopback > lan > public > unknown, then lowest latency
-/// - retries & ipv6 status are considered last
-pub(crate) fn select_best_connection(
-    conns: &HashMap<ConnectionId, ConnectionState>,
-) -> Option<(ConnectionId, &ConnectionState)> {
-    conns
-        .iter()
-        .min_by_key(|(id, s)| {
-            // lower is better
-            let relayed_rank = if s.relayed { 1 } else { 0 };
-            let locality_rank = classify_locality(s.remote_address);
-            let latency_rank = s.latency.unwrap_or(Duration::MAX);
-            let retries_rank = s.retries.load(Relaxed);
-            let is_ipv6 = if s.remote_address.is_some_and(|a| a.is_ipv6()) {
-                0
-            } else {
-                1
-            };
-
-            (
-                relayed_rank,
-                locality_rank,
-                latency_rank,
-                retries_rank,
-                is_ipv6,
-                **id,
-            )
-        })
-        .map(|(id, s)| (*id, s))
 }
 
 pub(crate) fn spawn_task<F, T>(future: F) -> JoinHandle<T>

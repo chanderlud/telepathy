@@ -13,8 +13,12 @@ const MAX_PARSE_LINE_LEN: usize = 240;
 
 #[derive(Debug, Clone)]
 pub struct RunOptions {
-    pub relay: String,
-    pub relay_peer: String,
+    pub listen_port: u16,
+    pub bind_addresses: Vec<String>,
+    pub relay_url: Option<String>,
+    pub dns_endpoint: Option<String>,
+    pub dns_origin_domain: Option<String>,
+    pub pkarr_relay: Option<String>,
 }
 
 pub async fn run(opts: RunOptions) -> Result<()> {
@@ -24,7 +28,15 @@ pub async fn run(opts: RunOptions) -> Result<()> {
     let hub = Hub::new(event_tx);
     let callbacks = hub.build_callbacks();
 
-    let network_config = match NetworkConfig::new(opts.relay, opts.relay_peer) {
+    let relays = opts.relay_url.clone().map(|url| vec![url]);
+    let network_config = match NetworkConfig::new(
+        opts.listen_port,
+        opts.bind_addresses.clone(),
+        relays,
+        opts.dns_endpoint.clone(),
+        opts.dns_origin_domain.clone(),
+        opts.pkarr_relay.clone(),
+    ) {
         Ok(config) => config,
         Err(err) => {
             let message = err.message;
@@ -268,10 +280,10 @@ async fn handle_command(
             telepathy.set_input_volume(value);
             CommandOutcome::AckOk
         }
-        Command::SetOutputVolumeDb { value } => {
-            telepathy.set_output_volume(value);
-            CommandOutcome::AckOk
-        }
+        Command::SetOutputVolumeDb { value } => match telepathy.set_output_volume(value) {
+            Ok(()) => CommandOutcome::AckOk,
+            Err(err) => CommandOutcome::AckErr(err),
+        },
         Command::SetRmsThresholdDb { value } => {
             telepathy.set_rms_threshold(value);
             CommandOutcome::AckOk

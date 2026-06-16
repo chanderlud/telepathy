@@ -36,7 +36,7 @@ mod wasm_benches {
         });
     }
 
-    /// Benchmarks scalar vs wide i16→f32 conversion.
+    /// Benchmarks scalar vs wide i16->f32 conversion.
     #[wasm_bindgen_bench]
     pub fn bench_i16_to_f32_conversion(c: &mut Criterion) {
         let mut pre_buf = [0_f32; 4096];
@@ -68,7 +68,7 @@ mod wasm_benches {
         });
     }
 
-    /// Benchmarks scalar vs wide f32→i16 conversion.
+    /// Benchmarks scalar vs wide f32->i16 conversion.
     #[wasm_bindgen_bench]
     pub fn bench_f32_to_i16_conversion(c: &mut Criterion) {
         let float_frame: Vec<f32> = dummy_float_frame()

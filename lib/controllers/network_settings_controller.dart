@@ -35,23 +35,168 @@ class NetworkSettingsController with ChangeNotifier {
   }
 
   Future<NetworkConfig> loadNetworkConfig() async {
+    final StoredNetworkValues stored = await _readStoredNetworkValues();
+    return buildNetworkConfigFromSpec(stored: stored);
+  }
+
+  @visibleForTesting
+  static NetworkConfig buildNetworkConfigFromSpec({
+    required StoredNetworkValues stored,
+    NetworkConfigBuilder? builder,
+  }) {
+    return _buildNetworkConfigFromSpec(
+      stored: stored,
+      builder: builder ?? _constructDefaultNetworkConfig,
+    );
+  }
+
+  Future<StoredNetworkValues> _readStoredNetworkValues() async {
+    return StoredNetworkValues(
+      listenPort: await options.getInt('listenPort'),
+      bindAddresses: await options.getStringList('bindAddresses'),
+      customRelaysEnabled:
+          await options.getBool('customRelaysEnabled') ?? false,
+      relays: await options.getStringList('relays'),
+      customDnsEnabled: await options.getBool('customDnsEnabled') ?? false,
+      dnsEndpoint: await options.getString('dnsEndpoint'),
+      dnsOriginDomain: await options.getString('dnsOriginDomain'),
+      customPkarrEnabled: await options.getBool('customPkarrEnabled') ?? false,
+      pkarrRelay: await options.getString('pkarrRelay'),
+    );
+  }
+
+  static NetworkConfig _buildNetworkConfigFromSpec({
+    required StoredNetworkValues stored,
+    required NetworkConfigBuilder builder,
+  }) {
     try {
-      return NetworkConfig(
-        relayAddress:
-            await options.getString('relayAddress') ?? defaultRelayAddress,
-        relayId: await options.getString('relayId') ?? defaultRelayId,
+      // Construct a defaults-only base first so any per-field rejection below
+      // leaves the live config in a known-safe state.
+      final NetworkConfig config = builder(
+        listenPort: defaultListenPort,
+        bindAddresses: defaultBindAddresses,
+        relays: null,
+        dnsEndpoint: null,
+        dnsOriginDomain: null,
+        pkarrRelay: null,
       );
+
+      // Apply stored values via the atomic `update` so either every group
+      // commits or none does. Groups with empty/half-stored values are
+      // dropped here rather than passed as `None`; passing `None` would
+      // override the previously-configured value, which is not the same
+      // as "skip this group".
+      final int newListenPort = stored.listenPort ?? defaultListenPort;
+      final List<String> newBindAddresses =
+          (stored.bindAddresses != null && stored.bindAddresses!.isNotEmpty)
+              ? stored.bindAddresses!
+              : defaultBindAddresses;
+      final List<String>? newRelays = (stored.customRelaysEnabled &&
+              stored.relays != null &&
+              stored.relays!.isNotEmpty)
+          ? stored.relays
+          : null;
+      final String? newDnsEndpoint = (stored.customDnsEnabled &&
+              stored.dnsEndpoint != null &&
+              stored.dnsEndpoint!.isNotEmpty &&
+              stored.dnsOriginDomain != null &&
+              stored.dnsOriginDomain!.isNotEmpty)
+          ? stored.dnsEndpoint
+          : null;
+      final String? newDnsOriginDomain =
+          newDnsEndpoint != null ? stored.dnsOriginDomain : null;
+      final String? newPkarrRelay =
+          stored.customPkarrEnabled ? stored.pkarrRelay : null;
+
+      try {
+        config.update(
+          listenPort: newListenPort,
+          bindAddresses: newBindAddresses,
+          relays: newRelays,
+          dnsEndpoint: newDnsEndpoint,
+          dnsOriginDomain: newDnsOriginDomain,
+          pkarrRelay: newPkarrRelay,
+        );
+      } on NetworkConfigUpdateError catch (e) {
+        DebugConsole.warn(
+          'invalid stored network config field ${e.field.name}: ${e.message}, using defaults',
+        );
+      } on DartError catch (e) {
+        DebugConsole.warn('invalid stored network config, using defaults: $e');
+      }
+
+      return config;
     } on DartError catch (e) {
-      DebugConsole.warn('invalid network config values: $e');
-      return NetworkConfig(
-          relayAddress: defaultRelayAddress, relayId: defaultRelayId);
+      DebugConsole.warn('failed to build network config, using defaults: $e');
+      return builder(
+        listenPort: defaultListenPort,
+        bindAddresses: defaultBindAddresses,
+        relays: null,
+        dnsEndpoint: null,
+        dnsOriginDomain: null,
+        pkarrRelay: null,
+      );
     }
   }
 
+  static NetworkConfig _constructDefaultNetworkConfig({
+    required int listenPort,
+    required List<String> bindAddresses,
+    required List<String>? relays,
+    required String? dnsEndpoint,
+    required String? dnsOriginDomain,
+    required String? pkarrRelay,
+  }) {
+    return NetworkConfig(
+      listenPort: listenPort,
+      bindAddresses: bindAddresses,
+      relays: relays,
+      dnsEndpoint: dnsEndpoint,
+      dnsOriginDomain: dnsOriginDomain,
+      pkarrRelay: pkarrRelay,
+    );
+  }
+
   Future<void> saveNetworkConfig() async {
-    await options.setString(
-        'relayAddress', await networkConfig.getRelayAddress());
-    await options.setString('relayId', await networkConfig.getRelayId());
+    await options.setInt('listenPort', networkConfig.getListenPort());
+    await options.setStringList(
+        'bindAddresses', networkConfig.getBindAddresses());
+
+    final List<String>? relays = networkConfig.getRelays();
+    // An empty custom-relay list would persist `customRelaysEnabled = true`
+    // against zero URLs, which on the rust side disables the default map
+    // without a replacement. The UI rejects this at save time; this branch
+    // is the defense-in-depth fallback for any path that bypasses it.
+    final bool customRelaysEnabled = relays != null && relays.isNotEmpty;
+    await options.setBool('customRelaysEnabled', customRelaysEnabled);
+    if (customRelaysEnabled) {
+      await options.setStringList('relays', relays);
+    } else {
+      await options.remove('relays');
+    }
+
+    final String? dnsEndpoint = networkConfig.getDnsEndpoint();
+    final String? dnsOriginDomain = networkConfig.getDnsOriginDomain();
+    final bool customDnsEnabled = dnsEndpoint != null &&
+        dnsEndpoint.isNotEmpty &&
+        dnsOriginDomain != null &&
+        dnsOriginDomain.isNotEmpty;
+    await options.setBool('customDnsEnabled', customDnsEnabled);
+    if (customDnsEnabled) {
+      await options.setString('dnsEndpoint', dnsEndpoint);
+      await options.setString('dnsOriginDomain', dnsOriginDomain);
+    } else {
+      await options.remove('dnsEndpoint');
+      await options.remove('dnsOriginDomain');
+    }
+
+    final String? pkarrRelay = networkConfig.getPkarrRelay();
+    await options.setBool('customPkarrEnabled', pkarrRelay != null);
+    if (pkarrRelay != null) {
+      await options.setString('pkarrRelay', pkarrRelay);
+    } else {
+      await options.remove('pkarrRelay');
+    }
   }
 
   Future<ScreenshareConfig> loadScreenshareConfig() async {
@@ -150,4 +295,48 @@ class NetworkSettingsController with ChangeNotifier {
     await options.setInt(
         'overlayBackgroundColor', overlayConfig.backgroundColor.toARGB32());
   }
+}
+
+/// Factory for constructing a [NetworkConfig] from already-validated values.
+///
+/// The production implementation calls the rust-backed `NetworkConfig(...)`
+/// constructor directly. Tests inject a fake that records the values it
+/// received and throws [DartError] on invalid input, mirroring the rust-side
+/// validation. This is the only seam in the production code that touches
+/// rust-bridged types during loading; mocking the rust binding is necessary
+/// because the native library is not loaded in `flutter test` and the
+/// [NetworkConfig] type is a `RustOpaque` that cannot be subclassed.
+typedef NetworkConfigBuilder = NetworkConfig Function({
+  required int listenPort,
+  required List<String> bindAddresses,
+  required List<String>? relays,
+  required String? dnsEndpoint,
+  required String? dnsOriginDomain,
+  required String? pkarrRelay,
+});
+
+/// Snapshot of the values pulled from persistent storage during loading.
+@visibleForTesting
+class StoredNetworkValues {
+  const StoredNetworkValues({
+    this.listenPort,
+    this.bindAddresses,
+    this.customRelaysEnabled = false,
+    this.relays,
+    this.customDnsEnabled = false,
+    this.dnsEndpoint,
+    this.dnsOriginDomain,
+    this.customPkarrEnabled = false,
+    this.pkarrRelay,
+  });
+
+  final int? listenPort;
+  final List<String>? bindAddresses;
+  final bool customRelaysEnabled;
+  final List<String>? relays;
+  final bool customDnsEnabled;
+  final String? dnsEndpoint;
+  final String? dnsOriginDomain;
+  final bool customPkarrEnabled;
+  final String? pkarrRelay;
 }

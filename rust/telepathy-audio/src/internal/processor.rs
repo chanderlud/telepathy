@@ -290,11 +290,7 @@ pub fn output_processor<O: AudioOutput>(
             warn!(len = buffer.len(), "output_frame_size_mismatch");
             continue;
         } else {
-            // The `Bytes` payload is only u8-aligned, so we cannot reinterpret its
-            // pointer as `*const i16` (that would violate `from_raw_parts`'s
-            // alignment precondition and is undefined behaviour). Instead, copy
-            // the native-endian byte pairs written by `input_processor` into our
-            // already-aligned `decoded_buf`.
+            // copy samples from the payload into decoded_buf
             for (dst, src) in decoded_buf.iter_mut().zip(buffer.chunks_exact(2)) {
                 *dst = i16::from_ne_bytes([src[0], src[1]]);
             }

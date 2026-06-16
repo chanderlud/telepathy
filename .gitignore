@@ -12,6 +12,8 @@
 .swiftpm/
 migrate_working_dir/
 *.pem
+system-tests/relay/certs/
+system-tests/relay/certgen/target
 
 # IntelliJ related
 *.iml
@@ -52,3 +54,6 @@ Podfile.lock
 .codegraph
 .cursor/rules
 telepathy-trace.log.*
+.omo
+/web/build_web.cmd
+/web/bench.cmd

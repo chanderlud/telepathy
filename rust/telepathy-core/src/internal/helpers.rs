@@ -1,27 +1,22 @@
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::core::TelepathyCore;
 use crate::internal::error::ErrorKind;
-use crate::internal::messages::{AudioHeader, ProtocolMessage, StartScreenshare};
+use crate::internal::messages::{AudioHeader, ProtocolMessage, RoomMessage, StartScreenshare};
 #[cfg(not(target_family = "wasm"))]
 use crate::internal::screenshare;
 use crate::internal::state::{EarlyCallState, StatisticsCollectorState};
 use crate::internal::utils::{KanalSink, KanalSource};
-use crate::internal::{Result, SESSION_PROTOCOL, STREAM_PROTOCOL};
+use crate::internal::{ALPN, Result};
 use crate::types::FrontendNotify;
-use crate::{Behaviour, BehaviourEvent};
+use crate::types::{ManagerState, SessionStatus};
 use bytes::Bytes;
-use libp2p::futures::StreamExt;
-use libp2p::multiaddr::Protocol;
-use libp2p::swarm::SwarmEvent;
-#[cfg(not(target_family = "wasm"))]
-use libp2p::tcp;
-use libp2p::{Multiaddr, PeerId, Swarm, autonat, dcutr, identify, noise, ping, yamux};
-use libp2p_stream::Control;
-use std::hash::{DefaultHasher, Hash, Hasher};
+use iroh::address_lookup::PkarrPublisher;
+use iroh::endpoint::{default_relay_mode, presets};
+use iroh::{Endpoint, PublicKey, RelayMode, SecretKey};
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
-use std::time::Duration;
 #[cfg(target_family = "wasm")]
 use telepathy_audio::WebAudioWrapper;
 use telepathy_audio::devices::AudioHost;
@@ -33,176 +28,187 @@ use telepathy_audio::io::{
 use tokio::fs::File;
 #[cfg(not(target_family = "wasm"))]
 use tokio::io::AsyncReadExt;
+use tokio::select;
 use tokio::sync::Notify;
-use tracing::{error, info, instrument, warn};
+use tokio::sync::mpsc::Sender;
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, error, instrument, trace, warn};
+use url::Url;
 
-impl<C, S, H> TelepathyCore<C, S, H>
+impl<C, S, H, I, O> TelepathyCore<C, S, H, I, O>
 where
     S: CoreStatisticsCallback + Send + Sync + 'static,
     C: CoreCallbacks<S> + Send + Sync + 'static,
-    H: AudioHost + Send + Sync + Clone + 'static,
+    H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
+    I: Send + Sync + 'static,
+    O: Send + Sync + 'static,
 {
-    /// builds a p2p swarm & connects to the relay server
-    #[instrument(name = "manager.swarm_setup", skip_all)]
-    pub(crate) async fn setup_swarm(&self) -> Result<(Swarm<Behaviour>, Multiaddr)> {
+    /// builds an iroh endpoint and waits for it to come online
+    #[instrument(name = "manager.setup_endpoint", skip_all)]
+    pub(crate) async fn setup_endpoint(&self) -> Result<Option<Endpoint>> {
         let identity = if let Some(keypair) = self.core_state.identity.read().await.as_ref() {
             keypair.clone()
         } else {
             return Err(ErrorKind::NoIdentityAvailable.into());
         };
 
-        let builder = libp2p::SwarmBuilder::with_existing_identity(identity);
+        trace!(event = "endpoint_launch", config = ?self.core_state.network_config);
+        self.callbacks.manager_state(ManagerState::Starting).await;
 
-        #[cfg(not(target_family = "wasm"))]
-        let provider_phase = builder
-            .with_tokio()
-            .with_tcp(
-                tcp::Config::default().nodelay(true),
-                noise::Config::new,
-                yamux::Config::default,
-            )
-            .map_err(|_| ErrorKind::SwarmBuild)?
-            .with_quic();
+        let mut endpoint_builder = Endpoint::builder(presets::Empty)
+            .secret_key(identity)
+            .alpns(vec![ALPN.to_vec()])
+            .relay_mode(default_relay_mode());
 
-        #[cfg(target_family = "wasm")]
-        let provider_phase = builder
-            .with_wasm_bindgen()
-            .with_other_transport(|id_keys| {
-                Ok(libp2p_webtransport_websys::Transport::new(
-                    libp2p_webtransport_websys::Config::new(id_keys),
-                ))
-            })?;
+        let pkarr_relay_value: Option<Url> = self
+            .core_state
+            .network_config
+            .pkarr_relay
+            .read()
+            .map_err(|_| ErrorKind::Poison("pkarr_relay"))?
+            .clone();
 
-        let mut swarm = provider_phase
-            .with_relay_client(noise::Config::new, yamux::Config::default)
-            .map_err(|_| ErrorKind::SwarmBuild)?
-            .with_behaviour(|keypair, relay_behaviour| Behaviour {
-                relay_client: relay_behaviour,
-                ping: ping::Behaviour::new(ping::Config::new()),
-                identify: identify::Behaviour::new(identify::Config::new(
-                    SESSION_PROTOCOL.to_string(),
-                    keypair.public(),
-                )),
-                dcutr: dcutr::Behaviour::new(keypair.public().to_peer_id()),
-                stream: libp2p_stream::Behaviour::new(),
-                auto_nat: autonat::Behaviour::new(
-                    keypair.public().to_peer_id(),
-                    autonat::Config::default(),
-                ),
-            })
-            .map_err(|_| ErrorKind::SwarmBuild)?
-            .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(30)))
-            .build();
-
-        let listen_port = self.core_state.network_config.listen_port.load(Relaxed);
-        for bind_address in &self.core_state.network_config.bind_addresses {
-            #[cfg(not(target_family = "wasm"))]
-            {
-                let listen_addr_quic = Multiaddr::empty()
-                    .with(Protocol::from(*bind_address))
-                    .with(Protocol::Udp(listen_port))
-                    .with(Protocol::QuicV1);
-
-                swarm.listen_on(listen_addr_quic)?;
-
-                let listen_addr_tcp = Multiaddr::empty()
-                    .with(Protocol::from(*bind_address))
-                    .with(Protocol::Tcp(listen_port));
-
-                swarm.listen_on(listen_addr_tcp)?;
-            }
-
-            #[cfg(target_family = "wasm")]
-            {
-                let listen_addr = Multiaddr::empty()
-                    .with(Protocol::from(*bind_address))
-                    .with(Protocol::Udp(listen_port))
-                    .with(Protocol::QuicV1)
-                    .with(Protocol::WebTransport);
-
-                swarm.listen_on(listen_addr)?;
-            }
+        if let Some(ref relay) = pkarr_relay_value {
+            endpoint_builder =
+                endpoint_builder.address_lookup(PkarrPublisher::builder(relay.clone()));
+        } else {
+            endpoint_builder = endpoint_builder.address_lookup(PkarrPublisher::n0_dns());
         }
 
-        let socket_address = *self.core_state.network_config.relay_address.read().await;
-        let relay_identity = *self.core_state.network_config.relay_id.read().await;
+        cfg_if::cfg_if! {
+            if #[cfg(target_family = "wasm")] {
+                use rustls::crypto::ring;
+                use iroh::address_lookup::PkarrResolver;
 
-        #[cfg(not(target_family = "wasm"))]
-        let relay_address = {
-            let relay_address_udp = Multiaddr::from(socket_address.ip())
-                .with(Protocol::Udp(socket_address.port()))
-                .with(Protocol::QuicV1)
-                .with_p2p(relay_identity)
-                .map_err(|_| ErrorKind::SwarmBuild)?;
+                let provider = ring::default_provider();
+                endpoint_builder = endpoint_builder.crypto_provider(Arc::new(provider));
 
-            let relay_address_tcp = Multiaddr::from(socket_address.ip())
-                .with(Protocol::Tcp(socket_address.port()))
-                .with_p2p(relay_identity)
-                .map_err(|_| ErrorKind::SwarmBuild)?;
-
-            if swarm.dial(relay_address_udp.clone()).is_err() {
-                swarm.dial(relay_address_tcp.clone())?;
-                info!("connected to relay with tcp");
-                relay_address_tcp.with(Protocol::P2pCircuit)
+                if let Some(relay) = pkarr_relay_value {
+                    endpoint_builder = endpoint_builder.address_lookup(PkarrResolver::builder(relay.clone()));
+                } else {
+                    endpoint_builder = endpoint_builder.address_lookup(PkarrResolver::n0_dns());
+                }
             } else {
-                info!("connected to relay with udp");
-                relay_address_udp.with(Protocol::P2pCircuit)
-            }
-        };
+                use rustls::crypto::aws_lc_rs::{self, kx_group};
+                use iroh::address_lookup::DnsAddressLookup;
+                use iroh::dns::DnsResolver;
 
-        #[cfg(target_family = "wasm")]
-        let relay_address = {
-            // TODO the relay currently does not support WebTransport
-            let address = Multiaddr::from(socket_address.ip())
-                .with(Protocol::Udp(socket_address.port()))
-                .with(Protocol::QuicV1)
-                .with(Protocol::WebTransport)
-                .with_p2p(relay_identity)
-                .map_err(|_| ErrorKind::SwarmBuild)?;
+                let mut provider = aws_lc_rs::default_provider();
+                provider.kx_groups = vec![
+                    kx_group::X25519MLKEM768,
+                    kx_group::X25519,
+                    kx_group::SECP256R1,
+                    kx_group::SECP384R1,
+                ];
 
-            swarm.dial(address.clone())?;
-            info!("connected to relay with webtransport");
-            address.with(Protocol::P2pCircuit)
-        };
+                endpoint_builder = endpoint_builder
+                    .clear_ip_transports()
+                    .crypto_provider(Arc::new(provider));
 
-        let mut learned_observed_addr = false;
-        let mut told_relay_observed_addr = false;
+                let listen_port = self.core_state.network_config.listen_port.load(Relaxed);
+                let bind_addresses = self
+                    .core_state
+                    .network_config
+                    .bind_addresses
+                    .read()
+                    .map_err(|_| ErrorKind::Poison("bind_addresses"))?
+                    .clone();
 
-        loop {
-            match swarm.next().await.ok_or(ErrorKind::SwarmEnded)? {
-                SwarmEvent::NewListenAddr { .. } => (),
-                SwarmEvent::Dialing { .. } => (),
-                SwarmEvent::ConnectionEstablished { .. } => (),
-                SwarmEvent::Behaviour(BehaviourEvent::Ping(_)) => (),
-                SwarmEvent::NewExternalAddrCandidate { .. } => (),
-                SwarmEvent::NewExternalAddrOfPeer { .. } => (),
-                SwarmEvent::Behaviour(BehaviourEvent::Identify(identify::Event::Sent {
-                    ..
-                })) => {
-                    info!("Told relay its public address");
-                    told_relay_observed_addr = true;
+                for ip in bind_addresses {
+                    endpoint_builder = endpoint_builder
+                        .bind_addr(SocketAddr::new(ip, listen_port))?;
                 }
-                SwarmEvent::Behaviour(BehaviourEvent::Identify(identify::Event::Received {
-                    info: identify::Info { .. },
-                    ..
-                })) => {
-                    info!("Relay told us our observed address");
-                    learned_observed_addr = true;
-                }
-                // no other event occurs during a successful initialization
-                event => {
-                    error!("Unexpected event during initialization {:?}", event);
-                    return Err(ErrorKind::UnexpectedSwarmEvent.into());
-                }
-            }
 
-            if learned_observed_addr && told_relay_observed_addr {
-                break;
+                let dns_endpoint = *self
+                    .core_state
+                    .network_config
+                    .dns_endpoint
+                    .read()
+                    .map_err(|_| ErrorKind::Poison("dns_endpoint"))?;
+
+                let dns_origin_domain = self
+                    .core_state
+                    .network_config
+                    .dns_origin_domain
+                    .read()
+                    .map_err(|_| ErrorKind::Poison("dns_origin_domain"))?.clone();
+
+                if let (Some(endpoint), Some(origin_domain)) = (dns_endpoint, dns_origin_domain) {
+                    let resolver = DnsResolver::with_nameserver(endpoint);
+                    endpoint_builder = endpoint_builder.address_lookup(
+                        DnsAddressLookup::builder(origin_domain)
+                            .dns_resolver(resolver)
+                            .build()
+                    );
+                } else {
+                    endpoint_builder = endpoint_builder.address_lookup(DnsAddressLookup::n0_dns());
+                }
             }
         }
 
-        swarm.listen_on(relay_address.clone())?;
-        Ok((swarm, relay_address))
+        if let Some(ref relays) = *self
+            .core_state
+            .network_config
+            .relays
+            .read()
+            .map_err(|_| ErrorKind::Poison("relays"))?
+        {
+            // Keep endpoint relay identity exactly aligned with NetworkConfig so PKARR
+            // advertisements use one canonical relay URL per physical relay service.
+            endpoint_builder = endpoint_builder.relay_mode(RelayMode::Custom(relays.clone()));
+        }
+
+        #[cfg(feature = "integration-testing")]
+        {
+            // Integration tests opt out of the n0 PKARR / DNS address discovery path
+            // and register a shared in-process `MemoryLookup` instead.
+            let lookup = self
+                .core_state
+                .network_config
+                .address_lookup
+                .read()
+                .map_err(|_| ErrorKind::Poison("address_lookup"))?
+                .clone();
+
+            if let Some(lookup) = lookup {
+                endpoint_builder = endpoint_builder
+                    .clear_address_lookup()
+                    .address_lookup(lookup.clone());
+            }
+
+            // Integration tests use a local relay without signed certificates
+            endpoint_builder =
+                endpoint_builder.ca_tls_config(iroh::tls::CaTlsConfig::insecure_skip_verify());
+        }
+
+        let endpoint = endpoint_builder.bind().await?;
+
+        // Register this endpoint's own `addr()` (relay URL + direct addrs) into
+        // the shared `MemoryLookup` so other in-process peers can resolve it.
+        #[cfg(feature = "integration-testing")]
+        {
+            if let Some(shared_lookup) = self
+                .core_state
+                .network_config
+                .address_lookup
+                .read()
+                .map_err(|_| ErrorKind::Poison("address_lookup"))?
+                .clone()
+            {
+                shared_lookup.add_endpoint_info(endpoint.addr());
+            }
+        }
+
+        select! {
+            _ = self.restart_manager.notified() => {
+                self.callbacks.manager_state(ManagerState::Stopped).await;
+                Ok(None)
+            },
+            _ = endpoint.online() => {
+                self.callbacks.manager_state(ManagerState::Active).await;
+                Ok(Some(endpoint))
+            }
+        }
     }
 
     #[cfg(not(target_family = "wasm"))]
@@ -214,11 +220,7 @@ where
             role = if message.header.is_some() { "receiver" } else { "sender" }
         )
     )]
-    pub(crate) async fn start_screenshare(
-        &self,
-        message: StartScreenshare,
-        control_option: Option<Control>,
-    ) -> Result<()> {
+    pub(crate) async fn start_screenshare(&self, message: StartScreenshare) -> Result<()> {
         let state = if let Some(s) = self.session_states.read().await.get(&message.peer) {
             s.clone()
         } else {
@@ -233,18 +235,14 @@ where
         *state.stop_screenshare.lock().await = Some(stop.clone());
         let dart_stop = FrontendNotify::new(&stop);
 
-        if let Some(ProtocolMessage::ScreenshareHeader { encoder_name }) = message.header
-            && let Some(mut control) = control_option
-        {
-            // the other peer is waiting for a stream
-            let stream = control.open_stream(message.peer, STREAM_PROTOCOL).await?;
+        if let Some(ProtocolMessage::ScreenshareHeader { encoder_name }) = message.header {
             // alert the frontend
             self.callbacks.screenshare_started(dart_stop, false).await;
+            let stream = message.connection.accept_uni().await?;
             // start playing back the screenshare
             screenshare::playback(
                 stream,
                 stop,
-                state.download_bandwidth.clone(),
                 encoder_name,
                 self.core_state.screenshare_config.width.load(Relaxed),
                 self.core_state.screenshare_config.height.load(Relaxed),
@@ -276,12 +274,11 @@ where
                 .await;
 
             if result.is_ok() {
-                // wait for the other peer to open a stream
-                let stream = state.receive_stream().await?;
                 // alert the frontend & provide the stop object
                 self.callbacks.screenshare_started(dart_stop, true).await;
+                let stream = message.connection.open_uni().await?;
                 // start recording the screenshare
-                screenshare::record(stream, stop, state.upload_bandwidth.clone(), config).await?;
+                screenshare::record(stream, stop, config).await?;
             } else {
                 warn!("giving up on screenshare start, state closed");
             }
@@ -296,7 +293,7 @@ where
         codec_options: (bool, bool, f32),
         statistics_state: &StatisticsCollectorState,
         end_call: &Arc<Notify>,
-    ) -> Result<InputHelper> {
+    ) -> Result<InputHelper<I>> {
         let (codec_enabled, vbr, residual_bits) = codec_options;
         // Channel for receiving processed audio data
         let (sender, receiver) = kanal::unbounded_async();
@@ -347,18 +344,18 @@ where
     /// helper method to set up audio output stack using the telepathy-audio library
     pub(crate) async fn setup_output(
         &self,
-        peer: PeerId,
+        peer: PublicKey,
         remote_sample_rate: f64,
         codec_enabled: bool,
         statistics_state: &StatisticsCollectorState,
         end_call: Arc<Notify>,
-    ) -> Result<OutputHelper> {
+    ) -> Result<OutputHelper<O>> {
         // Get device ID
         let device_id = self.core_state.output_device.lock().await.clone();
         // Create the input channel
         let (sender, receiver) = kanal::unbounded();
         // Get the shared volume multiplier
-        let output_volume = self.core_state.output_volume_for_peer(peer);
+        let output_volume = self.core_state.output_volume_for_peer(peer)?;
         // Create the audio output using the builder
         let handle = AudioOutputBuilder::new()
             .source(KanalSource::new(receiver))
@@ -379,7 +376,7 @@ where
     }
 
     /// helper method to set up EarlyCallState
-    pub(crate) async fn setup_call(&self, peer: PeerId) -> Result<EarlyCallState> {
+    pub(crate) async fn setup_call(&self, peer: PublicKey) -> Result<EarlyCallState> {
         // if there is an early room state, use it w/ the real peer id
         if let Some(mut state) = self
             .room_state
@@ -407,9 +404,7 @@ where
                         .sample_rate as u32
                 } else {
                     let device_id = self.core_state.input_device.lock().await;
-                    let device_handle = self.host.get_input_device(device_id.as_deref())?;
-                    info!("input_device: {:?}", device_handle.name());
-                    device_handle.sample_rate()?
+                    self.host.input_sample_rate(device_id.as_deref())?
                 }
             }
         };
@@ -460,8 +455,14 @@ where
         }
     }
 
+    /// Returns the generation of the currently installed `RoomState`, or
+    /// `None` if no room is active.
+    pub async fn current_room_generation(&self) -> Option<u64> {
+        self.room_state.read().await.as_ref().map(|s| s.generation)
+    }
+
     /// helper method to check if a peer is in the current room
-    pub(crate) async fn is_in_room(&self, peer_id: &PeerId) -> bool {
+    pub(crate) async fn is_in_room(&self, peer_id: &PublicKey) -> bool {
         self.room_state
             .read()
             .await
@@ -471,40 +472,54 @@ where
     }
 
     pub(crate) async fn room_hash(&self) -> Option<u64> {
-        self.room_state.read().await.as_ref().map(|state| {
-            state.peers.iter().fold(0u64, |acc, peer| {
-                let mut hasher = DefaultHasher::new();
-                peer.hash(&mut hasher);
-                acc ^ hasher.finish()
-            })
-        })
+        self.room_state
+            .read()
+            .await
+            .as_ref()
+            .map(|state| state.room_hash())
     }
 
-    pub(crate) async fn is_call_active(&self) -> bool {
-        self.core_state.in_call.load(Relaxed)
-            || self.room_state.read().await.is_some()
-            || self.core_state.end_audio_test.lock().await.is_some()
-    }
-
-    pub(crate) async fn send_start_screenshare(
+    /// Atomic snapshot of `(local_room_hash, is_in_room_for_peer, room_generation)`
+    pub(crate) async fn room_snapshot_for_peer(
         &self,
-        peer: PeerId,
-        header: Option<ProtocolMessage>,
-    ) {
-        if let Some(ref sender) = self.start_screenshare {
-            _ = sender.send(StartScreenshare { peer, header }).await;
+        peer_id: &PublicKey,
+    ) -> RoomNegotiationSnapshot {
+        let room_guard = self.room_state.read().await;
+        match room_guard.as_ref() {
+            Some(state) => RoomNegotiationSnapshot {
+                local_room_hash: Some(state.room_hash()),
+                is_in_room: state.peers.contains(peer_id),
+                room_generation: state.generation,
+            },
+            None => RoomNegotiationSnapshot {
+                local_room_hash: None,
+                is_in_room: false,
+                room_generation: 0,
+            },
         }
     }
 
-    pub(crate) async fn peer_id(&self) -> PeerId {
+    /// Atomic snapshot of `(sender, cancel)` for the current `room_state`,
+    /// or `None` if no room is currently active.
+    pub(crate) async fn room_handshake_snapshot(
+        &self,
+    ) -> Option<(Sender<RoomMessage>, CancellationToken)> {
+        self.room_state
+            .read()
+            .await
+            .as_ref()
+            .map(|s| (s.sender.clone(), s.cancel.clone()))
+    }
+
+    pub(crate) async fn peer_id(&self) -> PublicKey {
         if let Some(keypair) = self.core_state.identity.read().await.as_ref() {
-            keypair.public().to_peer_id()
+            keypair.public()
         } else {
-            PeerId::random()
+            SecretKey::generate().public()
         }
     }
 
-    pub(crate) async fn shutdown(&self) {
+    pub async fn shutdown(&self) {
         // guaranteed to end all sessions
         self.reset_sessions().await;
         // the manager will now stop & not run again
@@ -513,22 +528,158 @@ where
         self.restart_manager.notify_one();
     }
 
+    /// Inserts a new outbound attempt
+    pub(crate) async fn begin_outbound_attempt(&self, peer: PublicKey) -> u64 {
+        let mut attempts = self.outbound_attempts.write().await;
+        let generation = attempts.get(&peer).map(|current| current + 1).unwrap_or(1);
+        attempts.insert(peer, generation);
+        generation
+    }
+
+    /// Returns the current outbound generation
+    pub(crate) async fn get_outbound_generation(&self, peer: PublicKey) -> u64 {
+        self.outbound_attempts
+            .read()
+            .await
+            .get(&peer)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Emits the session status for outbound connections, checks for staleness
+    pub(crate) async fn emit_outbound_status(
+        &self,
+        peer: PublicKey,
+        generation: u64,
+        status: SessionStatus,
+    ) {
+        let is_current_outbound_attempt = self
+            .outbound_attempts
+            .read()
+            .await
+            .get(&peer)
+            .is_some_and(|current| *current == generation);
+
+        if !is_current_outbound_attempt {
+            debug!(
+                event = "outbound_session_status_stale",
+                peer.id = %peer,
+                generation,
+                ?status
+            );
+            return;
+        }
+
+        if matches!(status, SessionStatus::Inactive)
+            && self.session_states.read().await.contains_key(&peer)
+        {
+            debug!(
+                event = "outbound_session_status_suppressed_active_session",
+                peer.id = %peer,
+                generation
+            );
+            return;
+        }
+
+        self.callbacks.session_status(status, peer).await;
+    }
+
+    /// Emits the inactive session status, checking for newer sessions and staleness
+    pub(crate) async fn emit_inactive(&self, peer: PublicKey, session_generation: u64) {
+        let has_newer_outbound_attempt = self
+            .outbound_attempts
+            .read()
+            .await
+            .get(&peer)
+            .copied()
+            .unwrap_or(0)
+            > session_generation;
+
+        if has_newer_outbound_attempt {
+            debug!(
+                event = "session_inactive_stale_outbound_attempt",
+                peer.id = %peer,
+                session_generation
+            );
+            return;
+        }
+
+        if self.session_states.read().await.contains_key(&peer) {
+            debug!(
+                event = "session_inactive_suppressed_active_session",
+                peer.id = %peer,
+                session_generation
+            );
+            return;
+        }
+
+        self.callbacks
+            .session_status(SessionStatus::Inactive, peer)
+            .await;
+    }
+
     #[cfg(target_family = "wasm")]
     pub(crate) async fn init_web_audio(&self) -> Result<()> {
         let wrapper = WebAudioWrapper::new().await?;
         *self.web_input.lock().await = Some(wrapper);
         Ok(())
     }
+
+    /// Ends all sessions & restores session_states to default
+    pub(crate) async fn reset_sessions(&self) {
+        // Phase 1: drain the current `session_states` map. Removing the entries under
+        // the write lock establishes the per-session ownership invariant: no session
+        // task can re-acquire a pending direct-call slot for a peer whose session is
+        // no longer the current map entry.
+        let sessions: Vec<_> = {
+            let mut states = self.session_states.write().await;
+            states.drain().map(|(_, session)| session).collect()
+        };
+
+        for session in &sessions {
+            session.teardown().await;
+        }
+
+        // Phase 2: take the write lock as a terminal barrier. Any session task that
+        // somehow raced past the drain above will have observed an empty map and
+        // abandoned its acquisition. Now that the barrier has been observed, no
+        // remaining session can own a pending direct-call slot, so the slot can be
+        // atomically cleared without any per-session guard. The clear leaves
+        // `Idle`/`ActiveDirect`/`RoomCall`/`AudioTest` untouched.
+        //
+        // The write-lock barrier is a secondary defense. The primary defense against
+        // a session task that has already passed `is_session_still_current` is the
+        // `stop_session.is_cancelled()` check at the entry of `negotiate_outgoing_call`
+        // and `negotiate_incoming_call`. Both guards must be preserved together.
+        {
+            let _states = self.session_states.write().await;
+            if let Err(error) = self.core_state.call_slot.clear_pending_direct() {
+                warn!(
+                    event = "reset_sessions_pending_clear_failed",
+                    error = %error
+                );
+            }
+        }
+
+        self.outbound_attempts.write().await.clear();
+    }
 }
 
-pub(crate) struct OutputHelper {
-    _handle: AudioOutputHandle,
+pub(crate) struct OutputHelper<O> {
+    _handle: AudioOutputHandle<O>,
     sender: Option<kanal::Sender<Bytes>>,
 }
 
-impl OutputHelper {
+/// Atomic snapshot of room-related values
+pub(crate) struct RoomNegotiationSnapshot {
+    pub(crate) local_room_hash: Option<u64>,
+    pub(crate) is_in_room: bool,
+    pub(crate) room_generation: u64,
+}
+
+impl<O> OutputHelper<O> {
     /// Creates a new OutputHelper and stores the handle in the shared storage
-    pub(crate) fn new(handle: AudioOutputHandle, sender: kanal::Sender<Bytes>) -> Self {
+    pub(crate) fn new(handle: AudioOutputHandle<O>, sender: kanal::Sender<Bytes>) -> Self {
         Self {
             _handle: handle,
             sender: Some(sender),
@@ -540,15 +691,15 @@ impl OutputHelper {
     }
 }
 
-pub(crate) struct InputHelper {
-    _handle: AudioInputHandle,
+pub(crate) struct InputHelper<I> {
+    _handle: AudioInputHandle<I>,
     receiver: Option<kanal::AsyncReceiver<PooledBuffer>>,
 }
 
-impl InputHelper {
+impl<I> InputHelper<I> {
     /// Creates a new InputHelper and stores the handle in the shared storage
     pub(crate) fn new(
-        handle: AudioInputHandle,
+        handle: AudioInputHandle<I>,
         receiver: kanal::AsyncReceiver<PooledBuffer>,
     ) -> Self {
         Self {

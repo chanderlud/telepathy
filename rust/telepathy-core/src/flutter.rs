@@ -10,7 +10,9 @@ pub use crate::types::*;
 use flutter_rust_bridge::{DartFnFuture, frb};
 use std::sync::Arc;
 pub use telepathy_audio::Host;
+use telepathy_audio::Stream;
 use telepathy_audio::devices::CpalAudioHost;
+use telepathy_audio::io::SendStream;
 use tokio::sync::Mutex;
 
 type DartVoid<A> = Arc<Mutex<dyn Fn(A) -> DartFnFuture<()> + Send>>;
@@ -18,15 +20,19 @@ type DartMethod<A, R> = Arc<Mutex<dyn Fn(A) -> DartFnFuture<R> + Send>>;
 type AcceptCallArgs = (String, Option<Vec<u8>>, FrontendNotify);
 type SessionStatusArgs = (String, SessionStatus);
 type ScreenshareStartedArgs = (FrontendNotify, bool);
-type ManagerActiveArgs = (bool, bool);
+type ManagerActiveArgs = ManagerState;
 
-/// Rust API for FRB frontend.
-///
-/// Every public method here forwards to a same-named method on `TelepathyHandle`.
-/// Keep this `impl` in sync with `impl NativeTelepathy` and `impl TelepathyHandle`.
+/// Rust API for FRB frontend. Mirrors `impl NativeTelepathy` 1:1; both
+/// forward to `impl TelepathyHandle`.
 #[frb(opaque)]
 pub struct Telepathy {
-    handle: TelepathyHandle<FlutterCallbacks, FlutterStatisticsCallback, CpalAudioHost>,
+    handle: TelepathyHandle<
+        FlutterCallbacks,
+        FlutterStatisticsCallback,
+        CpalAudioHost,
+        Stream,
+        SendStream,
+    >,
 }
 
 impl Telepathy {
@@ -61,7 +67,7 @@ impl Telepathy {
     }
 
     /// Attempts to start a call through an existing session
-    pub async fn start_call(&self, contact: &Contact) -> std::result::Result<(), DartError> {
+    pub async fn start_call(&self, contact: &Contact) -> Result<(), DartError> {
         self.handle
             .start_call(contact)
             .await
@@ -74,10 +80,7 @@ impl Telepathy {
     }
 
     /// The only entry point into participating in a room
-    pub async fn join_room(
-        &self,
-        member_strings: Vec<String>,
-    ) -> std::result::Result<(), DartError> {
+    pub async fn join_room(&self, member_strings: Vec<String>) -> Result<(), DartError> {
         self.handle
             .join_room(member_strings)
             .await
@@ -85,7 +88,7 @@ impl Telepathy {
     }
 
     /// Restarts the session manager
-    pub async fn restart_manager(&self) -> std::result::Result<(), DartError> {
+    pub async fn restart_manager(&self) -> Result<(), DartError> {
         self.handle.restart_manager().await.map_err(DartError::from)
     }
 
@@ -95,8 +98,15 @@ impl Telepathy {
     }
 
     /// Sets the signing key (called when the profile changes)
-    pub async fn set_identity(&self, key: Vec<u8>) -> std::result::Result<(), DartError> {
-        self.handle.set_identity(key).await.map_err(DartError::from)
+    pub async fn set_identity(&self, key: Vec<u8>) -> Result<(), DartError> {
+        self.handle
+            .set_identity(
+                &(key
+                    .try_into()
+                    .map_err(|_| DartError::from(IDENTITY_KEY_LENGTH_MESSAGE.to_string()))?),
+            )
+            .await
+            .map_err(DartError::from)
     }
 
     /// Stops a specific session (called when a contact is deleted)
@@ -105,7 +115,7 @@ impl Telepathy {
     }
 
     /// Blocks while an audio test is running
-    pub async fn audio_test(&self) -> std::result::Result<(), DartError> {
+    pub async fn audio_test(&self) -> Result<(), DartError> {
         self.handle.audio_test().await.map_err(DartError::from)
     }
 
@@ -120,7 +130,7 @@ impl Telepathy {
     }
 
     /// Sends a chat message
-    pub async fn send_chat(&self, message: &mut ChatMessage) -> std::result::Result<(), DartError> {
+    pub async fn send_chat(&self, message: &mut ChatMessage) -> Result<(), DartError> {
         self.handle
             .send_chat(message)
             .await
@@ -142,13 +152,17 @@ impl Telepathy {
     }
 
     #[frb(sync)]
-    pub fn set_output_volume(&self, decibel: f32) {
-        self.handle.set_output_volume(decibel)
+    pub fn set_output_volume(&self, decibel: f32) -> Result<(), DartError> {
+        self.handle
+            .set_output_volume(decibel)
+            .map_err(DartError::from)
     }
 
     #[frb(sync)]
-    pub fn set_contact_output_volume(&self, contact: &Contact) {
-        self.handle.set_contact_output_volume(contact)
+    pub fn set_contact_output_volume(&self, contact: &Contact) -> Result<(), DartError> {
+        self.handle
+            .set_contact_output_volume(contact)
+            .map_err(DartError::from)
     }
 
     #[frb(sync)]
@@ -161,7 +175,7 @@ impl Telepathy {
         self.handle.set_muted(muted)
     }
 
-    /// Changing the denoise flag will not affect the current call
+    /// Denoise is set on the processor; the current call is not reconfigured.
     #[frb(sync)]
     pub fn set_denoise(&self, denoise: bool) {
         self.handle.set_denoise(denoise)
@@ -201,13 +215,11 @@ impl Telepathy {
     }
 
     /// Lists the input and output devices
-    pub fn list_devices(
-        &self,
-    ) -> std::result::Result<(Vec<AudioDevice>, Vec<AudioDevice>), DartError> {
+    pub fn list_devices(&self) -> Result<(Vec<AudioDevice>, Vec<AudioDevice>), DartError> {
         self.handle.list_devices().map_err(DartError::from)
     }
 
-    pub async fn set_model(&self, model: Option<Vec<u8>>) -> std::result::Result<(), DartError> {
+    pub async fn set_model(&self, model: Option<Vec<u8>>) -> Result<(), DartError> {
         self.handle.set_model(model).await.map_err(DartError::from)
     }
 }

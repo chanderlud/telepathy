@@ -63,8 +63,8 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   CrossPlatformFinalizerArg get rust_arc_decrement_strong_count_OverlayPtr => wire
       .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerOverlay;
 
-  CrossPlatformFinalizerArg get rust_arc_decrement_strong_count_PeerIdPtr => wire
-      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerId;
+  CrossPlatformFinalizerArg get rust_arc_decrement_strong_count_PublicKeyPtr =>
+      wire.rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPublicKey;
 
   CrossPlatformFinalizerArg
       get rust_arc_decrement_strong_count_RecordingConfigPtr => wire
@@ -135,8 +135,8 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
           dynamic raw);
 
   @protected
-  PeerId
-      dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerId(
+  PublicKey
+      dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPublicKey(
           dynamic raw);
 
   @protected
@@ -250,13 +250,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
           dynamic raw);
 
   @protected
-  FutureOr<void> Function((FrontendNotify, bool))
-      dco_decode_DartFn_Inputs_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_bool_Output_unit_AnyhowException(
+  FutureOr<void> Function(ManagerState)
+      dco_decode_DartFn_Inputs_manager_state_Output_unit_AnyhowException(
           dynamic raw);
 
   @protected
-  FutureOr<void> Function((bool, bool))
-      dco_decode_DartFn_Inputs_record_bool_bool_Output_unit_AnyhowException(
+  FutureOr<void> Function((FrontendNotify, bool))
+      dco_decode_DartFn_Inputs_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_bool_Output_unit_AnyhowException(
           dynamic raw);
 
   @protected
@@ -333,8 +333,8 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
           dynamic raw);
 
   @protected
-  PeerId
-      dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerId(
+  PublicKey
+      dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPublicKey(
           dynamic raw);
 
   @protected
@@ -419,6 +419,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       dynamic raw);
 
   @protected
+  ManagerState dco_decode_manager_state(dynamic raw);
+
+  @protected
+  NetworkConfigField dco_decode_network_config_field(dynamic raw);
+
+  @protected
+  NetworkConfigUpdateError dco_decode_network_config_update_error(dynamic raw);
+
+  @protected
   String? dco_decode_opt_String(dynamic raw);
 
   @protected
@@ -435,6 +444,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   int? dco_decode_opt_box_autoadd_u_32(dynamic raw);
 
   @protected
+  List<String>? dco_decode_opt_list_String(dynamic raw);
+
+  @protected
   Uint8List? dco_decode_opt_list_prim_u_8_strict(dynamic raw);
 
   @protected
@@ -443,9 +455,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
     bool
   ) dco_decode_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_bool(
       dynamic raw);
-
-  @protected
-  (bool, bool) dco_decode_record_bool_bool(dynamic raw);
 
   @protected
   (bool, bool, double) dco_decode_record_bool_bool_f_32(dynamic raw);
@@ -477,6 +486,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   Statistics dco_decode_statistics(dynamic raw);
+
+  @protected
+  int dco_decode_u_16(dynamic raw);
 
   @protected
   int dco_decode_u_32(dynamic raw);
@@ -544,8 +556,8 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
           SseDeserializer deserializer);
 
   @protected
-  PeerId
-      sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerId(
+  PublicKey
+      sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPublicKey(
           SseDeserializer deserializer);
 
   @protected
@@ -697,8 +709,8 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
           SseDeserializer deserializer);
 
   @protected
-  PeerId
-      sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerId(
+  PublicKey
+      sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPublicKey(
           SseDeserializer deserializer);
 
   @protected
@@ -784,6 +796,17 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       SseDeserializer deserializer);
 
   @protected
+  ManagerState sse_decode_manager_state(SseDeserializer deserializer);
+
+  @protected
+  NetworkConfigField sse_decode_network_config_field(
+      SseDeserializer deserializer);
+
+  @protected
+  NetworkConfigUpdateError sse_decode_network_config_update_error(
+      SseDeserializer deserializer);
+
+  @protected
   String? sse_decode_opt_String(SseDeserializer deserializer);
 
   @protected
@@ -800,6 +823,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   int? sse_decode_opt_box_autoadd_u_32(SseDeserializer deserializer);
 
   @protected
+  List<String>? sse_decode_opt_list_String(SseDeserializer deserializer);
+
+  @protected
   Uint8List? sse_decode_opt_list_prim_u_8_strict(SseDeserializer deserializer);
 
   @protected
@@ -808,9 +834,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
     bool
   ) sse_decode_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_bool(
       SseDeserializer deserializer);
-
-  @protected
-  (bool, bool) sse_decode_record_bool_bool(SseDeserializer deserializer);
 
   @protected
   (bool, bool, double) sse_decode_record_bool_bool_f_32(
@@ -845,6 +868,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   Statistics sse_decode_statistics(SseDeserializer deserializer);
+
+  @protected
+  int sse_decode_u_16(SseDeserializer deserializer);
 
   @protected
   int sse_decode_u_32(SseDeserializer deserializer);
@@ -914,8 +940,8 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void
-      sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerId(
-          PeerId self, SseSerializer serializer);
+      sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPublicKey(
+          PublicKey self, SseSerializer serializer);
 
   @protected
   void
@@ -1028,14 +1054,14 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
           SseSerializer serializer);
 
   @protected
+  void sse_encode_DartFn_Inputs_manager_state_Output_unit_AnyhowException(
+      FutureOr<void> Function(ManagerState) self, SseSerializer serializer);
+
+  @protected
   void
       sse_encode_DartFn_Inputs_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_bool_Output_unit_AnyhowException(
           FutureOr<void> Function((FrontendNotify, bool)) self,
           SseSerializer serializer);
-
-  @protected
-  void sse_encode_DartFn_Inputs_record_bool_bool_Output_unit_AnyhowException(
-      FutureOr<void> Function((bool, bool)) self, SseSerializer serializer);
 
   @protected
   void
@@ -1114,8 +1140,8 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void
-      sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerId(
-          PeerId self, SseSerializer serializer);
+      sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPublicKey(
+          PublicKey self, SseSerializer serializer);
 
   @protected
   void
@@ -1202,6 +1228,17 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       List<(String, Uint8List)> self, SseSerializer serializer);
 
   @protected
+  void sse_encode_manager_state(ManagerState self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_network_config_field(
+      NetworkConfigField self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_network_config_update_error(
+      NetworkConfigUpdateError self, SseSerializer serializer);
+
+  @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer);
 
   @protected
@@ -1218,6 +1255,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_opt_box_autoadd_u_32(int? self, SseSerializer serializer);
 
   @protected
+  void sse_encode_opt_list_String(List<String>? self, SseSerializer serializer);
+
+  @protected
   void sse_encode_opt_list_prim_u_8_strict(
       Uint8List? self, SseSerializer serializer);
 
@@ -1225,9 +1265,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void
       sse_encode_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_bool(
           (FrontendNotify, bool) self, SseSerializer serializer);
-
-  @protected
-  void sse_encode_record_bool_bool((bool, bool) self, SseSerializer serializer);
 
   @protected
   void sse_encode_record_bool_bool_f_32(
@@ -1258,6 +1295,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_statistics(Statistics self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_u_16(int self, SseSerializer serializer);
 
   @protected
   void sse_encode_u_32(int self, SseSerializer serializer);
@@ -1397,16 +1437,16 @@ class RustLibWire implements BaseWire {
           .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerOverlay(
               ptr);
 
-  void rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerId(
+  void rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPublicKey(
           int ptr) =>
       wasmModule
-          .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerId(
+          .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPublicKey(
               ptr);
 
-  void rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerId(
+  void rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPublicKey(
           int ptr) =>
       wasmModule
-          .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerId(
+          .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPublicKey(
               ptr);
 
   void rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRecordingConfig(
@@ -1545,11 +1585,11 @@ extension type RustLibWasmModule._(JSObject _) implements JSObject {
           int ptr);
 
   external void
-      rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerId(
+      rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPublicKey(
           int ptr);
 
   external void
-      rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPeerId(
+      rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerPublicKey(
           int ptr);
 
   external void

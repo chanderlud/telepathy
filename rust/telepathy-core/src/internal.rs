@@ -1,15 +1,15 @@
 /// callback traits shared by FRB and native frontends
-pub(crate) mod callbacks;
+pub mod callbacks;
+/// networking code for live audio streams
+mod connections;
 /// implementations for core telepathy functionality
-mod core;
-pub(crate) mod error;
+pub mod core;
+pub mod error;
 /// helper methods used by telepathy core
 mod helpers;
 pub(crate) mod messages;
 pub(crate) mod screenshare;
-/// networking code for live audio streams
-mod sockets;
-mod state;
+pub mod state;
 mod utils;
 
 use crate::AudioDevice;
@@ -17,13 +17,14 @@ use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::core::TelepathyCore;
 use crate::internal::error::{Error, ErrorKind};
 use crate::internal::messages::{Attachment, ProtocolMessage};
-use crate::internal::state::{EarlyCallState, RoomState, SessionState};
+use crate::internal::state::{
+    CallSlotAcquireResult, CallSlotState, EarlyCallState, RoomState, SessionState,
+};
 pub(crate) use crate::internal::utils::{JoinHandle, spawn_task};
 use crate::overlay::Overlay;
 use crate::types::{ChatMessage, CodecConfig, Contact, NetworkConfig, ScreenshareConfig};
 use chrono::Local;
-use libp2p::identity::Keypair;
-use libp2p::{PeerId, StreamProtocol};
+use iroh::SecretKey;
 use std::mem;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
@@ -42,37 +43,37 @@ type Result<T> = std::result::Result<T, Error>;
 
 /// A timeout used when initializing the call
 const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
-/// How often to keep-alive libp2p streams
+/// How often to keep-alive iroh session streams
 const KEEP_ALIVE: Duration = Duration::from_secs(10);
 /// the protocol identifier for Telepathy sessions
-const SESSION_PROTOCOL: StreamProtocol = StreamProtocol::new("/telepathy-session/0.0.1");
-/// the protocol identifier for Telepathy data streams (calls or screen shares)
-const STREAM_PROTOCOL: StreamProtocol = StreamProtocol::new("/telepathy-stream/0.0.1");
+const ALPN: &[u8] = b"telepathy/session/0";
 /// Maximum allowed size for a single length-delimited control/message frame on the session stream.
 const SESSION_MAX_FRAME_LENGTH: usize = 1024 * 1024 * 1024;
-/// How long to attempt direct connection upgrade before falling back to a relayed option
-const DCUTR_TIMEOUT: Duration = Duration::from_secs(5);
 
-pub(crate) struct TelepathyHandle<C, S, H>
+pub struct TelepathyHandle<C, S, H, I, O>
 where
     C: CoreCallbacks<S> + Send + Sync + 'static,
     S: CoreStatisticsCallback + Send + Sync + 'static,
-    H: AudioHost + Send + Sync + Clone + 'static,
+    H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
+    I: Send + Sync + 'static,
+    O: Send + Sync + 'static,
 {
-    inner: TelepathyCore<C, S, H>,
+    pub inner: TelepathyCore<C, S, H, I, O>,
 
     /// contains handles to the manager thread & room managers
     handles: Arc<Mutex<Vec<JoinHandle<()>>>>,
 }
 
-impl<C, S, H> TelepathyHandle<C, S, H>
+impl<C, S, H, I, O> TelepathyHandle<C, S, H, I, O>
 where
     C: CoreCallbacks<S> + Send + Sync + 'static,
     S: CoreStatisticsCallback + Send + Sync + 'static,
-    H: AudioHost + Send + Sync + Clone + 'static,
+    H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
+    I: Send + Sync + 'static,
+    O: Send + Sync + 'static,
 {
     /// Builds a new handle around a fresh `TelepathyCore`.
-    pub(crate) fn new(
+    pub fn new(
         host: H,
         network_config: &NetworkConfig,
         screenshare_config: &ScreenshareConfig,
@@ -112,17 +113,61 @@ where
 
     /// Attempts to start a call through an existing session
     pub async fn start_call(&self, contact: &Contact) -> Result<()> {
-        if self.inner.is_call_active().await {
+        // The session presence check and the pending-slot acquisition are
+        // atomic: both happen under the same `session_states` read lock
+        // guard, so the slot can only be acquired for a session that is
+        // currently in the map.
+        // The subsequent `notify_one` is a separate, best-effort operation:
+        // if the session has been removed in the meantime (after the guard
+        // is released), the acquired slot is released and `NoSessionForContact`
+        // is returned to avoid leaking the slot.
+        let slot_result = {
+            let state_lock = self.inner.session_states.read().await;
+            if state_lock.get(&contact.peer_id).is_none() {
+                return Err(ErrorKind::NoSessionForContact.into());
+            }
+            self.inner
+                .core_state
+                .call_slot
+                .try_acquire_or_match(CallSlotState::PendingOutgoing, contact.peer_id)?
+        };
+
+        if slot_result == CallSlotAcquireResult::Failed {
             return Err(ErrorKind::CallAlreadyActive.into());
         }
 
-        if let Some(state) = self.inner.session_states.read().await.get(&contact.peer_id) {
-            #[cfg(target_family = "wasm")]
-            self.inner.init_web_audio().await?;
+        // The slot is already `PendingOutgoing` for this peer, meaning the session task
+        // has already consumed the original `notify_one` and is currently negotiating the
+        // outgoing call. No additional notification is needed — the negotiation is already
+        // in progress.
+        if matches!(slot_result, CallSlotAcquireResult::MatchedPendingOutgoing) {
+            return Ok(());
+        }
 
+        #[cfg(target_family = "wasm")]
+        {
+            if let Err(error) = self.inner.init_web_audio().await {
+                self.inner
+                    .core_state
+                    .call_slot
+                    .release_if_pending_for_peer(contact.peer_id)?;
+                return Err(error);
+            }
+        }
+
+        let state_lock = self.inner.session_states.read().await;
+        if let Some(state) = state_lock.get(&contact.peer_id) {
             state.start_call.notify_one();
             Ok(())
         } else {
+            warn!(
+                event = "start_call_no_current_session_releasing_slot",
+                peer.id = %contact.peer_id,
+            );
+            self.inner
+                .core_state
+                .call_slot
+                .release_if_pending_for_peer(contact.peer_id)?;
             Err(ErrorKind::NoSessionForContact.into())
         }
     }
@@ -135,13 +180,13 @@ where
         } else if let Some(room_state) = self.inner.room_state.read().await.as_ref() {
             debug!("ending room");
             room_state.end_call.notify_one();
-        } else if let Some(session_state) = self
+        } else if let Ok(Some(peer)) = self
             .inner
-            .session_states
-            .read()
-            .await
-            .values()
-            .find(|s| s.in_call.load(Relaxed))
+            .core_state
+            .call_slot
+            .snapshot()
+            .map(|s| s.direct_peer)
+            && let Some(session_state) = self.inner.session_states.read().await.get(&peer)
         {
             debug!("ending call");
             session_state.end_call.notify_one();
@@ -152,12 +197,31 @@ where
 
     /// The only entry point into participating in a room
     pub async fn join_room(&self, member_strings: Vec<String>) -> Result<()> {
-        if self.inner.is_call_active().await {
+        if !self
+            .inner
+            .core_state
+            .call_slot
+            .try_acquire(CallSlotState::RoomCall, None)?
+        {
             return Err(ErrorKind::CallAlreadyActive.into());
         }
 
         #[cfg(target_family = "wasm")]
-        self.inner.init_web_audio().await?;
+        if let Err(error) = self.inner.init_web_audio().await {
+            self.inner.core_state.call_slot.release()?;
+            return Err(error);
+        }
+
+        // capture the exact ownership snapshot this room acquired so the room controller's
+        // teardown can release the slot against the same generation we own, even if the slot
+        // was released and re-acquired (e.g. a newer room) while the controller was running.
+        let room_owner = match self.inner.core_state.call_slot.snapshot() {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                self.inner.core_state.call_slot.release()?;
+                return Err(error);
+            }
+        };
 
         // parse members
         let members: Vec<_> = member_strings
@@ -171,7 +235,20 @@ where
         // gracefully ends the room call
         let end_call = Arc::new(Notify::new());
         // the same early call state is used throughout the room, the real peer ids are set later
-        let call_state = self.inner.setup_call(PeerId::random()).await?;
+        let call_state = match self.inner.setup_call(SecretKey::generate().public()).await {
+            Ok(state) => state,
+            Err(error) => {
+                self.inner.core_state.call_slot.release()?;
+                return Err(error);
+            }
+        };
+        // acquire fresh generation for the new state
+        let room_generation = self
+            .inner
+            .core_state
+            .next_room_generation
+            .fetch_add(1, Relaxed)
+            .saturating_add(1);
         // set room state
         let old_state_option = self.inner.room_state.write().await.replace(RoomState {
             peers: members.clone(),
@@ -179,6 +256,7 @@ where
             cancel: cancel.clone(),
             end_call: end_call.clone(),
             early_state: call_state.clone(),
+            generation: room_generation,
         });
         // clean up old state
         if let Some(old_state) = old_state_option {
@@ -201,7 +279,14 @@ where
             async move {
                 let stop_io = Default::default();
                 if let Err(error) = self_clone
-                    .room_controller(receiver, cancel, &stop_io, end_call)
+                    .room_controller(
+                        receiver,
+                        cancel,
+                        &stop_io,
+                        end_call,
+                        room_owner,
+                        room_generation,
+                    )
                     .await
                 {
                     error!("error in room controller: {:?}", error);
@@ -216,17 +301,21 @@ where
 
     /// Restarts the session manager
     pub async fn restart_manager(&self) -> Result<()> {
-        if self.inner.is_call_active().await {
+        if self.inner.core_state.call_slot.current() != CallSlotState::Idle {
             Err(ErrorKind::ManagerRestartDuringCall.into())
         } else {
+            // pre-register the readiness awaiter before triggering the restart.
+            let manager_ready = self.inner.core_state.manager_active.notified();
+            tokio::pin!(manager_ready);
+            manager_ready.as_mut().enable();
             // reset sessions so manager can clean up
             self.inner.reset_sessions().await;
             // restart the manager
             self.inner.restart_manager.notify_one();
             // wait for a new manager to start
-            self.inner.core_state.manager_active.notified().await;
+            manager_ready.await;
             // ensure volume cache resets fully
-            self.inner.core_state.reset_peer_output_volumes();
+            self.inner.core_state.reset_peer_output_volumes()?;
             // start a session for all contacts
             for contact in self.inner.callbacks.get_contacts().await {
                 self.start_session(&contact).await;
@@ -240,56 +329,75 @@ where
         // stops sessions & manager
         self.inner.shutdown().await;
         // wait for manager & any room controllers to join
-        for handle in self.handles.lock().await.drain(..) {
+        let handles: Vec<_> = self.handles.lock().await.drain(..).collect();
+        for handle in handles {
             handle.await.unwrap();
         }
         info!("shutdown complete");
     }
 
     /// Sets the signing key (called when the profile changes)
-    pub async fn set_identity(&self, key: Vec<u8>) -> Result<()> {
-        *self.inner.core_state.identity.write().await =
-            Some(Keypair::from_protobuf_encoding(&key).map_err(Error::from)?);
+    pub async fn set_identity(&self, key: &[u8; 32]) -> Result<()> {
+        *self.inner.core_state.identity.write().await = Some(SecretKey::from_bytes(key));
         Ok(())
     }
 
     /// Stops a specific session (called when a contact is deleted)
     pub async fn stop_session(&self, contact: &Contact) {
         // clear volume cache entry for contact
-        self.inner
+        if let Err(error) = self
+            .inner
             .core_state
-            .reset_peer_output_volume(&contact.peer_id);
-        if let Some(state) = self
+            .reset_peer_output_volume(&contact.peer_id)
+        {
+            error!("reset_peer_output_volume failed: {}", error);
+        }
+        // remove the session entry from the map under the write lock before releasing
+        // the call slot, so a replacement session that has already entered the map
+        // cannot be clobbered by the slot release.
+        let removed_state = self
             .inner
             .session_states
             .write()
             .await
-            .remove(&contact.peer_id)
+            .remove(&contact.peer_id);
+        if let Err(error) = self
+            .inner
+            .core_state
+            .call_slot
+            .release_if_pending_for_peer(contact.peer_id)
         {
+            error!("release_if_pending_for_peer failed: {}", error);
+        }
+        if let Some(state) = removed_state {
             state.stop_session.cancel();
         }
     }
 
     /// Blocks while an audio test is running
     pub async fn audio_test(&self) -> Result<()> {
-        if self.inner.is_call_active().await {
+        if !self
+            .inner
+            .core_state
+            .call_slot
+            .try_acquire(CallSlotState::AudioTest, None)?
+        {
             return Err(ErrorKind::CallAlreadyActive.into());
         }
 
         // update state right away to handle the test being ended quickly
         let end_call = Arc::new(Notify::new());
-        self.inner.core_state.in_call.store(true, Relaxed);
         *self.inner.core_state.end_audio_test.lock().await = Some(end_call.clone());
 
         #[cfg(target_family = "wasm")]
         if let Err(error) = self.inner.init_web_audio().await {
             // clean up state before propagating error
             self.inner.core_state.end_audio_test.lock().await.take();
-            self.inner.core_state.in_call.store(false, Relaxed);
+            self.inner.core_state.call_slot.release()?;
             return Err(error);
         }
 
-        let peer_id = PeerId::random();
+        let peer_id = SecretKey::generate().public();
         let result = match self.inner.setup_call(peer_id).await {
             Ok(mut audio_config) => {
                 audio_config.remote_configuration = audio_config.local_configuration.clone();
@@ -312,9 +420,9 @@ where
             Err(error) => Err(error),
         };
 
-        self.inner.core_state.reset_peer_output_volume(&peer_id);
+        self.inner.core_state.reset_peer_output_volume(&peer_id)?;
         self.inner.core_state.end_audio_test.lock().await.take();
-        self.inner.core_state.in_call.store(false, Relaxed);
+        self.inner.core_state.call_slot.release()?;
         result
     }
 
@@ -387,9 +495,9 @@ where
     }
 
     pub async fn start_screenshare(&self, contact: &Contact) {
-        self.inner
-            .send_start_screenshare(contact.peer_id, None)
-            .await;
+        if let Some(state) = self.inner.session_states.read().await.get(&contact.peer_id) {
+            state.start_screenshare.notify_one();
+        }
     }
 
     pub fn set_rms_threshold(&self, decimal: f32) {
@@ -400,12 +508,12 @@ where
         self.inner.core_state.set_input_volume(decibel)
     }
 
-    pub fn set_output_volume(&self, decibel: f32) {
-        self.inner.core_state.set_output_volume(decibel);
+    pub fn set_output_volume(&self, decibel: f32) -> Result<()> {
+        self.inner.core_state.set_output_volume(decibel)
     }
 
-    pub fn set_contact_output_volume(&self, contact: &Contact) {
-        self.inner.core_state.set_peer_output_volume(contact);
+    pub fn set_contact_output_volume(&self, contact: &Contact) -> Result<()> {
+        self.inner.core_state.set_peer_output_volume(contact)
     }
 
     pub fn set_deafened(&self, deafened: bool) {

@@ -1,3 +1,12 @@
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+use crate::types::Capabilities;
+use crate::types::{RecordingConfig, ScreenshareConfig};
+use bytes::Bytes;
+use futures_util::{SinkExt, StreamExt};
+use iroh::endpoint::{RecvStream, SendStream};
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+use regex::Regex;
+use speedy::{Readable, Writable};
 use std::fmt::Display;
 #[cfg(not(target_family = "wasm"))]
 use std::process::Stdio;
@@ -6,20 +15,7 @@ use std::process::{ExitStatus, Output};
 use std::str::FromStr;
 #[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
-#[cfg(not(target_family = "wasm"))]
-use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
-
-#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-use crate::types::Capabilities;
-use crate::types::{RecordingConfig, ScreenshareConfig};
-#[cfg(not(target_family = "wasm"))]
-use libp2p::Stream;
-#[cfg(not(target_family = "wasm"))]
-use libp2p::futures::{AsyncReadExt as ReadExt, AsyncWriteExt as WriteExt};
-#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-use regex::Regex;
-use speedy::{Readable, Writable};
 #[cfg(not(target_family = "wasm"))]
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 #[cfg(not(target_family = "wasm"))]
@@ -28,6 +24,7 @@ use tokio::process::Command;
 use tokio::select;
 #[cfg(not(target_family = "wasm"))]
 use tokio::sync::Notify;
+use tokio_util::codec::LengthDelimitedCodec;
 #[cfg(not(target_family = "wasm"))]
 use tracing::{error, info, instrument};
 
@@ -424,11 +421,12 @@ impl PlaybackConfig {
 #[cfg(not(target_family = "wasm"))]
 #[instrument(name = "screenshare.record", skip_all)]
 pub(crate) async fn record(
-    mut stream: Stream,
+    stream: SendStream,
     stop: Arc<Notify>,
-    bandwidth: Arc<AtomicUsize>,
     config: RecordingConfig,
 ) -> Result<()> {
+    let mut transport = LengthDelimitedCodec::builder().new_write(stream);
+
     info!(event = "screenshare_record_start", ?config);
 
     let mut command = config.make_command(false);
@@ -452,8 +450,7 @@ pub(crate) async fn record(
                 break;
             }
 
-            bandwidth.fetch_add(read, Relaxed);
-            if let Err(error) = WriteExt::write(&mut stream, &frame[..read]).await {
+            if let Err(error) = transport.send(Bytes::copy_from_slice(&frame[..read])).await {
                 error!("Failed to write frame to ffmpeg {}", error);
                 break;
             }
@@ -477,13 +474,14 @@ pub(crate) async fn record(
 #[cfg(not(target_family = "wasm"))]
 #[instrument(name = "screenshare.playback", skip_all)]
 pub(crate) async fn playback(
-    mut stream: Stream,
+    stream: RecvStream,
     stop: Arc<Notify>,
-    bandwidth: Arc<AtomicUsize>,
     encoder: String,
     width: u32,
     height: u32,
 ) -> Result<()> {
+    let mut transport = LengthDelimitedCodec::builder().new_read(stream);
+
     info!("Starting screen playback");
     let encoder = Encoder::from_str(&encoder).map_err(|_| ErrorKind::InvalidEncoder)?;
     let decoders = encoder.decoders();
@@ -526,15 +524,8 @@ pub(crate) async fn playback(
     let mut stdin = child.stdin.take().expect("Failed to capture stdin");
 
     let future = async {
-        let mut buffer = [0u8; BUFFER_SIZE];
-
-        while let Ok(read) = ReadExt::read(&mut stream, &mut buffer).await {
-            if read == 0 {
-                break;
-            }
-
-            bandwidth.fetch_add(read, Relaxed);
-            if let Err(error) = stdin.write(&buffer[..read]).await {
+        while let Some(Ok(message)) = transport.next().await {
+            if let Err(error) = stdin.write(&message).await {
                 error!("Failed to write frame to ffmpeg {}", error);
                 break;
             }
@@ -563,47 +554,4 @@ fn parse_codecs(output: Output, regex: &Regex) -> Vec<String> {
         .filter_map(|cap| cap.get(1))
         .map(|cap| cap.as_str().to_string())
         .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tracing::debug;
-
-    #[tokio::test]
-    #[ignore]
-    async fn test_capabilities() {
-        let capabilities = Capabilities::new().await;
-        debug!("{:?}", capabilities);
-
-        let encoders = [
-            Encoder::H264Nvenc,
-            Encoder::HevcNvenc,
-            Encoder::Av1Nvenc,
-            Encoder::Av1Qsv,
-            Encoder::Av1Vaapi,
-            Encoder::Av1Amf,
-            Encoder::H264Amf,
-            Encoder::H264Qsv,
-            Encoder::H264Vaapi,
-            Encoder::Libx264,
-            Encoder::Libx265,
-            Encoder::HevcAmf,
-            Encoder::HevcQsv,
-            Encoder::HevcVaapi,
-        ];
-
-        for encoder in encoders {
-            let config = RecordingConfig {
-                encoder,
-                device: Device::DesktopDuplication,
-                bitrate: 2_000_000,
-                height: None,
-                framerate: 30,
-            };
-
-            let status = config.test_config().await;
-            debug!("{:?}: {:?}", encoder, status);
-        }
-    }
 }

@@ -27,67 +27,34 @@
 //! let _ = tx;
 //! ```
 
-#[cfg(not(feature = "mock-audio"))]
-use crate::constants::TRANSITION_LENGTH;
 use crate::devices::AudioHost;
 use crate::error::Error;
 use crate::internal::NETWORK_FRAME;
 use crate::internal::processor::output_processor;
 use crate::internal::state::OutputProcessorState;
 use crate::internal::thread::{self, JoinHandle};
-use crate::internal::traits::AudioOutput;
-#[cfg(not(feature = "mock-audio"))]
-use crate::internal::traits::CHANNEL_SIZE;
-#[cfg(not(feature = "mock-audio"))]
-use crate::internal::traits::RingBufferOutput;
-#[cfg(not(feature = "mock-audio"))]
-use crate::internal::utils::{hann_fade_in, hann_fade_out};
+use crate::io::StreamErrorCallback;
 use crate::io::traits::AudioDataSource;
-use crate::io::{SendStream, StreamErrorCallback};
-#[cfg(feature = "mock-audio")]
-use crate::mock::MockAudioOutput;
 use crate::sea::codec::file::SeaFileHeader;
 use crate::sea::decoder::SeaDecoder;
 use atomic_float::AtomicF32;
-#[cfg(not(feature = "mock-audio"))]
-use cpal::Sample;
-#[cfg(not(feature = "mock-audio"))]
-use cpal::SampleFormat;
-#[cfg(not(feature = "mock-audio"))]
-use cpal::traits::{DeviceTrait, StreamTrait};
 use nnnoiseless::FRAME_SIZE;
-#[cfg(not(feature = "mock-audio"))]
-use rtrb::chunks::ChunkError;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
 use tracing::{debug, error};
 
-/// Configuration for audio output processing.
-///
-/// This struct holds all configuration options for an audio output stream.
-/// Use [`AudioOutputBuilder`] for a more ergonomic way to construct these options.
+/// Configuration for an audio output stream. Prefer [`AudioOutputBuilder`].
 pub struct AudioOutputConfig {
-    /// Device ID for output device selection.
-    ///
-    /// When `None`, uses the system's default output device.
-    /// When `Some(id)`, attempts to find the device with that ID,
-    /// falling back to default if not found.
+    /// Output device ID; `None` selects the system default.
     pub device_id: Option<String>,
-    /// Remote (source) sample rate in Hz.
-    ///
-    /// This is the sample rate of incoming audio data. The output processor
-    /// automatically resamples to the output device's native rate if needed.
+    /// Remote (source) sample rate. The processor resamples to the device's
+    /// native rate as needed.
     pub sample_rate: u32,
-    /// Output volume multiplier (1.0 = unity gain).
-    ///
-    /// Values less than 1.0 reduce volume, greater than 1.0 amplify.
+    /// Output gain. 1.0 = unity; values < 1.0 attenuate, > 1.0 amplify.
     pub volume: f32,
-    /// Set to true when codec is enabled
+    /// When true, the SEA codec decodes incoming frames.
     pub codec_enabled: bool,
-    /// Optional callback for stream errors.
-    ///
-    /// When set, the callback receives the underlying CPAL stream error.
-    /// When unset, stream errors are logged by default.
+    /// Stream-error callback; `None` falls back to a default log path.
     pub error_callback: Option<StreamErrorCallback>,
 }
 
@@ -119,14 +86,6 @@ where
     shared_deafened: Option<Arc<AtomicBool>>,
     shared_rms: Option<Arc<AtomicF32>>,
     shared_loss: Option<Arc<AtomicUsize>>,
-}
-
-/// Internal context for building audio output, shared between native and WASM
-struct OutputBuildContext {
-    output_volume: Arc<AtomicF32>,
-    deafened: Arc<AtomicBool>,
-    loss_sender: Arc<AtomicUsize>,
-    processor_handle: JoinHandle<()>,
 }
 
 impl AudioOutputBuilder<Box<dyn AudioDataSource>> {
@@ -214,11 +173,21 @@ where
         self
     }
 
+    /// Sets a shared atomic for the current output RMS level, enabling real-time monitoring.
+    ///
+    /// When provided, the processor writes the computed RMS of each played frame
+    /// into this atomic, allowing external code to read the live output level without
+    /// additional synchronization.
     pub fn rms_shared(mut self, rms: &Arc<AtomicF32>) -> Self {
         self.shared_rms = Some(rms.clone());
         self
     }
 
+    /// Sets a shared atomic for tracking packet loss, enabling real-time monitoring.
+    ///
+    /// When provided, the processor increments this counter each time a frame
+    /// underrun occurs (i.e., the source had no data when the output device
+    /// requested samples). External code can poll this value to measure loss rate.
     pub fn loss_shared(mut self, loss: &Arc<AtomicUsize>) -> Self {
         self.shared_loss = Some(loss.clone());
         self
@@ -241,40 +210,40 @@ where
         self
     }
 
-    /// Common initialization logic shared between native and WASM builds.
+    /// Builds and starts the audio output stream.
     ///
-    /// This method handles all shared setup steps:
-    /// - Creates shared atomic state (output_volume, deafened, rms_sender, loss_sender)
-    /// - Creates unbounded channel for network → processor communication
-    /// - Calculates resampling ratio: `output_sample_rate / config.sample_rate`
-    /// - Creates OutputProcessorState for atomic state management
-    /// - Auto-constructs SEA codec header when codec is enabled and no header provided:
-    ///   - version: 1
-    ///   - channels: 1 (mono)
-    ///   - chunk_size: 960
-    ///   - frames_per_chunk: 480
-    ///   - sample_rate: from config
-    /// - Creates decoder if codec is enabled and passes it to the processor thread
-    /// - Spawns processor thread (calls `output_processor` function with optional decoder)
+    /// Delegates device opening to the provided [`AudioHost`] implementation via
+    /// [`AudioHost::open_output`], then spawns the processor thread and returns a
+    /// handle for controlling the running stream.
     ///
-    /// # Type Parameters
+    /// The type parameter `I` is the host's associated `OutputStream` type (e.g.,
+    /// `SendStream` for [`CpalAudioHost`]). It is inferred automatically.
     ///
-    /// * `O` - Type implementing `AudioOutput` trait (e.g., `RingBufferOutput`, `WebOutput`)
+    /// # Errors
     ///
-    /// # Arguments
-    ///
-    /// * `processor_output` - The audio output destination for the processor
-    /// * `output_sample_rate` - Device's native sample rate in Hz
-    ///
-    /// # Returns
-    ///
-    /// Returns `Result<OutputBuildContext, AudioError>` containing handles and state for the created threads,
-    /// or an error if codec initialization fails.
-    fn build_common<O: AudioOutput + Send + 'static>(
-        self,
-        processor_output: O,
-        output_rate: u32,
-    ) -> Result<OutputBuildContext, Error> {
+    /// Returns an error if:
+    /// - No source was set via [`source`](Self::source)
+    /// - The host fails to open the output device (see [`AudioHost::open_output`])
+    /// - Codec initialization fails (invalid decoder settings)
+    /// - The processor thread cannot be spawned
+    pub fn build<I>(
+        mut self,
+        host: &impl AudioHost<OutputStream = I>,
+    ) -> Result<AudioOutputHandle<I>, Error>
+    where
+        I: Send + 'static,
+    {
+        if self.source.is_none() {
+            return Err(Error::Config(
+                "a data source must be set via source()".to_string(),
+            ));
+        }
+
+        // Open the output
+        let error_callback = self.config.error_callback.take();
+        let (processor_output, output_rate, stream) =
+            host.open_output(self.config.device_id.as_deref(), error_callback)?;
+
         // Create shared atomic state (use provided shared atomics or create new ones)
         let output_volume = self
             .shared_output_volume
@@ -317,154 +286,12 @@ where
             debug!("Output processor thread ended");
         })?;
 
-        Ok(OutputBuildContext {
+        Ok(AudioOutputHandle {
+            _stream: Some(stream),
+            _processor_handle: Some(processor_handle),
             output_volume,
             deafened,
             loss_sender,
-            processor_handle,
-        })
-    }
-
-    /// Builds and starts the audio output stream.
-    ///
-    /// This method creates and configures all necessary processing threads
-    /// and returns an `AudioOutputHandle` for controlling the stream.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - The device cannot be found
-    /// - The stream cannot be created
-    /// - The device uses an unsupported sample format
-    #[cfg(not(feature = "mock-audio"))]
-    pub fn build(mut self, host: &impl AudioHost) -> Result<AudioOutputHandle, Error> {
-        use rtrb::RingBuffer;
-        if self.source.is_none() {
-            return Err(Error::Config(
-                "a data source must be set via source()".to_string(),
-            ));
-        }
-
-        // Get the output device
-        let device_handle = host.get_output_device(self.config.device_id.as_deref())?;
-
-        let device = device_handle.device();
-        let config = device.default_output_config()?;
-
-        let output_channels = config.channels() as usize;
-        let output_sample_rate = config.sample_rate();
-        let sample_format = config.sample_format();
-
-        // Create ring buffer for lock-free producer/consumer communication
-        let (output_producer, output_consumer) = RingBuffer::<f32>::new(CHANNEL_SIZE * 4);
-
-        // Create processor output and build common components
-        let processor_output = RingBufferOutput::new(output_producer);
-        let error_callback = self.config.error_callback.take();
-        let context = self.build_common(processor_output, output_sample_rate)?;
-
-        // Build the audio stream with the appropriate sample format
-        let stream = match sample_format {
-            SampleFormat::I8 => build_output_stream_with_format::<i8>(
-                device,
-                &config.into(),
-                output_consumer,
-                output_channels,
-                error_callback,
-            )?,
-            SampleFormat::I16 => build_output_stream_with_format::<i16>(
-                device,
-                &config.into(),
-                output_consumer,
-                output_channels,
-                error_callback,
-            )?,
-            SampleFormat::I32 => build_output_stream_with_format::<i32>(
-                device,
-                &config.into(),
-                output_consumer,
-                output_channels,
-                error_callback,
-            )?,
-            SampleFormat::I64 => build_output_stream_with_format::<i64>(
-                device,
-                &config.into(),
-                output_consumer,
-                output_channels,
-                error_callback,
-            )?,
-            SampleFormat::U8 => build_output_stream_with_format::<u8>(
-                device,
-                &config.into(),
-                output_consumer,
-                output_channels,
-                error_callback,
-            )?,
-            SampleFormat::U16 => build_output_stream_with_format::<u16>(
-                device,
-                &config.into(),
-                output_consumer,
-                output_channels,
-                error_callback,
-            )?,
-            SampleFormat::U32 => build_output_stream_with_format::<u32>(
-                device,
-                &config.into(),
-                output_consumer,
-                output_channels,
-                error_callback,
-            )?,
-            SampleFormat::U64 => build_output_stream_with_format::<u64>(
-                device,
-                &config.into(),
-                output_consumer,
-                output_channels,
-                error_callback,
-            )?,
-            SampleFormat::F32 => build_output_stream_with_format::<f32>(
-                device,
-                &config.into(),
-                output_consumer,
-                output_channels,
-                error_callback,
-            )?,
-            SampleFormat::F64 => build_output_stream_with_format::<f64>(
-                device,
-                &config.into(),
-                output_consumer,
-                output_channels,
-                error_callback,
-            )?,
-            _ => return Err(Error::Config("Unsupported sample format".to_string())),
-        };
-        // Start playback
-        stream.0.play()?;
-
-        Ok(AudioOutputHandle {
-            _stream: Some(stream),
-            _processor_handle: Some(context.processor_handle),
-            output_volume: context.output_volume,
-            deafened: context.deafened,
-            loss_sender: context.loss_sender,
-        })
-    }
-
-    #[cfg(feature = "mock-audio")]
-    pub fn build(self, _host: &impl AudioHost) -> Result<AudioOutputHandle, Error> {
-        if self.source.is_none() {
-            return Err(Error::Config(
-                "a data source must be set via source()".to_string(),
-            ));
-        }
-
-        let context = self.build_common(MockAudioOutput, 48_000)?;
-
-        Ok(AudioOutputHandle {
-            _stream: None,
-            _processor_handle: Some(context.processor_handle),
-            output_volume: context.output_volume,
-            deafened: context.deafened,
-            loss_sender: context.loss_sender,
         })
     }
 }
@@ -477,23 +304,18 @@ impl Default for AudioOutputBuilder<Box<dyn AudioDataSource>> {
 
 /// Handle to a running audio output stream.
 ///
-/// This handle allows controlling the audio output (deafen/undeafen, volume)
-/// while audio data is received from the user-provided source. Resources are automatically
-/// cleaned up when dropped.
-///
-/// ## Thread Safety
-///
-/// All control methods (`deafen`, `undeafen`, `set_volume`, etc.) are thread-safe
-/// and can be called from any thread. They use atomic operations internally.
-pub struct AudioOutputHandle {
-    _stream: Option<SendStream>,
+/// All control methods (`deafen`, `undeafen`, `set_volume`, …) are thread-safe
+/// via the underlying atomics. Dropping the handle tears down the stream and
+/// joins the processor thread; there is no separate cleanup call.
+pub struct AudioOutputHandle<S> {
+    _stream: Option<S>,
     _processor_handle: Option<JoinHandle<()>>,
     output_volume: Arc<AtomicF32>,
     deafened: Arc<AtomicBool>,
     loss_sender: Arc<AtomicUsize>,
 }
 
-impl AudioOutputHandle {
+impl<S> AudioOutputHandle<S> {
     /// Deafens the audio output.
     ///
     /// When deafened, incoming audio data will be discarded and no sound
@@ -526,146 +348,4 @@ impl AudioOutputHandle {
     pub fn loss_receiver(&self) -> Arc<AtomicUsize> {
         self.loss_sender.clone()
     }
-}
-
-/// Builds an output stream with automatic sample format conversion.
-///
-/// This helper function creates a cpal output stream that converts f32 samples
-/// from the processing pipeline to the device's native sample format T.
-///
-/// Uses `rtrb::Consumer` with the chunks API for efficient bulk reads from the
-/// lock-free ring buffer, matching the producer-side `RingBufferOutput` pattern.
-///
-/// # Type Parameters
-///
-/// * `T` - The device's native sample format (e.g., i16, f32, u16)
-///
-/// # Arguments
-///
-/// * `device` - The cpal device to build the stream on
-/// * `config` - Stream configuration (sample rate, channels, etc.)
-/// * `output_consumer` - Ring buffer consumer for f32 samples from the processor
-/// * `output_channels` - Number of output channels
-/// * `error_callback` - Optional callback for stream errors
-#[cfg(not(feature = "mock-audio"))]
-fn build_output_stream_with_format<T>(
-    device: &cpal::Device,
-    config: &cpal::StreamConfig,
-    mut output_consumer: rtrb::Consumer<f32>,
-    output_channels: usize,
-    mut error_callback: Option<StreamErrorCallback>,
-) -> Result<SendStream, Error>
-where
-    T: Sample + cpal::SizedSample + cpal::FromSample<f32> + Send + 'static,
-{
-    use cpal::traits::DeviceTrait;
-
-    let mut last_sample = 0_f32;
-    let mut was_underrun = true;
-    let mut was_missing = false;
-
-    let stream = device.build_output_stream(
-        config,
-        move |data: &mut [T], _: &_| {
-            debug_assert!(output_channels > 0);
-
-            let total_frames = data.len() / output_channels;
-            // How many real frames we can pull right now
-            let available_frames = total_frames.min(output_consumer.slots());
-
-            if was_missing && available_frames == 0 {
-                // shortcut for when the fade already occurred & we are playing silence
-                data.fill(T::from_sample(0_f32));
-                return;
-            }
-
-            let mut frames = data.chunks_mut(output_channels);
-
-            // Read as many as possible (maybe 0)
-            let mut pulled = 0;
-            if available_frames > 0 {
-                match output_consumer.read_chunk(available_frames) {
-                    Ok(chunk) => {
-                        let mut samples = chunk.into_iter();
-
-                        // Fade-in on recovery: apply ramp to the incoming samples
-                        let ramp_in_len = if was_underrun {
-                            TRANSITION_LENGTH.min(available_frames)
-                        } else {
-                            0
-                        };
-
-                        for i in 0..ramp_in_len {
-                            let Some(frame) = frames.next() else {
-                                break;
-                            };
-                            let Some(sample_f32) = samples.next() else {
-                                break;
-                            };
-
-                            let g = hann_fade_in(i, ramp_in_len);
-                            let out = sample_f32 * g;
-
-                            last_sample = sample_f32;
-                            frame.fill(T::from_sample(out));
-                            pulled += 1;
-                        }
-
-                        if ramp_in_len > 0 {
-                            // Reset state after playing real samples
-                            was_underrun = false;
-                            was_missing = false;
-                        }
-
-                        // Remaining real samples (no gain)
-                        while let (Some(frame), Some(sample_f32)) = (frames.next(), samples.next())
-                        {
-                            last_sample = sample_f32;
-                            frame.fill(T::from_sample(sample_f32));
-                            pulled += 1;
-                        }
-                    }
-                    Err(ChunkError::TooFewSlots(_)) => {
-                        // Shouldn't happen since we min() with slots(), but if it does:
-                        pulled = 0;
-                    }
-                }
-            }
-
-            // If we couldn't fill the buffer, fade out then silence
-            let missing = total_frames.saturating_sub(pulled);
-            if missing > 0 {
-                was_underrun = true;
-                was_missing = true;
-
-                let fade_len = TRANSITION_LENGTH.min(missing);
-
-                // Smooth fade from last real sample -> 0
-                for i in 0..fade_len {
-                    let Some(frame) = frames.next() else {
-                        break;
-                    };
-                    let g = hann_fade_out(i, fade_len);
-                    frame.fill(T::from_sample(last_sample * g));
-                }
-
-                // Remaining frames: hard silence
-                for frame in frames {
-                    frame.fill(T::from_sample(0.0));
-                }
-
-                last_sample = 0.0;
-            }
-        },
-        move |err| {
-            if let Some(callback) = error_callback.as_mut() {
-                callback(err);
-            } else {
-                error!(error = %err, "output_stream_error");
-            }
-        },
-        None,
-    )?;
-
-    Ok(SendStream(stream))
 }

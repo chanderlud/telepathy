@@ -1,5 +1,5 @@
 use serde::Serialize;
-use telepathy_core::types::{CallState, ChatMessage, SessionStatus, Statistics};
+use telepathy_core::types::{CallState, ChatMessage, ManagerState, SessionStatus, Statistics};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -7,10 +7,7 @@ pub enum Event {
     Ready {
         version: String,
     },
-    ManagerActive {
-        active: bool,
-        restartable: bool,
-    },
+    ManagerActive(ManagerState),
     SessionStatus {
         peer: String,
         status: SessionStatus,

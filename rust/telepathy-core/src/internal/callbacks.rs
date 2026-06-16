@@ -1,28 +1,30 @@
 use crate::internal::utils::JoinHandle;
-use crate::types::{CallState, ChatMessage, Contact, FrontendNotify, SessionStatus, Statistics};
-#[cfg(test)]
+use crate::types::{
+    CallState, ChatMessage, Contact, FrontendNotify, ManagerState, SessionStatus, Statistics,
+};
+#[cfg(feature = "integration-testing")]
 use async_trait::async_trait;
-use libp2p::PeerId;
-#[cfg(test)]
+use iroh::PublicKey;
+#[cfg(feature = "integration-testing")]
 use mockall::automock;
 use std::future::Future;
 use std::sync::Arc;
 use tokio::sync::Notify;
 
-#[cfg_attr(test, automock)]
-#[cfg_attr(test, async_trait)]
-pub(crate) trait CoreCallbacks<S: CoreStatisticsCallback> {
+#[cfg_attr(feature = "integration-testing", automock)]
+#[cfg_attr(feature = "integration-testing", async_trait)]
+pub trait CoreCallbacks<S: CoreStatisticsCallback> {
     fn session_status(
         &self,
         status: SessionStatus,
-        peer: PeerId,
+        peer: PublicKey,
     ) -> impl Future<Output = ()> + Send;
 
     fn call_state(&self, status: CallState) -> impl Future<Output = ()> + Send;
 
     fn get_contacts(&self) -> impl Future<Output = Vec<Contact>> + Send;
 
-    fn manager_active(&self, active: bool, restartable: bool) -> impl Future<Output = ()> + Send;
+    fn manager_state(&self, state: ManagerState) -> impl Future<Output = ()> + Send;
 
     fn screenshare_started(
         &self,
@@ -44,8 +46,8 @@ pub(crate) trait CoreCallbacks<S: CoreStatisticsCallback> {
     fn statistics_callback(&self) -> S;
 }
 
-#[cfg_attr(test, automock)]
-#[cfg_attr(test, async_trait)]
-pub(crate) trait CoreStatisticsCallback {
+#[cfg_attr(feature = "integration-testing", automock)]
+#[cfg_attr(feature = "integration-testing", async_trait)]
+pub trait CoreStatisticsCallback {
     fn post(&self, stats: Statistics) -> impl Future<Output = ()> + Send;
 }

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-/// Custom TextInput Widget.
+/// Themed single-line text field with optional error-state styling.
 class TextInput extends StatelessWidget {
   final String labelText;
   final String? hintText;
@@ -9,8 +9,18 @@ class TextInput extends StatelessWidget {
   final bool? enabled;
   final FocusNode? focusNode;
   final bool? autofocus;
+  final int? maxLines;
   final void Function(String)? onChanged;
   final void Function(String)? onSubmitted;
+
+  /// Renders a built-in error message and tints the outline/label so the
+  /// error state stays visible at rest and on hover. Mutually exclusive
+  /// with [error].
+  final String? errorText;
+
+  /// Escape hatch for callers that need to render an arbitrary widget
+  /// (e.g. rich `Text` with inline links). When supplied, no error-state
+  /// tinting is applied.
   final Widget? error;
 
   const TextInput(
@@ -22,18 +32,52 @@ class TextInput extends StatelessWidget {
       this.enabled,
       this.focusNode,
       this.autofocus,
+      this.maxLines,
       this.onChanged,
       this.onSubmitted,
-      this.error});
+      this.errorText,
+      this.error})
+      : assert(errorText == null || error == null,
+            'errorText and error are mutually exclusive');
 
   @override
   Widget build(BuildContext context) {
+    final errorColor = Theme.of(context).colorScheme.error;
+    final errorHoverColor = Color.lerp(errorColor, Colors.black, 0.16)!;
+
+    final errorTextStyle = errorText == null
+        ? null
+        : WidgetStateTextStyle.resolveWith((Set<WidgetState> states) {
+            return TextStyle(
+              color: states.contains(WidgetState.hovered)
+                  ? errorHoverColor
+                  : errorColor,
+            );
+          });
+
+    final InputBorder border = errorText == null
+        ? const OutlineInputBorder(
+            borderRadius: BorderRadius.all(Radius.circular(10.0)),
+          )
+        : WidgetStateInputBorder.resolveWith((Set<WidgetState> states) {
+            final hovered = states.contains(WidgetState.hovered);
+            final focused = states.contains(WidgetState.focused);
+            return OutlineInputBorder(
+              borderRadius: const BorderRadius.all(Radius.circular(10.0)),
+              borderSide: BorderSide(
+                color: hovered ? errorHoverColor : errorColor,
+                width: focused ? 2 : 1,
+              ),
+            );
+          });
+
     return TextField(
       controller: controller,
       obscureText: obscureText ?? false,
       enabled: enabled,
       focusNode: focusNode,
       autofocus: autofocus ?? false,
+      maxLines: obscureText == true ? 1 : (maxLines ?? 1),
       onChanged: onChanged,
       onSubmitted: onSubmitted,
       decoration: InputDecoration(
@@ -46,10 +90,11 @@ class TextInput extends StatelessWidget {
             fontWeight: FontWeight.w600),
         fillColor: Theme.of(context).colorScheme.tertiaryContainer,
         filled: true,
+        errorText: errorText,
         error: error,
-        border: const OutlineInputBorder(
-          borderRadius: BorderRadius.all(Radius.circular(10.0)),
-        ),
+        labelStyle: errorTextStyle,
+        floatingLabelStyle: errorTextStyle,
+        border: border,
         contentPadding: const EdgeInsets.all(10.0),
       ),
     );

@@ -6,7 +6,7 @@
 - Audio crate: ./rust/telepathy-audio
 - CLI for system tests: ./rust/telepathy-cli
 - Flutter frontend code: ./lib
-- Generated code: ./lib/core/rust and frb_generated.rs
+- Generated code (do NOT read these files): ./lib/core/rust/* and frb_generated.rs
 - Documentation: ./docs
 - System test suite: ./system-tests
 
@@ -17,9 +17,15 @@
 - For example, after editing files in telepathy-core, you should run `cargo clippy --manifest-path ./rust/Cargo.toml -p telepathy_core`.
 - After editing Dart files, run `flutter analyze` in the project root directory.
 
+## Test Execution Rules
+
+- Unit tests may be executed directly with `cargo test --manifest-path ./rust/Cargo.toml`
+- Integration tests must be executed with `cargo test --manifest-path ./rust/Cargo.toml --test core_integration_test --features integration-testing`
+- System tests must be manually executed in WSL by the developer, prompt them to do so
+
 ## Flutter Rust Bridge Rules
 
-- After editing pub members of telepathy-core, you must run `flutter_rust_bridge_codegen generate` to regenerate the bindings.
+- After editing pub members of telepathy-core, you must run EXACTLY `flutter_rust_bridge_codegen generate` to regenerate the bindings.
 - If the codegen command is unavailable, try running `cargo install flutter_rust_bridge_codegen`.
 
 ## Test Quality Policy

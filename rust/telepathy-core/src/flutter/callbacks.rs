@@ -4,7 +4,8 @@ use crate::flutter::{
 };
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::{JoinHandle, spawn_task};
-use libp2p::PeerId;
+use crate::types::ManagerState;
+use iroh::PublicKey;
 use std::sync::Arc;
 use tokio::sync::Notify;
 
@@ -12,7 +13,7 @@ impl CoreCallbacks<FlutterStatisticsCallback> for FlutterCallbacks {
     fn session_status(
         &self,
         status: SessionStatus,
-        peer: PeerId,
+        peer: PublicKey,
     ) -> impl Future<Output = ()> + Send {
         notify(&self.session_status, (peer.to_string(), status))
     }
@@ -25,8 +26,8 @@ impl CoreCallbacks<FlutterStatisticsCallback> for FlutterCallbacks {
         invoke(&self.get_contacts, ())
     }
 
-    fn manager_active(&self, active: bool, restartable: bool) -> impl Future<Output = ()> + Send {
-        notify(&self.manager_active, (active, restartable))
+    fn manager_state(&self, state: ManagerState) -> impl Future<Output = ()> + Send {
+        notify(&self.manager_active, state)
     }
 
     fn screenshare_started(

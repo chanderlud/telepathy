@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:provider/provider.dart';
@@ -11,6 +12,11 @@ import 'package:telepathy/widgets/contacts/contact_widget.dart';
 import 'package:telepathy/widgets/contacts/room_widget.dart';
 import 'package:telepathy/widgets/contacts/snap_scroll_physics.dart';
 
+const double managerStatusSize = 28;
+const double contactsHeaderHeight = 36;
+const double addButtonSize = 36;
+const double addIconSize = 28;
+
 /// A widget which displays a list of ContactWidgets.
 class ContactsList extends StatelessWidget {
   final List<Contact> contacts;
@@ -20,9 +26,11 @@ class ContactsList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final bool isWindowsDesktop =
+        !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
     final stateController = context.watch<StateController>();
     final telepathy = context.read<Telepathy>();
-    final bool sessionManagerActive = stateController.sessionManagerActive;
+    final ManagerState managerState = stateController.sessionManagerState;
     final bool isCompact = context.isCompactContacts || context.isCompactWide;
     final List<Object> items = [
       ...contacts,
@@ -41,8 +49,8 @@ class ContactsList extends StatelessWidget {
         borderRadius: BorderRadius.circular(10.0),
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Padding(
               padding: EdgeInsets.symmetric(
@@ -52,74 +60,127 @@ class ContactsList extends StatelessWidget {
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Row(
-                    children: [
-                      const Padding(
-                        padding: EdgeInsetsDirectional.only(bottom: 2),
-                        child: Text('Contacts', style: TextStyle(fontSize: 20)),
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.only(left: 10, top: 3),
-                        child: IconButton(
-                            onPressed: () {
-                              showDialog(
-                                  context: context,
-                                  builder: (BuildContext context) {
-                                    return SimpleDialog(
-                                      backgroundColor: Theme.of(context)
-                                          .colorScheme
-                                          .secondaryContainer,
-                                      children: const [ContactForm()],
-                                    );
-                                  });
-                            },
-                            constraints: const BoxConstraints(
-                              maxWidth: 36,
-                              maxHeight: 36,
-                            ),
-                            padding: const EdgeInsetsDirectional.only(
-                              start: 1,
-                              top: 1,
-                              end: 1,
-                              bottom: 1,
-                            ),
-                            icon: SvgPicture.asset('assets/icons/Plus.svg')),
-                      ),
-                    ],
-                  ),
-                  if (!sessionManagerActive)
-                    Row(
+                  SizedBox(
+                    height: contactsHeaderHeight,
+                    child: Row(
                       mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
-                        const Tooltip(
-                          message: 'Session Manager Inactive',
-                          child: Icon(
-                            Icons.language,
-                            color: Color(0xFFdc2626),
-                            size: 20,
+                        const Text(
+                          'Contacts',
+                          style: TextStyle(
+                            fontSize: 20,
+                            height: 1.0,
+                            leadingDistribution: TextLeadingDistribution.even,
+                          ),
+                          strutStyle: StrutStyle(
+                            fontSize: 20,
+                            height: 1.0,
+                            leading: 0,
+                            forceStrutHeight: true,
+                          ),
+                          textHeightBehavior: TextHeightBehavior(
+                            applyHeightToFirstAscent: false,
+                            applyHeightToLastDescent: false,
+                            leadingDistribution: TextLeadingDistribution.even,
                           ),
                         ),
-                        if (stateController.sessionManagerRestartable)
-                          IconButton(
-                              onPressed: () {
-                                telepathy.restartManager();
-                              },
-                              constraints: const BoxConstraints(
-                                maxWidth: 36,
-                                maxHeight: 36,
-                              ),
-                              padding: const EdgeInsetsDirectional.only(
-                                start: 1,
-                                top: 1,
-                                end: 1,
-                                bottom: 1,
-                              ),
-                              icon: SvgPicture.asset('assets/icons/Restart.svg',
-                                  colorFilter: const ColorFilter.mode(
-                                      Color(0xFFdc2626), BlendMode.srcIn),
-                                  semanticsLabel: 'Restart session manager')),
+                        const SizedBox(width: 10),
+                        SizedBox.square(
+                          dimension: addButtonSize,
+                          child: IconButton(
+                            onPressed: () {
+                              showDialog(
+                                context: context,
+                                builder: (BuildContext context) {
+                                  return SimpleDialog(
+                                    backgroundColor: Theme.of(context)
+                                        .colorScheme
+                                        .secondaryContainer,
+                                    children: const [ContactForm()],
+                                  );
+                                },
+                              );
+                            },
+                            constraints: const BoxConstraints.tightFor(
+                              width: addButtonSize,
+                              height: addButtonSize,
+                            ),
+                            padding: isWindowsDesktop
+                                ? const EdgeInsets.only(top: 2.0)
+                                : EdgeInsets.zero,
+                            icon: SvgPicture.asset(
+                              'assets/icons/Plus.svg',
+                              width: addIconSize,
+                              height: addIconSize,
+                            ),
+                          ),
+                        ),
                       ],
                     ),
+                  ),
+                  Transform.translate(
+                    offset: Offset(0, isCompact ? 0 : 1.5),
+                    child: Container(
+                      height: 34,
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.tertiaryContainer,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      padding: const EdgeInsets.only(left: 8, right: 3),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          const Text(
+                            'Session Manager',
+                            style: TextStyle(
+                              height: 1.0,
+                              leadingDistribution: TextLeadingDistribution.even,
+                            ),
+                            strutStyle: StrutStyle(
+                              height: 1.0,
+                              leading: 0,
+                              forceStrutHeight: true,
+                            ),
+                            textHeightBehavior: TextHeightBehavior(
+                              applyHeightToFirstAscent: false,
+                              applyHeightToLastDescent: false,
+                              leadingDistribution: TextLeadingDistribution.even,
+                            ),
+                          ),
+                          const SizedBox(width: 5),
+                          managerStatusIcon(context, managerState),
+                          if (managerState == ManagerState.failed) ...[
+                            const SizedBox(width: 10),
+                            SizedBox.square(
+                              dimension: 28,
+                              child: IconButton(
+                                onPressed: () {
+                                  telepathy.restartManager();
+                                },
+                                constraints: const BoxConstraints.tightFor(
+                                  width: 28,
+                                  height: 28,
+                                ),
+                                padding: EdgeInsets.zero,
+                                icon: SvgPicture.asset(
+                                  'assets/icons/Restart.svg',
+                                  colorFilter: const ColorFilter.mode(
+                                    Color(0xFFdc2626),
+                                    BlendMode.srcIn,
+                                  ),
+                                  semanticsLabel: 'Restart session manager',
+                                  width: 24,
+                                  height: 24,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  )
                 ],
               )),
           SizedBox(height: isCompact ? 2.5 : 10),
@@ -161,4 +222,42 @@ class ContactsList extends StatelessWidget {
       ),
     );
   }
+}
+
+Widget managerStatusIcon(BuildContext context, ManagerState managerState) {
+  final colorScheme = Theme.of(context).colorScheme;
+
+  return SizedBox.square(
+    dimension: managerStatusSize,
+    child: Center(
+      child: switch (managerState) {
+        ManagerState.active => SvgPicture.asset(
+            'assets/icons/ShieldYes.svg',
+            semanticsLabel: 'Manager active icon',
+            colorFilter: ColorFilter.mode(
+              colorScheme.primary,
+              BlendMode.srcIn,
+            ),
+            width: managerStatusSize,
+            height: managerStatusSize,
+          ),
+        ManagerState.starting => const SizedBox.square(
+            dimension: 18,
+            child: CircularProgressIndicator(
+              strokeWidth: 3,
+            ),
+          ),
+        ManagerState.failed || ManagerState.stopped => SvgPicture.asset(
+            'assets/icons/ShieldOff.svg',
+            semanticsLabel: 'Manager inactive icon',
+            colorFilter: const ColorFilter.mode(
+              Color(0xFFdc2626),
+              BlendMode.srcIn,
+            ),
+            width: managerStatusSize,
+            height: managerStatusSize,
+          ),
+      },
+    ),
+  );
 }

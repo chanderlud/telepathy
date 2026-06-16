@@ -20,9 +20,7 @@ class StateController extends ChangeNotifier {
   /// peerId, status
   final Map<String, SessionStatus> sessions = {};
 
-  /// active, restartable
-  (bool, bool) _sessionManager = (false, false);
-
+  ManagerState _sessionManagerState = ManagerState.stopped;
   FrontendNotify? _stopSendingScreenshare;
   FrontendNotify? _stopReceivingScreenshare;
   bool isSendingScreenshare = false;
@@ -42,9 +40,7 @@ class StateController extends ChangeNotifier {
 
   bool get blockAudioChanges => isCallActive || inAudioTest;
 
-  bool get sessionManagerActive => _sessionManager.$1;
-
-  bool get sessionManagerRestartable => _sessionManager.$2;
+  ManagerState get sessionManagerState => _sessionManagerState;
 
   String get callDuration => formatTime(_callTimer.elapsed.inMilliseconds);
 
@@ -74,8 +70,8 @@ class StateController extends ChangeNotifier {
   }
 
   /// called when the session manager state changes
-  void setSessionManager((bool active, bool restartable) record) {
-    _sessionManager = record;
+  void setSessionManager(ManagerState state) {
+    _sessionManagerState = state;
     notifyListeners();
   }
 
