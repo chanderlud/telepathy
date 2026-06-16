@@ -139,8 +139,7 @@ void main() {
       expect(recorder.currentRelays, isNull);
     });
 
-    test('drops invalid stored DNS endpoint and its paired origin domain',
-        () {
+    test('drops invalid stored DNS endpoint and its paired origin domain', () {
       final recorder = _Recorder();
       NetworkSettingsController.buildNetworkConfigFromSpec(
         stored: const StoredNetworkValues(
@@ -303,7 +302,8 @@ void main() {
       );
     });
 
-    test('treats empty stored relay list as "no override" and keeps defaults '
+    test(
+        'treats empty stored relay list as "no override" and keeps defaults '
         'even when customRelaysEnabled is true', () {
       final recorder = _Recorder();
       NetworkSettingsController.buildNetworkConfigFromSpec(
@@ -483,7 +483,8 @@ void main() {
       );
     });
 
-    test('persists customRelaysEnabled=false and removes the relays key '
+    test(
+        'persists customRelaysEnabled=false and removes the relays key '
         'when relays is null', () async {
       // The default state of a fresh NetworkConfig: no custom relays
       // configured. The controller must clear the `relays` key so a
