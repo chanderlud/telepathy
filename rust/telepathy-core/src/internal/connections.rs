@@ -445,6 +445,7 @@ pub(crate) async fn audio_output(
             Ok(mut message) => {
                 let len = message.len();
 
+                // Real audio packets always exceed the size KEEP_ALIVE_PACKET_SIZE
                 if len == KEEP_ALIVE_PACKET_SIZE && message[0] == KEEP_ALIVE_TAG {
                     message.advance(1);
                     let sequence_floor = message.get_u32();
