@@ -137,6 +137,15 @@ pub(crate) struct DynamicConnection {
     /// Buffers are automatically returned to the pool when `PooledBytes` is dropped.
     packet_buffers: Arc<BufferPool>,
 
+    /// Single sequence space intentionally shared across all room peers so the
+    /// sender only ever increments one counter regardless of how many peers are
+    /// currently connected. This means a peer that joins mid-talkspurt will
+    /// observe a large initial sequence gap (the counter has already advanced
+    /// for any audio it missed). Newly-joined peers rely on
+    /// [`AudioJitterBuffer`]'s first-packet talkspurt-start handling in
+    /// `insert_audio` to anchor playout: the first packet it sees becomes the
+    /// anchor, jump-starting playback at that point rather than waiting for
+    /// the original sequence origin.
     sequence_number: u32,
 }
 
