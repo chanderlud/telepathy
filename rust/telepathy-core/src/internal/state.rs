@@ -141,7 +141,7 @@ impl CallSlot {
             inner.direct_peer = peer;
             // Bump the generation so callers that snapshot the slot before this acquisition
             // cannot accidentally match a future reacquire of the same state/peer.
-            inner.generation = inner.generation.saturating_add(1);
+            inner.generation = inner.generation.wrapping_add(1);
             Ok(true)
         } else {
             Ok(false)
@@ -180,7 +180,7 @@ impl CallSlot {
         if inner.state == CallSlotState::Idle {
             inner.state = state;
             inner.direct_peer = Some(peer);
-            inner.generation = inner.generation.saturating_add(1);
+            inner.generation = inner.generation.wrapping_add(1);
             return Ok(CallSlotAcquireResult::Acquired);
         }
 
@@ -330,7 +330,7 @@ impl CallSlot {
         ) {
             inner.state = CallSlotState::Idle;
             inner.direct_peer = None;
-            inner.generation = inner.generation.saturating_add(1);
+            inner.generation = inner.generation.wrapping_add(1);
             Ok(true)
         } else {
             Ok(false)
