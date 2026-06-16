@@ -488,7 +488,6 @@ fn prepare_packet(
         HEADER_SIZE + payload.len()
     };
 
-    // Fast-path: skip reserve if capacity is already sufficient
     if buf.capacity() < total_size {
         buf.reserve(total_size);
     }
@@ -513,9 +512,7 @@ fn is_keep_alive_payload(payload: &[u8]) -> bool {
     payload == [KEEP_ALIVE_TAG]
 }
 
-/// True when `a` is older than `b`, handling normal u32 wraparound.
-/// At 100 packets/sec, wraparound is not exactly tomorrow's problem,
-/// but doing this correctly costs almost nothing.
+/// True when `a` is older than `b` under u32 sequence-number wraparound.
 fn seq_before(a: u32, b: u32) -> bool {
     a != b && a.wrapping_sub(b) > 0x8000_0000
 }

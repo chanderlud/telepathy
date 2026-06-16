@@ -43,7 +43,7 @@ type Result<T> = std::result::Result<T, Error>;
 
 /// A timeout used when initializing the call
 const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
-/// How often to keep-alive libp2p streams
+/// How often to keep-alive iroh session streams
 const KEEP_ALIVE: Duration = Duration::from_secs(10);
 /// the protocol identifier for Telepathy sessions
 const ALPN: &[u8] = b"telepathy/session/0";

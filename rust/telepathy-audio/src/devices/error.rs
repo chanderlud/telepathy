@@ -1,16 +1,12 @@
 use cpal::{BuildStreamError, DefaultStreamConfigError, PlayStreamError};
 use std::fmt;
 
-/// Error type for device operations.
+/// Errors raised by device enumeration, selection, and stream construction.
 #[derive(Debug, Clone)]
 pub enum DeviceError {
-    /// Device with the specified ID was not found
     DeviceNotFound(String),
-    /// No default device is available
     NoDefaultDevice,
-    /// Failed to enumerate devices
     EnumerationFailed(String),
-    /// Device ID parsing failed
     InvalidDeviceId(String),
     DefaultConfigMissing(String),
     BuildStream(String),

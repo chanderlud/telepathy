@@ -1,18 +1,15 @@
-/// Green
 const GOOD_COLOR: Color = Color {
     red: 76,
     green: 175,
     blue: 80,
     opacity: 255,
 };
-/// Yellow
 const MEDIUM_COLOR: Color = Color {
     red: 255,
     green: 235,
     blue: 59,
     opacity: 255,
 };
-/// Red
 pub(crate) const BAD_COLOR: Color = Color {
     red: 244,
     green: 67,
@@ -29,7 +26,6 @@ pub(crate) struct Color {
 }
 
 impl Color {
-    /// linear interpolation between two colors and opacities
     fn lerp(start: Color, end: Color, fraction: f64) -> Color {
         let red = start.red as f64 + (end.red as f64 - start.red as f64) * fraction;
         let green = start.green as f64 + (end.green as f64 - start.green as f64) * fraction;

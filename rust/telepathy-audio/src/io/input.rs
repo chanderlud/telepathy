@@ -82,64 +82,30 @@ use std::sync::Condvar;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use tracing::{debug, error};
 
-/// Configuration for audio input processing.
+/// Configuration for an audio input stream. Prefer [`AudioInputBuilder`].
 ///
-/// This struct holds all configuration options for an audio input stream.
-/// Use [`AudioInputBuilder`] for a more ergonomic way to construct these options.
-///
-/// ## Sample Rate Behavior
-///
-/// When `denoise_enabled` is `true`, the processor upsamples to 48kHz for
-/// RNNoise processing and outputs 48kHz frames (no downsample back to device
-/// rate). When `denoise_enabled` is `false`, the processor passes through at
-/// the device's native sample rate. The encoder sample rate automatically
-/// matches the processor's output rate.
+/// When `denoise_enabled` is `true` the processor upsamples to 48 kHz for
+/// RNNoise and outputs 48 kHz; otherwise it passes through at the device's
+/// native rate. The encoder sample rate always matches the processor's output.
 pub struct AudioInputConfig {
-    /// Device ID for input device selection.
-    ///
-    /// When `None`, uses the system's default input device.
-    /// When `Some(id)`, attempts to find the device with that ID,
-    /// falling back to default if not found.
+    /// Input device ID; `None` selects the system default.
     pub device_id: Option<String>,
-    /// Custom noise suppression model bytes.
-    ///
-    /// When `None`, uses the default RNNoise model.
-    /// When `Some(bytes)`, loads a custom RNN model from the provided bytes.
+    /// Optional custom RNNoise model. `None` uses the default model.
     pub denoise_model: Option<RnnModel>,
-    /// Input volume multiplier (1.0 = unity gain).
-    ///
-    /// Values less than 1.0 reduce volume, greater than 1.0 amplify.
+    /// Input gain. 1.0 = unity; values < 1.0 attenuate, > 1.0 amplify.
     pub volume: f32,
-    /// RMS threshold for silence detection.
-    ///
-    /// Audio frames with RMS below this threshold are treated as silence.
-    /// A value of 0.0 disables silence detection.
+    /// RMS threshold for silence detection. 0.0 disables it.
     pub rms_threshold: f32,
-    /// Whether codec encoding is enabled.
-    ///
-    /// When enabled, audio is encoded using the SEA codec before being
-    /// passed to the callback.
+    /// When true, the SEA codec encodes the processor output.
     pub codec_enabled: bool,
-    /// Codec bit rate mode.
+    /// Codec bitrate mode.
     pub codec_mode: CodecBitrateMode,
-    /// Residual bits for codec quality (typically 2.0-8.0).
-    ///
-    /// Higher values provide better quality but larger encoded size.
+    /// Codec residual bits (typically 2.0–8.0). Higher = better, larger.
     pub codec_residual_bits: f32,
-    /// Optional callback for stream errors.
-    ///
-    /// When set, the callback receives the underlying CPAL stream error.
-    /// When unset, stream errors are logged by default.
+    /// Stream-error callback; `None` falls back to a default log path.
     pub error_callback: Option<StreamErrorCallback>,
-    /// Optional output sample rate override (only used when denoise is disabled).
-    ///
-    /// When set and `denoise_enabled` is `false`, the processor will resample
-    /// to this rate instead of passing through at the device's native rate.
-    /// This is useful for matching network requirements (e.g., 48kHz) without
-    /// the CPU overhead of noise suppression.
-    ///
-    /// When `denoise_enabled` is `true`, this field is ignored and output is
-    /// always 48kHz (RNNoise requirement).
+    /// Output rate override (only when denoise is disabled). When denoise is
+    /// enabled, output is always 48 kHz and this field is ignored.
     pub output_sample_rate: Option<u32>,
 }
 
@@ -474,7 +440,6 @@ where
 
         // create denoiser if needed
         let denoiser = self.config.denoise_model.map(DenoiseState::from_model);
-        // build input processor state
         let state = InputProcessorState::new(
             &input_volume,
             &rms_threshold,
@@ -482,13 +447,11 @@ where
             rms_sender,
             DEFAULT_POOL_CAPACITY,
         );
-        // determine the output sample rate
         let output_rate = if denoiser.is_some() {
             48_000
         } else {
             self.config.output_sample_rate.unwrap_or(input_rate)
         };
-        // create the encoder if needed
         let encoder = if self.config.codec_enabled {
             Some(SeaEncoder::new(
                 1,
@@ -645,32 +608,9 @@ where
 
 /// Handle to a running audio input stream.
 ///
-/// This handle allows controlling the audio input (mute/unmute, volume)
-/// and automatically cleans up resources when dropped.
-///
-/// ## Lifecycle
-///
-/// - **Creation**: Created by [`AudioInputBuilder::build`] on all platforms
-/// - **Running**: Audio is captured, processed (with optional encoding), and delivered via the configured sink
-/// - **Cleanup**: When dropped, the handle drops the underlying audio stream, causing the processor to observe EOF
-///
-/// ## Thread Safety
-///
-/// All control methods (`mute`, `unmute`, `set_volume`, etc.) are thread-safe
-/// and can be called from any thread. They use atomic operations internally.
-///
-/// ## Platform Differences
-///
-/// - **Native**: Uses cpal stream and rtrb ring buffer for input communication
-/// - **WASM**: Uses a pre-set `WebAudioWrapper`
-///   and Web Audio API; the wrapper must be provided via
-///   `AudioInputBuilder::web_audio_wrapper` before calling `build()`
-///
-/// ## Drop vs Explicit Cleanup
-///
-/// Dropping the handle (implicit when it goes out of scope) is the standard
-/// way to stop the stream. The underlying audio stream is dropped first,
-/// which signals EOF to the processor thread, causing it to exit cleanly.
+/// All control methods (`mute`, `unmute`, `set_volume`, …) are thread-safe via
+/// the underlying atomics. Dropping the handle tears down the stream and
+/// signals the processor to exit; there is no separate cleanup call.
 pub struct AudioInputHandle<S> {
     _stream: Option<S>,
     #[cfg(target_family = "wasm")]

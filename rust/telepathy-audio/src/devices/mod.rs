@@ -17,119 +17,42 @@ pub use cpal_host::CpalAudioHost;
 pub use error::DeviceError;
 pub use mock_host::{MockAudioHost, MockAudioInput, MockAudioOutput};
 
-/// Host abstraction for device enumeration and selection.
+/// Host abstraction for device enumeration, selection, and stream lifecycle.
 ///
-/// This trait defines the public audio host operations used by the crate:
-/// listing devices and resolving input/output handles from optional IDs.
-/// Implementations may wrap platform APIs directly or provide test doubles.
+/// Implementations wrap a platform audio backend (or a test double) and own the
+/// platform stream handle. The returned `*Stream` associated types must be kept
+/// alive for as long as the caller wants the stream to keep producing or
+/// consuming audio: dropping them stops the underlying stream.
+///
+/// Implementations must be `Send + Sync`; the input and output processor halves
+/// are typically shipped to independent tasks. Error semantics are documented
+/// per-method and surface exclusively through `DeviceError`.
 pub trait AudioHost {
     type InputStream: Send + Sync + 'static;
     type OutputStream: Send + Sync + 'static;
 
-    /// Lists all available input (recording) devices.
-    ///
-    /// # Errors
-    ///
-    /// Returns:
-    /// - `DeviceError::EnumerationFailed` when the backend fails to enumerate input devices
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// use telepathy_audio::devices::{AudioHost, CpalAudioHost};
-    ///
-    /// let host = CpalAudioHost::new();
-    /// let devices = host.list_input_devices().unwrap();
-    /// for device in devices {
-    ///     println!("Input: {} (ID: {})", device.name, device.id);
-    /// }
-    /// ```
+    /// Lists available input (recording) devices.
     fn list_input_devices(&self) -> Result<Vec<AudioDeviceInfo>, DeviceError>;
 
-    /// Lists all available output (playback) devices.
-    ///
-    /// # Errors
-    ///
-    /// Returns:
-    /// - `DeviceError::EnumerationFailed` when the backend fails to enumerate output devices
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// use telepathy_audio::devices::{AudioHost, CpalAudioHost};
-    ///
-    /// let host = CpalAudioHost::new();
-    /// let devices = host.list_output_devices().unwrap();
-    /// for device in devices {
-    ///     println!("Output: {} (ID: {})", device.name, device.id);
-    /// }
-    /// ```
+    /// Lists available output (playback) devices.
     fn list_output_devices(&self) -> Result<Vec<AudioDeviceInfo>, DeviceError>;
 
     /// Lists both input and output devices in one call.
-    ///
-    /// # Errors
-    ///
-    /// Returns:
-    /// - `DeviceError::EnumerationFailed` when input or output enumeration fails
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// use telepathy_audio::devices::{AudioHost, CpalAudioHost};
-    ///
-    /// let host = CpalAudioHost::new();
-    /// let devices = host.list_all_devices().unwrap();
-    /// println!("Found {} input devices", devices.input_devices.len());
-    /// println!("Found {} output devices", devices.output_devices.len());
-    /// ```
     fn list_all_devices(&self) -> Result<AudioDeviceList, DeviceError>;
 
-    /// Returns the default sample rate for the given input device.
-    ///
-    /// # Arguments
-    ///
-    /// * `device_id` - Optional device ID string. When `None`, queries the system default input device.
-    ///
-    /// # Errors
-    ///
-    /// Returns `DeviceError::NoDefaultDevice` if no default device is available,
-    /// or `DeviceError::DefaultConfigMissing` if the device config cannot be read.
+    /// Returns the default sample rate for the given input device, or the system
+    /// default when `device_id` is `None`.
     fn input_sample_rate(&self, device_id: Option<&str>) -> Result<u32, DeviceError>;
 
-    /// Returns the default sample rate for the given output device.
-    ///
-    /// # Arguments
-    ///
-    /// * `device_id` - Optional device ID string. When `None`, queries the system default output device.
-    ///
-    /// # Errors
-    ///
-    /// Returns `DeviceError::NoDefaultDevice` if no default device is available,
-    /// or `DeviceError::DefaultConfigMissing` if the device config cannot be read.
+    /// Returns the default sample rate for the given output device, or the system
+    /// default when `device_id` is `None`.
     fn output_sample_rate(&self, device_id: Option<&str>) -> Result<u32, DeviceError>;
 
-    /// Opens an input stream on the specified device and returns the processor input,
-    /// the device's native sample rate, and the platform stream handle.
+    /// Opens an input stream and returns the processor input, the device's
+    /// native sample rate, and the platform stream handle. The platform handle
+    /// must outlive all use of the processor input.
     ///
-    /// The returned `InputStream` must be kept alive for the duration of recording;
-    /// dropping it stops the stream.
-    ///
-    /// # Arguments
-    ///
-    /// * `device_id` - Optional device ID string. When `None`, uses the system default input device.
-    ///   Falls back to the default device if the specified ID is not found.
-    /// * `error_callback` - Optional callback invoked on stream errors. When `None`, errors are logged.
-    ///
-    /// # Errors
-    ///
-    /// Returns:
-    /// - `DeviceError::NoDefaultDevice` if no default device is available
-    /// - `DeviceError::InvalidDeviceId` if the device ID string cannot be parsed
-    /// - `DeviceError::DefaultConfigMissing` if the device's default config cannot be read
-    /// - `DeviceError::UnsupportedConfig` if the device uses an unsupported sample format
-    /// - `DeviceError::BuildStream` if the underlying stream cannot be created
-    /// - `DeviceError::PlayStream` if the stream cannot be started
+    /// `error_callback`, when `Some`, replaces the default error log path.
     #[cfg(not(target_family = "wasm"))]
     fn open_input(
         &self,
@@ -137,27 +60,11 @@ pub trait AudioHost {
         error_callback: Option<StreamErrorCallback>,
     ) -> Result<(impl AudioInput + Send + 'static, u32, Self::InputStream), DeviceError>;
 
-    /// Opens an output stream on the specified device and returns the processor output,
-    /// the device's native sample rate, and the platform stream handle.
+    /// Opens an output stream and returns the processor output, the device's
+    /// native sample rate, and the platform stream handle. The platform handle
+    /// must outlive all use of the processor output.
     ///
-    /// The returned `OutputStream` must be kept alive for the duration of playback;
-    /// dropping it stops the stream.
-    ///
-    /// # Arguments
-    ///
-    /// * `device_id` - Optional device ID string. When `None`, uses the system default output device.
-    ///   Falls back to the default device if the specified ID is not found.
-    /// * `error_callback` - Optional callback invoked on stream errors. When `None`, errors are logged.
-    ///
-    /// # Errors
-    ///
-    /// Returns:
-    /// - `DeviceError::NoDefaultDevice` if no default device is available
-    /// - `DeviceError::InvalidDeviceId` if the device ID string cannot be parsed
-    /// - `DeviceError::DefaultConfigMissing` if the device's default config cannot be read
-    /// - `DeviceError::UnsupportedConfig` if the device uses an unsupported sample format
-    /// - `DeviceError::BuildStream` if the underlying stream cannot be created
-    /// - `DeviceError::PlayStream` if the stream cannot be started
+    /// `error_callback`, when `Some`, replaces the default error log path.
     fn open_output(
         &self,
         device_id: Option<&str>,

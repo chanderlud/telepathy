@@ -817,6 +817,11 @@ impl From<String> for DartError {
     }
 }
 
+/// The error message returned when a caller supplies a non-32-byte identity key.
+/// Shared by `flutter::Telepathy::set_identity` and `native::NativeTelepathy::set_identity`
+/// so the user-facing wording stays in sync.
+pub const IDENTITY_KEY_LENGTH_MESSAGE: &str = "Key must be 32 bytes";
+
 #[derive(Debug, Clone, Serialize)]
 pub enum ManagerState {
     Stopped,

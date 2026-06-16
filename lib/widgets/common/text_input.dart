@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-/// Custom TextInput Widget.
+/// Themed single-line text field with optional error-state styling.
 class TextInput extends StatelessWidget {
   final String labelText;
   final String? hintText;
@@ -13,16 +13,14 @@ class TextInput extends StatelessWidget {
   final void Function(String)? onChanged;
   final void Function(String)? onSubmitted;
 
-  /// When non-null, renders a built-in error message under the field and
-  /// tints the outline/label so the error state is visible both at rest
-  /// and on hover. Use this instead of the raw `error` slot so the border
-  /// color tracks the theme's error color rather than a hard-coded red.
+  /// Renders a built-in error message and tints the outline/label so the
+  /// error state stays visible at rest and on hover. Mutually exclusive
+  /// with [error].
   final String? errorText;
 
-  /// Escape hatch for callers that need to render an arbitrary widget in
-  /// the error slot (e.g. a rich `Text` with inline links). When supplied,
-  /// no error-state border/label tinting is applied -- callers are
-  /// responsible for styling the field themselves.
+  /// Escape hatch for callers that need to render an arbitrary widget
+  /// (e.g. rich `Text` with inline links). When supplied, no error-state
+  /// tinting is applied.
   final Widget? error;
 
   const TextInput(
@@ -45,9 +43,17 @@ class TextInput extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final errorColor = Theme.of(context).colorScheme.error;
-    // Lerp the error color toward black so the outline darkens slightly on
-    // hover while still clearly signalling the error state.
     final errorHoverColor = Color.lerp(errorColor, Colors.black, 0.16)!;
+
+    final errorTextStyle = errorText == null
+        ? null
+        : WidgetStateTextStyle.resolveWith((Set<WidgetState> states) {
+            return TextStyle(
+              color: states.contains(WidgetState.hovered)
+                  ? errorHoverColor
+                  : errorColor,
+            );
+          });
 
     final InputBorder border = errorText == null
         ? const OutlineInputBorder(
@@ -86,24 +92,8 @@ class TextInput extends StatelessWidget {
         filled: true,
         errorText: errorText,
         error: error,
-        labelStyle: errorText == null
-            ? null
-            : WidgetStateTextStyle.resolveWith((Set<WidgetState> states) {
-                return TextStyle(
-                  color: states.contains(WidgetState.hovered)
-                      ? errorHoverColor
-                      : errorColor,
-                );
-              }),
-        floatingLabelStyle: errorText == null
-            ? null
-            : WidgetStateTextStyle.resolveWith((Set<WidgetState> states) {
-                return TextStyle(
-                  color: states.contains(WidgetState.hovered)
-                      ? errorHoverColor
-                      : errorColor,
-                );
-              }),
+        labelStyle: errorTextStyle,
+        floatingLabelStyle: errorTextStyle,
         border: border,
         contentPadding: const EdgeInsets.all(10.0),
       ),

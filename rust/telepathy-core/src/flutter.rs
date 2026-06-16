@@ -22,10 +22,8 @@ type SessionStatusArgs = (String, SessionStatus);
 type ScreenshareStartedArgs = (FrontendNotify, bool);
 type ManagerActiveArgs = ManagerState;
 
-/// Rust API for FRB frontend.
-///
-/// Every public method here forwards to a same-named method on `TelepathyHandle`.
-/// Keep this `impl` in sync with `impl NativeTelepathy` and `impl TelepathyHandle`.
+/// Rust API for FRB frontend. Mirrors `impl NativeTelepathy` 1:1; both
+/// forward to `impl TelepathyHandle`.
 #[frb(opaque)]
 pub struct Telepathy {
     handle: TelepathyHandle<
@@ -105,7 +103,7 @@ impl Telepathy {
             .set_identity(
                 &(key
                     .try_into()
-                    .map_err(|_| DartError::from("Key must be 32 bytes".to_string()))?),
+                    .map_err(|_| DartError::from(IDENTITY_KEY_LENGTH_MESSAGE.to_string()))?),
             )
             .await
             .map_err(DartError::from)
@@ -177,7 +175,7 @@ impl Telepathy {
         self.handle.set_muted(muted)
     }
 
-    /// Changing the denoise flag will not affect the current call
+    /// Denoise is set on the processor; the current call is not reconfigured.
     #[frb(sync)]
     pub fn set_denoise(&self, denoise: bool) {
         self.handle.set_denoise(denoise)

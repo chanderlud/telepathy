@@ -106,7 +106,11 @@ impl NativeTelepathy {
 
     pub async fn set_identity(&self, key: Vec<u8>) -> Result<(), String> {
         self.handle
-            .set_identity(&(key.try_into().map_err(|_| "Key must be 32 bytes")?))
+            .set_identity(
+                &(key
+                    .try_into()
+                    .map_err(|_| crate::types::IDENTITY_KEY_LENGTH_MESSAGE.to_string())?),
+            )
             .await
             .map_err(|e| e.to_string())
     }

@@ -60,106 +60,11 @@ class RoomWidgetState extends State<RoomWidget> {
           isHovered = hover;
         });
       },
-      onTap: () {
-        showDialog(
-            barrierDismissible: false,
-            context: context,
-            builder: (BuildContext context) {
-              return SimpleDialog(
-                title: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text('Edit Room'),
-                    IconButton(
-                      onPressed: () async {
-                        if (!stateController.isActiveRoom(widget.room)) {
-                          bool confirm = await showDialog<bool>(
-                                  context: context,
-                                  builder: (BuildContext context) {
-                                    return SimpleDialog(
-                                      title: const Text('Warning'),
-                                      contentPadding: const EdgeInsets.only(
-                                          bottom: 25, left: 25, right: 25),
-                                      titlePadding: const EdgeInsets.only(
-                                          top: 25,
-                                          left: 25,
-                                          right: 25,
-                                          bottom: 20),
-                                      children: [
-                                        const Text(
-                                            'Are you sure you want to delete this room?'),
-                                        const SizedBox(height: 20),
-                                        Row(
-                                          mainAxisAlignment:
-                                              MainAxisAlignment.end,
-                                          children: [
-                                            Button(
-                                              text: 'Cancel',
-                                              onPressed: () {
-                                                Navigator.pop(context, false);
-                                              },
-                                            ),
-                                            const SizedBox(width: 10),
-                                            Button(
-                                              text: 'Delete',
-                                              onPressed: () {
-                                                Navigator.pop(context, true);
-                                              },
-                                            ),
-                                          ],
-                                        ),
-                                      ],
-                                    );
-                                  }) ??
-                              false;
-
-                          if (confirm) {
-                            profilesController.removeRoom(widget.room);
-                          }
-
-                          if (context.mounted) {
-                            Navigator.pop(context);
-                          }
-                        } else {
-                          showErrorDialog(context, 'Warning',
-                              'Cannot delete a room while in an active call');
-                        }
-                      },
-                      icon: SvgPicture.asset('assets/icons/Trash.svg',
-                          semanticsLabel: 'Delete room icon'),
-                    ),
-                  ],
-                ),
-                contentPadding:
-                    const EdgeInsets.only(bottom: 25, left: 25, right: 25),
-                titlePadding: const EdgeInsets.only(
-                    top: 25, left: 25, right: 25, bottom: 20),
-                children: [
-                  TextInput(
-                      enabled: !stateController.isActiveRoom(widget.room),
-                      controller: _nicknameInput,
-                      labelText: 'Nickname'),
-                  const SizedBox(height: 20),
-                  Button(
-                    text: 'Save',
-                    onPressed: () {
-                      if (stateController.isActiveRoom(widget.room)) {
-                        showErrorDialog(context, 'Warning',
-                            'Cannot rename a room while in an active call');
-                        return;
-                      }
-
-                      setState(() {
-                        widget.room.nickname = _nicknameInput.text;
-                      });
-                      profilesController.saveRooms();
-                      Navigator.pop(context);
-                    },
-                  ),
-                ],
-              );
-            });
-      },
+      onTap: () => _showEditDialog(
+        context,
+        stateController: stateController,
+        profilesController: profilesController,
+      ),
       hoverColor: Colors.transparent,
       child: Container(
         margin: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
@@ -248,4 +153,108 @@ class RoomWidgetState extends State<RoomWidget> {
       ),
     );
   }
+
+  Future<void> _showEditDialog(
+    BuildContext context, {
+    required StateController stateController,
+    required ProfilesController profilesController,
+  }) {
+    return showDialog(
+      barrierDismissible: false,
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return SimpleDialog(
+          title: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text('Edit Room'),
+              IconButton(
+                onPressed: () async {
+                  if (!stateController.isActiveRoom(widget.room)) {
+                    bool confirm = await _confirmDelete(dialogContext);
+                    if (confirm) {
+                      profilesController.removeRoom(widget.room);
+                    }
+                    if (dialogContext.mounted) {
+                      Navigator.pop(dialogContext);
+                    }
+                  } else {
+                    showErrorDialog(
+                      dialogContext,
+                      'Warning',
+                      'Cannot delete a room while in an active call',
+                    );
+                  }
+                },
+                icon: SvgPicture.asset('assets/icons/Trash.svg',
+                    semanticsLabel: 'Delete room icon'),
+              ),
+            ],
+          ),
+          contentPadding:
+              const EdgeInsets.only(bottom: 25, left: 25, right: 25),
+          titlePadding: const EdgeInsets.only(
+              top: 25, left: 25, right: 25, bottom: 20),
+          children: [
+            TextInput(
+                enabled: !stateController.isActiveRoom(widget.room),
+                controller: _nicknameInput,
+                labelText: 'Nickname'),
+            const SizedBox(height: 20),
+            Button(
+              text: 'Save',
+              onPressed: () {
+                if (stateController.isActiveRoom(widget.room)) {
+                  showErrorDialog(dialogContext, 'Warning',
+                      'Cannot rename a room while in an active call');
+                  return;
+                }
+
+                setState(() {
+                  widget.room.nickname = _nicknameInput.text;
+                });
+                profilesController.saveRooms();
+                Navigator.pop(dialogContext);
+              },
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<bool> _confirmDelete(BuildContext context) async {
+    return await showDialog<bool>(
+          context: context,
+          builder: (BuildContext dialogContext) {
+            return SimpleDialog(
+              title: const Text('Warning'),
+              contentPadding:
+                  const EdgeInsets.only(bottom: 25, left: 25, right: 25),
+              titlePadding: const EdgeInsets.only(
+                  top: 25, left: 25, right: 25, bottom: 20),
+              children: [
+                const Text('Are you sure you want to delete this room?'),
+                const SizedBox(height: 20),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    Button(
+                      text: 'Cancel',
+                      onPressed: () => Navigator.pop(dialogContext, false),
+                    ),
+                    const SizedBox(width: 10),
+                    Button(
+                      text: 'Delete',
+                      onPressed: () => Navigator.pop(dialogContext, true),
+                    ),
+                  ],
+                ),
+              ],
+            );
+          },
+        ) ??
+        false;
+  }
 }
+

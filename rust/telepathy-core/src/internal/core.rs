@@ -698,17 +698,7 @@ where
             // the current map entry for `peer` and whose `stop_session` token has not
             // been canceled.
             if !is_session_still_current(&self.session_states, peer, session_id).await {
-                // A stale session (e.g. replaced by a collision winner or drained by
-                // `reset_sessions`) must not respond as if the peer is busy — that would
-                // be a lie, because from the caller's perspective the peer is reachable
-                // (a fresh session may be ready to serve on its own connection). The
-                // session exits without writing anything. If a fresh session exists in
-                // the map for this peer, it owns/closes the relevant connection and
-                // will serve the dialer on its own connection, so we leave it alone.
-                // Otherwise, nothing else will close this connection, so we close it
-                // here so the dialer learns the session is over via a transport close
-                // instead of waiting the full `HELLO_TIMEOUT` for a `HelloAck` that
-                // will never come.
+                // see IncomingSlotDecision::StaleSession
                 info!(event = "incoming_call_skipped_stale_session", peer.id = %peer);
                 let states = self.session_states.read().await;
                 if states.get(&peer).is_none() {
@@ -2070,8 +2060,7 @@ enum HelloResponse {
 /// `release_on_failure` is `false` for an incoming `Matched*` slot — the peer already holds
 /// the matching pending slot (outgoing in the simultaneous-dial case) and is responsible
 /// for its lifecycle. Outgoing acquisition sets it for both `Acquired` and `Matched*`.
-/// [`Self::into_handshake`] does not release the slot; handshake code transitions it to
-/// active.
+/// The handshake path does not release the slot; it transitions the slot to active.
 struct PendingDirectCallSlot<'a> {
     call_slot: &'a CallSlot,
     peer: PublicKey,

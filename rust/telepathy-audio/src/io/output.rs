@@ -43,32 +43,18 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
 use tracing::{debug, error};
 
-/// Configuration for audio output processing.
-///
-/// This struct holds all configuration options for an audio output stream.
-/// Use [`AudioOutputBuilder`] for a more ergonomic way to construct these options.
+/// Configuration for an audio output stream. Prefer [`AudioOutputBuilder`].
 pub struct AudioOutputConfig {
-    /// Device ID for output device selection.
-    ///
-    /// When `None`, uses the system's default output device.
-    /// When `Some(id)`, attempts to find the device with that ID,
-    /// falling back to default if not found.
+    /// Output device ID; `None` selects the system default.
     pub device_id: Option<String>,
-    /// Remote (source) sample rate in Hz.
-    ///
-    /// This is the sample rate of incoming audio data. The output processor
-    /// automatically resamples to the output device's native rate if needed.
+    /// Remote (source) sample rate. The processor resamples to the device's
+    /// native rate as needed.
     pub sample_rate: u32,
-    /// Output volume multiplier (1.0 = unity gain).
-    ///
-    /// Values less than 1.0 reduce volume, greater than 1.0 amplify.
+    /// Output gain. 1.0 = unity; values < 1.0 attenuate, > 1.0 amplify.
     pub volume: f32,
-    /// Set to true when codec is enabled
+    /// When true, the SEA codec decodes incoming frames.
     pub codec_enabled: bool,
-    /// Optional callback for stream errors.
-    ///
-    /// When set, the callback receives the underlying CPAL stream error.
-    /// When unset, stream errors are logged by default.
+    /// Stream-error callback; `None` falls back to a default log path.
     pub error_callback: Option<StreamErrorCallback>,
 }
 
@@ -318,25 +304,9 @@ impl Default for AudioOutputBuilder<Box<dyn AudioDataSource>> {
 
 /// Handle to a running audio output stream.
 ///
-/// This handle allows controlling the audio output (deafen/undeafen, volume,
-/// loss monitoring) while audio data is received from the user-provided source.
-/// Resources are automatically cleaned up when dropped.
-///
-/// The type parameter `S` is the platform stream type returned by the
-/// [`AudioHost`] (e.g., `SendStream` for [`CpalAudioHost`], `()` for
-/// [`MockAudioHost`]). It is inferred from the host passed to
-/// [`AudioOutputBuilder::build`].
-///
-/// ## Lifecycle
-///
-/// - **Creation**: Created by [`AudioOutputBuilder::build`]
-/// - **Running**: Audio is decoded (if codec enabled), resampled, and played via the output device
-/// - **Cleanup**: Dropping the handle drops the underlying stream, causing the processor thread to exit
-///
-/// ## Thread Safety
-///
-/// All control methods (`deafen`, `undeafen`, `set_volume`, etc.) are thread-safe
-/// and can be called from any thread. They use atomic operations internally.
+/// All control methods (`deafen`, `undeafen`, `set_volume`, …) are thread-safe
+/// via the underlying atomics. Dropping the handle tears down the stream and
+/// joins the processor thread; there is no separate cleanup call.
 pub struct AudioOutputHandle<S> {
     _stream: Option<S>,
     _processor_handle: Option<JoinHandle<()>>,

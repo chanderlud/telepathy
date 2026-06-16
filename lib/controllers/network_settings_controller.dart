@@ -70,8 +70,8 @@ class NetworkSettingsController with ChangeNotifier {
     required NetworkConfigBuilder builder,
   }) {
     try {
-      // Build a safe base first. The constructor with defaults is guaranteed to
-      // succeed, so we never feed possibly-invalid stored values into it.
+      // Construct a defaults-only base first so any per-field rejection below
+      // leaves the live config in a known-safe state.
       final NetworkConfig config = builder(
         listenPort: defaultListenPort,
         bindAddresses: defaultBindAddresses,
@@ -81,19 +81,11 @@ class NetworkSettingsController with ChangeNotifier {
         pkarrRelay: null,
       );
 
-      // Apply the stored values as a single atomic `update`. This
-      // validates every field up front and only commits once we know
-      // the entire configuration is acceptable to the rust side. If any
-      // field is invalid, the live `NetworkConfig` is left untouched --
-      // the per-field setters can leave it partially mutated if a
-      // later setter rejects its value.
-      //
-      // We compute the candidate values per group first so a corrupt
-      // group can be dropped without rejecting the rest of the update.
-      // Groups that we drop here (because of an empty/half-stored
-      // value) are intentionally not passed: passing `None` would
-      // override previously-configured values, which is not what
-      // "skip this group" means.
+      // Apply stored values via the atomic `update` so either every group
+      // commits or none does. Groups with empty/half-stored values are
+      // dropped here rather than passed as `None`; passing `None` would
+      // override the previously-configured value, which is not the same
+      // as "skip this group".
       final int newListenPort = stored.listenPort ?? defaultListenPort;
       final List<String> newBindAddresses =
           (stored.bindAddresses != null && stored.bindAddresses!.isNotEmpty)
@@ -126,28 +118,15 @@ class NetworkSettingsController with ChangeNotifier {
           pkarrRelay: newPkarrRelay,
         );
       } on NetworkConfigUpdateError catch (e) {
-        // One of the supplied stored groups is invalid. The atomic
-        // setter has guaranteed that the live config was NOT mutated,
-        // so it still reflects the safe defaults built above. Log
-        // the rust-side field tag along with the message so the log
-        // makes it obvious which stored group was rejected, and keep
-        // the defaults rather than retrying.
         DebugConsole.warn(
           'invalid stored network config field ${e.field.name}: ${e.message}, using defaults',
         );
       } on DartError catch (e) {
-        // Defensive fallback: if the rust side ever surfaces a plain
-        // [DartError] (e.g. from a path that bypasses the typed
-        // [NetworkConfigUpdateError]), keep the previous logging
-        // behaviour rather than crashing the controller.
         DebugConsole.warn('invalid stored network config, using defaults: $e');
       }
 
       return config;
     } on DartError catch (e) {
-      // The constructor itself (with defaults) is not expected to throw, but if
-      // it ever does, fall back to a fresh defaults-only config. Never pass
-      // possibly-invalid stored values back into the constructor here.
       DebugConsole.warn('failed to build network config, using defaults: $e');
       return builder(
         listenPort: defaultListenPort,
@@ -184,13 +163,10 @@ class NetworkSettingsController with ChangeNotifier {
         'bindAddresses', networkConfig.getBindAddresses());
 
     final List<String>? relays = networkConfig.getRelays();
-    // Treat "custom relays enabled with an empty list" the same as "no
-    // custom relays". An empty list would otherwise persist
-    // `customRelaysEnabled = true` against zero URLs, which on the rust
-    // side disables the default relay map without supplying a replacement
-    // and effectively breaks connectivity. The settings UI also rejects
-    // this case at save time, so this branch is a defense-in-depth guard
-    // against any code path that bypasses that validation.
+    // An empty custom-relay list would persist `customRelaysEnabled = true`
+    // against zero URLs, which on the rust side disables the default map
+    // without a replacement. The UI rejects this at save time; this branch
+    // is the defense-in-depth fallback for any path that bypasses it.
     final bool customRelaysEnabled = relays != null && relays.isNotEmpty;
     await options.setBool('customRelaysEnabled', customRelaysEnabled);
     if (customRelaysEnabled) {

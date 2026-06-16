@@ -434,10 +434,8 @@ where
                 &mut input_sender,
                 input_channels,
                 data.len(),
-                data.chunks(input_channels).map(|frame| {
-                    // Convert device format T to f32
-                    frame[0].to_float_sample()
-                }),
+                data.chunks(input_channels)
+                    .map(|frame| frame[0].to_float_sample()),
             );
         },
         move |err| {
@@ -453,10 +451,10 @@ where
     Ok(stream)
 }
 
-/// Builds an input stream for 64-bit sample formats (i64, u64, f64).
+/// Builds an input stream for the 64-bit sample formats whose `Float` is `f64`.
 ///
-/// These types use f64 as their intermediate float type, so we need a separate
-/// helper that converts f64 to f32.
+/// A separate helper is required because cpal's `Sample` trait maps those types
+/// through an f64 intermediate; the standard helper funnels through f32.
 #[cfg(not(target_family = "wasm"))]
 fn build_input_stream_with_format_64<T>(
     device: &Device,
@@ -476,7 +474,6 @@ where
                 input_channels,
                 data.len(),
                 data.chunks(input_channels).map(|frame| {
-                    // Convert device format T to f64, then to f32
                     let sample_f64 = frame[0].to_float_sample();
                     sample_f64 as f32
                 }),
@@ -552,7 +549,6 @@ where
             debug_assert!(output_channels > 0);
 
             let total_frames = data.len() / output_channels;
-            // How many real frames we can pull right now
             let available_frames = total_frames.min(output_consumer.slots());
 
             if was_missing && available_frames == 0 {
@@ -563,14 +559,14 @@ where
 
             let mut frames = data.chunks_mut(output_channels);
 
-            // Read as many as possible (maybe 0)
             let mut pulled = 0;
             if available_frames > 0 {
                 match output_consumer.read_chunk(available_frames) {
                     Ok(chunk) => {
                         let mut samples = chunk.into_iter();
 
-                        // Fade-in on recovery: apply ramp to the incoming samples
+                        // Fade-in on recovery: a Hann ramp over the first samples
+                        // smooths the discontinuity after an underrun.
                         let ramp_in_len = if was_underrun {
                             TRANSITION_LENGTH.min(available_frames)
                         } else {
@@ -594,12 +590,10 @@ where
                         }
 
                         if ramp_in_len > 0 {
-                            // Reset state after playing real samples
                             was_underrun = false;
                             was_missing = false;
                         }
 
-                        // Remaining real samples (no gain)
                         while let (Some(frame), Some(sample_f32)) = (frames.next(), samples.next())
                         {
                             last_sample = sample_f32;
@@ -614,7 +608,6 @@ where
                 }
             }
 
-            // If we couldn't fill the buffer, fade out then silence
             let missing = total_frames.saturating_sub(pulled);
             if missing > 0 {
                 was_underrun = true;
@@ -631,7 +624,6 @@ where
                     frame.fill(T::from_sample(last_sample * g));
                 }
 
-                // Remaining frames: hard silence
                 for frame in frames {
                     frame.fill(T::from_sample(0.0));
                 }
