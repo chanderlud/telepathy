@@ -503,6 +503,17 @@ jobs:
             export PATH="$PATH:/flutter/bin"
             export PATH="$PATH":"$HOME/.pub-cache/bin"
             export PATH=/flutter/bin/cache/dart-sdk/bin:$PATH
+
+            if [[ "${{ matrix.distro }}" == "ubuntu20.04" ]]; then
+              export CC=clang
+              export CXX=clang++
+              export CC_aarch64_unknown_linux_gnu=clang
+              export CXX_aarch64_unknown_linux_gnu=clang++
+            fi
+          
+            echo "CC=${CC:-unset}"
+            ${CC:-cc} --version | head -n 1
+            
             flutter_distributor release --name=distribution --jobs=release-distribution-linux-deb,release-distribution-linux-rpm
             mv dist/*/telepathy-*-linux.deb /artifacts/telepathy.deb
             mv dist/*/telepathy-*-linux.rpm /artifacts/telepathy.rpm
