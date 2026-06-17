@@ -17,14 +17,12 @@ The UI is built with [Flutter](https://flutter.dev/) enabling the app to target 
 
 - Screensharing for Windows, macOS, and Linux
 - Game overlay for Windows
-- Web support
 - Telepathy rooms (group calls)
 
 ### Planned
 
 - Lossless audio codec support
-- QUIC datagrams for live audio streams
-- p2p updates for desktop clients
+- Built in update pipeline with version checking and patching
 
 ## Local Development
 - Flutter, Dart, and Cargo are required for building the project
