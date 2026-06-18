@@ -19,8 +19,13 @@
 
 ## Test Execution Rules
 
-- Unit tests may be executed directly with `cargo test --manifest-path ./rust/Cargo.toml`
-- Integration tests must be executed with `cargo test --manifest-path ./rust/Cargo.toml --test core_integration_test --features integration-testing`
+- Prefer `cargo nextest run` over `cargo test` for Rust tests. The nextest config lives at `./rust/.config/nextest.toml`, so run nextest commands from `./rust` or pass `--manifest-path ./rust/Cargo.toml`.
+- Main Rust test pass: from the project root, run `cd rust && cargo nextest run --all-targets -E 'not kind(=bench) and not binary(=core_integration_test)'`. Use this after ordinary Rust changes; it runs unit and non-benchmark test targets without enabling the `integration-testing` feature.
+- Core integration stress pass: from the project root, run `cd rust && cargo nextest run -p telepathy_core --test core_integration_test --features integration-testing --stress-count 10`. Use this after changes touching telepathy-core sessions, calls, rooms, networking, teardown, or anything that may affect `./rust/telepathy-core/tests/core_integration_test.rs`.
+- Full CI-equivalent Rust test sequence: run the main Rust test pass first, then the core integration stress pass. Use this before handing off substantial Rust changes.
+- Targeted package tests: use `cd rust && cargo nextest run -p <package_name> -E 'not kind(=bench)'` for quick package-local validation when the core integration suite is unrelated.
+- Targeted single test debugging: use `cd rust && cargo nextest run -p <package_name> <test_name>` while iterating on a specific failure, then run the broader applicable pass before finalizing.
+- Only fall back to `cargo test` when nextest cannot run a required test mode; explain why in your handoff if you do.
 - System tests must be manually executed in WSL by the developer, prompt them to do so
 
 ## Flutter Rust Bridge Rules

@@ -102,8 +102,17 @@ jobs:
           cache: true
           cache-workspaces: rust
 
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+          fallback: none
+
       - name: Run Rust tests
-        run: cd rust && cargo test --all-targets --features integration-testing
+        run: |
+          cd rust
+          cargo nextest run --all-targets -E 'not kind(=bench) and not binary(=core_integration_test)'
+          cargo nextest run -p telepathy_core --test core_integration_test --features integration-testing --stress-count 10
 
   build_rust:
     needs: [lint_rust, test_rust]
