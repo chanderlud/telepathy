@@ -12,6 +12,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -21,7 +24,7 @@ jobs:
     name: Lint Rust
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Linux Prerequisites
         run: sudo apt-get update && sudo apt-get install clang cmake git ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev libasound2-dev
@@ -45,7 +48,7 @@ jobs:
     name: Lint Flutter
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Setup Flutter SDK
         uses: flutter-actions/setup-flutter@v4
@@ -69,7 +72,7 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Setup Flutter SDK
         uses: flutter-actions/setup-flutter@v4
@@ -87,10 +90,10 @@ jobs:
     needs: lint_rust
     runs-on: ubuntu-latest
     name: Test Rust
-    timeout-minutes: 20
+    timeout-minutes: 40
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Linux Prerequisites
         run: sudo apt-get update && sudo apt-get install clang cmake git ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev libasound2-dev
@@ -136,7 +139,7 @@ jobs:
             target: aarch64-apple-ios
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Linux Prerequisites
         if: runner.os == 'Linux'
@@ -185,7 +188,7 @@ jobs:
     name: System Tests
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Linux Prerequisites
         run: sudo apt-get update && sudo apt-get install clang cmake git ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev libasound2-dev iproute2
@@ -245,21 +248,21 @@ jobs:
         info:
           - image: windows-2022
             target: windows
-          # - image: macos-14
-          #   target: macos
+          - image: macos-14
+            target: macos
           - image: ubuntu-24.04
             target: linux
           - image: ubuntu-22.04
             target: linux
           - image: windows-2022
             target: apk
-          # - image: macos-14
-          #   target: ios
+          - image: macos-14
+            target: ios
           - image: ubuntu-24.04
             target: web
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Cache Cargo registry
         uses: actions/cache@v5
@@ -315,33 +318,6 @@ jobs:
         if: runner.os == 'Linux' && startsWith(github.ref, 'refs/tags/')
         run: sudo apt-get install rpm patchelf gcc-aarch64-linux-gnu g++-aarch64-linux-gnu dpkg-cross && dart pub global activate flutter_distributor
 
-      - name: Install the Apple certificate and provisioning profile
-        if: matrix.info.target == 'macos' || matrix.info.target == 'ios'
-        env:
-          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
-          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
-          BUILD_PROVISION_PROFILE_BASE64: ${{ matrix.info.target == 'ios' && secrets.BUILD_PROVISION_PROFILE_BASE64_MOBILE || secrets.BUILD_PROVISION_PROFILE_BASE64_DESKTOP }}
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-        run: |
-          CERTIFICATE_PATH=$RUNNER_TEMP/build_certificate.p12
-          PP_EXTENSION=$([[ "${{ matrix.info.target }}" == "ios" ]] && echo "mobileprovision" || echo "provisionprofile")
-          PP_PATH=$RUNNER_TEMP/build_pp.$PP_EXTENSION
-          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
-      
-          echo -n "$BUILD_CERTIFICATE_BASE64" | base64 --decode -o $CERTIFICATE_PATH
-          echo -n "$BUILD_PROVISION_PROFILE_BASE64" | base64 --decode -o $PP_PATH
-      
-          security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
-          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
-      
-          security import $CERTIFICATE_PATH -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
-          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
-          security list-keychain -d user -s $KEYCHAIN_PATH
-      
-          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
-          cp $PP_PATH ~/Library/MobileDevice/Provisioning\ Profiles
-
       - name: Install Web Tools
         if: matrix.info.target == 'web' && steps.cache-cargo-tools.outputs.cache-hit != 'true'
         run: cargo install flutter_rust_bridge_codegen@2.12.0 wasm-pack
@@ -354,8 +330,34 @@ jobs:
         if: matrix.info.target == 'web'
         run: ./web/build_web.sh
 
+      - name: Build macOS unsigned
+        if: matrix.info.target == 'macos'
+        run: |
+          set -eux
+          MODE="${{ startsWith(github.ref, 'refs/tags/') && 'release' || 'debug' }}"
+          CONFIG="${{ startsWith(github.ref, 'refs/tags/') && 'Release' || 'Debug' }}"
+          BUILD_DIR="$PWD/build/macos"
+          flutter build macos --config-only --$MODE
+          xcodebuild \
+            -workspace macos/Runner.xcworkspace \
+            -scheme Runner \
+            -configuration "$CONFIG" \
+            -derivedDataPath "$BUILD_DIR" \
+            -destination platform=macOS \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            OBJROOT="$BUILD_DIR/Build/Intermediates.noindex" \
+            SYMROOT="$BUILD_DIR/Build/Products" \
+            build
+
+      - name: Build iOS unsigned
+        if: matrix.info.target == 'ios'
+        run: flutter build ios ${{ startsWith(github.ref, 'refs/tags/') && '--release' || '--debug' }} --no-codesign
+
       - name: Build Flutter
-        if: matrix.info.target != 'linux' || !startsWith(github.ref, 'refs/tags/')
+        if: matrix.info.target != 'macos' && matrix.info.target != 'ios' && (matrix.info.target != 'linux' || !startsWith(github.ref, 'refs/tags/'))
         run: flutter build ${{ matrix.info.target }} ${{ startsWith(github.ref, 'refs/tags/') && '--release' || '--debug' }} ${{ matrix.info.target == 'web' && startsWith(github.ref, 'refs/tags/') && '--base-href /' || '' }}
 
       - name: Package deb & rpm
@@ -379,9 +381,21 @@ jobs:
         if: matrix.info.target == 'apk'
         run: mv build/app/outputs/flutter-apk/${{ startsWith(github.ref, 'refs/tags/') && 'app-release.apk' || 'app-debug.apk' }} telepathy.apk
 
-      - name: Move IPA
+      - name: Move macOS Bundle
+        if: matrix.info.target == 'macos'
+        run: mv build/macos/Build/Products/${{ startsWith(github.ref, 'refs/tags/') && 'Release' || 'Debug' }}/Telepathy.app telepathy-macos.app
+
+      - name: Package macOS Bundle
+        if: matrix.info.target == 'macos'
+        run: ditto -c -k --sequesterRsrc --keepParent telepathy-macos.app telepathy-macos-unsigned.zip
+
+      - name: Move iOS Bundle
         if: matrix.info.target == 'ios'
-        run: mv build/ios/iphoneos/Runner.app telepathy.app
+        run: mv build/ios/iphoneos/Runner.app telepathy-ios.app
+
+      - name: Package iOS Bundle
+        if: matrix.info.target == 'ios'
+        run: ditto -c -k --keepParent telepathy-ios.app telepathy-ios-unsigned-app.zip
 
       - name: Move Linux Bundle
         if: matrix.info.target == 'linux'
@@ -402,7 +416,8 @@ jobs:
           path: |
             telepathy.apk
             telepathy
-            telepathy.app
+            telepathy-macos-unsigned.zip
+            telepathy-ios-unsigned-app.zip
             telepathy-windows-x64.exe
             telepathy.deb
             telepathy.rpm
@@ -431,7 +446,7 @@ jobs:
           #   distro: ubuntu22.04
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Cache Cargo registry for cross build
         uses: actions/cache@v5
@@ -546,7 +561,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Download all artifacts
         uses: actions/download-artifact@v8
@@ -585,6 +600,12 @@ jobs:
           cd artifacts/telepathy_windows-2022_windows
           zip -r "../../dist/telepathy-${VER}-windows-standalone-x86_64.zip" telepathy
           cd ../../
+
+          mv "artifacts/telepathy_macos-14_macos/telepathy-macos-unsigned.zip" \
+             "dist/telepathy-${VER}-macos-arm64-unsigned.zip"
+
+          mv "artifacts/telepathy_macos-14_ios/telepathy-ios-unsigned-app.zip" \
+             "dist/telepathy-${VER}-ios-arm64-unsigned-app.zip"
 
           #
           # LINUX x86_64 (built on ubuntu-24.04 -> noble)
@@ -677,7 +698,7 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Download web artifact
         uses: actions/download-artifact@v8
