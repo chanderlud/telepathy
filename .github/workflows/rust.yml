@@ -310,6 +310,20 @@ jobs:
       - name: Get Packages
         run: flutter pub get
 
+      - name: Setup Rust for Apple Flutter builds
+        if: matrix.info.target == 'macos' || matrix.info.target == 'ios'
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: 'stable'
+          cache: true
+          cache-workspaces: rust
+
+      - name: Install Apple Rust targets
+        if: matrix.info.target == 'macos' || matrix.info.target == 'ios'
+        run: |
+          rustup target add aarch64-apple-darwin
+          rustup target add aarch64-apple-ios
+
       - name: Linux Prerequisites
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install clang cmake git ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev libasound2-dev libsecret-1-dev
@@ -348,6 +362,7 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             DEVELOPMENT_TEAM="" \
+            MACOSX_DEPLOYMENT_TARGET=10.15 \
             OBJROOT="$BUILD_DIR/Build/Intermediates.noindex" \
             SYMROOT="$BUILD_DIR/Build/Products" \
             build
