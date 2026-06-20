@@ -180,6 +180,8 @@ jobs:
           cache-workspaces: rust
 
       - name: Build
+        env:
+          IPHONEOS_DEPLOYMENT_TARGET: '18.0'
         run: cd rust && cargo build --verbose --target ${{ matrix.info.target }}
 
   system_tests:
@@ -369,21 +371,7 @@ jobs:
 
       - name: Build iOS unsigned
         if: matrix.info.target == 'ios'
-        env:
-          CARGOKIT_VERBOSE: '1'
-          RUST_BACKTRACE: '1'
-          VERBOSE_SCRIPT_LOGGING: 'YES'
-        run: |
-          set -o pipefail
-          flutter build ios ${{ startsWith(github.ref, 'refs/tags/') && '--release' || '--debug' }} --no-codesign --verbose 2>&1 | tee ios-build.log
-
-      - name: Upload iOS build log
-        if: failure() && matrix.info.target == 'ios'
-        uses: actions/upload-artifact@v7
-        with:
-          name: ios-build-log
-          path: ios-build.log
-          if-no-files-found: ignore
+        run: flutter build ios ${{ startsWith(github.ref, 'refs/tags/') && '--release' || '--debug' }} --no-codesign
 
       - name: Build Flutter
         if: matrix.info.target != 'macos' && matrix.info.target != 'ios' && (matrix.info.target != 'linux' || !startsWith(github.ref, 'refs/tags/'))
