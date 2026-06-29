@@ -73,6 +73,9 @@ NETWORK_PROFILES = [
 ROOM_THREE_ACTORS = ["alice", "bob", "carol"]
 ROOM_FOUR_ACTORS = ["alice", "bob", "carol", "dave"]
 ROOM_TWENTY_ACTORS = [f"peer{index:02d}" for index in range(1, 21)]
+FULL_LOSS_SAMPLES_PER_STAT = 4_800
+MAX_FULL_LOSS_STATS_PER_CALL = 10
+MAX_CONSECUTIVE_FULL_LOSS_STATS = 5
 
 
 def _generate_identity() -> Identity:
@@ -491,6 +494,117 @@ def _has_error_event(messages: list[dict]) -> bool:
         if message.get("type") in {"Error", "error"}:
             return True
     return False
+
+
+def _call_state_name(state: object) -> str | None:
+    if isinstance(state, str):
+        return state
+    if isinstance(state, dict) and len(state) == 1:
+        only_key = next(iter(state.keys()))
+        if isinstance(only_key, str):
+            return only_key
+    return None
+
+
+def _is_call_state(event: dict, state_name: str) -> bool:
+    if event.get("type") != "call_state":
+        return False
+    return _call_state_name(event.get("state")) == state_name
+
+
+def _statistics_since(actor: CliProcess, start_index: int) -> list[dict]:
+    return [
+        message
+        for message in actor.stdout_lines()[start_index:]
+        if message.get("kind") == "event" and message.get("type") == "statistics"
+    ]
+
+
+def _max_stat_value(stats: list[dict], field: str) -> float:
+    values = [
+        value
+        for stat in stats
+        if isinstance((value := stat.get(field)), (int, float))
+    ]
+    return float(max(values, default=0.0))
+
+
+def _longest_full_loss_run(stats: list[dict]) -> int:
+    longest = 0
+    current = 0
+    for stat in stats:
+        loss = stat.get("loss")
+        if isinstance(loss, int) and loss >= FULL_LOSS_SAMPLES_PER_STAT:
+            current += 1
+            longest = max(longest, current)
+        else:
+            current = 0
+    return longest
+
+
+async def _accept_next_call(callee: CliProcess, contact_id: str) -> None:
+    prompt = await callee.expect_event(
+        lambda event: event.get("type") == "accept_call_prompt"
+        and event.get("contact_id") == contact_id,
+        timeout=20.0,
+    )
+    request_id = prompt.get("request_id")
+    assert isinstance(request_id, str), f"accept_call_prompt missing request_id: {prompt}"
+    response = await callee.send(
+        {"cmd": "accept_call", "args": {"request_id": request_id, "accept": True}}
+    )
+    assert response.get("ok") is True, f"accept_call failed: {response}"
+
+
+async def _start_call_and_wait_connected(
+    caller: CliProcess,
+    callee: CliProcess,
+    *,
+    caller_contact_id: str,
+    callee_contact_id: str,
+) -> None:
+    response = await caller.send(
+        {"cmd": "start_call", "args": {"contact_id": caller_contact_id}}
+    )
+    assert response.get("ok") is True, f"start_call failed: {response}"
+    await _accept_next_call(callee, callee_contact_id)
+    await asyncio.gather(
+        caller.expect_event(lambda event: _is_call_state(event, "Connected"), timeout=20.0),
+        callee.expect_event(lambda event: _is_call_state(event, "Connected"), timeout=20.0),
+    )
+
+
+async def _collect_statistics_window(
+    actor: CliProcess,
+    *,
+    duration: float,
+) -> list[dict]:
+    start_index = len(actor.stdout_lines())
+    await asyncio.sleep(duration)
+    return _statistics_since(actor, start_index)
+
+
+def _assert_no_sustained_full_loss(actor_name: str, stats: list[dict]) -> None:
+    full_loss_stats = [
+        stat
+        for stat in stats
+        if isinstance(stat.get("loss"), int)
+        and stat["loss"] >= FULL_LOSS_SAMPLES_PER_STAT
+    ]
+    longest_run = _longest_full_loss_run(stats)
+    max_loss = _max_stat_value(stats, "loss")
+    max_download = _max_stat_value(stats, "download_bandwidth")
+
+    assert len(full_loss_stats) < MAX_FULL_LOSS_STATS_PER_CALL, (
+        f"{actor_name} recorded too many full-loss statistics; "
+        f"full_loss_count={len(full_loss_stats)}, longest_run={longest_run}, "
+        f"max_loss={max_loss}, max_download_bandwidth={max_download}, stats={stats}"
+    )
+    assert longest_run < MAX_CONSECUTIVE_FULL_LOSS_STATS, (
+        f"{actor_name} recorded sustained full-loss statistics; "
+        f"full_loss_count={len(full_loss_stats)}, longest_run={longest_run}, "
+        f"max_loss={max_loss}, max_download_bandwidth={max_download}, stats={stats}"
+    )
 
 
 async def _room_cli_group_fixture(
@@ -927,6 +1041,53 @@ async def test_call_hello_ack_timeout(
     assert (
         "CallEnded" in alice_call_states
     ), f"alice did not receive call_state CallEnded; observed {alice_call_states}"
+
+
+@pytest.mark.asyncio
+# Issue #44 is timing-sensitive: lower-latency profiles can drain stale audio datagrams
+# before the second call starts, while the satellite profile preserves the cross-call window.
+@pytest.mark.parametrize("profile", NETWORK_PROFILES, ids=lambda profile: profile.name)
+async def test_call_repeated_without_restart_keeps_remote_audio(
+    topology: TopologyManager,
+    cli_pair: dict[str, CliProcess],
+    profile: NetworkProfile,
+) -> None:
+    _ = topology, profile
+    await _run_scenario("call_repeated_without_restart.yaml", cli_pair)
+
+    alice = cli_pair["alice"]
+    bob = cli_pair["bob"]
+
+    await _start_call_and_wait_connected(
+        alice,
+        bob,
+        caller_contact_id="bob",
+        callee_contact_id="alice",
+    )
+
+    first_call_bob_stats = await _collect_statistics_window(bob, duration=3.0)
+    _assert_no_sustained_full_loss("bob during first call", first_call_bob_stats)
+
+    mute_response = await alice.send({"cmd": "set_muted", "args": {"value": True}})
+    assert mute_response.get("ok") is True, f"alice mute failed: {mute_response}"
+    await asyncio.sleep(11.0)
+
+    end_response = await alice.send({"cmd": "end_call", "args": {}})
+    assert end_response.get("ok") is True, f"alice end_call failed: {end_response}"
+    await bob.expect_event(lambda event: _is_call_state(event, "CallEnded"), timeout=20.0)
+
+    unmute_response = await alice.send({"cmd": "set_muted", "args": {"value": False}})
+    assert unmute_response.get("ok") is True, f"alice unmute failed: {unmute_response}"
+
+    await _start_call_and_wait_connected(
+        alice,
+        bob,
+        caller_contact_id="bob",
+        callee_contact_id="alice",
+    )
+
+    second_call_bob_stats = await _collect_statistics_window(bob, duration=4.0)
+    _assert_no_sustained_full_loss("bob during second call", second_call_bob_stats)
 
 
 @pytest.mark.asyncio
