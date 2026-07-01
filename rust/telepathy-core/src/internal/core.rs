@@ -1436,7 +1436,7 @@ where
         if let Some(o) = optional {
             let input_handle = spawn_task(audio_input(
                 input_helper.receiver(),
-                ConstConnection::new(o.connection.clone()),
+                ConstConnection::new(o.connection.clone(), self.core_state.audio_sequence.clone()),
                 stop_io.clone(),
             ));
 
@@ -1721,7 +1721,10 @@ where
 
         let input_handle = spawn_task(audio_input(
             input_helper.receiver(),
-            DynamicConnection::new(connection_sender.clone()),
+            DynamicConnection::new(
+                connection_sender.clone(),
+                self.core_state.audio_sequence.clone(),
+            ),
             stop_io.clone(),
         ));
 
