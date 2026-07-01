@@ -531,6 +531,17 @@ mod tests {
     }
 
     #[test]
+    fn keepalive_accepts_equal_floor_sequence_number() {
+        // The keepalive carries the *next* audio sequence number, so the first
+        // real frame after silence is allowed to arrive at exactly that floor.
+        let mut jitter = AudioJitterBuffer::new(48_000);
+
+        jitter.reset_after_keepalive(80);
+
+        assert!(jitter.insert_audio(80, Bytes::from_static(b"fresh call"), Instant::now()));
+    }
+
+    #[test]
     fn stale_keepalive_accepts_continued_sequence_number() {
         let mut jitter = AudioJitterBuffer::new(48_000);
 
