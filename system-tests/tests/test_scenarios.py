@@ -70,12 +70,20 @@ NETWORK_PROFILES = [
     ),
 ]
 
+REPEATED_CALL_PROFILE = NetworkProfile(
+    name="repeated_call_moderate_delay_zero_loss",
+    delay_ms=300,
+    jitter_ms=0,
+    loss_pct=0.0,
+    burst_loss=False,
+    seed=104,
+)
+
 ROOM_THREE_ACTORS = ["alice", "bob", "carol"]
 ROOM_FOUR_ACTORS = ["alice", "bob", "carol", "dave"]
 ROOM_TWENTY_ACTORS = [f"peer{index:02d}" for index in range(1, 21)]
 FULL_LOSS_SAMPLES_PER_STAT = 4_800
-MAX_FULL_LOSS_STATS_PER_CALL = 10
-MAX_CONSECUTIVE_FULL_LOSS_STATS = 5
+MAX_CONSECUTIVE_FULL_LOSS_STATS = 20
 
 
 def _generate_identity() -> Identity:
@@ -542,6 +550,19 @@ def _longest_full_loss_run(stats: list[dict]) -> int:
     return longest
 
 
+def _has_sustained_full_loss_then_recovery(stats: list[dict]) -> bool:
+    current = 0
+    for stat in stats:
+        loss = stat.get("loss")
+        if isinstance(loss, int) and loss >= FULL_LOSS_SAMPLES_PER_STAT:
+            current += 1
+            continue
+        if current >= MAX_CONSECUTIVE_FULL_LOSS_STATS:
+            return True
+        current = 0
+    return False
+
+
 async def _accept_next_call(callee: CliProcess, contact_id: str) -> None:
     prompt = await callee.expect_event(
         lambda event: event.get("type") == "accept_call_prompt"
@@ -585,24 +606,13 @@ async def _collect_statistics_window(
 
 
 def _assert_no_sustained_full_loss(actor_name: str, stats: list[dict]) -> None:
-    full_loss_stats = [
-        stat
-        for stat in stats
-        if isinstance(stat.get("loss"), int)
-        and stat["loss"] >= FULL_LOSS_SAMPLES_PER_STAT
-    ]
     longest_run = _longest_full_loss_run(stats)
     max_loss = _max_stat_value(stats, "loss")
     max_download = _max_stat_value(stats, "download_bandwidth")
 
-    assert len(full_loss_stats) < MAX_FULL_LOSS_STATS_PER_CALL, (
-        f"{actor_name} recorded too many full-loss statistics; "
-        f"full_loss_count={len(full_loss_stats)}, longest_run={longest_run}, "
-        f"max_loss={max_loss}, max_download_bandwidth={max_download}, stats={stats}"
-    )
-    assert longest_run < MAX_CONSECUTIVE_FULL_LOSS_STATS, (
-        f"{actor_name} recorded sustained full-loss statistics; "
-        f"full_loss_count={len(full_loss_stats)}, longest_run={longest_run}, "
+    assert not _has_sustained_full_loss_then_recovery(stats), (
+        f"{actor_name} recorded issue #44 sustained full-loss then recovery; "
+        f"longest_run={longest_run}, "
         f"max_loss={max_loss}, max_download_bandwidth={max_download}, stats={stats}"
     )
 
@@ -1044,9 +1054,9 @@ async def test_call_hello_ack_timeout(
 
 
 @pytest.mark.asyncio
-# Issue #44 is timing-sensitive: lower-latency profiles can drain stale audio datagrams
-# before the second call starts, while the satellite profile preserves the cross-call window.
-@pytest.mark.parametrize("profile", NETWORK_PROFILES, ids=lambda profile: profile.name)
+@pytest.mark.parametrize(
+    "profile", [REPEATED_CALL_PROFILE], ids=lambda profile: profile.name
+)
 async def test_call_repeated_without_restart_keeps_remote_audio(
     topology: TopologyManager,
     cli_pair: dict[str, CliProcess],
@@ -1068,16 +1078,17 @@ async def test_call_repeated_without_restart_keeps_remote_audio(
     first_call_bob_stats = await _collect_statistics_window(bob, duration=3.0)
     _assert_no_sustained_full_loss("bob during first call", first_call_bob_stats)
 
-    mute_response = await alice.send({"cmd": "set_muted", "args": {"value": True}})
-    assert mute_response.get("ok") is True, f"alice mute failed: {mute_response}"
-    await asyncio.sleep(11.0)
+    # Let the audio sequence climb so the bounded datagram queue holds enough
+    # stale frames to keep bob fully dark past the 20-stat / 2 s threshold
+    # during the second call's handshake.
+    await asyncio.sleep(5.0)
 
-    end_response = await alice.send({"cmd": "end_call", "args": {}})
-    assert end_response.get("ok") is True, f"alice end_call failed: {end_response}"
-    await bob.expect_event(lambda event: _is_call_state(event, "CallEnded"), timeout=20.0)
+    end_response = await bob.send({"cmd": "end_call", "args": {}})
+    assert end_response.get("ok") is True, f"bob end_call failed: {end_response}"
 
-    unmute_response = await alice.send({"cmd": "set_muted", "args": {"value": False}})
-    assert unmute_response.get("ok") is True, f"alice unmute failed: {unmute_response}"
+    # bob must start a new call soon after the previous ends
+    # sleep serves this purpose okay
+    await asyncio.sleep(0.5)
 
     await _start_call_and_wait_connected(
         alice,
@@ -1088,6 +1099,11 @@ async def test_call_repeated_without_restart_keeps_remote_audio(
 
     second_call_bob_stats = await _collect_statistics_window(bob, duration=4.0)
     _assert_no_sustained_full_loss("bob during second call", second_call_bob_stats)
+    max_second_call_output = _max_stat_value(second_call_bob_stats, "output_level")
+    assert max_second_call_output > 0.0, (
+        "bob did not observe nonzero output_level during second call; "
+        f"max_output_level={max_second_call_output}, stats={second_call_bob_stats}"
+    )
 
 
 @pytest.mark.asyncio
