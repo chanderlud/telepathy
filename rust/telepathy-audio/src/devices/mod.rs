@@ -119,9 +119,18 @@ fn format_device_name(name: &str, manufacturer: Option<&str>, extended: &[String
         .find(|detail| is_useful_device_detail(&normalized_name, detail));
 
     match detail {
+        Some(detail) if is_preformatted_device_label(&normalized_name, detail) => {
+            detail.to_string()
+        }
         Some(detail) => format!("{name} ({detail})"),
         None => name.to_string(),
     }
+}
+
+fn is_preformatted_device_label(normalized_name: &str, detail: &str) -> bool {
+    let normalized_detail = normalize_device_label(detail);
+    normalized_detail.starts_with(&format!("{normalized_name} ("))
+        && normalized_detail.ends_with(')')
 }
 
 fn is_useful_device_detail(normalized_name: &str, detail: &str) -> bool {
@@ -166,6 +175,24 @@ mod tests {
         let name = format_device_name("Microphone (USB Audio Interface)", None, &extended);
 
         assert_eq!(name, "Microphone (USB Audio Interface)");
+    }
+
+    #[test]
+    fn preformatted_extended_input_detail_is_not_nested() {
+        let extended = vec!["Microphone (Yeti Stereo Microphone)".to_string()];
+
+        let name = format_device_name("Microphone", None, &extended);
+
+        assert_eq!(name, "Microphone (Yeti Stereo Microphone)");
+    }
+
+    #[test]
+    fn preformatted_extended_output_detail_is_not_nested() {
+        let extended = vec!["Line 1 (Virtual Audio Cable)".to_string()];
+
+        let name = format_device_name("Line 1", None, &extended);
+
+        assert_eq!(name, "Line 1 (Virtual Audio Cable)");
     }
 
     #[test]
