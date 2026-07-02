@@ -98,7 +98,11 @@ pub struct AudioDeviceList {
 /// Returns `None` if the device name or ID cannot be extracted.
 fn device_to_info(device: &Device) -> Option<AudioDeviceInfo> {
     let description = device.description().ok()?;
-    let name = description.name().to_string();
+    let name = description
+        .extended()
+        .first()
+        .cloned()
+        .unwrap_or(description.name().to_string());
     let id = device.id().ok()?.to_string();
     Some(AudioDeviceInfo { name, id })
 }
