@@ -100,16 +100,20 @@ impl<I: Default, O: Default> Default for MockAudioHost<I, O> {
     }
 }
 
-/// In-process audio input that emits silence at real-time pace.
+/// In-process audio input that emits a deterministic signal at real-time pace.
 #[derive(Debug, Clone)]
 pub struct MockAudioInput {
     sample_rate: u32,
+    sample_index: u64,
 }
 
 impl MockAudioInput {
-    /// Creates a new mock input that emits silence at the given sample rate.
+    /// Creates a new mock input that emits changing non-silent samples at the given sample rate.
     pub fn new(sample_rate: u32) -> Self {
-        Self { sample_rate }
+        Self {
+            sample_rate,
+            sample_index: 0,
+        }
     }
 }
 
@@ -125,7 +129,11 @@ impl AudioInput for MockAudioInput {
         if frame_seconds.is_normal() || frame_seconds > 0.0 {
             thread::sleep(Duration::from_secs_f64(frame_seconds));
         }
-        dst.fill(0.0);
+        for sample in dst.iter_mut() {
+            let ramp_position = (self.sample_index % 96) as f32 / 95.0;
+            *sample = (ramp_position * 2.0 - 1.0) * 0.25;
+            self.sample_index = self.sample_index.wrapping_add(1);
+        }
         Ok(dst.len())
     }
 }
@@ -141,5 +149,26 @@ impl AudioOutput for MockAudioOutput {
 
     fn write_samples(&mut self, _samples: &[f32]) -> Result<usize, Error> {
         Ok(0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mock_audio_input_emits_changing_non_silent_samples() {
+        let mut input = MockAudioInput::new(1_000_000);
+        let mut first = [0.0; 4];
+        let mut second = [0.0; 4];
+
+        let first_read = input.read_into(&mut first).unwrap();
+        let second_read = input.read_into(&mut second).unwrap();
+
+        assert_eq!(first_read, first.len());
+        assert_eq!(second_read, second.len());
+        assert!(first.iter().any(|sample| *sample != 0.0));
+        assert!(second.iter().any(|sample| *sample != 0.0));
+        assert_ne!(first, second);
     }
 }

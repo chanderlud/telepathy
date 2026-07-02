@@ -9,7 +9,7 @@ use iroh::{PublicKey, SecretKey, TransportAddr};
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::atomic::Ordering::Relaxed;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 use telepathy_audio::RnnModel;
@@ -416,6 +416,9 @@ pub struct CoreState {
 
     /// serializes access to shared volume state
     output_lock: Arc<StdMutex<()>>,
+
+    /// global audio sequence number
+    pub(crate) audio_sequence: Arc<AtomicU32>,
 }
 
 impl CoreState {

@@ -4,8 +4,8 @@ use bytes::Bytes;
 use iroh::endpoint::Connection;
 use kanal::{AsyncReceiver, Sender};
 use std::collections::{BTreeMap, HashSet};
-use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
+use std::sync::atomic::{AtomicU32, AtomicUsize};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use telepathy_audio::FRAME_SIZE;
@@ -89,15 +89,15 @@ pub(crate) struct ConstConnection {
     /// (if not cloned), leveraging `Bytes::try_into_mut()` for recovery.
     packet_buffers: Arc<BufferPool>,
 
-    sequence_number: u32,
+    sequence_number: Arc<AtomicU32>,
 }
 
 impl ConstConnection {
-    pub(crate) fn new(connection: Connection) -> Self {
+    pub(crate) fn new(connection: Connection, sequence_number: Arc<AtomicU32>) -> Self {
         Self {
             connection,
             packet_buffers: Arc::new(BufferPool::new(PACKET_POOL_SIZE, PACKET_BUFFER_CAPACITY)),
-            sequence_number: 0,
+            sequence_number,
         }
     }
 }
@@ -106,7 +106,11 @@ impl TelepathyConnection for ConstConnection {
     fn send(&mut self, packet: &Bytes) -> usize {
         let pooled_buffer = BufferPool::acquire(&self.packet_buffers);
         let is_keep_alive = is_keep_alive_payload(packet.as_ref());
-        let sequence_number = self.sequence_number;
+        let sequence_number = if is_keep_alive {
+            self.sequence_number.load(Relaxed)
+        } else {
+            self.sequence_number.fetch_add(1, Relaxed)
+        };
         let pooled_bytes = prepare_packet(
             pooled_buffer,
             packet.as_ref(),
@@ -119,10 +123,6 @@ impl TelepathyConnection for ConstConnection {
             .connection
             .send_datagram((*pooled_bytes).clone())
             .is_ok();
-
-        if ok && !is_keep_alive {
-            self.sequence_number = self.sequence_number.wrapping_add(1);
-        }
 
         ok as usize
     }
@@ -146,7 +146,7 @@ pub(crate) struct DynamicConnection {
     /// `insert_audio` to anchor playout: the first packet it sees becomes the
     /// anchor, jump-starting playback at that point rather than waiting for
     /// the original sequence origin.
-    sequence_number: u32,
+    sequence_number: Arc<AtomicU32>,
 }
 
 impl TelepathyConnection for DynamicConnection {
@@ -164,7 +164,7 @@ impl TelepathyConnection for DynamicConnection {
         let mut i = 0;
         let mut successful_sends = 0;
         let is_keep_alive = is_keep_alive_payload(packet.as_ref());
-        let sequence_number = self.sequence_number;
+        let sequence_number = self.sequence_number.load(Relaxed);
 
         while i < self.connections.len() {
             let pooled_buffer = BufferPool::acquire(&self.packet_buffers);
@@ -197,19 +197,19 @@ impl TelepathyConnection for DynamicConnection {
         }
 
         if successful_sends > 0 && !is_keep_alive {
-            self.sequence_number = self.sequence_number.wrapping_add(1);
+            self.sequence_number.fetch_add(1, Relaxed);
         }
         successful_sends
     }
 }
 
 impl DynamicConnection {
-    pub(crate) fn new(new_connections: SharedConnections) -> Self {
+    pub(crate) fn new(new_connections: SharedConnections, sequence_number: Arc<AtomicU32>) -> Self {
         Self {
             new_connections,
             connections: Vec::new(),
             packet_buffers: Arc::new(BufferPool::new(PACKET_POOL_SIZE, PACKET_BUFFER_CAPACITY)),
-            sequence_number: 0,
+            sequence_number,
         }
     }
 }
@@ -515,4 +515,38 @@ fn is_keep_alive_payload(payload: &[u8]) -> bool {
 /// True when `a` is older than `b` under u32 sequence-number wraparound.
 fn seq_before(a: u32, b: u32) -> bool {
     a != b && a.wrapping_sub(b) > 0x8000_0000
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stale_keepalive_rejects_restarted_sequence_number() {
+        let mut jitter = AudioJitterBuffer::new(48_000);
+
+        jitter.reset_after_keepalive(80);
+
+        assert!(!jitter.insert_audio(0, Bytes::from_static(b"fresh call"), Instant::now()));
+    }
+
+    #[test]
+    fn keepalive_accepts_equal_floor_sequence_number() {
+        // The keepalive carries the *next* audio sequence number, so the first
+        // real frame after silence is allowed to arrive at exactly that floor.
+        let mut jitter = AudioJitterBuffer::new(48_000);
+
+        jitter.reset_after_keepalive(80);
+
+        assert!(jitter.insert_audio(80, Bytes::from_static(b"fresh call"), Instant::now()));
+    }
+
+    #[test]
+    fn stale_keepalive_accepts_continued_sequence_number() {
+        let mut jitter = AudioJitterBuffer::new(48_000);
+
+        jitter.reset_after_keepalive(80);
+
+        assert!(jitter.insert_audio(81, Bytes::from_static(b"fresh call"), Instant::now()));
+    }
 }
