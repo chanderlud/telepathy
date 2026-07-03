@@ -4,6 +4,7 @@
 //! audio input/output devices across platforms.
 
 mod cpal_host;
+mod direction;
 mod error;
 mod mock_host;
 
@@ -14,6 +15,7 @@ use crate::io::StreamErrorCallback;
 use cpal::Device;
 use cpal::traits::DeviceTrait;
 pub use cpal_host::CpalAudioHost;
+pub use direction::DeviceDirection;
 pub use error::DeviceError;
 pub use mock_host::{MockAudioHost, MockAudioInput, MockAudioOutput};
 

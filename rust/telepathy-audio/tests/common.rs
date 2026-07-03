@@ -8,6 +8,7 @@ use bytes::Bytes;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use telepathy_audio::ChannelError;
 use telepathy_audio::Error;
 use telepathy_audio::FRAME_SIZE;
 use telepathy_audio::internal::buffer_pool::DEFAULT_POOL_CAPACITY;
@@ -222,7 +223,9 @@ impl AudioOutput for FailingAudioOutput {
     }
 
     fn write_samples(&mut self, _samples: &[f32]) -> Result<usize, Error> {
-        Err(Error::Processing("intentional output failure".to_string()))
+        Err(Error::Channel(ChannelError::DataSinkFailed(
+            std::io::Error::other("intentional output failure"),
+        )))
     }
 }
 

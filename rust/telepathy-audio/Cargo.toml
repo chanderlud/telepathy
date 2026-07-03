@@ -1,6 +1,6 @@
 [package]
 name = "telepathy-audio"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 description = "Audio processing library for telepathy with device management, codec support, and SIMD optimization"
 license = "MIT"

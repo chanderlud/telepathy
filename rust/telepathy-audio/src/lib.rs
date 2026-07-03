@@ -56,6 +56,13 @@
 //! specific channel library. For convenience, `telepathy_audio::adapters` provides ready-to-use
 //! `std::sync::mpsc` implementations: [`MpscSink`](crate::adapters::MpscSink) and [`MpscSource`](crate::adapters::MpscSource).
 //!
+//! ## Error model
+//!
+//! [`Error`] is the crate-level error boundary. Each variant wraps a typed
+//! sub-error so callers can match on the underlying cause instead of parsing
+//! display text; inner errors preserve their original source via
+//! `std::error::Error::source()`. See [`error`] for the full hierarchy.
+//!
 //! ## Basic Usage
 //!
 //! ### Device Enumeration
@@ -247,7 +254,11 @@ pub mod sea;
 mod platform;
 
 pub use constants::FRAME_SIZE;
-pub use error::Error;
+pub use error::{
+    AudioFileError, ChannelError, ConfigError, Error, ProcessingError, StreamError, TaskError,
+};
+#[cfg(target_family = "wasm")]
+pub use error::{SpawnFailureReason, WasmError};
 
 #[cfg(any(test, feature = "test-internals"))]
 pub use constants::MINIMUM_SILENCE_LENGTH;

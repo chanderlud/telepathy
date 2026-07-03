@@ -252,6 +252,9 @@ impl Error {
     }
 
     pub(crate) fn is_audio_error(&self) -> bool {
-        matches!(self.kind, ErrorKind::DeviceError(_))
+        matches!(
+            self.kind,
+            ErrorKind::AudioError(_) | ErrorKind::DeviceError(_)
+        )
     }
 }

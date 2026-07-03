@@ -1,4 +1,5 @@
 use crate::constants::TRANSITION_LENGTH;
+use crate::devices::DeviceDirection;
 use crate::devices::{AudioDeviceInfo, AudioDeviceList, AudioHost, DeviceError, device_to_info};
 #[cfg(not(target_family = "wasm"))]
 use crate::internal::traits::{AudioInput, RingBufferInput};
@@ -8,10 +9,7 @@ use crate::internal::utils::{hann_fade_in, hann_fade_out};
 use crate::io::input::RingBufferSender;
 use crate::io::{SendStream, StreamErrorCallback};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{
-    Device, DeviceId, FromSample, Sample, SampleFormat, SizedSample, Stream,
-    StreamConfig,
-};
+use cpal::{Device, DeviceId, FromSample, Sample, SampleFormat, SizedSample, Stream, StreamConfig};
 use rtrb::chunks::ChunkError;
 use rtrb::{Consumer, RingBuffer};
 use std::fmt;
@@ -96,7 +94,7 @@ impl AudioHost for CpalAudioHost {
         let devices = self
             .inner()
             .input_devices()
-            .map_err(|e| DeviceError::EnumerationFailed(e.to_string()))?;
+            .map_err(DeviceError::EnumerateInput)?;
 
         Ok(devices.filter_map(|d| device_to_info(&d)).collect())
     }
@@ -105,7 +103,7 @@ impl AudioHost for CpalAudioHost {
         let devices = self
             .inner()
             .output_devices()
-            .map_err(|e| DeviceError::EnumerationFailed(e.to_string()))?;
+            .map_err(DeviceError::EnumerateOutput)?;
 
         Ok(devices.filter_map(|d| device_to_info(&d)).collect())
     }
@@ -122,14 +120,24 @@ impl AudioHost for CpalAudioHost {
 
     fn input_sample_rate(&self, device_id: Option<&str>) -> Result<u32, DeviceError> {
         let input_device = self.get_input_device(device_id)?;
-        let config = input_device.default_input_config()?;
-        Ok(config.sample_rate())
+        input_device
+            .default_input_config()
+            .map(|c| c.sample_rate())
+            .map_err(|source| DeviceError::DefaultConfig {
+                direction: DeviceDirection::Input,
+                source,
+            })
     }
 
     fn output_sample_rate(&self, device_id: Option<&str>) -> Result<u32, DeviceError> {
         let output_device = self.get_output_device(device_id)?;
-        let config = output_device.default_output_config()?;
-        Ok(config.sample_rate())
+        output_device
+            .default_output_config()
+            .map(|c| c.sample_rate())
+            .map_err(|source| DeviceError::DefaultConfig {
+                direction: DeviceDirection::Output,
+                source,
+            })
     }
 
     #[cfg(not(target_family = "wasm"))]
@@ -139,7 +147,13 @@ impl AudioHost for CpalAudioHost {
         error_callback: Option<StreamErrorCallback>,
     ) -> Result<(impl AudioInput + Send + 'static, u32, Self::InputStream), DeviceError> {
         let input_device = self.get_input_device(device_id)?;
-        let config = input_device.default_input_config()?;
+        let config =
+            input_device
+                .default_input_config()
+                .map_err(|source| DeviceError::DefaultConfig {
+                    direction: DeviceDirection::Input,
+                    source,
+                })?;
 
         let input_channels = config.channels() as usize;
         let device_sample_rate = config.sample_rate();
@@ -160,83 +174,87 @@ impl AudioHost for CpalAudioHost {
         let stream = match sample_format {
             SampleFormat::I8 => build_input_stream_with_format::<i8>(
                 &input_device,
-                &config.into(),
+                config.into(),
                 input_sender,
                 input_channels,
                 error_callback,
             )?,
             SampleFormat::I16 => build_input_stream_with_format::<i16>(
                 &input_device,
-                &config.into(),
+                config.into(),
                 input_sender,
                 input_channels,
                 error_callback,
             )?,
             SampleFormat::I32 => build_input_stream_with_format::<i32>(
                 &input_device,
-                &config.into(),
+                config.into(),
                 input_sender,
                 input_channels,
                 error_callback,
             )?,
             SampleFormat::I64 => build_input_stream_with_format_64::<i64>(
                 &input_device,
-                &config.into(),
+                config.into(),
                 input_sender,
                 input_channels,
                 error_callback,
             )?,
             SampleFormat::U8 => build_input_stream_with_format::<u8>(
                 &input_device,
-                &config.into(),
+                config.into(),
                 input_sender,
                 input_channels,
                 error_callback,
             )?,
             SampleFormat::U16 => build_input_stream_with_format::<u16>(
                 &input_device,
-                &config.into(),
+                config.into(),
                 input_sender,
                 input_channels,
                 error_callback,
             )?,
             SampleFormat::U32 => build_input_stream_with_format::<u32>(
                 &input_device,
-                &config.into(),
+                config.into(),
                 input_sender,
                 input_channels,
                 error_callback,
             )?,
             SampleFormat::U64 => build_input_stream_with_format_64::<u64>(
                 &input_device,
-                &config.into(),
+                config.into(),
                 input_sender,
                 input_channels,
                 error_callback,
             )?,
             SampleFormat::F32 => build_input_stream_with_format::<f32>(
                 &input_device,
-                &config.into(),
+                config.into(),
                 input_sender,
                 input_channels,
                 error_callback,
             )?,
             SampleFormat::F64 => build_input_stream_with_format_64::<f64>(
                 &input_device,
-                &config.into(),
+                config.into(),
                 input_sender,
                 input_channels,
                 error_callback,
             )?,
             _ => {
-                return Err(DeviceError::UnsupportedConfig(
-                    "Unsupported sample format".to_string(),
-                ));
+                return Err(DeviceError::UnsupportedSampleFormat {
+                    direction: DeviceDirection::Input,
+                    sample_format,
+                });
             }
         };
 
         // Start playback
-        stream.play()?;
+        stream.play().map_err(|source| DeviceError::StreamPlay {
+            direction: DeviceDirection::Input,
+            source,
+        })?;
         Ok((processor_input, device_sample_rate, stream))
     }
 
@@ -246,7 +264,13 @@ impl AudioHost for CpalAudioHost {
         error_callback: Option<StreamErrorCallback>,
     ) -> Result<(impl AudioOutput + Send + 'static, u32, Self::OutputStream), DeviceError> {
         let output_device = self.get_output_device(device_id)?;
-        let output_config = output_device.default_output_config()?;
+        let output_config =
+            output_device
+                .default_output_config()
+                .map_err(|source| DeviceError::DefaultConfig {
+                    direction: DeviceDirection::Output,
+                    source,
+                })?;
 
         // Create ring buffer for lock-free producer/consumer communication
         let (output_producer, output_consumer) = RingBuffer::<f32>::new(CHANNEL_SIZE * 4);
@@ -261,83 +285,87 @@ impl AudioHost for CpalAudioHost {
         let stream = match sample_format {
             SampleFormat::I8 => build_output_stream_with_format::<i8>(
                 &output_device,
-                &output_config.into(),
+                output_config.into(),
                 output_consumer,
                 output_channels,
                 error_callback,
             )?,
             SampleFormat::I16 => build_output_stream_with_format::<i16>(
                 &output_device,
-                &output_config.into(),
+                output_config.into(),
                 output_consumer,
                 output_channels,
                 error_callback,
             )?,
             SampleFormat::I32 => build_output_stream_with_format::<i32>(
                 &output_device,
-                &output_config.into(),
+                output_config.into(),
                 output_consumer,
                 output_channels,
                 error_callback,
             )?,
             SampleFormat::I64 => build_output_stream_with_format::<i64>(
                 &output_device,
-                &output_config.into(),
+                output_config.into(),
                 output_consumer,
                 output_channels,
                 error_callback,
             )?,
             SampleFormat::U8 => build_output_stream_with_format::<u8>(
                 &output_device,
-                &output_config.into(),
+                output_config.into(),
                 output_consumer,
                 output_channels,
                 error_callback,
             )?,
             SampleFormat::U16 => build_output_stream_with_format::<u16>(
                 &output_device,
-                &output_config.into(),
+                output_config.into(),
                 output_consumer,
                 output_channels,
                 error_callback,
             )?,
             SampleFormat::U32 => build_output_stream_with_format::<u32>(
                 &output_device,
-                &output_config.into(),
+                output_config.into(),
                 output_consumer,
                 output_channels,
                 error_callback,
             )?,
             SampleFormat::U64 => build_output_stream_with_format::<u64>(
                 &output_device,
-                &output_config.into(),
+                output_config.into(),
                 output_consumer,
                 output_channels,
                 error_callback,
             )?,
             SampleFormat::F32 => build_output_stream_with_format::<f32>(
                 &output_device,
-                &output_config.into(),
+                output_config.into(),
                 output_consumer,
                 output_channels,
                 error_callback,
             )?,
             SampleFormat::F64 => build_output_stream_with_format::<f64>(
                 &output_device,
-                &output_config.into(),
+                output_config.into(),
                 output_consumer,
                 output_channels,
                 error_callback,
             )?,
             _ => {
-                return Err(DeviceError::UnsupportedConfig(
-                    "Unsupported sample format".to_string(),
-                ));
+                return Err(DeviceError::UnsupportedSampleFormat {
+                    direction: DeviceDirection::Output,
+                    sample_format,
+                });
             }
         };
 
         // Start playback
-        stream.0.play()?;
+        stream.0.play().map_err(|source| DeviceError::StreamPlay {
+            direction: DeviceDirection::Output,
+            source,
+        })?;
         Ok((
             RingBufferOutput::new(output_producer),
             device_sample_rate,
@@ -349,47 +377,60 @@ impl AudioHost for CpalAudioHost {
 impl CpalAudioHost {
     fn get_input_device(&self, device_id: Option<&str>) -> Result<Device, DeviceError> {
         if let Some(id) = device_id {
-            let parsed: DeviceId = id.parse()?;
+            let parsed: DeviceId = id.parse().map_err(|parse| DeviceError::InvalidDeviceId {
+                direction: DeviceDirection::Input,
+                id: id.to_string(),
+                parse,
+            })?;
 
             // Try to find the device by ID
             if let Some(device) = self.inner().device_by_id(&parsed) {
                 return Ok(device);
             }
 
-            // Fall back to default device
-            tracing::warn!(device.id = id, "input_device_not_found_fallback_to_default");
+            return Err(DeviceError::DeviceNotFound {
+                direction: DeviceDirection::Input,
+                id: id.to_string(),
+            });
         }
 
         // Get default device
         let device = self
             .inner()
             .default_input_device()
-            .ok_or(DeviceError::NoDefaultDevice)?;
+            .ok_or(DeviceError::NoDefaultDevice {
+                direction: DeviceDirection::Input,
+            })?;
 
         Ok(device)
     }
 
     fn get_output_device(&self, device_id: Option<&str>) -> Result<Device, DeviceError> {
         if let Some(id) = device_id {
-            let parsed: DeviceId = id.parse()?;
+            let parsed: DeviceId = id.parse().map_err(|parse| DeviceError::InvalidDeviceId {
+                direction: DeviceDirection::Output,
+                id: id.to_string(),
+                parse,
+            })?;
 
             // Try to find the device by ID
             if let Some(device) = self.inner().device_by_id(&parsed) {
                 return Ok(device);
             }
 
-            // Fall back to default device
-            tracing::warn!(
-                device.id = id,
-                "output_device_not_found_fallback_to_default"
-            );
+            return Err(DeviceError::DeviceNotFound {
+                direction: DeviceDirection::Output,
+                id: id.to_string(),
+            });
         }
 
         // Get default device
         let device = self
             .inner()
             .default_output_device()
-            .ok_or(DeviceError::NoDefaultDevice)?;
+            .ok_or(DeviceError::NoDefaultDevice {
+                direction: DeviceDirection::Output,
+            })?;
 
         Ok(device)
     }
@@ -415,7 +456,7 @@ impl CpalAudioHost {
 #[cfg(not(target_family = "wasm"))]
 fn build_input_stream_with_format<T>(
     device: &Device,
-    config: &StreamConfig,
+    config: StreamConfig,
     mut input_sender: RingBufferSender,
     input_channels: usize,
     mut error_callback: Option<StreamErrorCallback>,
@@ -423,26 +464,31 @@ fn build_input_stream_with_format<T>(
 where
     T: Sample<Float = f32> + SizedSample + Send + 'static,
 {
-    let stream = device.build_input_stream(
-        *config,
-        move |data: &[T], _: &_| {
-            input_stream_helper(
-                &mut input_sender,
-                input_channels,
-                data.len(),
-                data.chunks(input_channels)
-                    .map(|frame| frame[0].to_float_sample()),
-            );
-        },
-        move |err| {
-            if let Some(callback) = error_callback.as_mut() {
-                callback(err);
-            } else {
-                error!(error = %err, "input_stream_error");
-            }
-        },
-        None,
-    )?;
+    let stream = device
+        .build_input_stream(
+            config,
+            move |data: &[T], _: &_| {
+                input_stream_helper(
+                    &mut input_sender,
+                    input_channels,
+                    data.len(),
+                    data.chunks(input_channels)
+                        .map(|frame| frame[0].to_float_sample()),
+                );
+            },
+            move |err| {
+                if let Some(callback) = error_callback.as_mut() {
+                    callback(err);
+                } else {
+                    error!(error = %err, "input_stream_error");
+                }
+            },
+            None,
+        )
+        .map_err(|source| DeviceError::BuildInputStream {
+            config: Some(config),
+            source,
+        })?;
 
     Ok(stream)
 }
@@ -454,7 +500,7 @@ where
 #[cfg(not(target_family = "wasm"))]
 fn build_input_stream_with_format_64<T>(
     device: &Device,
-    config: &StreamConfig,
+    config: StreamConfig,
     mut input_sender: RingBufferSender,
     input_channels: usize,
     mut error_callback: Option<StreamErrorCallback>,
@@ -462,28 +508,33 @@ fn build_input_stream_with_format_64<T>(
 where
     T: Sample<Float = f64> + SizedSample + Send + 'static,
 {
-    let stream = device.build_input_stream(
-        *config,
-        move |data: &[T], _: &_| {
-            input_stream_helper(
-                &mut input_sender,
-                input_channels,
-                data.len(),
-                data.chunks(input_channels).map(|frame| {
-                    let sample_f64 = frame[0].to_float_sample();
-                    sample_f64 as f32
-                }),
-            );
-        },
-        move |err| {
-            if let Some(callback) = error_callback.as_mut() {
-                callback(err);
-            } else {
-                error!(error = %err, "input_stream_error");
-            }
-        },
-        None,
-    )?;
+    let stream = device
+        .build_input_stream(
+            config,
+            move |data: &[T], _: &_| {
+                input_stream_helper(
+                    &mut input_sender,
+                    input_channels,
+                    data.len(),
+                    data.chunks(input_channels).map(|frame| {
+                        let sample_f64 = frame[0].to_float_sample();
+                        sample_f64 as f32
+                    }),
+                );
+            },
+            move |err| {
+                if let Some(callback) = error_callback.as_mut() {
+                    callback(err);
+                } else {
+                    error!(error = %err, "input_stream_error");
+                }
+            },
+            None,
+        )
+        .map_err(|source| DeviceError::BuildInputStream {
+            config: Some(config),
+            source,
+        })?;
 
     Ok(stream)
 }
@@ -527,7 +578,7 @@ fn input_stream_helper(
 /// * `error_callback` - Optional callback for stream errors
 fn build_output_stream_with_format<T>(
     device: &Device,
-    config: &StreamConfig,
+    config: StreamConfig,
     mut output_consumer: Consumer<f32>,
     output_channels: usize,
     mut error_callback: Option<StreamErrorCallback>,
@@ -539,103 +590,109 @@ where
     let mut was_underrun = true;
     let mut was_missing = false;
 
-    let stream = device.build_output_stream(
-        *config,
-        move |data: &mut [T], _: &_| {
-            debug_assert!(output_channels > 0);
+    let stream = device
+        .build_output_stream(
+            config,
+            move |data: &mut [T], _: &_| {
+                debug_assert!(output_channels > 0);
 
-            let total_frames = data.len() / output_channels;
-            let available_frames = total_frames.min(output_consumer.slots());
+                let total_frames = data.len() / output_channels;
+                let available_frames = total_frames.min(output_consumer.slots());
 
-            if was_missing && available_frames == 0 {
-                // shortcut for when the fade already occurred & we are playing silence
-                data.fill(T::from_sample(0_f32));
-                return;
-            }
+                if was_missing && available_frames == 0 {
+                    // shortcut for when the fade already occurred & we are playing silence
+                    data.fill(T::from_sample(0_f32));
+                    return;
+                }
 
-            let mut frames = data.chunks_mut(output_channels);
+                let mut frames = data.chunks_mut(output_channels);
 
-            let mut pulled = 0;
-            if available_frames > 0 {
-                match output_consumer.read_chunk(available_frames) {
-                    Ok(chunk) => {
-                        let mut samples = chunk.into_iter();
+                let mut pulled = 0;
+                if available_frames > 0 {
+                    match output_consumer.read_chunk(available_frames) {
+                        Ok(chunk) => {
+                            let mut samples = chunk.into_iter();
 
-                        // Fade-in on recovery: a Hann ramp over the first samples
-                        // smooths the discontinuity after an underrun.
-                        let ramp_in_len = if was_underrun {
-                            TRANSITION_LENGTH.min(available_frames)
-                        } else {
-                            0
+                            // Fade-in on recovery: a Hann ramp over the first samples
+                            // smooths the discontinuity after an underrun.
+                            let ramp_in_len = if was_underrun {
+                                TRANSITION_LENGTH.min(available_frames)
+                            } else {
+                                0
+                            };
+
+                            for i in 0..ramp_in_len {
+                                let Some(frame) = frames.next() else {
+                                    break;
+                                };
+                                let Some(sample_f32) = samples.next() else {
+                                    break;
+                                };
+
+                                let g = hann_fade_in(i, ramp_in_len);
+                                let out = sample_f32 * g;
+
+                                last_sample = sample_f32;
+                                frame.fill(T::from_sample(out));
+                                pulled += 1;
+                            }
+
+                            if ramp_in_len > 0 {
+                                was_underrun = false;
+                                was_missing = false;
+                            }
+
+                            while let (Some(frame), Some(sample_f32)) =
+                                (frames.next(), samples.next())
+                            {
+                                last_sample = sample_f32;
+                                frame.fill(T::from_sample(sample_f32));
+                                pulled += 1;
+                            }
+                        }
+                        Err(ChunkError::TooFewSlots(_)) => {
+                            // Shouldn't happen since we min() with slots(), but if it does:
+                            pulled = 0;
+                        }
+                    }
+                }
+
+                let missing = total_frames.saturating_sub(pulled);
+                if missing > 0 {
+                    was_underrun = true;
+                    was_missing = true;
+
+                    let fade_len = TRANSITION_LENGTH.min(missing);
+
+                    // Smooth fade from last real sample -> 0
+                    for i in 0..fade_len {
+                        let Some(frame) = frames.next() else {
+                            break;
                         };
-
-                        for i in 0..ramp_in_len {
-                            let Some(frame) = frames.next() else {
-                                break;
-                            };
-                            let Some(sample_f32) = samples.next() else {
-                                break;
-                            };
-
-                            let g = hann_fade_in(i, ramp_in_len);
-                            let out = sample_f32 * g;
-
-                            last_sample = sample_f32;
-                            frame.fill(T::from_sample(out));
-                            pulled += 1;
-                        }
-
-                        if ramp_in_len > 0 {
-                            was_underrun = false;
-                            was_missing = false;
-                        }
-
-                        while let (Some(frame), Some(sample_f32)) = (frames.next(), samples.next())
-                        {
-                            last_sample = sample_f32;
-                            frame.fill(T::from_sample(sample_f32));
-                            pulled += 1;
-                        }
+                        let g = hann_fade_out(i, fade_len);
+                        frame.fill(T::from_sample(last_sample * g));
                     }
-                    Err(ChunkError::TooFewSlots(_)) => {
-                        // Shouldn't happen since we min() with slots(), but if it does:
-                        pulled = 0;
+
+                    for frame in frames {
+                        frame.fill(T::from_sample(0.0));
                     }
+
+                    last_sample = 0.0;
                 }
-            }
-
-            let missing = total_frames.saturating_sub(pulled);
-            if missing > 0 {
-                was_underrun = true;
-                was_missing = true;
-
-                let fade_len = TRANSITION_LENGTH.min(missing);
-
-                // Smooth fade from last real sample -> 0
-                for i in 0..fade_len {
-                    let Some(frame) = frames.next() else {
-                        break;
-                    };
-                    let g = hann_fade_out(i, fade_len);
-                    frame.fill(T::from_sample(last_sample * g));
+            },
+            move |err| {
+                if let Some(callback) = error_callback.as_mut() {
+                    callback(err);
+                } else {
+                    error!(error = %err, "output_stream_error");
                 }
-
-                for frame in frames {
-                    frame.fill(T::from_sample(0.0));
-                }
-
-                last_sample = 0.0;
-            }
-        },
-        move |err| {
-            if let Some(callback) = error_callback.as_mut() {
-                callback(err);
-            } else {
-                error!(error = %err, "output_stream_error");
-            }
-        },
-        None,
-    )?;
+            },
+            None,
+        )
+        .map_err(|source| DeviceError::BuildOutputStream {
+            config: Some(config),
+            source,
+        })?;
 
     Ok(SendStream(stream))
 }

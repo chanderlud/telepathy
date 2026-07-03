@@ -73,7 +73,9 @@ fn sink_errors_propagate() {
     .unwrap_err();
 
     match err {
-        Error::Processing(msg) => assert!(msg.contains("intentional")),
+        Error::Channel(telepathy_audio::ChannelError::DataSinkFailed(io)) => {
+            assert!(io.to_string().contains("intentional"));
+        }
         other => panic!("expected Channel error, got {:?}", other),
     }
 }
