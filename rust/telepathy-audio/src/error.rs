@@ -99,52 +99,9 @@ impl From<DeviceError> for Error {
     }
 }
 
-/// Converts cpal device enumeration errors.
-///
-/// Occurs when [`list_input_devices`](crate::devices::list_input_devices) or
-/// [`list_output_devices`](crate::devices::list_output_devices) fails to enumerate devices.
-impl From<cpal::DevicesError> for Error {
-    fn from(err: cpal::DevicesError) -> Self {
-        Error::Device(err.to_string())
-    }
-}
-
-/// Converts cpal stream configuration errors.
-///
-/// Occurs when querying device's default stream configuration during
-/// [`AudioInputBuilder::build`](crate::io::input::AudioInputBuilder::build) or
-/// [`AudioOutputBuilder::build`](crate::io::output::AudioOutputBuilder::build).
-impl From<cpal::DefaultStreamConfigError> for Error {
-    fn from(err: cpal::DefaultStreamConfigError) -> Self {
-        Error::Stream(err.to_string())
-    }
-}
-
-/// Converts cpal stream creation errors.
-///
-/// Occurs when `build_input_stream` or `build_output_stream` fails during
-/// builder `build()` methods.
-impl From<cpal::BuildStreamError> for Error {
-    fn from(err: cpal::BuildStreamError) -> Self {
-        Error::Stream(err.to_string())
-    }
-}
-
-/// Converts cpal stream play errors.
-///
-/// Occurs when `stream.play()` fails after stream creation.
-impl From<cpal::PlayStreamError> for Error {
-    fn from(err: cpal::PlayStreamError) -> Self {
-        Error::Stream(err.to_string())
-    }
-}
-
-/// Converts cpal stream pause errors.
-///
-/// Occurs when attempting to pause a stream (currently unused).
-impl From<cpal::PauseStreamError> for Error {
-    fn from(err: cpal::PauseStreamError) -> Self {
-        Error::Stream(err.to_string())
+impl From<cpal::Error> for Error {
+    fn from(e: cpal::Error) -> Self {
+        Error::Device(e.to_string())
     }
 }
 

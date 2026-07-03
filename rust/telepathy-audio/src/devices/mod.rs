@@ -100,8 +100,8 @@ fn device_to_info(device: &Device) -> Option<AudioDeviceInfo> {
     let description = device.description().ok()?;
     let name = description
         .extended()
-        .first()
-        .cloned()
+        .next()
+        .map(|s| s.to_string())
         .unwrap_or(description.name().to_string());
     let id = device.id().ok()?.to_string();
     Some(AudioDeviceInfo { name, id })

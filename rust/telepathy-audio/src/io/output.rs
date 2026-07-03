@@ -204,7 +204,7 @@ where
     /// When set, the callback receives the underlying CPAL stream error.
     pub fn on_error<F>(mut self, callback: F) -> Self
     where
-        F: FnMut(cpal::StreamError) + Send + 'static,
+        F: FnMut(cpal::Error) + Send + 'static,
     {
         self.config.error_callback = Some(Box::new(callback));
         self

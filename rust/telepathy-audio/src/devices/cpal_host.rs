@@ -9,7 +9,7 @@ use crate::io::input::RingBufferSender;
 use crate::io::{SendStream, StreamErrorCallback};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{
-    Device, DeviceId, DeviceIdError, FromSample, Sample, SampleFormat, SizedSample, Stream,
+    Device, DeviceId, FromSample, Sample, SampleFormat, SizedSample, Stream,
     StreamConfig,
 };
 use rtrb::chunks::ChunkError;
@@ -349,9 +349,7 @@ impl AudioHost for CpalAudioHost {
 impl CpalAudioHost {
     fn get_input_device(&self, device_id: Option<&str>) -> Result<Device, DeviceError> {
         if let Some(id) = device_id {
-            let parsed: DeviceId = id
-                .parse()
-                .map_err(|e: DeviceIdError| DeviceError::InvalidDeviceId(e.to_string()))?;
+            let parsed: DeviceId = id.parse()?;
 
             // Try to find the device by ID
             if let Some(device) = self.inner().device_by_id(&parsed) {
@@ -373,9 +371,7 @@ impl CpalAudioHost {
 
     fn get_output_device(&self, device_id: Option<&str>) -> Result<Device, DeviceError> {
         if let Some(id) = device_id {
-            let parsed: DeviceId = id
-                .parse()
-                .map_err(|e: DeviceIdError| DeviceError::InvalidDeviceId(e.to_string()))?;
+            let parsed: DeviceId = id.parse()?;
 
             // Try to find the device by ID
             if let Some(device) = self.inner().device_by_id(&parsed) {
@@ -428,7 +424,7 @@ where
     T: Sample<Float = f32> + SizedSample + Send + 'static,
 {
     let stream = device.build_input_stream(
-        config,
+        *config,
         move |data: &[T], _: &_| {
             input_stream_helper(
                 &mut input_sender,
@@ -467,7 +463,7 @@ where
     T: Sample<Float = f64> + SizedSample + Send + 'static,
 {
     let stream = device.build_input_stream(
-        config,
+        *config,
         move |data: &[T], _: &_| {
             input_stream_helper(
                 &mut input_sender,
@@ -544,7 +540,7 @@ where
     let mut was_missing = false;
 
     let stream = device.build_output_stream(
-        config,
+        *config,
         move |data: &mut [T], _: &_| {
             debug_assert!(output_channels > 0);
 

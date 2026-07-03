@@ -1,4 +1,3 @@
-use cpal::{BuildStreamError, DefaultStreamConfigError, PlayStreamError};
 use std::fmt;
 
 /// Errors raised by device enumeration, selection, and stream construction.
@@ -8,10 +7,8 @@ pub enum DeviceError {
     NoDefaultDevice,
     EnumerationFailed(String),
     InvalidDeviceId(String),
-    DefaultConfigMissing(String),
-    BuildStream(String),
     UnsupportedConfig(String),
-    PlayStream(String),
+    Cpal(cpal::Error),
 }
 
 impl fmt::Display for DeviceError {
@@ -23,32 +20,16 @@ impl fmt::Display for DeviceError {
                 write!(f, "Failed to enumerate devices: {}", msg)
             }
             DeviceError::InvalidDeviceId(id) => write!(f, "Invalid device ID: {}", id),
-            DeviceError::DefaultConfigMissing(error) => {
-                write!(f, "Default config missing: {}", error)
-            }
-            DeviceError::BuildStream(error) => write!(f, "Failed to build stream: {}", error),
             DeviceError::UnsupportedConfig(error) => write!(f, "Unsupported config: {}", error),
-            DeviceError::PlayStream(error) => write!(f, "Failed to play stream: {}", error),
+            DeviceError::Cpal(error) => write!(f, "Cpal error: {}", error),
         }
     }
 }
 
 impl std::error::Error for DeviceError {}
 
-impl From<DefaultStreamConfigError> for DeviceError {
-    fn from(err: DefaultStreamConfigError) -> Self {
-        Self::DefaultConfigMissing(err.to_string())
-    }
-}
-
-impl From<BuildStreamError> for DeviceError {
-    fn from(err: BuildStreamError) -> Self {
-        Self::BuildStream(err.to_string())
-    }
-}
-
-impl From<PlayStreamError> for DeviceError {
-    fn from(err: PlayStreamError) -> Self {
-        Self::PlayStream(err.to_string())
+impl From<cpal::Error> for DeviceError {
+    fn from(error: cpal::Error) -> Self {
+        DeviceError::Cpal(error)
     }
 }

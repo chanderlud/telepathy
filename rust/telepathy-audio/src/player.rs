@@ -834,7 +834,7 @@ async fn play_sound_with_device(
 
         let mut stream_consumer = stream_consumer;
         let output_stream = output_device.build_output_stream(
-            &output_config.into(),
+            output_config.into(),
             move |output: &mut [f32], _| {
                 let mut canceled = processor_canceled_for_stream.load(Relaxed);
                 for frame in output.chunks_mut(output_channels) {
