@@ -23,10 +23,12 @@ class ContactForm extends StatefulWidget {
 class ContactFormState extends State<ContactForm> {
   final TextEditingController _nicknameInput = TextEditingController();
   final TextEditingController _peerIdInput = TextEditingController();
+  final TextEditingController _directConnInput = TextEditingController();
   final List<String> _peerIds = [];
   final FocusNode _nicknameFocusNode = FocusNode();
   String? selectedPeer;
   bool? addContact;
+  bool _directEnabled = false;
 
   @override
   void dispose() {
@@ -98,6 +100,25 @@ class ContactFormState extends State<ContactForm> {
                 labelText: 'Peer ID',
                 hintText: 'string encoded peer ID',
                 obscureText: true),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                const Text('Direct Connection'),
+                const SizedBox(width: 8),
+                Switch(
+                  value: _directEnabled,
+                  onChanged: (v) => setState(() => _directEnabled = v),
+                ),
+              ],
+            ),
+            if (_directEnabled) ...[
+              const SizedBox(height: 12),
+              TextInput(
+                controller: _directConnInput,
+                labelText: 'Connection String',
+                hintText: '{"relay_url": "...", "direct_addresses": [...]}',
+              ),
+            ],
             const SizedBox(height: 26),
             Center(
               child: Button(
@@ -125,10 +146,21 @@ class ContactFormState extends State<ContactForm> {
                     Contact contact =
                         profilesController.addContact(nickname, peerId);
 
+                    if (_directEnabled) {
+                      final connStr = _directConnInput.text.trim();
+                      if (connStr.isNotEmpty) {
+                        contact.setDirectConnectionString(
+                            connectionString: connStr);
+                        contact.setDirect(isDirect: true);
+                      }
+                    }
+
                     telepathy.startSession(contact: contact);
 
                     _nicknameInput.clear();
                     _peerIdInput.clear();
+                    _directConnInput.clear();
+                    setState(() => _directEnabled = false);
                     Navigator.pop(context);
                   } on DartError catch (_) {
                     showErrorDialog(

@@ -612,6 +612,9 @@ class _FakeTelepathy implements Telepathy {
   void setMuted({required bool muted}) {}
 
   @override
+  Future<String?> nodeAddr() async => null;
+
+  @override
   Future<void> setOutputDevice({String? deviceId}) async {}
 
   @override

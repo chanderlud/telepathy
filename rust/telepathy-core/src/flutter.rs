@@ -222,6 +222,14 @@ impl Telepathy {
     pub async fn set_model(&self, model: Option<Vec<u8>>) -> Result<(), DartError> {
         self.handle.set_model(model).await.map_err(DartError::from)
     }
+
+    /// Returns a JSON-serialized [`EndpointAddr`] of the local endpoint, or
+    /// `None` if the session manager is not active. The frontend displays
+    /// this in the networking settings so users can share their direct
+    /// addresses with contacts.
+    pub async fn node_addr(&self) -> Option<String> {
+        self.handle.node_addr().await
+    }
 }
 
 #[frb(opaque)]

@@ -30,6 +30,7 @@ use crate::types::{
     SessionStatus,
 };
 use chrono::Local;
+use iroh::EndpointAddr;
 use iroh::endpoint::{
     ConnectError, ConnectingError, Connection, ConnectionError, RecvStream, SendStream, VarInt,
 };
@@ -213,6 +214,10 @@ where
             elapsed_ms = setup_started.elapsed().as_millis() as u64
         );
 
+        // Store the bound endpoint's addresses so the frontend can display
+        // connection information (direct addresses + relay URL) in settings.
+        self.core_state.set_endpoint_addrs(Some(endpoint.addr()));
+
         // handles to threads spawned by the session manager
         let mut handles: Vec<JoinHandle<()>> = Vec::new();
         // preload public identity
@@ -294,6 +299,8 @@ where
         self.callbacks.manager_state(ManagerState::Stopped).await;
         self.cancel_outbound_connections.notify_waiters();
         self.outbound_attempts.write().await.clear();
+        // Clear endpoint addresses so stale connection info is not served
+        self.core_state.set_endpoint_addrs(None);
         // reset room state
         if let Some(state) = self.room_state.write().await.take() {
             state.end_call.notify_one();
@@ -321,10 +328,29 @@ where
         self.emit_outbound_status(peer, generation, SessionStatus::Connecting)
             .await;
 
+        let direct_addr = self
+            .callbacks
+            .get_contact(peer.to_vec())
+            .await
+            .and_then(|contact| {
+                if contact.is_direct {
+                    contact
+                        .direct_connection_string
+                        .and_then(|s| serde_json::from_str::<EndpointAddr>(&s).ok())
+                } else {
+                    None
+                }
+            });
+
         let connect_future = async {
             let mut retries = 0;
             loop {
-                match endpoint.connect(peer, ALPN).await {
+                let result = if let Some(ref addr) = direct_addr {
+                    endpoint.connect(addr.clone(), ALPN).await
+                } else {
+                    endpoint.connect(peer, ALPN).await
+                };
+                match result {
                     Ok(connection) => {
                         break Some(connection);
                     }
@@ -458,6 +484,8 @@ where
                 peer_id: peer,
                 output_volume: 0_f32,
                 is_room_only: true,
+                is_direct: false,
+                direct_connection_string: None,
             }
         });
 

@@ -28,6 +28,7 @@ lazy_static = "1"
 mockall = { version = "0.14", optional = true }
 regex = "1" # TODO consider removing regex dep
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 speedy = "=0.8.7"
 telepathy-audio = { path = "../telepathy-audio" }
 tracing = "0.1"

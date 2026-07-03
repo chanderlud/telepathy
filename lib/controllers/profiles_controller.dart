@@ -415,12 +415,18 @@ class ProfilesController with ChangeNotifier {
         continue;
       }
 
+      final bool isDirect = contactMap['isDirect'] == true;
+      final String? directConnectionString =
+          contactMap['directConnectionString'] as String?;
+
       try {
         contacts[entry.key] = Contact.fromParts(
           id: entry.key,
           nickname: nickname,
           peerId: peerId,
           outputVolume: outputVolume,
+          isDirect: isDirect,
+          directConnectionString: directConnectionString,
         );
       } catch (error) {
         DebugConsole.warn('invalid contact format for ${entry.key}: $error');
@@ -513,10 +519,19 @@ class ProfilesController with ChangeNotifier {
 
     for (final MapEntry<String, Contact> entry in profile.contacts.entries) {
       try {
+        String? directStr;
+        try {
+          directStr = entry.value.directConnectionString();
+        } catch (_) {
+          // ignore errors for contacts saved before this field existed
+        }
+
         contactsMap[entry.key] = <String, dynamic>{
           'nickname': entry.value.nickname(),
           'peerId': entry.value.peerId(),
           'outputVolume': entry.value.outputVolume(),
+          'isDirect': entry.value.isDirect(),
+          if (directStr != null) 'directConnectionString': directStr,
         };
       } catch (error) {
         DebugConsole.warn('skipping contact ${entry.key} during save: $error');

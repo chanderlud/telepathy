@@ -64,22 +64,30 @@ abstract class CodecConfig implements RustOpaqueInterface {
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Contact>>
 abstract class Contact implements RustOpaqueInterface {
+  String? directConnectionString();
+
   static Contact fromParts(
           {required String id,
           required String nickname,
           required String peerId,
-          required double outputVolume}) =>
+          required double outputVolume,
+          required bool isDirect,
+          String? directConnectionString}) =>
       RustLib.instance.api.crateTypesContactFromParts(
           id: id,
           nickname: nickname,
           peerId: peerId,
-          outputVolume: outputVolume);
+          outputVolume: outputVolume,
+          isDirect: isDirect,
+          directConnectionString: directConnectionString);
 
-  Future<PublicKey> getPeerId();
+  PublicKey getPeerId();
 
   String id();
 
   bool idEq({required List<int> id});
+
+  bool isDirect();
 
   factory Contact({required String nickname, required String peerId}) =>
       RustLib.instance.api
@@ -92,6 +100,10 @@ abstract class Contact implements RustOpaqueInterface {
   String peerId();
 
   Contact pubClone();
+
+  void setDirect({required bool isDirect});
+
+  void setDirectConnectionString({String? connectionString});
 
   void setNickname({required String nickname});
 

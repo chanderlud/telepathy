@@ -21,11 +21,15 @@ class ContactWidget extends StatefulWidget {
 class ContactWidgetState extends State<ContactWidget> {
   bool isHovered = false;
   late TextEditingController _nicknameInput;
+  late TextEditingController _directConnInput;
 
   @override
   void initState() {
     super.initState();
     _nicknameInput = TextEditingController(text: widget.contact.nickname());
+    _directConnInput = TextEditingController(
+      text: widget.contact.directConnectionString() ?? '',
+    );
   }
 
   @override
@@ -33,12 +37,14 @@ class ContactWidgetState extends State<ContactWidget> {
     super.didUpdateWidget(oldWidget);
     if (widget.contact != oldWidget.contact) {
       _nicknameInput.text = widget.contact.nickname();
+      _directConnInput.text = widget.contact.directConnectionString() ?? '';
     }
   }
 
   @override
   void dispose() {
     _nicknameInput.dispose();
+    _directConnInput.dispose();
     super.dispose();
   }
 
@@ -153,6 +159,41 @@ class ContactWidgetState extends State<ContactWidget> {
                         onChanged: (value) {
                           widget.contact.setNickname(nickname: value);
                         }),
+                    const SizedBox(height: 12),
+                    StatefulBuilder(builder: (context, setLocalState) {
+                      bool isDirect = widget.contact.isDirect();
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              const Text('Direct Connection'),
+                              const SizedBox(width: 8),
+                              Switch(
+                                value: isDirect,
+                                onChanged: (v) {
+                                  widget.contact.setDirect(isDirect: v);
+                                  setLocalState(() {});
+                                  setDialogState(() {});
+                                },
+                              ),
+                            ],
+                          ),
+                          if (isDirect) ...[
+                            const SizedBox(height: 12),
+                            TextInput(
+                              controller: _directConnInput,
+                              labelText: 'Connection String',
+                              onChanged: (value) {
+                                widget.contact.setDirectConnectionString(
+                                    connectionString:
+                                        value.isNotEmpty ? value : null);
+                              },
+                            ),
+                          ],
+                        ],
+                      );
+                    }),
                     const SizedBox(height: 20),
                     const Text('Output Volume', style: TextStyle(fontSize: 15)),
                     Slider(

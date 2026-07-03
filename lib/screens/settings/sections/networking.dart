@@ -1,6 +1,7 @@
 import 'dart:core';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart' hide Overlay;
+import 'package:flutter/services.dart' hide TextInput;
 import 'package:provider/provider.dart';
 import 'package:telepathy/controllers/index.dart';
 import 'package:telepathy/core/rust/flutter.dart';
@@ -49,6 +50,10 @@ class NetworkSettingsState extends State<NetworkSettings> {
   String _pkarrRelay = '';
   final TextEditingController _pkarrRelayInput = TextEditingController();
   String? _pkarrRelayError;
+
+  // Connection strings
+  String? _nodeAddr;
+  bool _nodeAddrLoading = false;
 
   // Critical backend error (e.g. a poisoned lock from the rust
   // runtime). Not tied to any one field; the rust atomic `update`
@@ -131,6 +136,19 @@ class NetworkSettingsState extends State<NetworkSettings> {
     _savedDnsEndpoint = _dnsEndpoint;
     _savedDnsOriginDomain = _dnsOriginDomain;
     _savedPkarrRelay = _pkarrRelay;
+
+    _fetchNodeAddr();
+  }
+
+  Future<void> _fetchNodeAddr() async {
+    setState(() => _nodeAddrLoading = true);
+    try {
+      final telepathy = context.read<Telepathy>();
+      _nodeAddr = await telepathy.nodeAddr();
+    } catch (_) {
+      _nodeAddr = null;
+    }
+    if (mounted) setState(() => _nodeAddrLoading = false);
   }
 
   @override
@@ -245,6 +263,8 @@ class NetworkSettingsState extends State<NetworkSettings> {
             if (!kIsWeb) _buildDnsSection(width, isRestartSafe),
             if (!kIsWeb) const SizedBox(height: 8),
             _buildPkarrSection(width, isRestartSafe),
+            const SizedBox(height: 16),
+            _buildConnectionStringsSection(),
             if (unsavedChanges || _saveSucceeded) const SizedBox(height: 20),
             if (unsavedChanges)
               Button(
@@ -469,6 +489,60 @@ class NetworkSettingsState extends State<NetworkSettings> {
           ),
         ],
       ],
+    );
+  }
+
+  Widget _buildConnectionStringsSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Text('Your Connection Strings',
+            style: TextStyle(fontWeight: FontWeight.w600)),
+        const SizedBox(height: 8),
+        if (_nodeAddrLoading)
+          const SizedBox(
+            width: 20,
+            height: 20,
+            child: CircularProgressIndicator(strokeWidth: 3),
+          )
+        else if (_nodeAddr != null)
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                _nodeAddr!,
+                style: const TextStyle(
+                  fontSize: 11,
+                  fontFamily: 'monospace',
+                ),
+              ),
+              const SizedBox(height: 6),
+              Button(
+                text: 'Copy',
+                onPressed: () {
+                  _copyToClipboard();
+                },
+                width: 80,
+              ),
+            ],
+          )
+        else
+          const Text(
+            'Start a session to see your connection strings.',
+            style: TextStyle(color: Colors.grey),
+          ),
+      ],
+    );
+  }
+
+  Future<void> _copyToClipboard() async {
+    if (_nodeAddr == null) return;
+    await Clipboard.setData(ClipboardData(text: _nodeAddr!));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Connection string copied to clipboard')),
     );
   }
 

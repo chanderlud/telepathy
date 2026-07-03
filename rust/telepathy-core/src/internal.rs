@@ -596,4 +596,15 @@ where
         *self.inner.core_state.denoise_model.write().await = model;
         Ok(())
     }
+
+    /// Returns a serialized representation of the local endpoint's connection
+    /// info (direct addresses + relay URL) so the frontend can display it in
+    /// the networking settings page. Returns `None` if the session manager
+    /// is not active or the endpoint hasn't been bound yet.
+    pub async fn node_addr(&self) -> Option<String> {
+        self.inner
+            .core_state
+            .get_endpoint_addrs()
+            .and_then(|addr| serde_json::to_string(&addr).ok())
+    }
 }

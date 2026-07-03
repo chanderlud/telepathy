@@ -75,6 +75,12 @@ abstract class Telepathy implements RustOpaqueInterface {
           codecConfig: codecConfig,
           callbacks: callbacks);
 
+  /// Returns a JSON-serialized [`EndpointAddr`] of the local endpoint, or
+  /// `None` if the session manager is not active. The frontend displays
+  /// this in the networking settings so users can share their direct
+  /// addresses with contacts.
+  Future<String?> nodeAddr();
+
   void pauseStatistics();
 
   /// Restarts the session manager
@@ -89,7 +95,7 @@ abstract class Telepathy implements RustOpaqueInterface {
 
   void setDeafened({required bool deafened});
 
-  /// Changing the denoise flag will not affect the current call
+  /// Denoise is set on the processor; the current call is not reconfigured.
   void setDenoise({required bool denoise});
 
   void setEfficiencyMode({required bool enabled});

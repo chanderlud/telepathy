@@ -66,6 +66,14 @@ pub struct Contact {
 
     /// In rooms, some contacts are dummy representing unknown peers
     pub(crate) is_room_only: bool,
+
+    /// When true, sessions for this contact try a direct Iroh connection
+    /// (bypassing relay / address discovery) using `direct_connection_string`.
+    pub(crate) is_direct: bool,
+
+    /// A serialized [`EndpointAddr`] (JSON) conveying the peer's direct addresses
+    /// and relay URL. Parsed and passed to `Endpoint::connect` when `is_direct` is true.
+    pub(crate) direct_connection_string: Option<String>,
 }
 
 impl Contact {
@@ -77,15 +85,20 @@ impl Contact {
             peer_id: PublicKey::from_str(&peer_id).map_err(|_| ErrorKind::InvalidContactFormat)?,
             output_volume: 0.0,
             is_room_only: false,
+            is_direct: false,
+            direct_connection_string: None,
         })
     }
 
     #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
+    #[allow(clippy::too_many_arguments)]
     pub fn from_parts(
         id: String,
         nickname: String,
         peer_id: String,
         output_volume: f32,
+        is_direct: bool,
+        direct_connection_string: Option<String>,
     ) -> Result<Contact, DartError> {
         Ok(Self {
             id,
@@ -93,6 +106,8 @@ impl Contact {
             peer_id: PublicKey::from_str(&peer_id).map_err(|_| ErrorKind::InvalidContactFormat)?,
             output_volume: contact_output_volume_from_parts(output_volume),
             is_room_only: false,
+            is_direct,
+            direct_connection_string,
         })
     }
 
@@ -136,8 +151,29 @@ impl Contact {
         self.peer_id.to_vec() == id
     }
 
+    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
     pub fn get_peer_id(&self) -> PublicKey {
         self.peer_id
+    }
+
+    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
+    pub fn is_direct(&self) -> bool {
+        self.is_direct
+    }
+
+    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
+    pub fn set_direct(&mut self, is_direct: bool) {
+        self.is_direct = is_direct;
+    }
+
+    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
+    pub fn direct_connection_string(&self) -> Option<String> {
+        self.direct_connection_string.clone()
+    }
+
+    #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
+    pub fn set_direct_connection_string(&mut self, connection_string: Option<String>) {
+        self.direct_connection_string = connection_string;
     }
 }
 
