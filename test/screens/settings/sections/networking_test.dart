@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -14,6 +15,9 @@ import 'package:telepathy/screens/settings/sections/networking.dart';
 import 'package:telepathy/widgets/common/index.dart';
 
 void main() {
+  const connectionStringsPortNote =
+      'Set a fixed, non-zero listen port if you want peers to set up direct contacts for you.';
+
   setUp(() {
     SharedPreferencesAsyncPlatform.instance =
         InMemorySharedPreferencesAsync.empty();
@@ -21,6 +25,51 @@ void main() {
 
   tearDown(() {
     SharedPreferencesAsyncPlatform.instance = null;
+  });
+
+  testWidgets(
+      'connection strings note stays visible while loading, populated, and empty',
+      (WidgetTester tester) async {
+    final loadingNodeAddr = Completer<String?>();
+    final loadingRecorder = _NetworkConfigRecorder(
+      listenPort: 40142,
+      bindAddresses: const ['0.0.0.0', '::'],
+    );
+
+    await tester.pumpNetworkSettings(
+      controller: _FakeNetworkSettingsController(loadingRecorder),
+      stateController: StateController(),
+      telepathy: _FakeTelepathy(nodeAddrFuture: loadingNodeAddr.future),
+    );
+
+    expect(find.text(connectionStringsPortNote), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+
+    loadingNodeAddr.complete('node-address-with-fixed-port');
+    await tester.pumpAndSettle();
+
+    expect(find.text(connectionStringsPortNote), findsOneWidget);
+    expect(find.text('node-address-with-fixed-port'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+
+    final emptyRecorder = _NetworkConfigRecorder(
+      listenPort: 40142,
+      bindAddresses: const ['0.0.0.0', '::'],
+    );
+
+    await tester.pumpNetworkSettings(
+      controller: _FakeNetworkSettingsController(emptyRecorder),
+      stateController: StateController(),
+      telepathy: _FakeTelepathy(),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text(connectionStringsPortNote), findsOneWidget);
+    expect(
+      find.text('Start a session to see your connection strings.'),
+      findsOneWidget,
+    );
   });
 
   testWidgets(
@@ -544,6 +593,11 @@ bool _isValidIpLiteral(String value) {
 }
 
 class _FakeTelepathy implements Telepathy {
+  _FakeTelepathy({Future<String?>? nodeAddrFuture})
+      : _nodeAddrFuture = nodeAddrFuture;
+
+  final Future<String?>? _nodeAddrFuture;
+
   @override
   bool get isDisposed => false;
 
@@ -612,7 +666,9 @@ class _FakeTelepathy implements Telepathy {
   void setMuted({required bool muted}) {}
 
   @override
-  Future<String?> nodeAddr() async => null;
+  Future<String?> nodeAddr() async => _nodeAddrFuture == null
+      ? null
+      : await _nodeAddrFuture;
 
   @override
   Future<void> setOutputDevice({String? deviceId}) async {}

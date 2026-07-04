@@ -602,9 +602,8 @@ where
     /// the networking settings page. Returns `None` if the session manager
     /// is not active or the endpoint hasn't been bound yet.
     pub async fn node_addr(&self) -> Option<String> {
-        self.inner
+            serde_json::to_string(&self.inner
             .core_state
-            .get_endpoint_addrs()
-            .and_then(|addr| serde_json::to_string(&addr).ok())
+            .get_endpoint_addrs()).ok()
     }
 }

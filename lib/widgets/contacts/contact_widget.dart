@@ -169,7 +169,7 @@ class ContactWidgetState extends State<ContactWidget> {
                             children: [
                               const Text('Direct Connection'),
                               const SizedBox(width: 8),
-                              Switch(
+                              CustomSwitch(
                                 value: isDirect,
                                 onChanged: (v) {
                                   widget.contact.setDirect(isDirect: v);

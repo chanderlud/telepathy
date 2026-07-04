@@ -421,11 +421,11 @@ pub struct CoreState {
     /// global audio sequence number
     pub(crate) audio_sequence: Arc<AtomicU32>,
 
-    /// The local endpoint's current [`EndpointAddr`], populated when the
+    /// The local endpoint's current transport addrs, populated when the
     /// session manager binds the endpoint and cleared on teardown. Used
     /// to expose connection information to the frontend (networking settings)
     /// so users can share their direct addresses with contacts.
-    pub(crate) endpoint_addrs: Arc<StdRwLock<Option<EndpointAddr>>>,
+    pub(crate) endpoint_addrs: Arc<StdRwLock<Vec<TransportAddr>>>,
 }
 
 impl CoreState {
@@ -531,7 +531,7 @@ impl CoreState {
 
     /// Returns the local endpoint's current [`EndpointAddr`] if the session
     /// manager is active and the endpoint has been bound.
-    pub(crate) fn get_endpoint_addrs(&self) -> Option<EndpointAddr> {
+    pub(crate) fn get_endpoint_addrs(&self) -> Vec<TransportAddr> {
         self.endpoint_addrs
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -540,7 +540,7 @@ impl CoreState {
 
     /// Stores the local endpoint's [`EndpointAddr`] after the session manager
     /// binds the endpoint. Cleared on manager teardown.
-    pub(crate) fn set_endpoint_addrs(&self, addrs: Option<EndpointAddr>) {
+    pub(crate) fn set_endpoint_addrs(&self, addrs: Vec<TransportAddr>) {
         *self
             .endpoint_addrs
             .write()

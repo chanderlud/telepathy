@@ -7,7 +7,7 @@ use crate::internal::screenshare::{Decoder, Device, Encoder, ScreenshareConfigDi
 use crate::internal::spawn_task;
 use atomic_float::AtomicF32;
 use chrono::{DateTime, Local, SecondsFormat, Utc};
-use iroh::RelayMap;
+use iroh::{RelayMap, TransportAddr};
 use iroh::RelayUrl;
 #[cfg(feature = "integration-testing")]
 use iroh::address_lookup::memory::MemoryLookup;
@@ -71,8 +71,8 @@ pub struct Contact {
     /// (bypassing relay / address discovery) using `direct_connection_string`.
     pub(crate) is_direct: bool,
 
-    /// A serialized [`EndpointAddr`] (JSON) conveying the peer's direct addresses
-    /// and relay URL. Parsed and passed to `Endpoint::connect` when `is_direct` is true.
+    /// A serialized [`Vec<TransportAddr>`] (JSON) conveying the peer's direct addresses
+    /// Parsed and passed to `Endpoint::connect` when `is_direct` is true.
     pub(crate) direct_connection_string: Option<String>,
 }
 
@@ -174,6 +174,18 @@ impl Contact {
     #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
     pub fn set_direct_connection_string(&mut self, connection_string: Option<String>) {
         self.direct_connection_string = connection_string;
+    }
+    
+    pub(crate) fn group_contact(peer_id: PublicKey) -> Self {
+        Self {
+            id: Uuid::new_v4().to_string(),
+            nickname: String::from("GroupContact"),
+            peer_id,
+            output_volume: 0_f32,
+            is_room_only: true,
+            is_direct: false,
+            direct_connection_string: None,
+        }
     }
 }
 

@@ -499,6 +499,11 @@ class NetworkSettingsState extends State<NetworkSettings> {
       children: [
         const Text('Your Connection Strings',
             style: TextStyle(fontWeight: FontWeight.w600)),
+        const SizedBox(height: 4),
+        const Text(
+          'Set a fixed, non-zero listen port if you want peers to set up direct contacts for you.',
+          style: TextStyle(color: Colors.grey),
+        ),
         const SizedBox(height: 8),
         if (_nodeAddrLoading)
           const SizedBox(

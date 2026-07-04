@@ -30,7 +30,7 @@ use crate::types::{
     SessionStatus,
 };
 use chrono::Local;
-use iroh::EndpointAddr;
+use iroh::{EndpointAddr, TransportAddr};
 use iroh::endpoint::{
     ConnectError, ConnectingError, Connection, ConnectionError, RecvStream, SendStream, VarInt,
 };
@@ -216,7 +216,7 @@ where
 
         // Store the bound endpoint's addresses so the frontend can display
         // connection information (direct addresses + relay URL) in settings.
-        self.core_state.set_endpoint_addrs(Some(endpoint.addr()));
+        self.core_state.set_endpoint_addrs(endpoint.addr().addrs.iter().cloned().collect());
 
         // handles to threads spawned by the session manager
         let mut handles: Vec<JoinHandle<()>> = Vec::new();
@@ -300,7 +300,7 @@ where
         self.cancel_outbound_connections.notify_waiters();
         self.outbound_attempts.write().await.clear();
         // Clear endpoint addresses so stale connection info is not served
-        self.core_state.set_endpoint_addrs(None);
+        self.core_state.set_endpoint_addrs(Vec::new());
         // reset room state
         if let Some(state) = self.room_state.write().await.take() {
             state.end_call.notify_one();
@@ -334,9 +334,11 @@ where
             .await
             .and_then(|contact| {
                 if contact.is_direct {
-                    contact
+                    let addrs = contact
                         .direct_connection_string
-                        .and_then(|s| serde_json::from_str::<EndpointAddr>(&s).ok())
+                        .and_then(|s| serde_json::from_str::<Vec<TransportAddr>>(&s).ok())?;
+
+                    Some(EndpointAddr::from_parts(peer, addrs))
                 } else {
                     None
                 }
@@ -478,15 +480,7 @@ where
         let contact = contact_option.unwrap_or_else(|| {
             // there may be no contact for members of a group
             debug!(event = "group_contact_created", peer.id = %peer);
-            Contact {
-                id: Uuid::new_v4().to_string(),
-                nickname: String::from("GroupContact"),
-                peer_id: peer,
-                output_volume: 0_f32,
-                is_room_only: true,
-                is_direct: false,
-                direct_connection_string: None,
-            }
+            Contact::group_contact(peer)
         });
 
         // seed the initial per-contact output volume
