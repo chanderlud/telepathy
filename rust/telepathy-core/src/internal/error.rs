@@ -10,6 +10,12 @@ use telepathy_audio::devices::DeviceError;
 use tokio::task::JoinError;
 use tokio::time::error::Elapsed;
 
+/// Reason used in [`ProtocolMessage::error_goodbye`] and
+/// [`AudioStreamError::remote_reason`] when the underlying error is an audio
+/// device error. Defined once and reused so the wire-level reason and the
+/// `Display` wording stay in sync.
+pub(crate) const AUDIO_DEVICE_ERROR_REMOTE_REASON: &str = "audio device error";
+
 /// generic error type for Telepathy
 #[derive(Debug)]
 pub struct Error {
@@ -29,6 +35,8 @@ pub(crate) enum ErrorKind {
     #[cfg(target_family = "wasm")]
     WasmTimeout(wasmtimer::tokio::error::Elapsed),
     AudioError(telepathy_audio::Error),
+    AudioInputStream(String),
+    AudioOutputStream(String),
     #[cfg(target_family = "wasm")]
     Canceled(Canceled),
     DeviceError(DeviceError),
@@ -209,6 +217,8 @@ impl Display for Error {
                 ErrorKind::WasmTimeout(_) => "The connection timed out".to_string(),
                 ErrorKind::AddrParse(ref err) => err.to_string(),
                 ErrorKind::AudioError(ref err) => format!("Audio error: {err}"),
+                ErrorKind::AudioInputStream(ref err) => format!("Input stream error: {err}"),
+                ErrorKind::AudioOutputStream(ref err) => format!("Output stream error: {err}"),
                 #[cfg(target_family = "wasm")]
                 ErrorKind::Canceled(ref err) => format!("Canceled: {}", err),
                 ErrorKind::DeviceError(ref err) => format!("Device error: {}", err),
@@ -254,7 +264,53 @@ impl Error {
     pub(crate) fn is_audio_error(&self) -> bool {
         matches!(
             self.kind,
-            ErrorKind::AudioError(_) | ErrorKind::DeviceError(_)
+            ErrorKind::AudioError(_)
+                | ErrorKind::AudioInputStream(_)
+                | ErrorKind::AudioOutputStream(_)
+                | ErrorKind::DeviceError(_)
         )
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum AudioStreamDirection {
+    Input,
+    Output,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct AudioStreamError {
+    direction: AudioStreamDirection,
+    message: String,
+}
+
+impl AudioStreamError {
+    pub(crate) fn input(message: String) -> Self {
+        Self {
+            direction: AudioStreamDirection::Input,
+            message,
+        }
+    }
+
+    pub(crate) fn output(message: String) -> Self {
+        Self {
+            direction: AudioStreamDirection::Output,
+            message,
+        }
+    }
+
+    pub(crate) fn user_message(&self) -> String {
+        Error::from(self.clone().into_error_kind()).to_string()
+    }
+
+    pub(crate) fn remote_reason(&self) -> &'static str {
+        AUDIO_DEVICE_ERROR_REMOTE_REASON
+    }
+
+    pub(crate) fn into_error_kind(self) -> ErrorKind {
+        match self.direction {
+            AudioStreamDirection::Input => ErrorKind::AudioInputStream(self.message),
+            AudioStreamDirection::Output => ErrorKind::AudioOutputStream(self.message),
+        }
     }
 }

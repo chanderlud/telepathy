@@ -1,6 +1,6 @@
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::core::TelepathyCore;
-use crate::internal::error::ErrorKind;
+use crate::internal::error::{AudioStreamError, ErrorKind};
 use crate::internal::messages::{AudioHeader, RoomMessage};
 #[cfg(not(target_family = "wasm"))]
 use crate::internal::messages::{ProtocolMessage, StartScreenshare};
@@ -35,7 +35,7 @@ use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 use tokio::select;
 use tokio::sync::Notify;
-use tokio::sync::mpsc::Sender;
+use tokio::sync::mpsc::{Sender, UnboundedSender};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, instrument, trace, warn};
 use url::Url;
@@ -326,6 +326,7 @@ where
         codec_options: (bool, bool, f32),
         statistics_state: &StatisticsCollectorState,
         end_call: &Arc<Notify>,
+        stream_error: UnboundedSender<AudioStreamError>,
     ) -> Result<InputHelper<I>> {
         let (codec_enabled, vbr, residual_bits) = codec_options;
         // Channel for receiving processed audio data
@@ -342,7 +343,11 @@ where
             .rms_shared(&statistics_state.input_rms)
             .on_error(move |error| {
                 error!(error = %error, "input_stream_error");
-                input_end_call.notify_one();
+                report_stream_error(
+                    &stream_error,
+                    &input_end_call,
+                    AudioStreamError::input(error.to_string()),
+                );
             })
             .sink(KanalSink::new(sender));
 
@@ -384,6 +389,7 @@ where
         codec_enabled: bool,
         statistics_state: &StatisticsCollectorState,
         end_call: Arc<Notify>,
+        stream_error: UnboundedSender<AudioStreamError>,
     ) -> Result<OutputHelper<O>> {
         let device_id = self.prune_stale_output_device().await;
         // Create the input channel
@@ -402,7 +408,11 @@ where
             .codec(codec_enabled)
             .on_error(move |error| {
                 error!(error = %error, "output_stream_error");
-                end_call.notify_one();
+                report_stream_error(
+                    &stream_error,
+                    &end_call,
+                    AudioStreamError::output(error.to_string()),
+                );
             })
             .build(&self.host)?;
 
@@ -696,6 +706,17 @@ where
         }
 
         self.outbound_attempts.write().await.clear();
+    }
+}
+
+fn report_stream_error(
+    sender: &UnboundedSender<AudioStreamError>,
+    end_call: &Notify,
+    error: AudioStreamError,
+) {
+    let sent = sender.send(error).is_ok();
+    if !sent {
+        end_call.notify_one();
     }
 }
 

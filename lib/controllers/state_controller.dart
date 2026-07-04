@@ -118,22 +118,20 @@ class StateController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void setInAudioTest() {
-    inAudioTest = !inAudioTest;
+  void setInAudioTest(bool active) {
+    inAudioTest = active;
     status = inAudioTest ? 'In Audio Test' : 'Inactive';
 
     notifyListeners();
   }
 
   Future<void> runAudioTest(Future<void> Function() audioTest) async {
-    setInAudioTest();
+    setInAudioTest(true);
 
     try {
       await audioTest();
     } finally {
-      if (inAudioTest) {
-        setInAudioTest();
-      }
+      setInAudioTest(false);
     }
   }
 

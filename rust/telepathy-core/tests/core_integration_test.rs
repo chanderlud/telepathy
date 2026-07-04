@@ -110,12 +110,12 @@ impl AudioOutput for RecordingOutput {
 }
 
 #[derive(Clone)]
-struct OutputErrorProbe {
+struct StreamErrorProbe {
     callback: Arc<Mutex<Option<StreamErrorCallback>>>,
     ready: Arc<Notify>,
 }
 
-impl OutputErrorProbe {
+impl StreamErrorProbe {
     fn new() -> Self {
         Self {
             callback: Arc::new(Mutex::new(None)),
@@ -138,19 +138,23 @@ impl OutputErrorProbe {
             .lock()
             .unwrap()
             .take()
-            .expect("output error callback should be captured before triggering");
+            .expect("stream error callback should be captured before triggering");
         callback(error);
     }
 }
 
 #[derive(Clone)]
 struct CallbackCapturingAudioHost {
-    output_error_probe: OutputErrorProbe,
+    input_error_probe: StreamErrorProbe,
+    output_error_probe: StreamErrorProbe,
 }
 
 impl CallbackCapturingAudioHost {
-    fn new(output_error_probe: OutputErrorProbe) -> Self {
-        Self { output_error_probe }
+    fn new(input_error_probe: StreamErrorProbe, output_error_probe: StreamErrorProbe) -> Self {
+        Self {
+            input_error_probe,
+            output_error_probe,
+        }
     }
 }
 
@@ -206,11 +210,12 @@ impl AudioHost for CallbackCapturingAudioHost {
     fn open_input(
         &self,
         _: Option<&str>,
-        _: Option<StreamErrorCallback>,
+        error_callback: Option<StreamErrorCallback>,
     ) -> Result<
         (impl AudioInput + Send + 'static, u32, Self::InputStream),
         telepathy_audio::devices::DeviceError,
     > {
+        self.input_error_probe.capture(error_callback);
         Ok((MockAudioInput::default(), DEFAULT_SAMPLE_RATE, ()))
     }
 
@@ -1817,6 +1822,53 @@ async fn audio_frames_play_in_order() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn audio_test_input_stream_error_propagates_and_clears_state() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+
+    let codec_config = CodecConfig::new(false, false, 5.0);
+
+    let key = SecretKey::generate();
+    let contact = Contact::new("audio-test-client".to_string(), key.public().to_string())
+        .expect("contact invalid");
+
+    let input_error_probe = StreamErrorProbe::new();
+    let output_error_probe = StreamErrorProbe::new();
+    let client = build_client_with_options(
+        relay_map,
+        key,
+        vec![contact],
+        &codec_config,
+        CallbackCapturingAudioHost::new(input_error_probe.clone(), output_error_probe),
+        Arc::new(Mutex::new(Vec::new())),
+        None,
+        ManagerLifecycle::Restartable,
+    )
+    .await;
+
+    let (result, ()) = tokio::join!(async { client.telepathy.audio_test().await }, async {
+        input_error_probe.wait_captured().await;
+        input_error_probe.trigger(simulated_stream_error(
+            "simulated input device disconnected",
+        ));
+    });
+
+    let error = result.expect_err("audio_test should fail when input stream errors");
+    assert!(
+        error
+            .to_string()
+            .contains("simulated input device disconnected"),
+        "expected propagated disconnect error, got {error}"
+    );
+    assert_call_slot_idle(
+        &client,
+        "audio_test should leave the call slot idle after cleanup",
+    );
+
+    client.telepathy.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn audio_test_output_stream_error_propagates_and_clears_state() {
     init_test_tracing();
     let relay_map = shared_relay_map();
@@ -1827,13 +1879,14 @@ async fn audio_test_output_stream_error_propagates_and_clears_state() {
     let contact = Contact::new("audio-test-client".to_string(), key.public().to_string())
         .expect("contact invalid");
 
-    let output_error_probe = OutputErrorProbe::new();
+    let input_error_probe = StreamErrorProbe::new();
+    let output_error_probe = StreamErrorProbe::new();
     let client = build_client_with_options(
         relay_map,
         key,
         vec![contact],
         &codec_config,
-        CallbackCapturingAudioHost::new(output_error_probe.clone()),
+        CallbackCapturingAudioHost::new(input_error_probe, output_error_probe.clone()),
         Arc::new(Mutex::new(Vec::new())),
         None,
         ManagerLifecycle::Restartable,
@@ -1842,8 +1895,7 @@ async fn audio_test_output_stream_error_propagates_and_clears_state() {
 
     let (result, ()) = tokio::join!(async { client.telepathy.audio_test().await }, async {
         output_error_probe.wait_captured().await;
-        output_error_probe.trigger(CpalError::with_message(
-            CpalErrorKind::DeviceNotAvailable,
+        output_error_probe.trigger(simulated_stream_error(
             "simulated output device disconnected",
         ));
     });
@@ -1855,20 +1907,32 @@ async fn audio_test_output_stream_error_propagates_and_clears_state() {
             .contains("simulated output device disconnected"),
         "expected propagated disconnect error, got {error}"
     );
-    let snapshot = client
-        .telepathy
-        .inner
-        .core_state
-        .call_slot
-        .snapshot()
-        .expect("call slot snapshot should succeed");
-    assert_eq!(
-        snapshot.state,
-        CallSlotState::Idle,
-        "audio_test should leave the call slot idle after cleanup"
+    assert_call_slot_idle(
+        &client,
+        "audio_test should leave the call slot idle after cleanup",
     );
 
     client.telepathy.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn normal_call_input_stream_error_surfaces_local_message() {
+    normal_call_stream_error_surfaces_local_message(true).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn normal_call_output_stream_error_surfaces_local_message() {
+    normal_call_stream_error_surfaces_local_message(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn room_input_stream_error_surfaces_local_message() {
+    room_stream_error_surfaces_local_message(true).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn room_output_stream_error_surfaces_local_message() {
+    room_stream_error_surfaces_local_message(false).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3162,6 +3226,164 @@ async fn room_duplicate_join_is_busy_then_idempotent() {
     client_a.telepathy.shutdown().await;
 }
 
+async fn normal_call_stream_error_surfaces_local_message(trigger_input: bool) {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+    let codec_config = CodecConfig::new(true, true, 5.0);
+
+    let key_a = SecretKey::generate();
+    let key_b = SecretKey::generate();
+    let contact_a = Contact::new(
+        "stream-error-client-a".to_string(),
+        key_a.public().to_string(),
+    )
+    .expect("contact a invalid");
+    let contact_b = Contact::new(
+        "stream-error-client-b".to_string(),
+        key_b.public().to_string(),
+    )
+    .expect("contact b invalid");
+
+    let call_states_a = Arc::new(Mutex::new(Vec::new()));
+    let call_states_b = Arc::new(Mutex::new(Vec::new()));
+    let input_error_probe = StreamErrorProbe::new();
+    let output_error_probe = StreamErrorProbe::new();
+    let accept_probe_b = PendingAcceptProbe::default();
+
+    let client_a = build_client(
+        relay_map,
+        key_a,
+        vec![contact_b.clone()],
+        &codec_config,
+        CallbackCapturingAudioHost::new(input_error_probe.clone(), output_error_probe.clone()),
+        call_states_a.clone(),
+    )
+    .await;
+    let client_b = build_client_with_accept_probe(
+        relay_map,
+        key_b,
+        vec![contact_a.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_b.clone(),
+        accept_probe_b.clone(),
+    )
+    .await;
+
+    client_a.telepathy.start_session(&contact_b).await;
+    client_b.telepathy.start_session(&contact_a).await;
+    wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
+
+    client_a
+        .telepathy
+        .start_call(&contact_b)
+        .await
+        .expect("alice should start the outgoing call");
+    accept_probe_b.wait_opened().await;
+    client_b
+        .telepathy
+        .start_call(&contact_a)
+        .await
+        .expect("bob should accept the call");
+
+    wait_for_connected(&call_states_a, "alice").await;
+    wait_for_connected(&call_states_b, "bob").await;
+    accept_probe_b.wait_cancelled().await;
+
+    let (probe, expected_message, simulated_message) =
+        stream_error_scenario(trigger_input, &input_error_probe, &output_error_probe);
+    probe.wait_captured().await;
+    probe.trigger(simulated_stream_error(simulated_message));
+
+    wait_for_call_ended_contains(&call_states_a, expected_message, false, "alice").await;
+    wait_for_call_ended_contains(&call_states_b, "audio device error", true, "bob").await;
+    assert_no_call_ended_contains(&call_states_b, simulated_message, "bob");
+
+    client_a.telepathy.shutdown().await;
+    client_b.telepathy.shutdown().await;
+}
+
+async fn room_stream_error_surfaces_local_message(trigger_input: bool) {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+    let codec_config = CodecConfig::new(true, true, 5.0);
+
+    let key_a = SecretKey::generate();
+    let key_b = SecretKey::generate();
+    let contact_a = Contact::new(
+        "room-stream-error-client-a".to_string(),
+        key_a.public().to_string(),
+    )
+    .expect("contact a invalid");
+    let contact_b = Contact::new(
+        "room-stream-error-client-b".to_string(),
+        key_b.public().to_string(),
+    )
+    .expect("contact b invalid");
+
+    let peer_b = contact_b.get_peer_id().to_string();
+    let call_states_a = Arc::new(Mutex::new(Vec::new()));
+    let call_states_b = Arc::new(Mutex::new(Vec::new()));
+    let room_members = sorted_room_members(&contact_a, &contact_b);
+    let input_error_probe = StreamErrorProbe::new();
+    let output_error_probe = StreamErrorProbe::new();
+
+    let client_a = build_client(
+        relay_map,
+        key_a,
+        vec![contact_b.clone()],
+        &codec_config,
+        CallbackCapturingAudioHost::new(input_error_probe.clone(), output_error_probe.clone()),
+        call_states_a.clone(),
+    )
+    .await;
+    let client_b = build_client(
+        relay_map,
+        key_b,
+        vec![contact_a.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_b,
+    )
+    .await;
+
+    client_a.telepathy.start_session(&contact_b).await;
+    client_b.telepathy.start_session(&contact_a).await;
+    wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
+
+    client_a
+        .telepathy
+        .join_room(room_members.clone())
+        .await
+        .expect("client a should join room");
+    client_b
+        .telepathy
+        .join_room(room_members)
+        .await
+        .expect("client b should join room");
+    wait_for_room_join_count(&call_states_a, &peer_b, 1).await;
+
+    let (probe, expected_message, simulated_message) =
+        stream_error_scenario(trigger_input, &input_error_probe, &output_error_probe);
+    probe.wait_captured().await;
+    probe.trigger(simulated_stream_error(simulated_message));
+
+    wait_for_call_ended_contains(&call_states_a, expected_message, false, "room client a").await;
+
+    client_a.telepathy.shutdown().await;
+    client_b.telepathy.shutdown().await;
+}
+
 fn init_test_tracing() {
     TEST_TRACING_INIT.call_once(|| {
         let _ = tracing_subscriber::fmt()
@@ -3487,6 +3709,90 @@ fn sorted_room_members(a: &Contact, b: &Contact) -> Vec<String> {
 
 fn call_state_snapshot(call_states: &Arc<Mutex<Vec<CallState>>>) -> Vec<CallState> {
     call_states.lock().unwrap().clone()
+}
+
+fn simulated_stream_error(message: &'static str) -> CpalError {
+    CpalError::with_message(CpalErrorKind::DeviceNotAvailable, message)
+}
+
+fn stream_error_scenario<'a>(
+    trigger_input: bool,
+    input_error_probe: &'a StreamErrorProbe,
+    output_error_probe: &'a StreamErrorProbe,
+) -> (&'a StreamErrorProbe, &'static str, &'static str) {
+    if trigger_input {
+        (
+            input_error_probe,
+            "Input stream error: simulated input device disconnected",
+            "simulated input device disconnected",
+        )
+    } else {
+        (
+            output_error_probe,
+            "Output stream error: simulated output device disconnected",
+            "simulated output device disconnected",
+        )
+    }
+}
+
+fn assert_call_slot_idle<H, I, O>(client: &ClientHarness<H, I, O>, message: &str)
+where
+    H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
+    I: Send + Sync + 'static,
+    O: Send + Sync + 'static,
+{
+    let snapshot = client
+        .telepathy
+        .inner
+        .core_state
+        .call_slot
+        .snapshot()
+        .expect("call slot snapshot should succeed");
+    assert_eq!(snapshot.state, CallSlotState::Idle, "{message}");
+}
+
+async fn wait_for_call_ended_contains(
+    call_states: &Arc<Mutex<Vec<CallState>>>,
+    expected_message: &str,
+    expected_remote: bool,
+    label: &str,
+) {
+    let mut poll = interval(Duration::from_millis(100));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    loop {
+        poll.tick().await;
+        let states = call_state_snapshot(call_states);
+        if states.iter().any(|state| {
+            matches!(
+                state,
+                CallState::CallEnded(message, remote)
+                    if *remote == expected_remote && message.contains(expected_message)
+            )
+        }) {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for {label} CallEnded containing '{expected_message}' with remote={expected_remote}; states were {states:?}"
+        );
+    }
+}
+
+fn assert_no_call_ended_contains(
+    call_states: &Arc<Mutex<Vec<CallState>>>,
+    unexpected_message: &str,
+    label: &str,
+) {
+    let states = call_state_snapshot(call_states);
+    assert!(
+        !states.iter().any(|state| {
+            matches!(
+                state,
+                CallState::CallEnded(message, _) if message.contains(unexpected_message)
+            )
+        }),
+        "{label} should not observe raw stream error text '{unexpected_message}'; states were {states:?}"
+    );
 }
 
 async fn wait_for_counter(counter: &AtomicUsize, notify: &Notify, expected: usize, label: &str) {

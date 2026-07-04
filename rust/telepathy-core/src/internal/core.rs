@@ -6,7 +6,7 @@ use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::connections::{
     ConstConnection, DynamicConnection, SharedConnections, audio_input, audio_output,
 };
-use crate::internal::error::ErrorKind;
+use crate::internal::error::{AUDIO_DEVICE_ERROR_REMOTE_REASON, AudioStreamError, ErrorKind};
 use crate::internal::helpers::{InputHelper, OutputHelper};
 use crate::internal::messages::{
     AudioHeader, ProtocolMessage, RoomMessage, SESSION_STOPPED_REASON, StartScreenshare,
@@ -45,7 +45,7 @@ use telepathy_audio::devices::AudioHost;
 use tokio::select;
 #[cfg(target_family = "wasm")]
 use tokio::sync::Mutex;
-use tokio::sync::mpsc::{Receiver, Sender, channel};
+use tokio::sync::mpsc::{Receiver, Sender, UnboundedReceiver, channel, unbounded_channel};
 use tokio::sync::{Notify, RwLock};
 #[cfg(not(target_family = "wasm"))]
 use tokio::time::{Instant, Interval, interval, sleep_until, timeout};
@@ -995,7 +995,7 @@ where
                         write_message(
                             io.send,
                             &ProtocolMessage::Goodbye {
-                                reason: Some("audio device error".to_string()),
+                                reason: Some(AUDIO_DEVICE_ERROR_REMOTE_REASON.to_string()),
                             },
                         )
                         .await?;
@@ -1409,9 +1409,16 @@ where
         // the two clients agree on these codec options
         let codec_config = call_state.codec_config();
 
+        let (stream_error_sender, mut stream_error_receiver) = unbounded_channel();
+
         // Setup input (stream is managed internally)
         let mut input_helper = self
-            .setup_input(codec_config, &statistics_state, end_call)
+            .setup_input(
+                codec_config,
+                &statistics_state,
+                end_call,
+                stream_error_sender.clone(),
+            )
             .await?;
 
         // Setup output (stream is managed internally)
@@ -1422,6 +1429,7 @@ where
                 codec_config.0,
                 &statistics_state,
                 end_call.clone(),
+                stream_error_sender,
             )
             .await?;
 
@@ -1433,7 +1441,7 @@ where
             self.core_state.statistics_paused.clone(),
         ));
 
-        if let Some(o) = optional {
+        let call_result = if let Some(o) = optional {
             let input_handle = spawn_task(audio_input(
                 input_helper.receiver(),
                 ConstConnection::new(o.connection.clone(), self.core_state.audio_sequence.clone()),
@@ -1448,25 +1456,26 @@ where
                 call_state.remote_configuration.sample_rate,
             ));
 
-            let controller_future = self.call_controller(o, call_state.peer, end_call);
+            let controller_future =
+                self.call_controller(o, call_state.peer, end_call, &mut stream_error_receiver);
 
             info!(event = "call_controller_starting");
 
-            let message_option = match controller_future.await {
-                Ok((message, notify)) if notify => {
-                    info!(event = "call_controller_result", notify, ?message);
-                    Some(message.unwrap_or_default())
+            let call_ended = match controller_future.await {
+                Ok(CallControllerOutcome::Notify { message, remote }) => {
+                    info!(event = "call_controller_result", remote, message = %message);
+                    Some((message, remote))
                 }
                 Err(error) => {
                     error!(event = "call_controller_error", error = %error);
-                    Some(error.to_string())
+                    Some((error.to_string(), false))
                 }
                 _ => None,
             };
 
-            if let Some(message) = message_option {
+            if let Some((message, remote)) = call_ended {
                 self.callbacks
-                    .call_state(CallState::CallEnded(message, true))
+                    .call_state(CallState::CallEnded(message, remote))
                     .await;
             }
 
@@ -1494,16 +1503,19 @@ where
             }
 
             info!(event = "call_controller_returned");
+            Ok(())
         } else {
-            loopback(
+            let result = loopback(
                 input_helper.receiver(),
                 output_helper.sender(),
                 stop_io,
                 end_call,
+                &mut stream_error_receiver,
             )
             .await;
             stop_io.cancel();
-        }
+            result
+        };
 
         debug!(event = "call_teardown_start");
         // on ios the audio session must be deactivated
@@ -1518,7 +1530,7 @@ where
         statistics_handle.await?;
         // dropping input and output handles cleans up resources
         debug!(event = "call_teardown_done");
-        Ok(())
+        call_result
     }
 
     /// Controller for normal calls
@@ -1528,18 +1540,34 @@ where
         o: OptionalCallArgs<'_>,
         peer: PublicKey,
         end_call: &Arc<Notify>,
-    ) -> Result<(Option<String>, bool)> {
+        stream_errors: &mut UnboundedReceiver<AudioStreamError>,
+    ) -> Result<CallControllerOutcome> {
         let identity = self.peer_id().await;
+        let mut stream_errors_open = true;
 
         CONNECTED.store(true, Relaxed);
         self.callbacks.call_state(CallState::Connected).await;
 
         loop {
             select! {
+                biased;
+
+                error = stream_errors.recv(), if stream_errors_open => {
+                    if let Some(error) = error {
+                        let message = error.user_message();
+                        let remote_reason = error.remote_reason().to_string();
+                        _ = write_message(
+                            o.control_send,
+                            &ProtocolMessage::Goodbye { reason: Some(remote_reason) },
+                        ).await;
+                        break Ok(CallControllerOutcome::Notify { message, remote: false });
+                    }
+                    stream_errors_open = false;
+                }
                 // ends the call
                 _ = end_call.notified() => {
                     write_message(o.control_send, &ProtocolMessage::Goodbye { reason: None }).await?;
-                    break Ok((None, false));
+                    break Ok(CallControllerOutcome::Silent);
                 },
                 _ = o.state.start_screenshare.notified() => {
                     info!(event = "starting_screenshare", peer.id = ?peer);
@@ -1563,7 +1591,10 @@ where
                     match message {
                         ProtocolMessage::Goodbye { reason } => {
                             debug!(event = "call_goodbye_received", ?reason);
-                            break Ok((reason, true));
+                            break Ok(CallControllerOutcome::Notify {
+                                message: reason.unwrap_or_default(),
+                                remote: true,
+                            });
                         },
                         ProtocolMessage::Chat { text, attachments } => {
                             self.callbacks.message_received(ChatMessage {
@@ -1599,7 +1630,10 @@ where
                     } else {
                         // if the channel closes, the call has ended
                         info!(event = "call_message_channel_closed");
-                        break Ok((None, true));
+                        break Ok(CallControllerOutcome::Notify {
+                            message: String::new(),
+                            remote: true,
+                        });
                     }
                 },
             }
@@ -1709,6 +1743,8 @@ where
         // tracks connection state for peers keyed by transport stable id
         let mut connections: HashMap<usize, RoomConnection<O>> = HashMap::new();
         let mut peer_connections: HashMap<PublicKey, usize> = HashMap::new();
+        let (stream_error_sender, mut stream_error_receiver) = unbounded_channel();
+        let mut stream_errors_open = true;
 
         // Setup input (stream is managed internally)
         let mut input_helper: InputHelper<I> = self
@@ -1716,6 +1752,7 @@ where
                 (true, true, 5_f32), // hard coded room codec options
                 &statistics_state,
                 &end_call,
+                stream_error_sender.clone(),
             )
             .await?;
 
@@ -1741,6 +1778,53 @@ where
 
         loop {
             select! {
+                biased;
+
+                error = stream_error_receiver.recv(), if stream_errors_open => {
+                    if let Some(error) = error {
+                        let message = error.user_message();
+                        let remote_reason = error.remote_reason().to_string();
+                        // Mirror `call_controller`: notify active room peers with a goodbye
+                        // carrying the audio-device-error reason so they can distinguish a
+                        // local device failure from a normal transport disconnect.
+                        for (connection_id, room_connection) in connections.iter() {
+                            match room_connection.connection.open_bi().await {
+                                Ok((send_stream, _recv_stream)) => {
+                                    let mut framed = LengthDelimitedCodec::builder()
+                                        .max_frame_length(SESSION_MAX_FRAME_LENGTH)
+                                        .length_field_type::<u64>()
+                                        .new_write(send_stream);
+                                    if let Err(error) = write_message(
+                                        &mut framed,
+                                        &ProtocolMessage::Goodbye {
+                                            reason: Some(remote_reason.clone()),
+                                        },
+                                    )
+                                    .await
+                                    {
+                                        warn!(
+                                            event = "room_audio_error_goodbye_failed",
+                                            connection.id = connection_id,
+                                            error = %error
+                                        );
+                                    }
+                                }
+                                Err(error) => {
+                                    warn!(
+                                        event = "room_audio_error_open_bi_failed",
+                                        connection.id = connection_id,
+                                        error = %error
+                                    );
+                                }
+                            }
+                        }
+                        self.callbacks
+                            .call_state(CallState::CallEnded(message, false))
+                            .await;
+                        break;
+                    }
+                    stream_errors_open = false;
+                }
                 message = receiver.recv() => {
                     match message {
                         Some(RoomMessage::Join { connection, state, session_id }) => {
@@ -1810,6 +1894,7 @@ where
                                     true,
                                     &statistics_state,
                                     end_call.clone(),
+                                    stream_error_sender.clone(),
                                 )
                                 .await?;
                             // begin sending
@@ -1972,6 +2057,11 @@ struct RoomConnection<O> {
     connection: Connection,
     _output: OutputHelper<O>,
     handle: JoinHandle<Result<()>>,
+}
+
+enum CallControllerOutcome {
+    Silent,
+    Notify { message: String, remote: bool },
 }
 
 pub(crate) struct OptionalCallArgs<'a> {

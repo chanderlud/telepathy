@@ -203,7 +203,7 @@ class _AudioSettingsState extends State<AudioSettings> {
                   }
 
                   if (inAudioTest) {
-                    stateController.setInAudioTest();
+                    stateController.setInAudioTest(false);
                     telepathy.endCall();
                   } else {
                     try {

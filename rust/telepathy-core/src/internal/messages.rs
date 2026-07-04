@@ -1,4 +1,4 @@
-use crate::internal::error::Error;
+use crate::internal::error::{AUDIO_DEVICE_ERROR_REMOTE_REASON, Error};
 use crate::internal::state::EarlyCallState;
 use iroh::PublicKey;
 use iroh::endpoint::Connection;
@@ -40,7 +40,7 @@ impl ProtocolMessage {
                 if error.is_session_stopped() {
                     SESSION_STOPPED_REASON
                 } else if error.is_audio_error() {
-                    "audio device error"
+                    AUDIO_DEVICE_ERROR_REMOTE_REASON
                 } else {
                     "an error occurred"
                 }
