@@ -279,8 +279,6 @@ impl AudioHost for CpalAudioHost {
         let device_sample_rate = output_config.sample_rate();
         let sample_format = output_config.sample_format();
 
-        let output_device = self.get_output_device(device_id)?;
-
         // Build the audio stream with the appropriate sample format
         let stream = match sample_format {
             SampleFormat::I8 => build_output_stream_with_format::<i8>(
@@ -376,63 +374,56 @@ impl AudioHost for CpalAudioHost {
 
 impl CpalAudioHost {
     fn get_input_device(&self, device_id: Option<&str>) -> Result<Device, DeviceError> {
-        if let Some(id) = device_id {
-            let parsed: DeviceId = id.parse().map_err(|parse| DeviceError::InvalidDeviceId {
-                direction: DeviceDirection::Input,
-                id: id.to_string(),
-                parse,
-            })?;
-
-            // Try to find the device by ID
-            if let Some(device) = self.inner().device_by_id(&parsed) {
-                return Ok(device);
-            }
-
-            return Err(DeviceError::DeviceNotFound {
-                direction: DeviceDirection::Input,
-                id: id.to_string(),
-            });
-        }
-
-        // Get default device
-        let device = self
-            .inner()
-            .default_input_device()
-            .ok_or(DeviceError::NoDefaultDevice {
-                direction: DeviceDirection::Input,
-            })?;
-
-        Ok(device)
+        self.get_device(device_id, DeviceDirection::Input, |host| {
+            host.default_input_device()
+        })
     }
 
     fn get_output_device(&self, device_id: Option<&str>) -> Result<Device, DeviceError> {
+        self.get_device(device_id, DeviceDirection::Output, |host| {
+            host.default_output_device()
+        })
+    }
+
+    /// Resolves a device for the given `direction`.
+    ///
+    /// When `device_id` is `Some`, the lookup is strict: a failure to parse
+    /// the ID returns `DeviceError::InvalidDeviceId` and a parsed ID that does
+    /// not match any current device returns `DeviceError::DeviceNotFound`.
+    /// Callers that need to survive stale or unrecognized IDs (e.g. a saved
+    /// selection from a different platform) must prune the selection upstream
+    /// before reaching this layer.
+    ///
+    /// When `device_id` is `None`, the platform default device is used and
+    /// `DeviceError::NoDefaultDevice` is returned if none is available.
+    fn get_device<F>(
+        &self,
+        device_id: Option<&str>,
+        direction: DeviceDirection,
+        default_device: F,
+    ) -> Result<Device, DeviceError>
+    where
+        F: FnOnce(&cpal::Host) -> Option<Device>,
+    {
         if let Some(id) = device_id {
-            let parsed: DeviceId = id.parse().map_err(|parse| DeviceError::InvalidDeviceId {
-                direction: DeviceDirection::Output,
-                id: id.to_string(),
-                parse,
-            })?;
+            let parsed = id
+                .parse::<DeviceId>()
+                .map_err(|parse| DeviceError::InvalidDeviceId {
+                    direction,
+                    id: id.to_string(),
+                    parse,
+                })?;
 
-            // Try to find the device by ID
-            if let Some(device) = self.inner().device_by_id(&parsed) {
-                return Ok(device);
-            }
-
-            return Err(DeviceError::DeviceNotFound {
-                direction: DeviceDirection::Output,
-                id: id.to_string(),
-            });
+            return self
+                .inner()
+                .device_by_id(&parsed)
+                .ok_or(DeviceError::DeviceNotFound {
+                    direction,
+                    id: id.to_string(),
+                });
         }
 
-        // Get default device
-        let device = self
-            .inner()
-            .default_output_device()
-            .ok_or(DeviceError::NoDefaultDevice {
-                direction: DeviceDirection::Output,
-            })?;
-
-        Ok(device)
+        default_device(self.inner()).ok_or(DeviceError::NoDefaultDevice { direction })
     }
 }
 
@@ -695,4 +686,79 @@ where
         })?;
 
     Ok(SendStream(stream))
+}
+
+#[cfg(test)]
+#[cfg(not(target_family = "wasm"))]
+mod tests {
+    use super::*;
+    use crate::devices::DeviceDirection;
+
+    #[test]
+    fn get_input_device_rejects_unparseable_id() {
+        let host = CpalAudioHost::new();
+
+        let bogus = "this-is-not-a-cpal-device-id";
+        let result = host.get_input_device(Some(bogus));
+
+        match result {
+            Err(DeviceError::InvalidDeviceId {
+                direction: DeviceDirection::Input,
+                id,
+                ..
+            }) => assert_eq!(id, bogus),
+            other => panic!("expected InvalidDeviceId for unparseable input ID, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn get_output_device_rejects_unparseable_id() {
+        let host = CpalAudioHost::new();
+
+        let bogus = "this-is-not-a-cpal-device-id";
+        let result = host.get_output_device(Some(bogus));
+
+        match result {
+            Err(DeviceError::InvalidDeviceId {
+                direction: DeviceDirection::Output,
+                id,
+                ..
+            }) => assert_eq!(id, bogus),
+            other => panic!("expected InvalidDeviceId for unparseable output ID, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn get_input_device_reports_missing_id() {
+        let host = CpalAudioHost::new();
+
+        // The host prefix must be valid for the platform running the test
+        // so that parsing succeeds but the device lookup fails.
+        let bogus = format!("{}:00000000-0000-0000-0000-000000000000", host.inner().id());
+        let result = host.get_input_device(Some(&bogus));
+
+        match result {
+            Err(DeviceError::DeviceNotFound {
+                direction: DeviceDirection::Input,
+                id,
+            }) => assert_eq!(id, bogus),
+            other => panic!("expected DeviceNotFound for missing input ID, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn get_output_device_reports_missing_id() {
+        let host = CpalAudioHost::new();
+
+        let bogus = format!("{}:00000000-0000-0000-0000-000000000000", host.inner().id());
+        let result = host.get_output_device(Some(&bogus));
+
+        match result {
+            Err(DeviceError::DeviceNotFound {
+                direction: DeviceDirection::Output,
+                id,
+            }) => assert_eq!(id, bogus),
+            other => panic!("expected DeviceNotFound for missing output ID, got {other:?}"),
+        }
+    }
 }

@@ -253,6 +253,34 @@ Future<void> main(List<String> args) async {
 
   final audioDevices = AudioDevices(telepathy: telepathy);
 
+  // Snapshot the output device ID before reconciliation so we can detect
+  // whether pruning cleared or changed it (e.g., a saved USB headset was
+  // unplugged). The sound player was already bound to the pre-prune ID at
+  // construction, so without a refresh it would keep using a stale binding.
+  final prePruneOutputDeviceId = audioSettingsController.outputDeviceId;
+
+  // Reconcile persisted device selections against the platform's current device
+  // list. Saved IDs may no longer resolve (e.g., a USB headset was unplugged),
+  // and we don't want to keep applying a stale ID that the audio stack then has
+  // to fall back from on every call setup.
+  try {
+    final (inputDevices, outputDevices) = await telepathy.listDevices();
+    await audioSettingsController.pruneMissingDevices(
+      inputDevices: inputDevices,
+      outputDevices: outputDevices,
+    );
+  } catch (e, st) {
+    DebugConsole.debug('Failed to reconcile audio devices on startup: $e\n$st');
+  }
+
+  // Use the post-prune controller state as the single source of truth for
+  // output-device routing. Reapply it to the sound player so a cleared or
+  // changed saved selection reaches the player alongside Telepathy.
+  final postPruneOutputDeviceId = audioSettingsController.outputDeviceId;
+  if (prePruneOutputDeviceId != postPruneOutputDeviceId) {
+    soundPlayer.updateOutputDevice(deviceId: postPruneOutputDeviceId);
+  }
+
   // apply options to the instance
   telepathy.setRmsThreshold(decimal: audioSettingsController.inputSensitivity);
   telepathy.setInputVolume(decibel: audioSettingsController.inputVolume);
@@ -261,7 +289,7 @@ Future<void> main(List<String> args) async {
   telepathy.setPlayCustomRingtones(
       play: preferencesController.playCustomRingtones);
   telepathy.setInputDevice(deviceId: audioSettingsController.inputDeviceId);
-  telepathy.setOutputDevice(deviceId: audioSettingsController.outputDeviceId);
+  telepathy.setOutputDevice(deviceId: postPruneOutputDeviceId);
   telepathy.setSendCustomRingtone(
       send: preferencesController.customRingtoneFile != null);
   telepathy.setEfficiencyMode(enabled: preferencesController.efficiencyMode);

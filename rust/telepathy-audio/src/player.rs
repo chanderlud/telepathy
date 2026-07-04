@@ -34,8 +34,6 @@ use crate::error::{
     AudioFileError, ChannelError, Error, ProcessingError, StreamDirection, StreamError, TaskError,
 };
 use crate::internal::processing::wide_mul;
-#[cfg(target_family = "wasm")]
-use crate::internal::thread;
 use crate::internal::traits::CHANNEL_SIZE;
 use crate::internal::utils::{db_to_multiplier, resampler_factory};
 use crate::sea::codec::file::SeaFileHeader;
@@ -727,21 +725,21 @@ pub async fn wav_to_sea(bytes: Vec<u8>, residual_bits: f32) -> Result<Vec<u8>, E
 }
 
 /// Gets the output device based on the configured device ID.
+///
+/// Falls back to the system default when the persisted device ID no longer
+/// resolves.
 async fn get_output_device(
     output_device: &Arc<Mutex<Option<DeviceId>>>,
     host: &Host,
 ) -> Result<cpal::Device, Error> {
-    match *output_device.lock().await {
-        Some(ref id) => host.device_by_id(id).ok_or_else(|| {
-            Error::Device(DeviceError::DeviceNotFound {
-                direction: DeviceDirection::Output,
-                id: id.to_string(),
-            })
-        }),
-        None => host
-            .default_output_device()
-            .ok_or(Error::Device(DeviceError::NoOutputDevice)),
+    if let Some(ref id) = *output_device.lock().await
+        && let Some(device) = host.device_by_id(id)
+    {
+        return Ok(device);
     }
+
+    host.default_output_device()
+        .ok_or(Error::Device(DeviceError::NoOutputDevice))
 }
 
 /// Internal play sound function with pre-obtained device and config.
@@ -1264,8 +1262,8 @@ fn unpack_wav_frame<T: SampleConversion + Clone>(
 /// Runs a CPU-bound closure on a blocking context and returns its result.
 ///
 /// On native targets uses `tokio::task::spawn_blocking` for optimal performance.
-/// On WASM uses the thread abstraction with a oneshot channel to bridge synchronous
-/// execution to an awaitable future (no multi-threaded runtime in browser).
+/// On WASM runs inline because `wasm_bindgen::JsValue`-backed errors are not
+/// `Send` and cannot cross a worker/channel boundary.
 #[cfg(not(target_family = "wasm"))]
 async fn spawn_cpu_task<F, R>(f: F) -> Result<R, Error>
 where
@@ -1278,15 +1276,9 @@ where
 #[cfg(target_family = "wasm")]
 async fn spawn_cpu_task<F, R>(f: F) -> Result<R, Error>
 where
-    F: FnOnce() -> Result<R, Error> + Send + 'static,
-    R: Send + 'static,
+    F: FnOnce() -> Result<R, Error>,
 {
-    let (tx, rx) = oneshot::channel();
-    thread::safe_spawn(move || {
-        let result = f();
-        let _ = tx.send(result);
-    })?;
-    rx.await?
+    f()
 }
 
 #[cfg(test)]

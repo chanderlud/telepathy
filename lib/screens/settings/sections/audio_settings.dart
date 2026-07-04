@@ -87,6 +87,33 @@ class _AudioSettingsState extends State<AudioSettings> {
                   selectedOutputDevice: audioSettingsController.outputDeviceId,
                 ),
                 builder: (BuildContext context, _DeviceDropdownState state, _) {
+                  WidgetsBinding.instance.addPostFrameCallback((_) async {
+                    final inputKnown = state.selectedInputDevice == null ||
+                        state.inputDevices
+                            .any((d) => d.id == state.selectedInputDevice);
+                    final outputKnown = state.selectedOutputDevice == null ||
+                        state.outputDevices
+                            .any((d) => d.id == state.selectedOutputDevice);
+
+                    if (inputKnown && outputKnown) {
+                      return;
+                    }
+
+                    await audioSettingsController.pruneMissingDevices(
+                      inputDevices: state.inputDevices,
+                      outputDevices: state.outputDevices,
+                    );
+
+                    if (!inputKnown) {
+                      telepathy.setInputDevice(deviceId: null);
+                    }
+
+                    if (!outputKnown) {
+                      telepathy.setOutputDevice(deviceId: null);
+                      player.updateOutputDevice(deviceId: null);
+                    }
+                  });
+
                   final inputInitialSelection =
                       state.selectedInputDevice != null &&
                               state.inputDevices
