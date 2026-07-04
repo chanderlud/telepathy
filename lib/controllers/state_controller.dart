@@ -125,6 +125,18 @@ class StateController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> runAudioTest(Future<void> Function() audioTest) async {
+    setInAudioTest();
+
+    try {
+      await audioTest();
+    } finally {
+      if (inAudioTest) {
+        setInAudioTest();
+      }
+    }
+  }
+
   void disableCallsTemporarily() {
     _callEndedRecently = true;
 

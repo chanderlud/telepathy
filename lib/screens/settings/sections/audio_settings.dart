@@ -206,14 +206,12 @@ class _AudioSettingsState extends State<AudioSettings> {
                     stateController.setInAudioTest();
                     telepathy.endCall();
                   } else {
-                    stateController.setInAudioTest();
                     try {
-                      await telepathy.audioTest();
+                      await stateController.runAudioTest(telepathy.audioTest);
                     } on DartError catch (e) {
                       if (!context.mounted) return;
                       showErrorDialog(
                           context, 'Error in Audio Test', e.message);
-                      stateController.setInAudioTest();
                     }
                   }
                 },

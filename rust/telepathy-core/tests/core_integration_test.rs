@@ -1,5 +1,6 @@
 #![cfg(feature = "integration-testing")]
 
+use cpal::{Error as CpalError, ErrorKind as CpalErrorKind};
 use iroh::address_lookup::memory::MemoryLookup;
 use iroh::{PublicKey, RelayMap, SecretKey};
 use std::sync::atomic::Ordering::Relaxed;
@@ -10,6 +11,7 @@ use std::time::Duration;
 use telepathy_audio::devices::AudioHost;
 use telepathy_audio::devices::{MockAudioHost, MockAudioInput, MockAudioOutput};
 use telepathy_audio::internal::traits::{AudioInput, AudioOutput};
+use telepathy_audio::io::StreamErrorCallback;
 use telepathy_core::internal::TelepathyHandle;
 use telepathy_core::internal::callbacks::{MockCoreCallbacks, MockCoreStatisticsCallback};
 use telepathy_core::internal::state::{CallSlotState, SessionState};
@@ -104,6 +106,124 @@ impl AudioOutput for RecordingOutput {
         let idx = (samples[0] / SEQUENCED_STEP).round() as usize;
         self.log.lock().unwrap().push(idx);
         Ok(0)
+    }
+}
+
+#[derive(Clone)]
+struct OutputErrorProbe {
+    callback: Arc<Mutex<Option<StreamErrorCallback>>>,
+    ready: Arc<Notify>,
+}
+
+impl OutputErrorProbe {
+    fn new() -> Self {
+        Self {
+            callback: Arc::new(Mutex::new(None)),
+            ready: Arc::new(Notify::new()),
+        }
+    }
+
+    fn capture(&self, callback: Option<StreamErrorCallback>) {
+        *self.callback.lock().unwrap() = callback;
+        self.ready.notify_one();
+    }
+
+    async fn wait_captured(&self) {
+        self.ready.notified().await;
+    }
+
+    fn trigger(&self, error: CpalError) {
+        let mut callback = self
+            .callback
+            .lock()
+            .unwrap()
+            .take()
+            .expect("output error callback should be captured before triggering");
+        callback(error);
+    }
+}
+
+#[derive(Clone)]
+struct CallbackCapturingAudioHost {
+    output_error_probe: OutputErrorProbe,
+}
+
+impl CallbackCapturingAudioHost {
+    fn new(output_error_probe: OutputErrorProbe) -> Self {
+        Self { output_error_probe }
+    }
+}
+
+impl AudioHost for CallbackCapturingAudioHost {
+    type InputStream = ();
+    type OutputStream = ();
+
+    fn list_input_devices(
+        &self,
+    ) -> Result<Vec<telepathy_audio::devices::AudioDeviceInfo>, telepathy_audio::devices::DeviceError>
+    {
+        Ok(vec![telepathy_audio::devices::AudioDeviceInfo {
+            name: "Mock Input".to_string(),
+            id: "mock".to_string(),
+        }])
+    }
+
+    fn list_output_devices(
+        &self,
+    ) -> Result<Vec<telepathy_audio::devices::AudioDeviceInfo>, telepathy_audio::devices::DeviceError>
+    {
+        Ok(vec![telepathy_audio::devices::AudioDeviceInfo {
+            name: "Mock Output".to_string(),
+            id: "mock".to_string(),
+        }])
+    }
+
+    fn list_all_devices(
+        &self,
+    ) -> Result<telepathy_audio::devices::AudioDeviceList, telepathy_audio::devices::DeviceError>
+    {
+        Ok(telepathy_audio::devices::AudioDeviceList {
+            input_devices: self.list_input_devices()?,
+            output_devices: self.list_output_devices()?,
+        })
+    }
+
+    fn input_sample_rate(
+        &self,
+        _: Option<&str>,
+    ) -> Result<u32, telepathy_audio::devices::DeviceError> {
+        Ok(DEFAULT_SAMPLE_RATE)
+    }
+
+    fn output_sample_rate(
+        &self,
+        _: Option<&str>,
+    ) -> Result<u32, telepathy_audio::devices::DeviceError> {
+        Ok(DEFAULT_SAMPLE_RATE)
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn open_input(
+        &self,
+        _: Option<&str>,
+        _: Option<StreamErrorCallback>,
+    ) -> Result<
+        (impl AudioInput + Send + 'static, u32, Self::InputStream),
+        telepathy_audio::devices::DeviceError,
+    > {
+        Ok((MockAudioInput::default(), DEFAULT_SAMPLE_RATE, ()))
+    }
+
+    fn open_output(
+        &self,
+        _: Option<&str>,
+        error_callback: Option<StreamErrorCallback>,
+    ) -> Result<
+        (impl AudioOutput + Send + 'static, u32, Self::OutputStream),
+        telepathy_audio::devices::DeviceError,
+    > {
+        self.output_error_probe.capture(error_callback);
+        Ok((MockAudioOutput, DEFAULT_SAMPLE_RATE, ()))
     }
 }
 
@@ -1694,6 +1814,61 @@ async fn audio_frames_play_in_order() {
             window[1]
         );
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn audio_test_output_stream_error_propagates_and_clears_state() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+
+    let codec_config = CodecConfig::new(false, false, 5.0);
+
+    let key = SecretKey::generate();
+    let contact = Contact::new("audio-test-client".to_string(), key.public().to_string())
+        .expect("contact invalid");
+
+    let output_error_probe = OutputErrorProbe::new();
+    let client = build_client_with_options(
+        relay_map,
+        key,
+        vec![contact],
+        &codec_config,
+        CallbackCapturingAudioHost::new(output_error_probe.clone()),
+        Arc::new(Mutex::new(Vec::new())),
+        None,
+        ManagerLifecycle::Restartable,
+    )
+    .await;
+
+    let (result, ()) = tokio::join!(async { client.telepathy.audio_test().await }, async {
+        output_error_probe.wait_captured().await;
+        output_error_probe.trigger(CpalError::with_message(
+            CpalErrorKind::DeviceNotAvailable,
+            "simulated output device disconnected",
+        ));
+    });
+
+    let error = result.expect_err("audio_test should fail when output stream errors");
+    assert!(
+        error
+            .to_string()
+            .contains("simulated output device disconnected"),
+        "expected propagated disconnect error, got {error}"
+    );
+    let snapshot = client
+        .telepathy
+        .inner
+        .core_state
+        .call_slot
+        .snapshot()
+        .expect("call slot snapshot should succeed");
+    assert_eq!(
+        snapshot.state,
+        CallSlotState::Idle,
+        "audio_test should leave the call slot idle after cleanup"
+    );
+
+    client.telepathy.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
