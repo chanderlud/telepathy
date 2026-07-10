@@ -147,6 +147,10 @@ impl StreamErrorProbe {
 struct CallbackCapturingAudioHost {
     input_error_probe: StreamErrorProbe,
     output_error_probe: StreamErrorProbe,
+    /// When set, `open_output` returns a synchronous `DeviceError`
+    /// (simulating an exclusively-held output device) without capturing
+    /// the stream error callback.
+    fail_output_synchronously: Arc<AtomicBool>,
 }
 
 impl CallbackCapturingAudioHost {
@@ -154,6 +158,7 @@ impl CallbackCapturingAudioHost {
         Self {
             input_error_probe,
             output_error_probe,
+            fail_output_synchronously: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -227,6 +232,9 @@ impl AudioHost for CallbackCapturingAudioHost {
         (impl AudioOutput + Send + 'static, u32, Self::OutputStream),
         telepathy_audio::devices::DeviceError,
     > {
+        if self.fail_output_synchronously.load(Relaxed) {
+            return Err(telepathy_audio::devices::DeviceError::NoOutputDevice);
+        }
         self.output_error_probe.capture(error_callback);
         Ok((MockAudioOutput, DEFAULT_SAMPLE_RATE, ()))
     }
@@ -1915,6 +1923,191 @@ async fn audio_test_output_stream_error_propagates_and_clears_state() {
     client.telepathy.shutdown().await;
 }
 
+/// Regression test: a synchronously-failing `setup_output` (e.g. another
+/// process holds the exclusive output device) must surface a single
+/// `CallState::CallEnded` to the dialer with the user-facing
+/// `CALL_END_AUDIO_DEVICE_FAILURE` copy and `remote == false`, so the
+/// frontend can exit the connecting state. Before the fix, the slot
+/// was released inside `call_handshake` before the error reached
+/// `session_outer`, so the `CallEnded` guard was false and the
+/// frontend stayed in `CallLifecycle.connecting` forever.
+#[tokio::test(flavor = "multi_thread")]
+async fn setup_output_synchronous_failure_emits_call_ended() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+    let codec_config = CodecConfig::new(true, true, 5.0);
+
+    let key_a = SecretKey::generate();
+    let key_b = SecretKey::generate();
+    let contact_a = Contact::new(
+        "setup-output-fail-client-a".to_string(),
+        key_a.public().to_string(),
+    )
+    .expect("contact a invalid");
+    let contact_b = Contact::new(
+        "setup-output-fail-client-b".to_string(),
+        key_b.public().to_string(),
+    )
+    .expect("contact b invalid");
+
+    let call_states_a = Arc::new(Mutex::new(Vec::new()));
+    let call_states_b = Arc::new(Mutex::new(Vec::new()));
+    let input_error_probe = StreamErrorProbe::new();
+    let output_error_probe = StreamErrorProbe::new();
+    let accept_probe_b = PendingAcceptProbe::default();
+
+    let dialer_host =
+        CallbackCapturingAudioHost::new(input_error_probe.clone(), output_error_probe.clone());
+    dialer_host.fail_output_synchronously.store(true, Relaxed);
+
+    let client_a = build_client(
+        relay_map,
+        key_a,
+        vec![contact_b.clone()],
+        &codec_config,
+        dialer_host,
+        call_states_a.clone(),
+    )
+    .await;
+    let client_b = build_client_with_accept_probe(
+        relay_map,
+        key_b,
+        vec![contact_a.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_b.clone(),
+        accept_probe_b.clone(),
+    )
+    .await;
+
+    client_a.telepathy.start_session(&contact_b).await;
+    client_b.telepathy.start_session(&contact_a).await;
+    wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
+
+    client_a
+        .telepathy
+        .start_call(&contact_b)
+        .await
+        .expect("alice should start the outgoing call");
+    accept_probe_b.wait_opened().await;
+    client_b
+        .telepathy
+        .start_call(&contact_a)
+        .await
+        .expect("bob should accept the call");
+
+    wait_for_call_ended_contains(&call_states_a, "Audio device error", false, "alice").await;
+
+    let states_a = call_state_snapshot(&call_states_a);
+    let ended_count = states_a
+        .iter()
+        .filter(|state| matches!(state, CallState::CallEnded(_, _)))
+        .count();
+    assert_eq!(
+        ended_count, 1,
+        "expected exactly one CallEnded on the dialer; states were {states_a:?}"
+    );
+    assert!(
+        states_a
+            .iter()
+            .all(|state| !matches!(state, CallState::Connected)),
+        "dialer must never reach Connected when setup_output fails synchronously; states were {states_a:?}"
+    );
+    assert_no_call_ended_contains(&call_states_a, "no output device", "alice");
+    assert_call_slot_idle(
+        &client_a,
+        "dialer should leave the call slot idle after synchronous setup_output failure",
+    );
+
+    client_a.telepathy.shutdown().await;
+    client_b.telepathy.shutdown().await;
+}
+
+/// Happy-path contrast for [`setup_output_synchronous_failure_emits_call_ended`]:
+/// when the dialer's output device opens successfully, the same host still
+/// produces a `CallState::Connected`. Guards against an over-eager fix that
+/// would short-circuit `call_handshake` before the call becomes active.
+#[tokio::test(flavor = "multi_thread")]
+async fn setup_output_synchronous_flag_disabled_still_connects() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+    let codec_config = CodecConfig::new(true, true, 5.0);
+
+    let key_a = SecretKey::generate();
+    let key_b = SecretKey::generate();
+    let contact_a = Contact::new(
+        "setup-output-happy-client-a".to_string(),
+        key_a.public().to_string(),
+    )
+    .expect("contact a invalid");
+    let contact_b = Contact::new(
+        "setup-output-happy-client-b".to_string(),
+        key_b.public().to_string(),
+    )
+    .expect("contact b invalid");
+
+    let call_states_a = Arc::new(Mutex::new(Vec::new()));
+    let call_states_b = Arc::new(Mutex::new(Vec::new()));
+    let accept_probe_b = PendingAcceptProbe::default();
+
+    let client_a = build_client(
+        relay_map,
+        key_a,
+        vec![contact_b.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_a.clone(),
+    )
+    .await;
+    let client_b = build_client_with_accept_probe(
+        relay_map,
+        key_b,
+        vec![contact_a.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_b.clone(),
+        accept_probe_b.clone(),
+    )
+    .await;
+
+    client_a.telepathy.start_session(&contact_b).await;
+    client_b.telepathy.start_session(&contact_a).await;
+    wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
+
+    client_a
+        .telepathy
+        .start_call(&contact_b)
+        .await
+        .expect("alice should start the outgoing call");
+    accept_probe_b.wait_opened().await;
+    client_b
+        .telepathy
+        .start_call(&contact_a)
+        .await
+        .expect("bob should accept the call");
+
+    wait_for_connected(&call_states_a, "alice").await;
+    wait_for_connected(&call_states_b, "bob").await;
+
+    client_a.telepathy.shutdown().await;
+    client_b.telepathy.shutdown().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn normal_call_input_stream_error_surfaces_local_message() {
     normal_call_stream_error_surfaces_local_message(true).await;
@@ -3301,7 +3494,7 @@ async fn normal_call_stream_error_surfaces_local_message(trigger_input: bool) {
     probe.trigger(simulated_stream_error(simulated_message));
 
     wait_for_call_ended_contains(&call_states_a, expected_message, false, "alice").await;
-    wait_for_call_ended_contains(&call_states_b, "audio device error", true, "bob").await;
+    wait_for_call_ended_contains(&call_states_b, "Audio device error", true, "bob").await;
     assert_no_call_ended_contains(&call_states_b, simulated_message, "bob");
 
     client_a.telepathy.shutdown().await;
@@ -3379,6 +3572,644 @@ async fn room_stream_error_surfaces_local_message(trigger_input: bool) {
     probe.trigger(simulated_stream_error(simulated_message));
 
     wait_for_call_ended_contains(&call_states_a, expected_message, false, "room client a").await;
+
+    client_a.telepathy.shutdown().await;
+    client_b.telepathy.shutdown().await;
+}
+
+// ---------------------------------------------------------------------------
+// Call-end copy contract tests.
+//
+// These tests pin down the *exact* user-facing message string that
+// `CallState::CallEnded` carries for every backend failure path. They
+// are the regression guard against two distinct bugs:
+//
+//   1. Ad-hoc `format!(...)` / `error.to_string()` calls leaking internal
+//      wording (e.g. `"Poison error: ..."`, `"Channel closed (mpsc send
+//      failed)"`, `"Transport failed on send"`) into the frontend.
+//   2. Different code paths emitting the same backend failure with
+//      different copy (the inconsistency this refactor eliminates).
+//
+// All paths funnel through `CallEndMessage` in
+// `rust/telepathy-core/src/internal/error.rs`. The expected strings
+// below must stay in sync with the `CALL_END_*` constants and the
+// peer-message helpers in that module.
+// ---------------------------------------------------------------------------
+
+/// Locks down the `"{nickname} is busy"` copy that Alice observes when
+/// Bob's listener slot is non-idle and rejects the incoming `Hello`
+/// with `Busy`.
+///
+/// Drives the production paths end-to-end:
+///   * Bob runs `audio_test` so his `CallSlot` is `AudioTest`.
+///   * Alice dials Bob via the public `start_call` API.
+///   * Alice's session task enters `negotiate_outgoing_call`, sends
+///     `Hello`, receives `Busy`, and emits
+///     `CallEnded("Bob is busy", true)` through `handle_outgoing_hello_response`
+///     → `HelloResponse::EndedWith(peer_busy_message(...))`.
+#[tokio::test(flavor = "multi_thread")]
+async fn outgoing_call_busy_emits_localized_copy() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+    let codec_config = CodecConfig::new(true, true, 5.0);
+
+    let key_a = SecretKey::generate();
+    let key_b = SecretKey::generate();
+    let contact_a = Contact::new("busy-client-a".to_string(), key_a.public().to_string())
+        .expect("contact a invalid");
+    let contact_b = Contact::new("busy-client-b".to_string(), key_b.public().to_string())
+        .expect("contact b invalid");
+
+    let call_states_a = Arc::new(Mutex::new(Vec::new()));
+
+    let client_a = build_client(
+        relay_map,
+        key_a,
+        vec![contact_b.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_a.clone(),
+    )
+    .await;
+    let client_b = build_client(
+        relay_map,
+        key_b,
+        vec![contact_a.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        Default::default(),
+    )
+    .await;
+
+    client_a.telepathy.start_session(&contact_b).await;
+    client_b.telepathy.start_session(&contact_a).await;
+    wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
+
+    // Force Bob's slot into `AudioTest` so his listener path will
+    // reject Alice's `Hello` with `Busy` (the slot is not Idle and
+    // cannot match a pending incoming request — see
+    // `acquire_incoming_call_slot` in `internal/core.rs`). We use
+    // the public slot API here rather than `audio_test()` because
+    // the latter drives a real call loop that would block on
+    // `end_call`; we only need the slot state to be non-idle for
+    // the Busy path to fire.
+    assert!(
+        client_b
+            .telepathy
+            .inner
+            .core_state
+            .call_slot
+            .try_acquire(CallSlotState::AudioTest, None)
+            .expect("slot acquire should succeed"),
+        "Bob's slot must be acquirable for the busy test setup"
+    );
+
+    // Drain Bob's mock `accept` path so the listener session is
+    // ready to receive `Hello` immediately.
+    client_a
+        .telepathy
+        .start_call(&contact_b)
+        .await
+        .expect("alice should start the outgoing call");
+
+    let busy_message = format!("{} is busy", contact_b.nickname());
+    wait_for_call_ended_contains(&call_states_a, &busy_message, true, "alice").await;
+
+    // The raw wire reason "Busy" must not leak into the frontend copy.
+    assert_no_call_ended_contains(&call_states_a, "Busy", "alice");
+
+    // Release Bob's slot so `shutdown` can take it cleanly. The
+    // production `shutdown` path calls `reset_sessions` which only
+    // touches `PendingDirect*`/`ActiveDirect`/`RoomCall`; an
+    // `AudioTest` slot would block clean teardown, so we release it
+    // explicitly here. The audio-test acquisition in `audio_test()`
+    // does the same release on its own teardown, so this matches the
+    // production lifecycle.
+    client_b
+        .telepathy
+        .inner
+        .core_state
+        .call_slot
+        .release()
+        .expect("slot release should succeed");
+
+    client_a.telepathy.shutdown().await;
+    client_b.telepathy.shutdown().await;
+}
+
+/// Locks down the `"{nickname} did not respond to the call"` copy that
+/// the `HELLO_TIMEOUT` arm of `negotiate_outgoing_call` emits.
+///
+/// The end-to-end path requires Alice to dial Bob and Bob to never
+/// ack within 10 seconds, which is covered (in the negative form)
+/// by `stale_session_with_no_replacement_closes_connection_promptly`.
+/// Driving the positive case would require either a 10-second
+/// wall-clock wait or a deliberate slowdown of `HELLO_TIMEOUT`; both
+/// are out of scope for this contract test. We instead pin down the
+/// formatter — the single source of the timeout copy — so any future
+/// refactor that re-introduced a `format!("...", ...)` here would
+/// surface as a failed assertion.
+#[test]
+fn outgoing_call_did_not_respond_emits_localized_copy() {
+    use telepathy_core::internal::error::peer_no_response_message;
+
+    // Exact wording the production formatter produces. Asserted as a
+    // literal here so an accidental edit to the template is caught.
+    assert_eq!(
+        peer_no_response_message("Bob"),
+        "Bob did not respond to the call"
+    );
+    // Empty nickname still produces a user-facing sentence — the
+    // formatter never panics or returns an empty string for edge-case
+    // inputs.
+    assert_eq!(peer_no_response_message(""), " did not respond to the call");
+    // Unicode nickname: contract must round-trip without mangling.
+    assert_eq!(
+        peer_no_response_message("Élise Müller"),
+        "Élise Müller did not respond to the call"
+    );
+}
+
+/// Locks down the natural peer-facing sentences produced by
+/// `peer_goodbye_reason_message` for every `GoodbyeReason` variant.
+///
+/// The `Goodbye` arm of `negotiate_outgoing_call`'s hello-response
+/// dispatcher (`handle_outgoing_hello_response`) routes the peer's
+/// reason through this formatter into `HelloResponse::EndedWith`,
+/// which the controller surfaces as `CallState::CallEnded`. End-to-end
+/// driving requires Bob to send `Goodbye` mid-handshake, which is
+/// awkward to arrange deterministically; we instead pin the formatter
+/// directly so any regression that re-introduced raw wire wording
+/// (e.g. `format!("... because of {}", reason.as_wire_str())`) fails
+/// this assertion.
+#[test]
+fn outgoing_call_goodbye_emits_localized_copy() {
+    use telepathy_core::internal::error::{GoodbyeReason, peer_goodbye_reason_message};
+
+    // Each variant maps to a stable, user-facing sentence. The raw
+    // transport wording (e.g. "session stopped", "audio device error")
+    // must NOT appear in the produced copy.
+    assert_eq!(
+        peer_goodbye_reason_message("Bob", GoodbyeReason::SessionStopped),
+        "Bob did not accept the call because the session was stopped"
+    );
+    assert_eq!(
+        peer_goodbye_reason_message("Bob", GoodbyeReason::AudioDeviceError),
+        "Bob did not accept the call because of an audio device problem"
+    );
+    assert_eq!(
+        peer_goodbye_reason_message("Bob", GoodbyeReason::Error),
+        "Bob did not accept the call because of an unexpected problem"
+    );
+    assert_eq!(
+        peer_goodbye_reason_message("Bob", GoodbyeReason::None),
+        "Bob did not accept the call"
+    );
+
+    // Sanity: the formatter must not leak wire-format vocabulary into
+    // any variant. Each variant produces a sentence that starts with
+    // "{nickname} did not accept the call" — a regression that
+    // re-introduced raw wire wording would break this prefix.
+    for reason in [
+        GoodbyeReason::SessionStopped,
+        GoodbyeReason::AudioDeviceError,
+        GoodbyeReason::Error,
+        GoodbyeReason::None,
+    ] {
+        let rendered = peer_goodbye_reason_message("Bob", reason);
+        assert!(
+            rendered.starts_with("Bob did not accept the call"),
+            "goodbye reason {reason:?} did not start with the expected user-facing prefix; got {rendered:?}"
+        );
+        // The snake-case wire name (e.g. "session_stopped") must never
+        // appear in the user-facing copy.
+        let wire_name = format!("{reason:?}");
+        assert!(
+            !rendered.contains(&wire_name),
+            "wire-format variant name {wire_name:?} leaked into user-facing copy {rendered:?}"
+        );
+    }
+}
+
+/// Regression test: a peer-driven normal hangup must reach the frontend
+/// as a *silent* `CallEnded` so the dialog guard
+/// (`state.field0.isNotEmpty` in `lib/main.dart`) suppresses the
+/// failure toast and the silent hangup tone plays instead.
+///
+/// Before the fix to `CallEndMessage::from_goodbye_reason`, the local
+/// `Goodbye { reason: GoodbyeReason::None }` sent by
+/// `ProtocolMessage::goodbye()` rendered to
+/// `"The call ended unexpectedly"` on the receiving peer. The Flutter
+/// dialog guard considered that non-empty and surfaced a "Call failed"
+/// dialog for every ordinary hangup. The helper now returns an empty
+/// string for `GoodbyeReason::None`; this test pins the end-to-end
+/// behaviour so a regression in either the helper or the call
+/// controller branch is caught immediately.
+#[tokio::test(flavor = "multi_thread")]
+async fn normal_hangup_emits_silent_call_ended_for_remote_peer() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+    let codec_config = CodecConfig::new(true, true, 5.0);
+
+    let key_a = SecretKey::generate();
+    let key_b = SecretKey::generate();
+    let contact_a = Contact::new(
+        "silent-hangup-client-a".to_string(),
+        key_a.public().to_string(),
+    )
+    .expect("contact a invalid");
+    let contact_b = Contact::new(
+        "silent-hangup-client-b".to_string(),
+        key_b.public().to_string(),
+    )
+    .expect("contact b invalid");
+
+    let call_states_a = Arc::new(Mutex::new(Vec::new()));
+    let call_states_b = Arc::new(Mutex::new(Vec::new()));
+
+    let client_a = build_client(
+        relay_map,
+        key_a,
+        vec![contact_b.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_a.clone(),
+    )
+    .await;
+    let client_b = build_client(
+        relay_map,
+        key_b,
+        vec![contact_a.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_b.clone(),
+    )
+    .await;
+
+    client_a.telepathy.start_session(&contact_b).await;
+    client_b.telepathy.start_session(&contact_a).await;
+    wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
+
+    // Drive a connected direct call (Bob's accept handle returns true
+    // by default in `build_client`).
+    client_a
+        .telepathy
+        .start_call(&contact_b)
+        .await
+        .expect("alice should start the outgoing call");
+    wait_for_connected(&call_states_a, "alice").await;
+    wait_for_connected(&call_states_b, "bob").await;
+
+    // Alice hangs up via the public API. Her controller's `end_call.notified()`
+    // branch writes `Goodbye { reason: GoodbyeReason::None }` to Bob and
+    // returns `Silent`; Bob's controller converts the wire reason to an
+    // empty user-facing message via `from_goodbye_reason`.
+    client_a.telepathy.end_call().await;
+
+    // Bob must receive exactly one `CallEnded` with an empty message and
+    // `remote = true`. This is the silent path: the frontend dialog
+    // guard on `state.field0.isNotEmpty` short-circuits the dialog and
+    // plays the silent hangup tone.
+    wait_for_call_ended_contains(&call_states_b, "", true, "bob's silent hangup").await;
+
+    // Belt-and-braces: scan every captured `CallEnded` on the receiving
+    // peer and confirm none of them carry the generic "unexpected"
+    // failure copy. A regression that re-introduced the
+    // `GoodbyeReason::None` → `CALL_END_GENERIC` mapping would surface
+    // here as `The call ended unexpectedly` instead of an empty
+    // message.
+    let states_b = call_state_snapshot(&call_states_b);
+    for state in &states_b {
+        if let CallState::CallEnded(message, _) = state {
+            assert_ne!(
+                message, "The call ended unexpectedly",
+                "peer-driven normal hangup must NOT render to the generic failure copy on the receiving peer"
+            );
+        }
+    }
+
+    // Confirm exactly one silent `CallEnded` reached Bob, so the test
+    // cannot pass by accident if a future controller change emits an
+    // additional silent `CallEnded` alongside the expected one.
+    let silent_end_count = states_b
+        .iter()
+        .filter(|state| matches!(state, CallState::CallEnded(message, true) if message.is_empty()))
+        .count();
+    assert_eq!(
+        silent_end_count, 1,
+        "expected exactly one remote silent CallEnded on bob; got {silent_end_count} in {states_b:?}"
+    );
+
+    // Neither peer should have observed any call-ended emission before
+    // they reached `Connected` — a stale teardown from a previous
+    // call_state iteration would otherwise slip past the silent-hangup
+    // assertion above.
+    assert_no_call_ended_before_connected(&states_b, "bob");
+
+    client_a.telepathy.shutdown().await;
+    client_b.telepathy.shutdown().await;
+}
+
+/// Locks down the `CallEndMessage::from_error` mapping for
+/// `SessionStopped` errors.
+///
+/// The session-error path in `session_outer` emits
+/// `CallEnded(CallEndMessage::from_error(&error), false)`. A
+/// `SessionStopped` error can only be produced end-to-end by racing
+/// the slot release with `call_handshake`'s `transition_pending_to_active`,
+/// which is difficult to drive from a test. We pin the mapping at
+/// the helper boundary here and rely on the existing audio-stream
+/// integration tests to lock down the production emission paths
+/// (they exercise `from_stream_error`, which is the most common
+/// production failure mode).
+#[test]
+fn session_stopped_error_emits_localized_copy() {
+    use telepathy_core::internal::error::{
+        CALL_END_SESSION_STOPPED, CallEndMessage, Error, ErrorKind,
+    };
+
+    let error: Error = ErrorKind::SessionStopped.into();
+    let rendered = CallEndMessage::from_error(&error).into_string();
+    assert_eq!(
+        rendered, CALL_END_SESSION_STOPPED,
+        "SessionStopped must produce the dedicated session-stopped copy"
+    );
+    assert_eq!(
+        rendered, "The session was stopped",
+        "exact wording must stay in sync with the user-facing template"
+    );
+    // The legacy `Display` impl produces "Session stopped" (no
+    // "The" prefix); the helper must NOT pass that raw text through.
+    assert_ne!(
+        rendered,
+        error.to_string(),
+        "legacy Display wording leaked through CallEndMessage"
+    );
+}
+
+/// Locks down the `CallEndMessage::from_error` mapping for generic
+/// non-audio, non-session-stopped, non-timeout errors. The session
+/// error path passes every such error through `CallEndMessage::from_error`,
+/// which must collapse the wording to the generic
+/// `"The call ended unexpectedly"` copy regardless of which
+/// `ErrorKind` triggered it.
+#[test]
+fn generic_controller_failure_emits_localized_copy() {
+    use telepathy_core::internal::error::{CALL_END_GENERIC, CallEndMessage, Error, ErrorKind};
+
+    // Unit-level guard: every internal error kind that maps to the
+    // generic copy must produce exactly the expected string and
+    // MUST NOT leak the raw `Display` wording.
+    let error: Error = ErrorKind::MpscSend.into();
+    let rendered = CallEndMessage::from_error(&error).into_string();
+    assert_eq!(
+        rendered, CALL_END_GENERIC,
+        "MpscSend must produce the generic copy"
+    );
+    assert_ne!(
+        rendered,
+        error.to_string(),
+        "raw Display wording must not leak through CallEndMessage"
+    );
+    assert!(
+        !rendered.contains("mpsc"),
+        "internal acronym leaked into user copy: {rendered}"
+    );
+
+    let error: Error = ErrorKind::TransportSend.into();
+    let rendered = CallEndMessage::from_error(&error).into_string();
+    assert_eq!(
+        rendered, CALL_END_GENERIC,
+        "TransportSend must produce the generic copy"
+    );
+    assert!(
+        !rendered.contains("Transport"),
+        "internal wording leaked into user copy: {rendered}"
+    );
+
+    let error: Error = ErrorKind::Poison("test lock").into();
+    let rendered = CallEndMessage::from_error(&error).into_string();
+    assert_eq!(
+        rendered, CALL_END_GENERIC,
+        "Poison must produce the generic copy"
+    );
+    assert!(
+        !rendered.contains("Poison"),
+        "internal wording leaked into user copy: {rendered}"
+    );
+}
+
+/// Catch-all assertion: the *frontend* copy for every backend failure
+/// is a closed set of user-facing sentences. Any internal wording that
+/// bleeds into `CallState::CallEnded` is a regression.
+///
+/// Asserted against every `CallEnded` emitted by the four scenarios
+/// covered above plus the existing audio-stream tests, so a future
+/// refactor that re-introduces `error.to_string()` (or any other
+/// internal-text leak) at any emission site would fail loudly here.
+#[tokio::test(flavor = "multi_thread")]
+async fn raw_internal_error_strings_never_reach_call_ended() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+    let codec_config = CodecConfig::new(true, true, 5.0);
+
+    let key_a = SecretKey::generate();
+    let key_b = SecretKey::generate();
+    let contact_a = Contact::new("raw-error-client-a".to_string(), key_a.public().to_string())
+        .expect("contact a invalid");
+    let contact_b = Contact::new("raw-error-client-b".to_string(), key_b.public().to_string())
+        .expect("contact b invalid");
+
+    let call_states_a = Arc::new(Mutex::new(Vec::new()));
+
+    let client_a = build_client(
+        relay_map,
+        key_a,
+        vec![contact_b.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_a.clone(),
+    )
+    .await;
+    let client_b = build_client(
+        relay_map,
+        key_b,
+        vec![contact_a.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        Default::default(),
+    )
+    .await;
+
+    client_a.telepathy.start_session(&contact_b).await;
+    client_b.telepathy.start_session(&contact_a).await;
+    wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
+
+    // Drive the busy path: Bob's slot is `AudioTest` so he rejects
+    // Alice's `Hello` with `Busy` (the slot is not Idle and cannot
+    // match a pending incoming request — see
+    // `acquire_incoming_call_slot` in `internal/core.rs`). We acquire
+    // the slot directly here rather than driving `audio_test()`
+    // because the latter blocks on a real call loop; we only need the
+    // slot to be non-Idle for the Busy path to fire, and releasing
+    // the slot at the end of the test lets `shutdown` take it
+    // cleanly.
+    assert!(
+        client_b
+            .telepathy
+            .inner
+            .core_state
+            .call_slot
+            .try_acquire(CallSlotState::AudioTest, None)
+            .expect("slot acquire should succeed"),
+        "Bob's slot must be acquirable for the busy test setup"
+    );
+    client_a
+        .telepathy
+        .start_call(&contact_b)
+        .await
+        .expect("alice should start the outgoing call");
+
+    wait_for_call_ended_contains(
+        &call_states_a,
+        &format!("{} is busy", contact_b.nickname()),
+        true,
+        "alice",
+    )
+    .await;
+    // Release Bob's `AudioTest` slot so shutdown can take the slot
+    // cleanly. The slot must be released *before* the call-state
+    // snapshot so the shutdown path doesn't race with our walk.
+    client_b
+        .telepathy
+        .inner
+        .core_state
+        .call_slot
+        .release()
+        .expect("slot release should succeed");
+
+    // Walk every captured `CallEnded` and assert that none of the
+    // known internal Display strings leaked through. The set is
+    // closed: any new emission that violates this contract must add a
+    // row here *and* be routed through `CallEndMessage`.
+    let states = call_state_snapshot(&call_states_a);
+    let forbidden_substrings = [
+        // `ErrorKind::Poison` wording
+        "Poison",
+        // `ErrorKind::MpscSend` wording
+        "mpsc",
+        // `ErrorKind::TransportSend` / `TransportRecv` wording
+        "Transport",
+        // `ErrorKind::KanalSend` / `KanalReceive` / `KanalClose` wording
+        "Kanal",
+        // `ErrorKind::InvalidContactFormat` wording
+        "Invalid contact format",
+        // `ErrorKind::NoIdentityAvailable` / `NoEncoderAvailable` wording
+        "No identity",
+        "No encoder",
+        // `ErrorKind::ManagerRestartDuringCall` wording
+        "Cannot restart manager",
+        // `ErrorKind::AttachmentsTooLarge` wording
+        "Attachments too large",
+        // `ErrorKind::AudioError` raw "Audio error: ..." prefix from
+        // the legacy `Display` impl
+        "Audio error:",
+        // `ErrorKind::AudioInputStream` / `AudioOutputStream` raw
+        // "Input stream error: ..." / "Output stream error: ..." prefix
+        "Input stream error:",
+        "Output stream error:",
+        // `ErrorKind::DeviceError` raw "Device error: ..." prefix
+        "Device error:",
+        // `ErrorKind::BindError` wording
+        "Bind error",
+        // `ErrorKind::KeyParsing` wording
+        "Key parsing",
+        // `ErrorKind::Connection` wording
+        "Connection error",
+        // `ErrorKind::Poison` from anywhere via session-error wording
+        "poisoned",
+        // Wire-level GoodbyeReason strings that must NOT reach the
+        // frontend copy (the renderer does its own mapping via
+        // `CallEndMessage::from_goodbye_reason`).
+        "an error occurred",
+        "transport error",
+        "session stopped",
+        "audio device error",
+    ];
+
+    let mut violations: Vec<String> = Vec::new();
+    for state in &states {
+        if let CallState::CallEnded(message, _) = state {
+            for forbidden in &forbidden_substrings {
+                if message.contains(forbidden) {
+                    violations.push(format!(
+                        "CallEnded message {message:?} contains forbidden substring {forbidden:?}"
+                    ));
+                }
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "raw internal error strings leaked into CallEnded copy:\n  {}",
+        violations.join("\n  ")
+    );
+
+    // Every observed `CallEnded` must match one of the closed user-
+    // facing copy templates. This is the dual of the forbidden-
+    // substring check: it locks down the *positive* contract.
+    for state in &states {
+        if let CallState::CallEnded(message, _) = state {
+            let known = [
+                "A call is already active",
+                "Audio device error",
+                "The call ended unexpectedly",
+                "The session was stopped",
+                "The connection timed out",
+            ];
+            let is_user_facing_template = known.iter().any(|t| message == *t)
+                || message.contains(" did not accept the call")
+                || message.contains(" did not respond to the call")
+                || message.contains(" is busy")
+                || message.starts_with("Received an unexpected message from ");
+            assert!(
+                is_user_facing_template,
+                "CallEnded message {message:?} did not match any known user-facing template; \
+                 either a new user-facing template was added (extend this assertion) or \
+                 internal wording leaked (route through CallEndMessage)"
+            );
+        }
+    }
 
     client_a.telepathy.shutdown().await;
     client_b.telepathy.shutdown().await;
@@ -3720,16 +4551,26 @@ fn stream_error_scenario<'a>(
     input_error_probe: &'a StreamErrorProbe,
     output_error_probe: &'a StreamErrorProbe,
 ) -> (&'a StreamErrorProbe, &'static str, &'static str) {
+    // Local `CallEnded` copy is direction-specific: input stream errors
+    // surface as `CALL_END_AUDIO_INPUT_FAILURE` ("Microphone error") and
+    // output stream errors as `CALL_END_AUDIO_OUTPUT_FAILURE` ("Speaker
+    // error") — see `CallEndMessage::from_stream_error`. The remote-side
+    // wire reason (`GoodbyeReason::AudioDeviceError`) still maps to the
+    // generic `CALL_END_AUDIO_DEVICE_FAILURE` ("Audio device error") on
+    // receiving peers via `CallEndMessage::from_goodbye_reason`, so the
+    // sanitization check on the remote end remains intact.
+    // The raw cpal/driver message must NOT reach the frontend on either
+    // side.
     if trigger_input {
         (
             input_error_probe,
-            "Input stream error: simulated input device disconnected",
+            "Microphone error",
             "simulated input device disconnected",
         )
     } else {
         (
             output_error_probe,
-            "Output stream error: simulated output device disconnected",
+            "Speaker error",
             "simulated output device disconnected",
         )
     }

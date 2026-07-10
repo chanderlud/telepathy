@@ -177,15 +177,15 @@ class _AudioSettingsState extends State<AudioSettings> {
         Row(children: [
           Selector<StateController, (bool, bool)>(
             selector: (context, controller) =>
-                (controller.inAudioTest, controller.isCallActive),
+                (controller.inAudioTest, controller.hasLiveCall),
             builder: (BuildContext context, state, _) {
-              final (inAudioTest, isCallActive) = state;
+              final (inAudioTest, hasLiveCall) = state;
               final stateController = context.read<StateController>();
               return Button(
                 text: inAudioTest ? 'End Test' : 'Sound Test',
                 width: 80,
                 height: 25,
-                disabled: isCallActive,
+                disabled: hasLiveCall,
                 onPressed: () async {
                   // 100ms debounce for safety
                   if (testCooldown) {

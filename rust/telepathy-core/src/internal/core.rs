@@ -6,10 +6,13 @@ use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::connections::{
     ConstConnection, DynamicConnection, SharedConnections, audio_input, audio_output,
 };
-use crate::internal::error::{AUDIO_DEVICE_ERROR_REMOTE_REASON, AudioStreamError, ErrorKind};
+use crate::internal::error::{
+    AudioStreamError, CallEndMessage, ErrorKind, peer_busy_message, peer_goodbye_reason_message,
+    peer_no_response_message, peer_not_accepted_message, peer_unexpected_message,
+};
 use crate::internal::helpers::{InputHelper, OutputHelper};
 use crate::internal::messages::{
-    AudioHeader, ProtocolMessage, RoomMessage, SESSION_STOPPED_REASON, StartScreenshare,
+    AudioHeader, GoodbyeReason, ProtocolMessage, RoomMessage, StartScreenshare,
 };
 use crate::internal::state::{
     CallSlot, CallSlotAcquireResult, CallSlotSnapshot, CallSlotState, CoreState,
@@ -614,8 +617,9 @@ where
                     {
                         warn!(event = "session_error_while_call_active", ?error);
                         if call_slot.release_if_match(snapshot)? {
+                            let message = CallEndMessage::from_error(&error);
                             self.callbacks
-                                .call_state(CallState::CallEnded(error.to_string(), false))
+                                .call_state(CallState::CallEnded(message.into_string(), false))
                                 .await;
                         }
                     }
@@ -753,27 +757,24 @@ where
                     HandshakeDispatch::SessionStopped => Ok(HelloResponse::SessionStopped),
                 }
             }
-            ProtocolMessage::Goodbye { reason: Some(m) } => Ok(HelloResponse::EndedWith(format!(
-                "{} did not accept the call because of {m}",
-                args.contact.nickname
-            ))),
+            ProtocolMessage::Goodbye { reason } => Ok(HelloResponse::EndedWith(
+                peer_goodbye_reason_message(&args.contact.nickname, reason),
+            )),
             // In a room, peer-level reject/busy is non-fatal: other peers may still join, so keep waiting.
             ProtocolMessage::Reject | ProtocolMessage::Busy if is_in_room => {
                 info!(event = "room_peer_rejected_or_busy_ignored");
                 Ok(HelloResponse::Continue)
             }
-            ProtocolMessage::Goodbye { .. } | ProtocolMessage::Reject => {
+            ProtocolMessage::Reject => {
                 info!(event = "call_not_accepted");
-                Ok(HelloResponse::EndedWith(format!(
-                    "{} did not accept the call",
-                    args.contact.nickname
+                Ok(HelloResponse::EndedWith(peer_not_accepted_message(
+                    &args.contact.nickname,
                 )))
             }
             ProtocolMessage::Busy => {
                 info!(event = "call_peer_busy");
-                Ok(HelloResponse::EndedWith(format!(
-                    "{} is busy",
-                    args.contact.nickname
+                Ok(HelloResponse::EndedWith(peer_busy_message(
+                    &args.contact.nickname,
                 )))
             }
             ProtocolMessage::KeepAlive => Ok(HelloResponse::Continue),
@@ -822,9 +823,8 @@ where
             }
             message => {
                 warn!(event = "hello_ack_flow_unexpected_message", ?message);
-                Ok(HelloResponse::EndedWith(format!(
-                    "Received an unexpected message from {}",
-                    args.contact.nickname
+                Ok(HelloResponse::EndedWith(peer_unexpected_message(
+                    &args.contact.nickname,
                 )))
             }
         }
@@ -995,7 +995,7 @@ where
                         write_message(
                             io.send,
                             &ProtocolMessage::Goodbye {
-                                reason: Some(AUDIO_DEVICE_ERROR_REMOTE_REASON.to_string()),
+                                reason: GoodbyeReason::AudioDeviceError,
                             },
                         )
                         .await?;
@@ -1062,11 +1062,10 @@ where
             // `session_rearmed_pending_outgoing` path in `session_outer`.
             if !is_session_still_current(&self.session_states, peer, io.state.id).await {
                 info!(event = "outgoing_call_skipped_stale_session", peer.id = %peer);
+                let message =
+                    CallEndMessage::from_text(crate::internal::error::CALL_END_ALREADY_ACTIVE);
                 self.callbacks
-                    .call_state(CallState::CallEnded(
-                        "A call is already active".to_string(),
-                        true,
-                    ))
+                    .call_state(CallState::CallEnded(message.into_string(), true))
                     .await;
                 return Ok(OutgoingNegotiationOutcome::CallEnded);
             }
@@ -1074,11 +1073,10 @@ where
                 Some(slot) => pending_slot = Some(slot),
                 None => {
                     warn!(event = "call_slot_busy_outgoing", peer.id = %peer);
+                    let message =
+                        CallEndMessage::from_text(crate::internal::error::CALL_END_ALREADY_ACTIVE);
                     self.callbacks
-                        .call_state(CallState::CallEnded(
-                            "A call is already active".to_string(),
-                            true,
-                        ))
+                        .call_state(CallState::CallEnded(message.into_string(), true))
                         .await;
                     return Ok(OutgoingNegotiationOutcome::CallEnded);
                 }
@@ -1089,8 +1087,9 @@ where
         let mut call_state = match self.setup_call(peer).await {
             Ok(state) => state,
             Err(error) => {
+                let message = CallEndMessage::from_error(&error);
                 self.callbacks
-                    .call_state(CallState::CallEnded(error.to_string(), false))
+                    .call_state(CallState::CallEnded(message.into_string(), false))
                     .await;
                 release_pending(&self.session_states, peer, io.state.id, &mut pending_slot).await?;
                 return Err(error);
@@ -1129,7 +1128,7 @@ where
                 }
                 _ = io.state.end_call.notified() => {
                     info!(event = "end_call_notified_waiting_hello_ack");
-                    write_message(io.send, &ProtocolMessage::Goodbye { reason: None }).await?;
+                    write_message(io.send, &ProtocolMessage::goodbye()).await?;
                     release_pending(
                         &self.session_states,
                         peer,
@@ -1147,14 +1146,11 @@ where
                                 hello_timeout_ms = hello_timeout.as_millis() as u64,
                                 peer.id = %args.contact.peer_id
                             );
+                            let message = CallEndMessage::from_text(peer_no_response_message(
+                                &args.contact.nickname,
+                            ));
                             self.callbacks
-                                .call_state(CallState::CallEnded(
-                                    format!(
-                                        "{} did not respond to the call",
-                                        args.contact.nickname
-                                    ),
-                                    true,
-                                ))
+                                .call_state(CallState::CallEnded(message.into_string(), true))
                                 .await;
                             release_pending(
                                 &self.session_states,
@@ -1325,7 +1321,7 @@ where
                 write_message(
                     send,
                     &ProtocolMessage::Goodbye {
-                        reason: Some(SESSION_STOPPED_REASON.to_string()),
+                        reason: GoodbyeReason::SessionStopped,
                     },
                 )
                 .await?;
@@ -1370,8 +1366,16 @@ where
             // hide the overlay
             self.overlay.hide();
         }
-        // send a goodbye message on errors
+        // send a goodbye message on errors and notify the frontend so the caller
+        // exits the connecting state. Session-stopped is intentionally silent
+        // (handled as `HandshakeDispatch::SessionStopped` upstream).
         if let Err(error) = result.as_ref() {
+            if !error.is_session_stopped() {
+                let message = CallEndMessage::from_error(error);
+                self.callbacks
+                    .call_state(CallState::CallEnded(message.into_string(), false))
+                    .await;
+            }
             warn!(event = "call_handshake_sending_error_goodbye", ?error);
             let message = ProtocolMessage::error_goodbye(error);
             write_message(send, &message).await?;
@@ -1468,7 +1472,8 @@ where
                 }
                 Err(error) => {
                     error!(event = "call_controller_error", error = %error);
-                    Some((error.to_string(), false))
+                    let message = CallEndMessage::from_error(&error);
+                    Some((message.into_string(), false))
                 }
                 _ => None,
             };
@@ -1554,19 +1559,21 @@ where
 
                 error = stream_errors.recv(), if stream_errors_open => {
                     if let Some(error) = error {
-                        let message = error.user_message();
-                        let remote_reason = error.remote_reason().to_string();
+                        let message = CallEndMessage::from_stream_error(&error).into_string();
                         _ = write_message(
                             o.control_send,
-                            &ProtocolMessage::Goodbye { reason: Some(remote_reason) },
-                        ).await;
+                            &ProtocolMessage::Goodbye {
+                                reason: error.remote_reason(),
+                            },
+                        )
+                        .await;
                         break Ok(CallControllerOutcome::Notify { message, remote: false });
                     }
                     stream_errors_open = false;
                 }
                 // ends the call
                 _ = end_call.notified() => {
-                    write_message(o.control_send, &ProtocolMessage::Goodbye { reason: None }).await?;
+                    write_message(o.control_send, &ProtocolMessage::goodbye()).await?;
                     break Ok(CallControllerOutcome::Silent);
                 },
                 _ = o.state.start_screenshare.notified() => {
@@ -1591,8 +1598,9 @@ where
                     match message {
                         ProtocolMessage::Goodbye { reason } => {
                             debug!(event = "call_goodbye_received", ?reason);
+                            let message = CallEndMessage::from_goodbye_reason(reason).into_string();
                             break Ok(CallControllerOutcome::Notify {
-                                message: reason.unwrap_or_default(),
+                                message,
                                 remote: true,
                             });
                         },
@@ -1675,13 +1683,13 @@ where
             select! {
                 _ = stop_session.cancelled() => {
                     info!(event = "room_session_stopped_sending_goodbye", peer.id = %peer_id);
-                    _ = write_message(send, &ProtocolMessage::Goodbye { reason: None }).await;
+                    _ = write_message(send, &ProtocolMessage::goodbye()).await;
                     break
                 }
                 _ = cancel.cancelled() => {
                     // try to say goodbye
                     info!(event = "room_cancelled_sending_goodbye", peer.id = %peer_id);
-                    _ = write_message(send, &ProtocolMessage::Goodbye { reason: None }).await;
+                    _ = write_message(send, &ProtocolMessage::goodbye()).await;
                     break
                 }
                 result = read_message(recv) => {
@@ -1782,8 +1790,8 @@ where
 
                 error = stream_error_receiver.recv(), if stream_errors_open => {
                     if let Some(error) = error {
-                        let message = error.user_message();
-                        let remote_reason = error.remote_reason().to_string();
+                        let message = CallEndMessage::from_stream_error(&error).into_string();
+                        let remote_reason = error.remote_reason();
                         // Mirror `call_controller`: notify active room peers with a goodbye
                         // carrying the audio-device-error reason so they can distinguish a
                         // local device failure from a normal transport disconnect.
@@ -1797,7 +1805,7 @@ where
                                     if let Err(error) = write_message(
                                         &mut framed,
                                         &ProtocolMessage::Goodbye {
-                                            reason: Some(remote_reason.clone()),
+                                            reason: remote_reason,
                                         },
                                     )
                                     .await
@@ -2292,19 +2300,6 @@ async fn release_pending(
     session_id: Uuid,
     pending_slot: &mut Option<PendingDirectCallSlot<'_>>,
 ) -> Result<()> {
-    // Two independent silent no-op conditions below MUST be preserved together:
-    //
-    // 1. `is_session_still_current` returns `false` -> we exit early to protect a
-    //    replacement session's slot. A collision-loser / drained session must not
-    //    clobber the slot now owned by its replacement.
-    //
-    // 2. `PendingDirectCallSlot::release_on_failure` is `false`
-    //    (matched-incoming / simultaneous-dial) -> `slot.release()` is itself a
-    //    no-op, because the outgoing peer owns the slot and is responsible for
-    //    its lifecycle. Removing this guard (e.g. by "simplifying"
-    //    `release_on_failure` to always release) would let an incoming
-    //    `Matched*` session tear down the outgoing peer's slot — a silent
-    //    slot-clobbering bug.
     if !is_session_still_current(session_states, peer, session_id).await {
         return Ok(());
     }
@@ -2327,7 +2322,7 @@ async fn abort_negotiation_session_stopped(
     _ = write_message(
         send,
         &ProtocolMessage::Goodbye {
-            reason: Some(SESSION_STOPPED_REASON.to_string()),
+            reason: GoodbyeReason::SessionStopped,
         },
     )
     .await;

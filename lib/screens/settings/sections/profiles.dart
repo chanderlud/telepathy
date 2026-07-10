@@ -148,9 +148,23 @@ class ProfileSettingsState extends State<ProfileSettings> {
                               : 'Set Active',
                           width: 65,
                           height: 25,
-                          disabled: stateController.isCallActive ||
+                          // `blockAudioChanges` covers the connecting and
+                          // active phases and audio tests, all of which
+                          // occupy the backend call slot and would race
+                          // with `restartManager()` / `setIdentity`. Using
+                          // `isCallActive` here is not enough because the
+                          // slot is occupied before promotion.
+                          disabled: stateController.blockAudioChanges ||
                               profilesController.activeProfile == profile.id,
                           onPressed: () async {
+                            // Defensive recheck inside the handler so a
+                            // build-cycle race between `disabled` being
+                            // painted and the user tapping cannot reach the
+                            // mutating setActiveProfile / setIdentity /
+                            // restartManager sequence.
+                            if (stateController.blockAudioChanges) {
+                              return;
+                            }
                             await profilesController
                                 .setActiveProfile(profile.id);
                             await telepathy.setIdentity(key: profile.keypair);
@@ -159,7 +173,7 @@ class ProfileSettingsState extends State<ProfileSettings> {
                           noSplash: true,
                           disabledColor:
                               profilesController.activeProfile == profile.id &&
-                                      stateController.isCallActive
+                                      stateController.blockAudioChanges
                                   ? Theme.of(listContext)
                                       .colorScheme
                                       .tertiaryContainer

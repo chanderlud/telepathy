@@ -46,7 +46,7 @@ const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 /// How often to keep-alive iroh session streams
 const KEEP_ALIVE: Duration = Duration::from_secs(10);
 /// the protocol identifier for Telepathy sessions
-const ALPN: &[u8] = b"telepathy/session/0";
+const ALPN: &[u8] = b"telepathy/session/1";
 /// Maximum allowed size for a single length-delimited control/message frame on the session stream.
 const SESSION_MAX_FRAME_LENGTH: usize = 1024 * 1024 * 1024;
 

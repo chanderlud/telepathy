@@ -114,7 +114,7 @@ Future<void> main(List<String> args) async {
 
     Contact? contact = profilesController.getContact(id);
 
-    if (stateController.isCallActive) {
+    if (stateController.hasLiveCall) {
       return false;
     } else if (contact == null) {
       DebugConsole.warn('contact is null');
@@ -155,8 +155,11 @@ Future<void> main(List<String> args) async {
 
       return false; // cancelled
     } else if (result) {
+      // Move through the same connecting->active gate the outgoing
+      // path uses.
       stateController.setStatus('Connecting');
-      stateController.setActiveContact(contact);
+      stateController.setPendingContact(contact);
+      stateController.promotePendingContact(contact);
     }
 
     return result;
@@ -175,7 +178,7 @@ Future<void> main(List<String> args) async {
 
   /// called when the call state changes
   FutureOr<void> callState(CallState state) async {
-    if (!stateController.isCallActive) {
+    if (!stateController.hasLiveCall) {
       return;
     }
 
@@ -187,6 +190,10 @@ Future<void> main(List<String> args) async {
       case CallState_Connected():
         // handles the initial connect
         bytes = await readSeaBytes('connected');
+        // backend confirmed the call is now active; the pending target (if any)
+        // has been promoted to active by the widget that initiated the call.
+        stateController.clearPending();
+        stateController.markCallActive();
         stateController.setStatus('Active');
       case CallState_Waiting():
         stateController.setStatus('Waiting for peers');
@@ -198,15 +205,15 @@ Future<void> main(List<String> args) async {
         stateController.roomLeave(state.field0);
         return; // TODO add room leave sound
       case CallState_CallEnded():
-        if (!stateController.isCallActive) {
-          DebugConsole.warn('call ended entered but there is no active call');
-          return;
-        }
-
+        // Suppress dialogs when the local user just hung up (the widget sets
+        // status to Inactive and clears state synchronously before the backend
+        // `CallEnded` echo arrives). Otherwise surface the failure reason.
+        final localHangup = !stateController.hasLiveCall;
         stateController.endOfCall();
         bytes = await readSeaBytes('call_ended');
 
-        if (state.field0.isNotEmpty &&
+        if (!localHangup &&
+            state.field0.isNotEmpty &&
             navigatorKey.currentState != null &&
             navigatorKey.currentState!.mounted) {
           showErrorDialog(

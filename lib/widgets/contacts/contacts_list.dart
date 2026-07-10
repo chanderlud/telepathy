@@ -202,12 +202,18 @@ class ContactsList extends StatelessWidget {
                   itemBuilder: (BuildContext context, int index) {
                     final item = items[index];
 
+                    // Stable `ValueKey` per identity pins the widget
+                    // State to the contact/room across rebuilds, so an
+                    // in-flight `startCall`/`joinRoom` continuation is
+                    // not observed by a swapped-in sibling.
                     if (item is Contact) {
                       return ContactWidget(
+                        key: ValueKey<String>('contact:${item.id()}'),
                         contact: item,
                       );
                     } else if (item is Room) {
                       return RoomWidget(
+                        key: ValueKey<String>('room:${item.id}'),
                         room: item,
                       );
                     } else {

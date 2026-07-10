@@ -5,10 +5,21 @@ import 'package:telepathy/core/utils/index.dart';
 import 'package:telepathy/core/rust/types.dart';
 import 'package:telepathy/models/index.dart';
 
+/// Lifecycle phases the frontend tracks for an outgoing or room call.
+///
+/// `Connecting` is the phase after the user requests a call but before the backend
+/// has acknowledged the active call (or failed). During this phase, fast `CallEnded`
+/// callbacks from the backend must still update the UI rather than be dropped,
+/// otherwise users see a hung "Connecting" state with no failure reason.
+enum CallLifecycle { idle, connecting, active, ending }
+
 /// A controller which helps bridge the gap between the UI and backend.
 class StateController extends ChangeNotifier {
   Contact? _activeContact;
   Room? _activeRoom;
+  Contact? _pendingContact;
+  Room? _pendingRoom;
+  CallLifecycle _callLifecycle = CallLifecycle.idle;
 
   String status = 'Inactive';
   bool _deafened = false;
@@ -30,7 +41,21 @@ class StateController extends ChangeNotifier {
 
   Room? get activeRoom => _activeRoom;
 
+  Contact? get pendingContact => _pendingContact;
+
+  Room? get pendingRoom => _pendingRoom;
+
+  CallLifecycle get callLifecycle => _callLifecycle;
+
   bool get isCallActive => _activeContact != null || _activeRoom != null;
+
+  /// True while a call is being placed (before the backend confirms the call is
+  /// active) OR while a call is currently active. Replaces the previous
+  /// `_gate_open_until_active` semantics so early `CallEnded` events from the
+  /// backend are still observed during the connecting phase.
+  bool get hasLiveCall =>
+      _callLifecycle == CallLifecycle.connecting ||
+      _callLifecycle == CallLifecycle.active;
 
   bool get isDeafened => _deafened;
 
@@ -38,20 +63,101 @@ class StateController extends ChangeNotifier {
 
   bool get callEndedRecently => _callEndedRecently;
 
-  bool get blockAudioChanges => isCallActive || inAudioTest;
+  /// True while audio device changes must be blocked. See [hasLiveCall]
+  /// for why this covers the connecting phase too.
+  bool get blockAudioChanges => hasLiveCall || inAudioTest;
 
   ManagerState get sessionManagerState => _sessionManagerState;
 
   String get callDuration => formatTime(_callTimer.elapsed.inMilliseconds);
 
   void setActiveContact(Contact? contact) {
+    if (contact != null && _callLifecycle == CallLifecycle.idle) {
+      // Late promotion after endOfCall already cleared the lifecycle. The
+      // call is over; do not resurrect activeContact or restart the timer.
+      return;
+    }
     _activeContact = contact;
+    _pendingContact = null;
+    _callLifecycle = contact != null ? CallLifecycle.active : _callLifecycle;
     notifyListeners();
   }
 
   void setActiveRoom(Room? room) {
     _activeRoom = room;
+    _pendingRoom = null;
+    _callLifecycle = room != null ? CallLifecycle.active : _callLifecycle;
     notifyListeners();
+  }
+
+  /// Records the contact the user is attempting to call, before awaiting
+  /// `Telepathy.startCall()`. This lets the gate in `callState` observe early
+  /// failure events while the backend is still negotiating the call.
+  void setPendingContact(Contact? contact) {
+    _pendingContact = contact;
+    if (contact != null) {
+      _callLifecycle = CallLifecycle.connecting;
+    }
+    notifyListeners();
+  }
+
+  /// Records the room the user is attempting to join, before awaiting
+  /// `Telepathy.joinRoom()`. This lets the gate in `callState` observe early
+  /// failure events while the backend is still negotiating the room.
+  void setPendingRoom(Room? room) {
+    _pendingRoom = room;
+    if (room != null) {
+      _callLifecycle = CallLifecycle.connecting;
+    }
+    notifyListeners();
+  }
+
+  /// Move from `connecting` (or any state) to `active`. Idempotent if already
+  /// active.
+  void markCallActive() {
+    if (_callLifecycle != CallLifecycle.active) {
+      _callLifecycle = CallLifecycle.active;
+      notifyListeners();
+    }
+  }
+
+  /// Clear any pending call target that has not yet transitioned to active.
+  /// Called by the front-end after a fast failure or a transition to active so
+  /// the pending slot doesn't leak into another call attempt.
+  void clearPending() {
+    if (_pendingContact != null || _pendingRoom != null) {
+      _pendingContact = null;
+      _pendingRoom = null;
+      notifyListeners();
+    }
+  }
+
+  /// Promote a pending contact to active only if the lifecycle is still
+  /// `connecting` and the pending target matches [contact] by identity.
+  /// Otherwise a no-op. Guards the `await startCall` continuation in
+  /// `contact_widget.dart` from resurrecting a call the user has ended.
+  bool promotePendingContact(Contact contact) {
+    if (_callLifecycle != CallLifecycle.connecting) {
+      return false;
+    }
+    if (_pendingContact == null || !identical(_pendingContact, contact)) {
+      return false;
+    }
+    setActiveContact(contact);
+    return true;
+  }
+
+  /// Room counterpart of [promotePendingContact] for the `await joinRoom`
+  /// continuation in `room_widget.dart`.
+  bool promotePendingRoom(Room room) {
+    if (_callLifecycle != CallLifecycle.connecting) {
+      return false;
+    }
+    if (_pendingRoom == null || !identical(_pendingRoom, room)) {
+      return false;
+    }
+    setActiveRoom(room);
+    return true;
   }
 
   void setStatus(String status) {
@@ -60,9 +166,13 @@ class StateController extends ChangeNotifier {
     if (status == 'Inactive') {
       _activeContact = null;
       _activeRoom = null;
+      _pendingContact = null;
+      _pendingRoom = null;
+      _callLifecycle = CallLifecycle.idle;
       _callTimer.stop();
       _callTimer.reset();
     } else if (status == 'Active') {
+      _callLifecycle = CallLifecycle.active;
       _callTimer.start();
     }
 
@@ -189,7 +299,10 @@ class StateController extends ChangeNotifier {
     _activeRoom?.online.clear();
     _activeContact = null;
     _activeRoom = null;
+    _pendingContact = null;
+    _pendingRoom = null;
     status = 'Inactive';
+    _callLifecycle = CallLifecycle.idle;
     _callTimer.stop();
     _callTimer.reset();
     disableCallsTemporarily();

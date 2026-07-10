@@ -265,7 +265,7 @@ class ContactWidgetState extends State<ContactWidget> {
                   width: 32,
                 ),
                 onPressed: () async {
-                  if (stateController.isCallActive) {
+                  if (stateController.hasLiveCall) {
                     showErrorDialog(context, 'Call failed',
                         'There is a call already active');
                     return;
@@ -278,15 +278,30 @@ class ContactWidgetState extends State<ContactWidget> {
                     return;
                   }
 
+                  // Capture the target before any await so the continuation
+                  // and the `callState` gate observe the same contact the
+                  // user clicked, even if the widget is rebuilt against a
+                  // different contact while `startCall` is still resolving.
+                  final Contact target = widget.contact;
                   stateController.setStatus('Connecting');
+                  stateController.setPendingContact(target);
                   List<int> bytes = await readSeaBytes('outgoing');
                   outgoingSoundHandle = await player.play(bytes: bytes);
 
                   try {
-                    await telepathy.startCall(contact: widget.contact);
-                    stateController.setActiveContact(widget.contact);
+                    await telepathy.startCall(contact: target);
+                    // Only promote to active if the lifecycle is still
+                    // `connecting` and the pending target still matches
+                    // this widget. A fast `CallEnded` callback can race
+                    // the future and reset the lifecycle to `idle`, in
+                    // which case `promotePendingContact` returns false
+                    // and the call is not resurrected.
+                    if (!stateController.promotePendingContact(target)) {
+                      outgoingSoundHandle?.cancel();
+                      return;
+                    }
                   } on DartError catch (e) {
-                    stateController.setStatus('Inactive');
+                    stateController.endOfCall();
                     outgoingSoundHandle?.cancel();
                     if (!context.mounted) return;
                     showErrorDialog(context, 'Call failed', e.message);

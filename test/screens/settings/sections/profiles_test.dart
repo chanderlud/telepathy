@@ -12,6 +12,7 @@ import 'package:telepathy/core/rust/lib.dart';
 import 'package:telepathy/core/rust/types.dart';
 import 'package:telepathy/models/index.dart';
 import 'package:telepathy/screens/settings/sections/profiles.dart';
+import 'package:telepathy/widgets/common/index.dart';
 
 void main() {
   setUp(() {
@@ -100,7 +101,121 @@ void main() {
     );
     expect(profilesController.createdNames, isEmpty);
   });
+
+  group('ProfileSettings "Set Active" gate', () {
+    // Regression: the previous gate was `stateController.isCallActive`,
+    // which is only true once `setActiveContact`/`setActiveRoom` has
+    // promoted the slot. During `CallLifecycle.connecting` (and during
+    // audio tests) the backend call slot is already occupied but
+    // `isCallActive` is still false, so the button stayed enabled and
+    // tapping `restartManager()` could race the in-flight startCall
+    // and leave the frontend profile and backend identity
+    // inconsistent. The gate is now `blockAudioChanges`, which
+    // covers the connecting + active phases and the audio-test phase.
+
+    testWidgets(
+        'the "Set Active" button is disabled while a pending room is in '
+        'the connecting phase', (WidgetTester tester) async {
+      final profilesController = FakeProfilesController();
+      await profilesController.createProfile('First Profile');
+      final stateController = StateController();
+
+      await tester.pumpProfileSettingsWithState(
+        profilesController: profilesController,
+        stateController: stateController,
+      );
+
+      // Move the controller into the connecting phase via the same
+      // path the room widget uses; this matches production state for
+      // an outgoing room call still being negotiated by the backend.
+      stateController.setPendingRoom(_roomFixture('connect-pending'));
+      await tester.pumpAndSettle();
+
+      // The "Set Active" button is the row's primary action. While
+      // the controller is in the connecting phase it must be visibly
+      // disabled, so a tap is rejected before the call/identity
+      // mutators run.
+      final setActiveButton = find.widgetWithText(Button, 'Set Active');
+      expect(setActiveButton, findsOneWidget);
+      expect(tester.widget<Button>(setActiveButton).disabled, isTrue,
+          reason: 'Set Active must be disabled while a call slot is pending '
+              'in the connecting phase; isCallActive alone misses this');
+
+      await tester.tap(setActiveButton);
+      await tester.pumpAndSettle();
+
+      expect(profilesController.setActiveCalls, isEmpty,
+          reason: 'the defensive early return inside onPressed must reject '
+              'mutations while blockAudioChanges is true');
+    });
+
+    testWidgets('the "Set Active" button is disabled during an audio test',
+        (WidgetTester tester) async {
+      final profilesController = FakeProfilesController();
+      await profilesController.createProfile('Audio Gate Profile');
+      final stateController = StateController();
+
+      await tester.pumpProfileSettingsWithState(
+        profilesController: profilesController,
+        stateController: stateController,
+      );
+
+      // `StateController.setInAudioTest(true)` flips `inAudioTest`
+      // and `blockAudioChanges` to true without requiring the rust
+      // audio-test bridge.
+      stateController.setInAudioTest(true);
+      await tester.pumpAndSettle();
+
+      final setActiveButton = find.widgetWithText(Button, 'Set Active');
+      expect(setActiveButton, findsOneWidget);
+      expect(tester.widget<Button>(setActiveButton).disabled, isTrue,
+          reason: 'Set Active must be disabled during audio tests because '
+              'restartManager() competes with the audio-test device '
+              'access the backend holds');
+    });
+
+    testWidgets(
+        'when the controller is idle, "Set Active" runs the full '
+        'setActiveProfile / setIdentity / restartManager sequence',
+        (WidgetTester tester) async {
+      final profilesController = FakeProfilesController();
+      await profilesController.createProfile('Idle Profile');
+      final telepathy = _RecordingTelepathy();
+      final stateController = StateController();
+
+      await tester.pumpProfileSettingsWithAll(
+        profilesController: profilesController,
+        stateController: stateController,
+        telepathy: telepathy,
+      );
+
+      expect(
+        tester
+            .widget<Button>(find.widgetWithText(Button, 'Set Active'))
+            .disabled,
+        isFalse,
+        reason: 'idle controller must leave the button enabled',
+      );
+
+      await tester.tap(find.widgetWithText(Button, 'Set Active'));
+      await tester.pumpAndSettle();
+
+      expect(profilesController.setActiveCalls, ['profile-0'],
+          reason: 'profile switch must reach profilesController');
+      expect(telepathy.identityCalls, hasLength(1),
+          reason: 'profile switch must push the keypair through setIdentity');
+      expect(telepathy.restartManagerCalls, hasLength(1),
+          reason: 'profile switch must restart the manager after the identity '
+              'has been applied');
+    });
+  });
 }
+
+Room _roomFixture(String id) => Room(
+      id: id,
+      peerIds: <String>[],
+      nickname: 'Room $id',
+    );
 
 extension on WidgetTester {
   Future<void> pumpProfileSettings(FakeProfilesController profilesController) {
@@ -114,6 +229,52 @@ extension on WidgetTester {
             value: StateController(),
           ),
           Provider<Telepathy>.value(value: FakeTelepathy()),
+        ],
+        child: const MaterialApp(home: Scaffold(body: ProfileSettings())),
+      ),
+    );
+  }
+
+  /// Variant used by the "Set Active" gate tests: lets the test
+  /// supply the `StateController` (or `Telepathy`) so the controller
+  /// can be advanced into `connecting` / `audio-test` before the
+  /// widget mounts.
+  Future<void> pumpProfileSettingsWithState({
+    required FakeProfilesController profilesController,
+    required StateController stateController,
+    Telepathy? telepathy,
+  }) {
+    return pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider<ProfilesController>.value(
+            value: profilesController,
+          ),
+          ChangeNotifierProvider<StateController>.value(
+            value: stateController,
+          ),
+          Provider<Telepathy>.value(value: telepathy ?? FakeTelepathy()),
+        ],
+        child: const MaterialApp(home: Scaffold(body: ProfileSettings())),
+      ),
+    );
+  }
+
+  Future<void> pumpProfileSettingsWithAll({
+    required FakeProfilesController profilesController,
+    required StateController stateController,
+    required Telepathy telepathy,
+  }) {
+    return pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider<ProfilesController>.value(
+            value: profilesController,
+          ),
+          ChangeNotifierProvider<StateController>.value(
+            value: stateController,
+          ),
+          Provider<Telepathy>.value(value: telepathy),
         ],
         child: const MaterialApp(home: Scaffold(body: ProfileSettings())),
       ),
@@ -136,6 +297,7 @@ class FakeProfilesController extends ProfilesController {
         );
 
   final List<String> createdNames = <String>[];
+  final List<String> setActiveCalls = <String>[];
   int _nextProfileId = 0;
 
   @override
@@ -153,6 +315,124 @@ class FakeProfilesController extends ProfilesController {
     notifyListeners();
     return id;
   }
+
+  @override
+  Future<void> setActiveProfile(String profileId) async {
+    setActiveCalls.add(profileId);
+    await super.setActiveProfile(profileId);
+  }
+}
+
+/// Records `setIdentity` and `restartManager` so the "idle" gate test
+/// can verify the full profile-switch sequence fires only when the
+/// controller is not blocking audio changes.
+class _RecordingTelepathy implements Telepathy {
+  final List<List<int>> identityCalls = <List<int>>[];
+  final List<void> restartManagerCalls = <void>[];
+
+  @override
+  Future<void> setIdentity({required List<int> key}) async {
+    identityCalls.add(List<int>.unmodifiable(key));
+  }
+
+  @override
+  Future<void> restartManager() async {
+    restartManagerCalls.add(null);
+  }
+
+  @override
+  bool get isDisposed => false;
+
+  @override
+  void dispose() {}
+
+  @override
+  Future<void> audioTest() async {}
+
+  @override
+  ChatMessage buildChat({
+    required Contact contact,
+    required String text,
+    required List<(String, Uint8List)> attachments,
+  }) {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<void> endCall() async {}
+
+  @override
+  Future<void> joinRoom({required List<String> memberStrings}) async {}
+
+  @override
+  Future<(List<AudioDevice>, List<AudioDevice>)> listDevices() async =>
+      (<AudioDevice>[], <AudioDevice>[]);
+
+  @override
+  void pauseStatistics() {}
+
+  @override
+  void resumeStatistics() {}
+
+  @override
+  Future<void> sendChat({required ChatMessage message}) async {}
+
+  @override
+  void setContactOutputVolume({required Contact contact}) {}
+
+  @override
+  void setDeafened({required bool deafened}) {}
+
+  @override
+  void setDenoise({required bool denoise}) {}
+
+  @override
+  void setEfficiencyMode({required bool enabled}) {}
+
+  @override
+  Future<void> setInputDevice({String? deviceId}) async {}
+
+  @override
+  void setInputVolume({required double decibel}) {}
+
+  @override
+  Future<void> setModel({Uint8List? model}) async {}
+
+  @override
+  void setMuted({required bool muted}) {}
+
+  @override
+  Future<void> setOutputDevice({String? deviceId}) async {}
+
+  @override
+  void setOutputVolume({required double decibel}) {}
+
+  @override
+  void setPlayCustomRingtones({required bool play}) {}
+
+  @override
+  void setRmsThreshold({required double decimal}) {}
+
+  @override
+  void setSendCustomRingtone({required bool send}) {}
+
+  @override
+  Future<void> shutdown() async {}
+
+  @override
+  Future<void> startCall({required Contact contact}) async {}
+
+  @override
+  Future<void> startManager() async {}
+
+  @override
+  Future<void> startScreenshare({required Contact contact}) async {}
+
+  @override
+  Future<void> startSession({required Contact contact}) async {}
+
+  @override
+  Future<void> stopSession({required Contact contact}) async {}
 }
 
 class FakeTelepathy implements Telepathy {
