@@ -132,6 +132,14 @@ impl StreamErrorProbe {
         self.ready.notified().await;
     }
 
+    fn signal_setup_attempt(&self) {
+        self.ready.notify_one();
+    }
+
+    async fn wait_setup_attempted(&self) {
+        self.ready.notified().await;
+    }
+
     fn trigger(&self, error: CpalError) {
         let mut callback = self
             .callback
@@ -151,6 +159,7 @@ struct CallbackCapturingAudioHost {
     /// (simulating an exclusively-held output device) without capturing
     /// the stream error callback.
     fail_output_synchronously: Arc<AtomicBool>,
+    fail_input_synchronously: Arc<AtomicBool>,
 }
 
 impl CallbackCapturingAudioHost {
@@ -159,6 +168,7 @@ impl CallbackCapturingAudioHost {
             input_error_probe,
             output_error_probe,
             fail_output_synchronously: Arc::new(AtomicBool::new(false)),
+            fail_input_synchronously: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -220,6 +230,10 @@ impl AudioHost for CallbackCapturingAudioHost {
         (impl AudioInput + Send + 'static, u32, Self::InputStream),
         telepathy_audio::devices::DeviceError,
     > {
+        if self.fail_input_synchronously.load(Relaxed) {
+            self.input_error_probe.signal_setup_attempt();
+            return Err(telepathy_audio::devices::DeviceError::NoOutputDevice);
+        }
         self.input_error_probe.capture(error_callback);
         Ok((MockAudioInput::default(), DEFAULT_SAMPLE_RATE, ()))
     }
@@ -233,6 +247,7 @@ impl AudioHost for CallbackCapturingAudioHost {
         telepathy_audio::devices::DeviceError,
     > {
         if self.fail_output_synchronously.load(Relaxed) {
+            self.output_error_probe.signal_setup_attempt();
             return Err(telepathy_audio::devices::DeviceError::NoOutputDevice);
         }
         self.output_error_probe.capture(error_callback);
@@ -3417,6 +3432,168 @@ async fn room_duplicate_join_is_busy_then_idempotent() {
     );
 
     client_a.telepathy.shutdown().await;
+}
+
+/// Regression test: synchronous input setup failure must remove the
+/// `RoomState` installed by public `join_room` and release its `RoomCall`
+/// slot before any room processing starts.
+#[tokio::test(flavor = "multi_thread")]
+async fn room_input_setup_synchronous_failure_clears_state_and_releases_slot() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+    let codec_config = CodecConfig::new(true, true, 5.0);
+
+    let key_a = SecretKey::generate();
+    let key_b = SecretKey::generate();
+    let contact_a = Contact::new(
+        "room-input-setup-fail-client-a".to_string(),
+        key_a.public().to_string(),
+    )
+    .expect("contact a invalid");
+    let contact_b = Contact::new(
+        "room-input-setup-fail-client-b".to_string(),
+        key_b.public().to_string(),
+    )
+    .expect("contact b invalid");
+    let call_states_a = Arc::new(Mutex::new(Vec::new()));
+
+    let input_error_probe = StreamErrorProbe::new();
+    let output_error_probe = StreamErrorProbe::new();
+    let input_failure_host =
+        CallbackCapturingAudioHost::new(input_error_probe.clone(), output_error_probe);
+    input_failure_host
+        .fail_input_synchronously
+        .store(true, Relaxed);
+
+    let client_a = build_client(
+        relay_map,
+        key_a,
+        vec![contact_b.clone()],
+        &codec_config,
+        input_failure_host,
+        call_states_a.clone(),
+    )
+    .await;
+
+    client_a
+        .telepathy
+        .join_room(sorted_room_members(&contact_a, &contact_b))
+        .await
+        .expect("join_room should return after spawning its controller");
+    input_error_probe.wait_setup_attempted().await;
+
+    wait_for_call_ended_contains(
+        &call_states_a,
+        "Audio device error",
+        false,
+        "room input setup failure",
+    )
+    .await;
+    wait_for_slot_idle(&client_a, &contact_a.get_peer_id().to_string()).await;
+    assert_eq!(
+        client_a.telepathy.inner.current_room_generation().await,
+        None,
+        "synchronous input setup failure must clear RoomState"
+    );
+    assert_call_slot_idle(
+        &client_a,
+        "synchronous room input setup failure must release the call slot",
+    );
+
+    client_a.telepathy.shutdown().await;
+}
+
+/// Regression test: synchronous output setup failure after room peers join
+/// must remove the installed `RoomState` and release its `RoomCall` slot.
+#[tokio::test(flavor = "multi_thread")]
+async fn room_output_setup_synchronous_failure_clears_state_and_releases_slot() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+    let codec_config = CodecConfig::new(true, true, 5.0);
+
+    let key_a = SecretKey::generate();
+    let key_b = SecretKey::generate();
+    let contact_a = Contact::new(
+        "room-output-setup-fail-client-a".to_string(),
+        key_a.public().to_string(),
+    )
+    .expect("contact a invalid");
+    let contact_b = Contact::new(
+        "room-output-setup-fail-client-b".to_string(),
+        key_b.public().to_string(),
+    )
+    .expect("contact b invalid");
+    let call_states_a = Arc::new(Mutex::new(Vec::new()));
+
+    let input_error_probe = StreamErrorProbe::new();
+    let output_error_probe = StreamErrorProbe::new();
+    let output_failure_host =
+        CallbackCapturingAudioHost::new(input_error_probe, output_error_probe.clone());
+    output_failure_host
+        .fail_output_synchronously
+        .store(true, Relaxed);
+    let room_members = sorted_room_members(&contact_a, &contact_b);
+
+    let client_a = build_client(
+        relay_map,
+        key_a,
+        vec![contact_b.clone()],
+        &codec_config,
+        output_failure_host,
+        call_states_a.clone(),
+    )
+    .await;
+    let client_b = build_client(
+        relay_map,
+        key_b,
+        vec![contact_a.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        Default::default(),
+    )
+    .await;
+
+    client_a.telepathy.start_session(&contact_b).await;
+    client_b.telepathy.start_session(&contact_a).await;
+    wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
+
+    client_a
+        .telepathy
+        .join_room(room_members.clone())
+        .await
+        .expect("client a should start joining room");
+    client_b
+        .telepathy
+        .join_room(room_members)
+        .await
+        .expect("client b should join room and send peer join");
+    output_error_probe.wait_setup_attempted().await;
+
+    wait_for_call_ended_contains(
+        &call_states_a,
+        "Audio device error",
+        false,
+        "room output setup failure",
+    )
+    .await;
+    wait_for_slot_idle(&client_a, &contact_a.get_peer_id().to_string()).await;
+    assert_eq!(
+        client_a.telepathy.inner.current_room_generation().await,
+        None,
+        "synchronous output setup failure after peer join must clear RoomState"
+    );
+    assert_call_slot_idle(
+        &client_a,
+        "synchronous room output setup failure must release the call slot",
+    );
+
+    client_a.telepathy.shutdown().await;
+    client_b.telepathy.shutdown().await;
 }
 
 async fn normal_call_stream_error_surfaces_local_message(trigger_input: bool) {

@@ -1,6 +1,7 @@
+use crate::flutter::CallState;
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
-use crate::internal::core::TelepathyCore;
-use crate::internal::error::{AudioStreamError, ErrorKind};
+use crate::internal::core::{RoomControllerCleanup, TelepathyCore};
+use crate::internal::error::{AudioStreamError, CallEndMessage, Error, ErrorKind};
 use crate::internal::messages::{AudioHeader, RoomMessage};
 #[cfg(not(target_family = "wasm"))]
 use crate::internal::messages::{ProtocolMessage, StartScreenshare};
@@ -37,7 +38,7 @@ use tokio::select;
 use tokio::sync::Notify;
 use tokio::sync::mpsc::{Sender, UnboundedSender};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, instrument, trace, warn};
+use tracing::{debug, error, info, instrument, trace, warn};
 use url::Url;
 
 impl<C, S, H, I, O> TelepathyCore<C, S, H, I, O>
@@ -706,6 +707,117 @@ where
         }
 
         self.outbound_attempts.write().await.clear();
+    }
+
+    pub(crate) async fn cleanup_room_controller(
+        &self,
+        stop_io: &CancellationToken,
+        cleanup: RoomControllerCleanup<O>,
+    ) -> Result<()> {
+        let RoomControllerCleanup {
+            end_sessions,
+            room_owner,
+            room_generation,
+            input_handle,
+            connections,
+            statistics_handle,
+            setup_error,
+        } = cleanup;
+
+        // tear down processing stack
+        debug!(event = "room_processing_teardown_start");
+        // on ios the audio session must be deactivated
+        #[cfg(target_os = "ios")]
+        deactivate_audio_session();
+        // cleanup web input on WASM
+        #[cfg(target_family = "wasm")]
+        {
+            *self.web_input.lock().await = None;
+        }
+        stop_io.cancel();
+        let setup_failed = setup_error.is_some();
+        // join input IO task
+        if let Some(input_handle) = input_handle {
+            match input_handle.await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) if setup_failed => {
+                    warn!(event = "room_input_closed_on_setup_failure", ?error);
+                }
+                Ok(Err(error)) => return Err(error),
+                Err(error) if setup_failed => {
+                    warn!(event = "room_input_join_failed_on_setup_failure", ?error);
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        // join output tasks, dropping output helpers to close
+        for connection in connections.into_values() {
+            match connection.handle.await {
+                Ok(Ok(())) => (),
+                Ok(Err(error)) => {
+                    warn!(event = "room_output_closed_on_teardown", ?error);
+                }
+                Err(error) if setup_failed => {
+                    warn!(event = "room_output_join_failed_on_setup_failure", ?error);
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        debug!(event = "room_processing_teardown_done");
+        // cleanup room state ONLY if still the currently installed `room_state`
+        {
+            let mut room_guard = self.room_state.write().await;
+            if room_guard
+                .as_ref()
+                .is_some_and(|state| state.generation == room_generation)
+            {
+                let _ = room_guard.take();
+            } else {
+                info!(
+                    event = "room_state_take_skipped_stale_generation",
+                    room.generation = room_generation
+                );
+            }
+        }
+        // release only against the exact `room_owner` snapshot
+        match self.core_state.call_slot.release_if_match(room_owner) {
+            Ok(_) => {}
+            Err(error) if setup_failed => {
+                warn!(
+                    event = "room_call_slot_release_failed_on_setup_failure",
+                    ?error
+                );
+            }
+            Err(error) => return Err(error),
+        }
+        // cleanup sessions blocked by room
+        end_sessions.cancel();
+        // join statistics collector
+        if let Some(statistics_handle) = statistics_handle {
+            match statistics_handle.await {
+                Ok(()) => {}
+                Err(error) if setup_failed => {
+                    warn!(
+                        event = "room_statistics_join_failed_on_setup_failure",
+                        ?error
+                    );
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        match setup_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
+    pub(crate) async fn notify_setup_failure(&self, error: &Error) {
+        self.callbacks
+            .call_state(CallState::CallEnded(
+                CallEndMessage::from_error(error).into_string(),
+                false,
+            ))
+            .await;
     }
 }
 

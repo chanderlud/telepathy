@@ -7,10 +7,11 @@ use crate::internal::connections::{
     ConstConnection, DynamicConnection, SharedConnections, audio_input, audio_output,
 };
 use crate::internal::error::{
-    AudioStreamError, CallEndMessage, ErrorKind, peer_busy_message, peer_goodbye_reason_message,
-    peer_no_response_message, peer_not_accepted_message, peer_unexpected_message,
+    AudioStreamError, CallEndMessage, Error, ErrorKind, peer_busy_message,
+    peer_goodbye_reason_message, peer_no_response_message, peer_not_accepted_message,
+    peer_unexpected_message,
 };
-use crate::internal::helpers::{InputHelper, OutputHelper};
+use crate::internal::helpers::OutputHelper;
 use crate::internal::messages::{
     AudioHeader, GoodbyeReason, ProtocolMessage, RoomMessage, StartScreenshare,
 };
@@ -1753,17 +1754,36 @@ where
         let mut peer_connections: HashMap<PublicKey, usize> = HashMap::new();
         let (stream_error_sender, mut stream_error_receiver) = unbounded_channel();
         let mut stream_errors_open = true;
+        let mut setup_error = None;
 
-        // Setup input (stream is managed internally)
-        let mut input_helper: InputHelper<I> = self
+        let mut input_helper = match self
             .setup_input(
                 (true, true, 5_f32), // hard coded room codec options
                 &statistics_state,
                 &end_call,
                 stream_error_sender.clone(),
             )
-            .await?;
-
+            .await
+        {
+            Ok(helper) => helper,
+            Err(error) => {
+                self.notify_setup_failure(&error).await;
+                return self
+                    .cleanup_room_controller(
+                        stop_io,
+                        RoomControllerCleanup {
+                            end_sessions,
+                            room_owner,
+                            room_generation,
+                            input_handle: None,
+                            connections: HashMap::new(),
+                            statistics_handle: None,
+                            setup_error: Some(error),
+                        },
+                    )
+                    .await;
+            }
+        };
         let input_handle = spawn_task(audio_input(
             input_helper.receiver(),
             DynamicConnection::new(
@@ -1895,7 +1915,7 @@ where
 
                             connection_sender.push(connection.clone());
                             // setup output stack
-                            let mut helper = self
+                            let mut helper = match self
                                 .setup_output(
                                     state.peer,
                                     state.remote_configuration.sample_rate as f64,
@@ -1904,7 +1924,15 @@ where
                                     end_call.clone(),
                                     stream_error_sender.clone(),
                                 )
-                                .await?;
+                                .await
+                            {
+                                Ok(helper) => helper,
+                                Err(error) => {
+                                    self.notify_setup_failure(&error).await;
+                                    setup_error = Some(error);
+                                    break;
+                                }
+                            };
                             // begin sending
                             let handle = spawn_task(audio_output(
                                 helper.sender(),
@@ -1985,52 +2013,19 @@ where
             }
         }
 
-        // tear down processing stack
-        debug!(event = "room_processing_teardown_start");
-        // on ios the audio session must be deactivated
-        #[cfg(target_os = "ios")]
-        deactivate_audio_session();
-        // cleanup web input on WASM
-        #[cfg(target_family = "wasm")]
-        {
-            *self.web_input.lock().await = None;
-        }
-        stop_io.cancel();
-        // join input IO task
-        input_handle.await??;
-        // join output tasks, dropping output helpers to close
-        for connection in connections.into_values() {
-            match connection.handle.await {
-                Ok(Ok(())) => (),
-                Ok(Err(error)) => {
-                    warn!(event = "room_output_closed_on_teardown", ?error);
-                }
-                Err(error) => return Err(error.into()),
-            }
-        }
-        debug!(event = "room_processing_teardown_done");
-        // cleanup room state ONLY if still the currently installed `room_state`
-        {
-            let mut room_guard = self.room_state.write().await;
-            if room_guard
-                .as_ref()
-                .is_some_and(|state| state.generation == room_generation)
-            {
-                let _ = room_guard.take();
-            } else {
-                info!(
-                    event = "room_state_take_skipped_stale_generation",
-                    room.generation = room_generation
-                );
-            }
-        }
-        // release only against the exact `room_owner` snapshot
-        self.core_state.call_slot.release_if_match(room_owner)?;
-        // cleanup sessions blocked by room
-        end_sessions.cancel();
-        // join statistics collector
-        statistics_handle.await?;
-        Ok(())
+        self.cleanup_room_controller(
+            stop_io,
+            RoomControllerCleanup {
+                end_sessions,
+                room_owner,
+                room_generation,
+                input_handle: Some(input_handle),
+                connections,
+                statistics_handle: Some(statistics_handle),
+                setup_error,
+            },
+        )
+        .await
     }
 }
 
@@ -2064,7 +2059,17 @@ where
 struct RoomConnection<O> {
     connection: Connection,
     _output: OutputHelper<O>,
-    handle: JoinHandle<Result<()>>,
+    pub(crate) handle: JoinHandle<Result<()>>,
+}
+
+pub(crate) struct RoomControllerCleanup<O> {
+    end_sessions: CancellationToken,
+    room_owner: CallSlotSnapshot,
+    room_generation: u64,
+    input_handle: Option<JoinHandle<Result<()>>>,
+    connections: HashMap<usize, RoomConnection<O>>,
+    statistics_handle: Option<JoinHandle<()>>,
+    setup_error: Option<Error>,
 }
 
 enum CallControllerOutcome {
