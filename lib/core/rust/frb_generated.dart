@@ -7176,7 +7176,7 @@ class TelepathyImpl extends RustOpaque implements Telepathy {
   void setDeafened({required bool deafened}) => RustLib.instance.api
       .crateFlutterTelepathySetDeafened(that: this, deafened: deafened);
 
-  /// Changing the denoise flag will not affect the current call
+  /// Denoise is set on the processor; the current call is not reconfigured.
   void setDenoise({required bool denoise}) => RustLib.instance.api
       .crateFlutterTelepathySetDenoise(that: this, denoise: denoise);
 

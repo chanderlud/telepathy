@@ -89,7 +89,7 @@ abstract class Telepathy implements RustOpaqueInterface {
 
   void setDeafened({required bool deafened});
 
-  /// Changing the denoise flag will not affect the current call
+  /// Denoise is set on the processor; the current call is not reconfigured.
   void setDenoise({required bool denoise});
 
   void setEfficiencyMode({required bool enabled});

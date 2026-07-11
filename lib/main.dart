@@ -129,11 +129,15 @@ Future<void> main(List<String> args) async {
       bytes = ringtone;
     }
 
-    FlutterSoundHandle handle = await soundPlayer.play(bytes: bytes);
+    FlutterSoundHandle? handle = await playSoundEffect(
+      player: soundPlayer,
+      bytes: bytes,
+      sound: 'incoming',
+    );
 
     if (navigatorKey.currentState == null ||
         !navigatorKey.currentState!.mounted) {
-      handle.cancel();
+      handle?.cancel();
       return false;
     }
 
@@ -143,7 +147,7 @@ Future<void> main(List<String> args) async {
 
     final result = await Future.any([acceptedFuture, cancelFuture]);
 
-    handle.cancel();
+    handle?.cancel();
 
     if (result == null) {
       DebugConsole.debug('cancelled');
@@ -223,7 +227,11 @@ Future<void> main(List<String> args) async {
         }
     }
 
-    otherSoundHandle = await soundPlayer.play(bytes: bytes);
+    otherSoundHandle = await playSoundEffect(
+      player: soundPlayer,
+      bytes: bytes,
+      sound: state is CallState_Connected ? 'connected' : 'call-ended',
+    );
   }
 
   /// called when the backend wants to start sessions

@@ -9,14 +9,18 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shared_preferences_platform_interface/in_memory_shared_preferences_async.dart';
 import 'package:shared_preferences_platform_interface/shared_preferences_async_platform_interface.dart';
+import 'package:telepathy/controllers/audio_settings_controller.dart';
 import 'package:telepathy/controllers/profiles_controller.dart';
 import 'package:telepathy/controllers/state_controller.dart';
 import 'package:telepathy/core/rust/flutter.dart';
 import 'package:telepathy/core/rust/lib.dart';
 import 'package:telepathy/core/rust/player.dart';
 import 'package:telepathy/core/rust/types.dart';
+import 'package:telepathy/core/utils/console.dart';
+import 'package:telepathy/core/utils/sound_effects.dart';
 import 'package:telepathy/models/index.dart';
-import 'package:telepathy/models/room.dart';
+import 'package:telepathy/widgets/call/call_controls.dart';
+import 'package:telepathy/widgets/call/room_details_widget.dart';
 import 'package:telepathy/widgets/contacts/contact_widget.dart';
 import 'package:telepathy/widgets/contacts/room_widget.dart';
 
@@ -80,6 +84,34 @@ class _FakeSoundPlayer implements SoundPlayer {
   bool get isDisposed => false;
 }
 
+class _ThrowingSoundPlayer implements SoundPlayer {
+  _ThrowingSoundPlayer(this.errorMessage);
+
+  final String errorMessage;
+  int playCalls = 0;
+
+  @override
+  ArcHost host() => _FakeArcHost();
+
+  @override
+  Future<FlutterSoundHandle> play({required List<int> bytes}) async {
+    playCalls += 1;
+    throw DartError(message: errorMessage);
+  }
+
+  @override
+  Future<void> updateOutputDevice({String? deviceId}) async {}
+
+  @override
+  void updateOutputVolume({required double volume}) {}
+
+  @override
+  void dispose() {}
+
+  @override
+  bool get isDisposed => false;
+}
+
 class _RecordingTelepathy implements Telepathy {
   /// Completer for the most recent `startCall`. The test owns the
   /// completion timing so it can drive the race against a rebuild.
@@ -89,6 +121,9 @@ class _RecordingTelepathy implements Telepathy {
   /// Completer for the most recent `joinRoom`.
   final List<Completer<void>> joinRoomCallers = [];
   final List<List<String>> joinRoomMemberStrings = [];
+  int endCallCalls = 0;
+  final List<bool> mutedValues = [];
+  final List<bool> deafenedValues = [];
 
   @override
   Future<void> startCall({required Contact contact}) {
@@ -106,10 +141,8 @@ class _RecordingTelepathy implements Telepathy {
     return completer.future;
   }
 
-  // The contact/room `onPressed` closures only call `startCall` and
-  // `joinRoom`. Everything below is here solely to satisfy the
-  // abstract surface so the fake can be substituted for the real
-  // telepathy bridge in `Provider<Telepathy>`.
+  // Widget tests below record call, room, and control interactions.
+  // Remaining members satisfy the abstract bridge surface.
   @override
   Future<void> audioTest() async {}
   @override
@@ -119,7 +152,10 @@ class _RecordingTelepathy implements Telepathy {
           required List<(String, Uint8List)> attachments}) =>
       throw UnimplementedError();
   @override
-  Future<void> endCall() async {}
+  Future<void> endCall() async {
+    endCallCalls += 1;
+  }
+
   @override
   Future<(List<AudioDevice>, List<AudioDevice>)> listDevices() async =>
       (<AudioDevice>[], <AudioDevice>[]);
@@ -134,7 +170,10 @@ class _RecordingTelepathy implements Telepathy {
   @override
   void setContactOutputVolume({required Contact contact}) {}
   @override
-  void setDeafened({required bool deafened}) {}
+  void setDeafened({required bool deafened}) {
+    deafenedValues.add(deafened);
+  }
+
   @override
   void setDenoise({required bool denoise}) {}
   @override
@@ -148,7 +187,10 @@ class _RecordingTelepathy implements Telepathy {
   @override
   Future<void> setModel({Uint8List? model}) async {}
   @override
-  void setMuted({required bool muted}) {}
+  void setMuted({required bool muted}) {
+    mutedValues.add(muted);
+  }
+
   @override
   Future<void> setOutputDevice({String? deviceId}) async {}
   @override
@@ -259,8 +301,48 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   tearDown(() {
+    outgoingSoundHandle?.cancel();
+    otherSoundHandle?.cancel();
+    outgoingSoundHandle = null;
+    otherSoundHandle = null;
     rootBundle.clear();
     SharedPreferencesAsyncPlatform.instance = null;
+  });
+
+  testWidgets(
+      'playSoundEffect returns null and logs DartError context when sound playback fails',
+      (WidgetTester _) async {
+    final _ThrowingSoundPlayer player = _ThrowingSoundPlayer(
+      'SoundPlayer.play failed for outgoing ringtone while output device is locked',
+    );
+    final int originalLogCount = console.logs.length;
+
+    addTearDown(() {
+      console.logs.removeRange(originalLogCount, console.logs.length);
+    });
+
+    final FlutterSoundHandle? handle = await playSoundEffect(
+      player: player,
+      bytes: <int>[1, 2, 3],
+      sound: 'outgoing ringtone',
+    );
+
+    expect(handle, isNull,
+        reason: 'DartError playback failures must surface as null handles');
+    expect(player.playCalls, 1,
+        reason: 'helper must still attempt playback once');
+    expect(console.logs, hasLength(originalLogCount + 1),
+        reason: 'failure path must emit exactly one console error');
+
+    final Log log = console.logs.last;
+    expect(log.type, 'error');
+    expect(log.message,
+        'Failed to play outgoing ringtone sound: SoundPlayer.play failed for outgoing ringtone while output device is locked');
+    expect(log.message, contains('outgoing ringtone'));
+    expect(
+        log.message,
+        contains(
+            'SoundPlayer.play failed for outgoing ringtone while output device is locked'));
   });
 
   group('ContactWidget call-target capture across rebuilds', () {
@@ -295,6 +377,41 @@ void main() {
       );
       _markContactConnected(stateController, alice);
       _markContactConnected(stateController, bob);
+    });
+
+    testWidgets(
+        'a locked output device does not stop the call target from reaching '
+        'startCall', (WidgetTester tester) async {
+      _stubOutgoingRingtone(tester);
+
+      final _ThrowingSoundPlayer throwingPlayer = _ThrowingSoundPlayer(
+        'SoundPlayer.play failed for outgoing ringtone while output device is locked',
+      );
+
+      await tester.pumpWidget(
+        _harness(
+          stateController: stateController,
+          profilesController: profilesController,
+          telepathy: telepathy,
+          player: throwingPlayer,
+          child: ContactWidget(contact: alice),
+        ),
+      );
+
+      await tester.tap(find.byType(IconButton));
+      await tester.pump();
+
+      expect(stateController.pendingContact, same(alice),
+          reason: 'the clicked contact still becomes pending before sound '
+              'playback fails');
+      expect(throwingPlayer.playCalls, 1,
+          reason: 'best-effort outgoing sound must attempt playback before the '
+              'call continues');
+      expect(telepathy.startCallContacts, hasLength(1),
+          reason: 'best-effort outgoing sound must not block startCall even '
+              'when SoundPlayer.play throws DartError');
+      expect(telepathy.startCallContacts.single, same(alice),
+          reason: 'startCall must still target the clicked contact');
     });
 
     testWidgets(
@@ -463,6 +580,38 @@ void main() {
     });
 
     testWidgets(
+        'a locked output device does not stop a room call from reaching '
+        'joinRoom', (WidgetTester tester) async {
+      _stubOutgoingRingtone(tester);
+
+      final _ThrowingSoundPlayer throwingPlayer = _ThrowingSoundPlayer(
+        'SoundPlayer.play failed for outgoing ringtone while output device is locked',
+      );
+
+      await tester.pumpWidget(
+        _harness(
+          stateController: stateController,
+          profilesController: profilesController,
+          telepathy: telepathy,
+          player: throwingPlayer,
+          child: RoomWidget(room: alpha),
+        ),
+      );
+
+      await tester.tap(find.byType(IconButton).last);
+      await tester.pump();
+
+      expect(stateController.pendingRoom, same(alpha),
+          reason:
+              'the selected room must become pending before playback fails');
+      expect(throwingPlayer.playCalls, 1,
+          reason: 'best-effort outgoing sound must attempt playback once');
+      expect(telepathy.joinRoomMemberStrings, [alpha.peerIds],
+          reason: 'best-effort outgoing sound must not block joinRoom when '
+              'SoundPlayer.play throws DartError');
+    });
+
+    testWidgets(
         'a mid-flight target swap does not redirect the captured '
         'joinRoom continuation onto the new room', (WidgetTester tester) async {
       _stubOutgoingRingtone(tester);
@@ -590,6 +739,146 @@ void main() {
 
       expect(stateController.activeRoom, same(alpha));
       expect(stateController.pendingRoom, isNull);
+    });
+  });
+
+  group('Optional call sounds do not block controls', () {
+    late _RecordingTelepathy telepathy;
+    late StateController stateController;
+    late ProfilesController profilesController;
+    late Room alpha;
+
+    setUp(() {
+      FlutterSecureStorage.setMockInitialValues(<String, String>{});
+      SharedPreferencesAsyncPlatform.instance =
+          InMemorySharedPreferencesAsync.empty();
+      telepathy = _RecordingTelepathy();
+      stateController = StateController();
+      profilesController = ProfilesController(
+        storage: const FlutterSecureStorage(),
+        options: SharedPreferencesAsync(),
+        roomHasher: ({required List<String> peers}) => peers.join('|'),
+      );
+      alpha = Room(
+        id: 'room-alpha',
+        peerIds: const ['peer-1', 'peer-2'],
+        nickname: 'Alpha Room',
+      );
+    });
+
+    testWidgets('a locked output device does not stop room end cleanup',
+        (WidgetTester tester) async {
+      _stubOutgoingRingtone(tester);
+      profilesController.profiles['profile-test'] = Profile(
+        id: 'profile-test',
+        nickname: 'Test Profile',
+        peerId: '12D3KooWTestProfilePeerId111111111111111111111111111111',
+        keypair: const <int>[],
+        contacts: <String, Contact>{},
+        rooms: <String, Room>{},
+      );
+      profilesController.activeProfile = 'profile-test';
+      stateController.setActiveRoom(alpha);
+      final _ThrowingSoundPlayer throwingPlayer = _ThrowingSoundPlayer(
+        'SoundPlayer.play failed for call ended sound while output device is locked',
+      );
+
+      await tester.pumpWidget(
+        _harness(
+          stateController: stateController,
+          profilesController: profilesController,
+          telepathy: telepathy,
+          player: throwingPlayer,
+          child: const RoomDetailsWidget(),
+        ),
+      );
+
+      await tester.tap(find.byType(IconButton));
+      await tester.pump();
+
+      expect(throwingPlayer.playCalls, 1,
+          reason: 'best-effort end sound must attempt playback once');
+      expect(telepathy.endCallCalls, 1,
+          reason: 'end sound failure must not block backend endCall');
+      expect(stateController.activeRoom, isNull,
+          reason: 'end sound failure must not retain active room state');
+      expect(stateController.status, 'Inactive',
+          reason: 'end sound failure must reset call status');
+      await tester.pump(const Duration(seconds: 1));
+    });
+
+    testWidgets('a locked output device does not stop mute state or backend',
+        (WidgetTester tester) async {
+      _stubOutgoingRingtone(tester);
+      final audioSettings = AudioSettingsController(
+        options: SharedPreferencesAsync(),
+      );
+      await audioSettings.init();
+      final _ThrowingSoundPlayer throwingPlayer = _ThrowingSoundPlayer(
+        'SoundPlayer.play failed for mute sound while output device is locked',
+      );
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider<AudioSettingsController>.value(
+          value: audioSettings,
+          child: _harness(
+            stateController: stateController,
+            profilesController: profilesController,
+            telepathy: telepathy,
+            player: throwingPlayer,
+            child: const CallControls(),
+          ),
+        ),
+      );
+
+      await tester.tap(find.byType(IconButton).first);
+      await tester.pump();
+
+      expect(throwingPlayer.playCalls, 1,
+          reason: 'best-effort mute sound must attempt playback once');
+      expect(stateController.isMuted, isTrue,
+          reason: 'mute sound failure must not block muted state');
+      expect(telepathy.mutedValues, [true],
+          reason: 'mute sound failure must not block setMuted');
+    });
+
+    testWidgets('a locked output device does not stop deafen state or backend',
+        (WidgetTester tester) async {
+      _stubOutgoingRingtone(tester);
+      final audioSettings = AudioSettingsController(
+        options: SharedPreferencesAsync(),
+      );
+      await audioSettings.init();
+      final _ThrowingSoundPlayer throwingPlayer = _ThrowingSoundPlayer(
+        'SoundPlayer.play failed for deafen sound while output device is locked',
+      );
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider<AudioSettingsController>.value(
+          value: audioSettings,
+          child: _harness(
+            stateController: stateController,
+            profilesController: profilesController,
+            telepathy: telepathy,
+            player: throwingPlayer,
+            child: const CallControls(),
+          ),
+        ),
+      );
+
+      await tester.tap(find.byType(IconButton).at(1));
+      await tester.pump();
+
+      expect(throwingPlayer.playCalls, 1,
+          reason: 'best-effort deafen sound must attempt playback once');
+      expect(stateController.isDeafened, isTrue,
+          reason: 'deafen sound failure must not block deafened state');
+      expect(stateController.isMuted, isTrue,
+          reason: 'deafen sound failure must retain enforced mute state');
+      expect(telepathy.deafenedValues, [true],
+          reason: 'deafen sound failure must not block setDeafened');
+      expect(telepathy.mutedValues, [true],
+          reason: 'deafen sound failure must not block setMuted');
     });
   });
 

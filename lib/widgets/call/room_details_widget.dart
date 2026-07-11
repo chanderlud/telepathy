@@ -67,7 +67,11 @@ class RoomDetailsWidget extends StatelessWidget {
               stateController.endOfCall();
 
               List<int> bytes = await readSeaBytes('call_ended');
-              otherSoundHandle = await player.play(bytes: bytes);
+              otherSoundHandle = await playSoundEffect(
+                player: player,
+                bytes: bytes,
+                sound: 'call-ended',
+              );
             },
           ),
           Text('Online: ${online.map(getNickname).join(' ')}'),

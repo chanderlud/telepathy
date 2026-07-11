@@ -140,7 +140,11 @@ class RoomWidgetState extends State<RoomWidget> {
                 stateController.setStatus('Connecting');
                 stateController.setPendingRoom(target);
                 List<int> bytes = await readSeaBytes('outgoing');
-                outgoingSoundHandle = await player.play(bytes: bytes);
+                outgoingSoundHandle = await playSoundEffect(
+                  player: player,
+                  bytes: bytes,
+                  sound: 'outgoing',
+                );
 
                 try {
                   await telepathy.joinRoom(memberStrings: target.peerIds);

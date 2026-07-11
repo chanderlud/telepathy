@@ -253,7 +253,11 @@ class ContactWidgetState extends State<ContactWidget> {
                   stateController.endOfCall();
 
                   List<int> bytes = await readSeaBytes('call_ended');
-                  otherSoundHandle = await player.play(bytes: bytes);
+                  otherSoundHandle = await playSoundEffect(
+                    player: player,
+                    bytes: bytes,
+                    sound: 'call-ended',
+                  );
                 },
               ),
             if (!active && online)
@@ -286,7 +290,11 @@ class ContactWidgetState extends State<ContactWidget> {
                   stateController.setStatus('Connecting');
                   stateController.setPendingContact(target);
                   List<int> bytes = await readSeaBytes('outgoing');
-                  outgoingSoundHandle = await player.play(bytes: bytes);
+                  outgoingSoundHandle = await playSoundEffect(
+                    player: player,
+                    bytes: bytes,
+                    sound: 'outgoing',
+                  );
 
                   try {
                     await telepathy.startCall(contact: target);
