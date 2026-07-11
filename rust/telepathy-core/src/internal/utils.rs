@@ -207,7 +207,6 @@ pub(crate) async fn loopback(
     }
 }
 
-#[cfg(not(target_family = "wasm"))]
 pub(crate) fn spawn_task<F, T>(future: F) -> JoinHandle<T>
 where
     F: Future<Output = T> + Send + 'static,
@@ -222,15 +221,6 @@ where
     {
         tokio::spawn(future)
     }
-}
-
-#[cfg(target_family = "wasm")]
-pub(crate) fn spawn_task<F, T>(future: F) -> JoinHandle<T>
-where
-    F: Future<Output = T> + 'static,
-    T: 'static,
-{
-    flutter_rust_bridge::spawn_local(future)
 }
 
 #[cfg(target_os = "ios")]

@@ -416,7 +416,7 @@ impl std::error::Error for AudioFileError {
 #[derive(Debug)]
 pub enum WasmError {
     /// A JS-side error bubbled up via `wasm_bindgen`.
-    JavaScript(wasm_bindgen::JsValue),
+    JavaScript(String),
     /// `thread::spawn` panicked (typically because `SharedArrayBuffer` is unavailable).
     ThreadSpawnPanic {
         /// Classified reason for the panic (e.g. missing COOP/COEP headers).
@@ -535,11 +535,9 @@ impl From<WasmError> for Error {
 #[cfg(target_family = "wasm")]
 impl From<wasm_bindgen::JsValue> for Error {
     fn from(err: wasm_bindgen::JsValue) -> Self {
-        Error::Wasm(WasmError::JavaScript(err))
+        Error::Wasm(WasmError::JavaScript(format!("{:?}", err)))
     }
 }
-
-// ---- Internal helpers used elsewhere in the crate ----
 
 /// Inspects the panic payload from a `thread::spawn` call and produces a typed
 /// [`WasmError`]. Returns `Some` when the failure is WASM-specific; native
