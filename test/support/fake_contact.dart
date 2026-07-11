@@ -1,12 +1,9 @@
 import 'package:telepathy/core/rust/lib.dart';
 import 'package:telepathy/core/rust/types.dart';
 
-/// Shared `Contact` fake for unit and widget tests.
-///
-/// `Contact` is a `RustOpaqueInterface` marker — the native bridge is not
-/// initialized in the test harness, so production callers cannot construct
-/// one. Tests that need a `Contact` (to drive `StateController` or to build
-/// `ContactWidget`) should instantiate this fake.
+/// Shared `Contact` fake for unit and widget tests. `Contact` is a
+/// `RustOpaqueInterface` marker — the native bridge is not initialized in the
+/// test harness, so production callers cannot construct one.
 class FakeContact implements Contact {
   FakeContact({required String id, required String contactNickname})
       : _id = id,

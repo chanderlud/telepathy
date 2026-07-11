@@ -7,16 +7,13 @@ use speedy::{Readable, Writable};
 use tokio::sync::mpsc::UnboundedSender;
 use uuid::Uuid;
 
-/// Canonical reasons for a [`ProtocolMessage::Goodbye`].
+/// Canonical reasons for a [`ProtocolMessage::Goodbye`]. Wire vocabulary
+/// stays canonical; user-facing rendering lives in `CallEndMessage`.
 #[derive(Readable, Writable, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GoodbyeReason {
-    /// The local session was stopped.
     SessionStopped,
-    /// An audio device or stream error occurred.
     AudioDeviceError,
-    /// A non-audio, non-session-stopped error occurred.
     Error,
-    /// No reason specified.
     None,
 }
 

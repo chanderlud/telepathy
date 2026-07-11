@@ -651,15 +651,8 @@ where
         is_in_room: bool,
     ) -> Result<HandshakeDispatch> {
         if is_in_room {
-            self.room_handshake(
-                io.send,
-                io.recv,
-                io.connection,
-                &io.state.stop_session,
-                call_state,
-                io.state.id,
-            )
-            .await?;
+            self.room_handshake(io.send, io.recv, io.connection, call_state, io.state)
+                .await?;
             Ok(HandshakeDispatch::Completed)
         } else if let Some(_slot) = pending_slot.take() {
             match self
@@ -1662,9 +1655,8 @@ where
         send: &mut FramedWrite<SendStream, LengthDelimitedCodec>,
         recv: &mut FramedRead<RecvStream, LengthDelimitedCodec>,
         connection: &Connection,
-        stop_session: &CancellationToken,
         call_state: EarlyCallState,
-        session_id: Uuid,
+        session: &Arc<SessionState>,
     ) -> Result<()> {
         let peer_id = call_state.peer;
         let connection_id = connection.stable_id();
@@ -1679,7 +1671,7 @@ where
             .send(RoomMessage::Join {
                 connection: connection.clone(),
                 state: call_state,
-                session_id,
+                session_id: session.id,
                 terminal_sender,
             })
             .await
@@ -1701,7 +1693,7 @@ where
                         }
                     }
                 }
-                _ = stop_session.cancelled() => {
+                _ = session.stop_session.cancelled() => {
                     info!(event = "room_session_stopped_sending_goodbye", peer.id = %peer_id);
                     _ = write_message(send, &ProtocolMessage::goodbye()).await;
                     break
@@ -1731,6 +1723,20 @@ where
                     }
                 }
             }
+        }
+
+        // Discard any `SessionState::start_call` permit latched on this session before
+        // releasing the room slot, so it cannot start a direct call against the
+        // former room peer. `timeout(Duration::ZERO, ...)` drains a pending permit
+        // (the `Notified` future resolves immediately) and is a no-op otherwise.
+        if tokio::time::timeout(Duration::ZERO, session.start_call.notified())
+            .await
+            .is_ok()
+        {
+            debug!(
+                event = "room_handshake_discarded_stale_start_call",
+                peer.id = %peer_id
+            );
         }
 
         // sender may already be closed at this point

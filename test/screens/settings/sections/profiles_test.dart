@@ -103,15 +103,13 @@ void main() {
   });
 
   group('ProfileSettings "Set Active" gate', () {
-    // Regression: the previous gate was `stateController.isCallActive`,
-    // which is only true once `setActiveContact`/`setActiveRoom` has
-    // promoted the slot. During `CallLifecycle.connecting` (and during
-    // audio tests) the backend call slot is already occupied but
-    // `isCallActive` is still false, so the button stayed enabled and
-    // tapping `restartManager()` could race the in-flight startCall
-    // and leave the frontend profile and backend identity
-    // inconsistent. The gate is now `blockAudioChanges`, which
-    // covers the connecting + active phases and the audio-test phase.
+    // Regression: the previous gate was `stateController.isCallActive`, which
+    // is only true once `setActiveContact`/`setActiveRoom` has promoted the slot.
+    // During `CallLifecycle.connecting` (and during audio tests) the backend call
+    // slot is already occupied but `isCallActive` is still false, so the button
+    // stayed enabled and tapping `restartManager()` could race the in-flight
+    // startCall and leave the frontend profile and backend identity inconsistent.
+    // The gate is now `blockAudioChanges`, covering connecting + active + audio-test.
 
     testWidgets(
         'the "Set Active" button is disabled while a pending room is in '
@@ -125,16 +123,9 @@ void main() {
         stateController: stateController,
       );
 
-      // Move the controller into the connecting phase via the same
-      // path the room widget uses; this matches production state for
-      // an outgoing room call still being negotiated by the backend.
       stateController.setPendingRoom(_roomFixture('connect-pending'));
       await tester.pumpAndSettle();
 
-      // The "Set Active" button is the row's primary action. While
-      // the controller is in the connecting phase it must be visibly
-      // disabled, so a tap is rejected before the call/identity
-      // mutators run.
       final setActiveButton = find.widgetWithText(Button, 'Set Active');
       expect(setActiveButton, findsOneWidget);
       expect(tester.widget<Button>(setActiveButton).disabled, isTrue,
@@ -160,9 +151,8 @@ void main() {
         stateController: stateController,
       );
 
-      // `StateController.setInAudioTest(true)` flips `inAudioTest`
-      // and `blockAudioChanges` to true without requiring the rust
-      // audio-test bridge.
+      // setInAudioTest flips `inAudioTest` and `blockAudioChanges` without
+      // requiring the rust audio-test bridge.
       stateController.setInAudioTest(true);
       await tester.pumpAndSettle();
 
@@ -235,10 +225,9 @@ extension on WidgetTester {
     );
   }
 
-  /// Variant used by the "Set Active" gate tests: lets the test
-  /// supply the `StateController` (or `Telepathy`) so the controller
-  /// can be advanced into `connecting` / `audio-test` before the
-  /// widget mounts.
+  /// Variant used by the "Set Active" gate tests: lets the test supply the
+  /// `StateController` (or `Telepathy`) so the controller can be advanced into
+  /// `connecting` / `audio-test` before the widget mounts.
   Future<void> pumpProfileSettingsWithState({
     required FakeProfilesController profilesController,
     required StateController stateController,
@@ -323,9 +312,9 @@ class FakeProfilesController extends ProfilesController {
   }
 }
 
-/// Records `setIdentity` and `restartManager` so the "idle" gate test
-/// can verify the full profile-switch sequence fires only when the
-/// controller is not blocking audio changes.
+/// Records `setIdentity` and `restartManager` so the "idle" gate test can
+/// verify the full profile-switch sequence fires only when the controller is not
+/// blocking audio changes.
 class _RecordingTelepathy implements Telepathy {
   final List<List<int>> identityCalls = <List<int>>[];
   final List<void> restartManagerCalls = <void>[];

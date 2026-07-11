@@ -565,11 +565,8 @@ where
     }
 
     pub async fn shutdown(&self) {
-        // guaranteed to end all sessions
         self.reset_sessions().await;
-        // the manager will now stop & not run again
         self.core_state.stop_manager.store(true, Relaxed);
-        // end the current manager
         self.restart_manager.notify_one();
     }
 
@@ -672,10 +669,9 @@ where
 
     /// Ends all sessions & restores session_states to default
     pub(crate) async fn reset_sessions(&self) {
-        // Phase 1: drain the current `session_states` map. Removing the entries under
-        // the write lock establishes the per-session ownership invariant: no session
-        // task can re-acquire a pending direct-call slot for a peer whose session is
-        // no longer the current map entry.
+        // Drain `session_states` under the write lock so no session task can
+        // re-acquire a pending direct-call slot for a peer whose session is no
+        // longer the current map entry.
         let sessions: Vec<_> = {
             let mut states = self.session_states.write().await;
             states.drain().map(|(_, session)| session).collect()
@@ -685,17 +681,12 @@ where
             session.teardown().await;
         }
 
-        // Phase 2: take the write lock as a terminal barrier. Any session task that
-        // somehow raced past the drain above will have observed an empty map and
-        // abandoned its acquisition. Now that the barrier has been observed, no
-        // remaining session can own a pending direct-call slot, so the slot can be
-        // atomically cleared without any per-session guard. The clear leaves
-        // `Idle`/`ActiveDirect`/`RoomCall`/`AudioTest` untouched.
-        //
-        // The write-lock barrier is a secondary defense. The primary defense against
-        // a session task that has already passed `is_session_still_current` is the
-        // `stop_session.is_cancelled()` check at the entry of `negotiate_outgoing_call`
-        // and `negotiate_incoming_call`. Both guards must be preserved together.
+        // Terminal barrier: re-acquire the write lock so any session task that
+        // raced past the drain observed an empty map and abandoned its acquisition.
+        // Only then can the pending slot be cleared atomically — `Idle`/`ActiveDirect`/
+        // `RoomCall`/`AudioTest` are left untouched. The barrier is a secondary
+        // defense; the primary one is the `stop_session.is_cancelled()` check at the
+        // entry of `negotiate_outgoing_call` and `negotiate_incoming_call`.
         {
             let _states = self.session_states.write().await;
             if let Err(error) = self.core_state.call_slot.clear_pending_direct() {
@@ -724,19 +715,15 @@ where
             setup_error,
         } = cleanup;
 
-        // tear down processing stack
         debug!(event = "room_processing_teardown_start");
-        // on ios the audio session must be deactivated
         #[cfg(target_os = "ios")]
         deactivate_audio_session();
-        // cleanup web input on WASM
         #[cfg(target_family = "wasm")]
         {
             *self.web_input.lock().await = None;
         }
         stop_io.cancel();
         let setup_failed = setup_error.is_some();
-        // join input IO task
         if let Some(input_handle) = input_handle {
             match input_handle.await {
                 Ok(Ok(())) => {}
@@ -750,7 +737,6 @@ where
                 Err(error) => return Err(error.into()),
             }
         }
-        // join output tasks, dropping output helpers to close
         for connection in connections.into_values() {
             match connection.handle.await {
                 Ok(Ok(())) => (),
@@ -764,7 +750,7 @@ where
             }
         }
         debug!(event = "room_processing_teardown_done");
-        // cleanup room state ONLY if still the currently installed `room_state`
+        // Clear `room_state` only if it's still the currently installed generation.
         {
             let mut room_guard = self.room_state.write().await;
             if room_guard
@@ -779,7 +765,7 @@ where
                 );
             }
         }
-        // release only against the exact `room_owner` snapshot
+        // Release the slot only against the exact `room_owner` snapshot.
         match self.core_state.call_slot.release_if_match(room_owner) {
             Ok(_) => {}
             Err(error) if setup_failed => {
@@ -790,9 +776,7 @@ where
             }
             Err(error) => return Err(error),
         }
-        // cleanup sessions blocked by room
         end_sessions.cancel();
-        // join statistics collector
         if let Some(statistics_handle) = statistics_handle {
             match statistics_handle.await {
                 Ok(()) => {}

@@ -1,8 +1,12 @@
 #![cfg(feature = "integration-testing")]
 
+use bytes::Bytes;
 use cpal::{Error as CpalError, ErrorKind as CpalErrorKind};
+use futures_util::{SinkExt, StreamExt};
 use iroh::address_lookup::memory::MemoryLookup;
-use iroh::{PublicKey, RelayMap, SecretKey};
+use iroh::endpoint::{Connection, RecvStream, SendStream, presets};
+use iroh::{Endpoint, PublicKey, RelayMap, RelayMode, SecretKey};
+use speedy::{Readable, Writable};
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::{Arc, Mutex, Once, OnceLock};
@@ -22,6 +26,7 @@ use telepathy_core::types::{
 };
 use tokio::sync::Notify;
 use tokio::time::{interval, sleep};
+use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
@@ -29,12 +34,9 @@ use uuid::Uuid;
 static TEST_TRACING_INIT: Once = Once::new();
 static RELAY_INIT: Once = Once::new();
 static RELAY_DETAILS: OnceLock<RelayMap> = OnceLock::new();
-/// Single shared in-process address lookup. Initialised alongside the
-/// relay server so every test client sees the same `BTreeMap`.
-///
-/// `setup_endpoint` calls `add_endpoint_info(endpoint.addr())` against
-/// this lookup right after binding, so any client that dials another
-/// will resolve that peer's `EndpointInfo` from the same map.
+/// Single shared in-process address lookup. `setup_endpoint` registers each
+/// peer's `addr()` here right after bind, so every test client resolves the
+/// others from the same map.
 static SHARED_ADDRESS_LOOKUP: OnceLock<MemoryLookup> = OnceLock::new();
 
 const SEQUENCED_STEP: f32 = 1.0 / 4096.0;
@@ -56,6 +58,60 @@ where
 {
     telepathy: MockTelepathyHandle<H, I, O>,
     is_active: Arc<AtomicBool>,
+}
+
+#[derive(Debug, Readable, Writable)]
+enum WireProtocolMessage {
+    Hello {
+        ringtone: Option<Vec<u8>>,
+        audio_header: WireAudioHeader,
+        room_hash: Option<u64>,
+    },
+    HelloAck {
+        audio_header: WireAudioHeader,
+    },
+    Reject,
+    Busy,
+    Goodbye {
+        reason: WireGoodbyeReason,
+    },
+    Chat {
+        text: String,
+        attachments: Vec<WireAttachment>,
+    },
+    KeepAlive,
+    ScreenshareHeader {
+        encoder_name: String,
+    },
+}
+
+#[derive(Debug, Readable, Writable)]
+struct WireAudioHeader {
+    sample_rate: u32,
+    codec_enabled: bool,
+    vbr: bool,
+    residual_bits: f64,
+}
+
+#[derive(Debug, Readable, Writable)]
+enum WireGoodbyeReason {
+    SessionStopped,
+    AudioDeviceError,
+    Error,
+    None,
+}
+
+#[derive(Debug, Readable, Writable)]
+struct WireAttachment {
+    name: String,
+    data: Vec<u8>,
+}
+
+struct RawRoomPeer {
+    endpoint: Endpoint,
+    connection: Connection,
+    control_send: FramedWrite<SendStream, LengthDelimitedCodec>,
+    control_recv: FramedRead<RecvStream, LengthDelimitedCodec>,
 }
 
 #[derive(Debug, Clone)]
@@ -269,13 +325,10 @@ struct PendingAcceptProbe {
     cancelled_notify: Arc<Notify>,
 }
 
-/// How many manager lifecycle cycles the mock `manager_state` callback
-/// should accept. The standard `SingleLifecycle` mirrors the production
-/// expectation of one activation (2 `Active`/`Starting` events) followed by
-/// one `Stopped` on shutdown. `RestartableLifecycle` permits any number of
-/// activations and `Stopped`/`Failed` events so tests that exercise
-/// `restart_manager()` (which stops the existing manager and spawns a new
-/// one) do not trip mockall's strict call-count assertion.
+/// How many manager lifecycle cycles the mock `manager_state` callback accepts.
+/// `Single` pins to one activation (2 active/starting + 1 stopped);
+/// `Restartable` accepts any number so `restart_manager()` tests don't trip
+/// mockall's strict call-count assertion.
 #[derive(Debug, Clone, Copy)]
 enum ManagerLifecycle {
     Single,
@@ -386,18 +439,9 @@ async fn session_collision_doesnt_fail() {
     client_b.telepathy.shutdown().await;
 }
 
-/// Locks in the in-process `MemoryLookup` address discovery path.
-///
-/// `shared_relay_map()` boots the relay server and the shared
-/// `MemoryLookup` is initialised in the same `Once`. After both
-/// clients bind, `setup_endpoint` registers each peer's `addr()`
-/// against the shared lookup, so the dial that follows can resolve
-/// the remote peer without reaching the n0 PKARR relay. The
-/// assertions verify both that the registration happened (the
-/// lookup contains entries for both peers) and that the resulting
-/// end-to-end call reaches `Connected` — the regression scenario is
-/// the in-process lookup silently failing and the dial hanging
-/// until `HELLO_TIMEOUT`.
+/// In-process `MemoryLookup` registers each peer's `addr()` after bind so the
+/// dial resolves without reaching the n0 PKARR relay. Regression: lookup
+/// silently fails and dial hangs until `HELLO_TIMEOUT`.
 #[tokio::test(flavor = "multi_thread")]
 async fn memory_address_lookup_resolves_peer_over_relay() {
     init_test_tracing();
@@ -582,14 +626,9 @@ async fn call_simultaneous_dial_matches_pending_incoming_and_connects() {
     client_b.telepathy.shutdown().await;
 }
 
-/// Regression test for the repeated-`start_call` queueing bug.
-///
-/// Calling `start_call` again while the first outgoing dial to the same peer is still pending
-/// must be an idempotent local start: the second call returns success, does not send another
-/// `state.start_call.notify_one()`, and does not queue a stale permit that re-enters
-/// `negotiate_outgoing_call` after the present call ends. Without the fix the queued permit
-/// would re-fire the dial after teardown and the slot would briefly leave `Idle` for a
-/// phantom second negotiation.
+/// Regression: a second `start_call` while a first outgoing dial is still pending must
+/// be idempotent — no extra notify, no queued permit that re-enters
+/// `negotiate_outgoing_call` after teardown, no phantom `Idle` flip.
 #[tokio::test(flavor = "multi_thread")]
 async fn repeated_start_call_same_outgoing_does_not_queue_stale_permit() {
     init_test_tracing();
@@ -641,24 +680,19 @@ async fn repeated_start_call_same_outgoing_does_not_queue_stale_permit() {
     client_b.telepathy.start_session(&contact_a).await;
     wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
 
-    // First outgoing dial. Slot moves Idle -> PendingOutgoing; the session task
-    // observes the notify and starts negotiating.
+    // First outgoing dial moves the slot to PendingOutgoing.
     client_a
         .telepathy
         .start_call(&contact_b)
         .await
         .expect("first start_call should succeed");
-    // Second outgoing dial to the same peer while the first is still pending. The slot is
-    // already PendingOutgoing for this peer, so the second call must be an idempotent
-    // match: Ok(()), no extra notify.
+    // Second outgoing dial: must be an idempotent match — Ok(()), no extra notify.
     client_a
         .telepathy
         .start_call(&contact_b)
         .await
         .expect("second start_call to same peer must succeed as an idempotent local start");
 
-    // The call should connect normally — the second match must not have corrupted the
-    // negotiation in any way.
     wait_for_connected(&call_states_a, "alice").await;
     wait_for_connected(&call_states_b, "bob").await;
 
@@ -669,16 +703,14 @@ async fn repeated_start_call_same_outgoing_does_not_queue_stale_permit() {
     assert_no_call_ended_before_connected(&states_a, "alice");
     assert_no_call_ended_before_connected(&states_b, "bob");
 
-    // End the call cleanly. With the bug, the second start_call's queued notify permit
-    // would re-enter negotiate_outgoing_call after the slot becomes Idle, briefly
-    // re-acquiring it for a phantom second dial.
+    // End the call cleanly. With the bug, the second start_call's queued permit would
+    // re-enter negotiate_outgoing_call after the slot becomes Idle.
     client_a.telepathy.end_call().await;
 
     wait_for_slot_idle(&client_a, &contact_b.peer_id.to_string()).await;
 
-    // Stability window: any phantom second dial would have re-acquired the slot within
-    // a few hundred ms. Without the bug, the slot must remain Idle because no permit was
-    // queued.
+    // Stability window: a phantom second dial would re-acquire the slot within a few
+    // hundred ms. Without the bug, the slot must remain Idle because no permit was queued.
     sleep(Duration::from_secs(2)).await;
 
     let final_snapshot = client_a
@@ -695,10 +727,6 @@ async fn repeated_start_call_same_outgoing_does_not_queue_stale_permit() {
         final_snapshot
     );
 
-    // Defensive secondary check: a phantom second negotiation would have produced a
-    // second end-to-end hello-ack timeout or hello failure, which manifests as an extra
-    // CallEnded before any second Connected. Verify the call-state log shows the single
-    // expected Connected -> ended transition, not a phantom re-dial.
     let states_a_after = call_state_snapshot(&call_states_a);
     let connected_count = states_a_after
         .iter()
@@ -713,14 +741,9 @@ async fn repeated_start_call_same_outgoing_does_not_queue_stale_permit() {
     client_b.telepathy.shutdown().await;
 }
 
-/// Regression test for the terminal-teardown pending-slot leak.
-///
-/// `start_call` is the only production path that acquires a `PendingOutgoing` slot
-/// for an outgoing dial. After it acquires the slot and notifies the session
-/// task, the session enters `negotiate_outgoing_call` and matches the same slot.
-/// Terminal teardown via `shutdown` (which goes through `reset_sessions` internally)
-/// must clear the pending slot, even though the session's `is_session_still_current`
-/// guard sees an empty map and the per-session `release_pending` would no-op.
+/// Terminal teardown via `shutdown` -> `reset_sessions` must clear a pending
+/// `PendingOutgoing` slot. Per-session `release_pending` no-ops on the empty
+/// post-drain map; deterministic `clear_pending_direct` is the line of defense.
 #[tokio::test(flavor = "multi_thread")]
 async fn reset_sessions_clears_pending_outgoing_slot() {
     init_test_tracing();
@@ -773,17 +796,14 @@ async fn reset_sessions_clears_pending_outgoing_slot() {
     client_b.telepathy.start_session(&contact_a).await;
     wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
 
-    // Drive an outgoing dial through the public `start_call` API. The slot moves
-    // Idle -> PendingOutgoing; the session task is notified and will match.
+    // Drive an outgoing dial through the public `start_call` API.
     client_a
         .telepathy
         .start_call(&contact_b)
         .await
         .expect("alice should start the outgoing call");
 
-    // Verify the slot is now PendingOutgoing before we trigger teardown. The
-    // public `start_call` is the production entry point; verifying this state
-    // confirms we are exercising the real acquisition path, not a bypass.
+    // Confirm we are exercising the real acquisition path, not a bypass.
     let before = client_a
         .telepathy
         .inner
@@ -798,18 +818,14 @@ async fn reset_sessions_clears_pending_outgoing_slot() {
     );
     assert_eq!(before.direct_peer, Some(peer_id_b));
 
-    // Terminal teardown via the public `shutdown` API. This is the same path a
-    // real user would hit, and it goes through `reset_sessions` internally. The
-    // per-session `is_session_still_current` guard sees the empty post-drain map
-    // and the per-session `release_pending` would no-op; the deterministic
-    // `clear_pending_direct` in `reset_sessions` is what actually clears the
-    // slot. The slot must end up `Idle` with no owner.
+    // Terminal teardown via `shutdown` -> `reset_sessions`. Per-session
+    // `release_pending` no-ops on the empty post-drain map; deterministic
+    // `clear_pending_direct` is what actually clears the slot.
     client_a.telepathy.shutdown().await;
     client_b.telepathy.shutdown().await;
 
-    // Stability window: per-session teardown runs asynchronously. Wait for the
-    // slot to become `Idle` and then re-check after a beat to catch any race
-    // where a delayed teardown could re-pend it.
+    // Per-session teardown runs asynchronously; re-check after a beat to catch a
+    // delayed teardown re-pending the slot.
     wait_for_slot_idle(&client_a, &peer_id_b.to_string()).await;
     sleep(Duration::from_millis(200)).await;
 
@@ -831,16 +847,10 @@ async fn reset_sessions_clears_pending_outgoing_slot() {
     );
 }
 
-/// Regression test for the terminal-teardown pending-incoming-slot leak.
-///
-/// Mirrors `reset_sessions_clears_pending_outgoing_slot` for the `PendingIncoming`
-/// state. Alice calls Bob, Bob's session task receives the `Hello` and acquires
-/// `PendingIncoming` to show the accept prompt. We block the accept prompt via
-/// the `PendingAcceptProbe` and then call `shutdown` on Bob before the prompt
-/// resolves. The deterministic `clear_pending_direct` in `reset_sessions` must
-/// clear the slot even though the per-session `is_session_still_current` guard
-/// sees the empty post-drain map and the per-session `release_pending` would
-/// no-op.
+/// Mirrors `reset_sessions_clears_pending_outgoing_slot` for `PendingIncoming`.
+/// Block the accept prompt via `PendingAcceptProbe`, then `shutdown` Bob before
+/// it resolves. `reset_sessions` must clear the slot even though per-session
+/// `release_pending` no-ops on the empty post-drain map.
 #[tokio::test(flavor = "multi_thread")]
 async fn reset_sessions_clears_pending_incoming_slot() {
     init_test_tracing();
@@ -896,9 +906,8 @@ async fn reset_sessions_clears_pending_incoming_slot() {
     wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
 
     // Drive the call through the public `start_call` API on Alice. Bob's session
-    // task receives the `Hello`, runs the new `is_session_still_current` guard,
-    // acquires `PendingIncoming`, and shows the accept prompt (blocked by the
-    // probe).
+    // task receives the `Hello`, runs `is_session_still_current`, acquires
+    // `PendingIncoming`, and shows the accept prompt (blocked by the probe).
     client_a
         .telepathy
         .start_call(&contact_b)
@@ -906,9 +915,6 @@ async fn reset_sessions_clears_pending_incoming_slot() {
         .expect("alice should start the outgoing call");
     accept_probe_b.wait_opened().await;
 
-    // Verify the slot is now `PendingIncoming` for Alice on Bob. This confirms
-    // the production acquisition path (session task -> `acquire_incoming_call_slot`)
-    // was exercised, not a manual bypass.
     let before = client_b
         .telepathy
         .inner
@@ -923,13 +929,9 @@ async fn reset_sessions_clears_pending_incoming_slot() {
     );
     assert_eq!(before.direct_peer, Some(peer_id_a));
 
-    // Terminal teardown via the public `shutdown` API. The session task is
-    // blocked waiting for the accept prompt; `reset_sessions` cancels the
-    // session's `stop_session` token and drains `session_states`. The
-    // cancellation reaches the prompt (via `cancel_prompt.notify_one()` in
-    // `abort_negotiation_session_stopped`), the session task returns
-    // `SessionStopped`, and the deterministic `clear_pending_direct` in
-    // `reset_sessions` must leave the slot in `Idle` with no owner.
+    // `reset_sessions` cancels the session's `stop_session` token and drains
+    // `session_states`; cancellation reaches the prompt, the session returns
+    // `SessionStopped`, and `clear_pending_direct` must leave the slot `Idle`.
     client_b.telepathy.shutdown().await;
     client_a.telepathy.shutdown().await;
 
@@ -954,28 +956,10 @@ async fn reset_sessions_clears_pending_incoming_slot() {
     );
 }
 
-/// Regression test for the queued-session-work path through terminal teardown.
-///
-/// A session that has already been selected for queued work (`start_call.notify_one()`)
-/// can resume inside `negotiate_outgoing_call` AFTER `reset_sessions` has performed
-/// its terminal barrier. The per-session `release_pending` guard sees an empty
-/// `session_states` and would no-op; the slot must still be cleared by the
-/// deterministic `clear_pending_direct` in `reset_sessions`.
-///
-/// This test exercises that real queued-session-work path: it queues a
-/// `start_call.notify_one()` on a live `SessionState` so the session task will
-/// reach `negotiate_outgoing_call`, and then calls `shutdown` (which goes through
-/// `reset_sessions`). The negotiation-entry cancellation guard added to
-/// `negotiate_outgoing_call` must observe the cancellation and return
-/// `OutgoingNegotiationOutcome::SessionStopped` without acquiring a slot. The
-/// terminal `clear_pending_direct` in `reset_sessions` must then leave the slot
-/// in `Idle`.
-///
-/// Without the guard, a drained session task that already entered
-/// `negotiate_outgoing_call` could re-pend the slot after the terminal barrier,
-/// and the per-session `release_pending` would no-op because the session is no
-/// longer the current map entry — leaving the slot stuck in `PendingOutgoing`
-/// after `shutdown` returns.
+/// Queued session work that resumes inside `negotiate_outgoing_call` AFTER
+/// `reset_sessions`'s terminal barrier must observe cancellation and return
+/// `SessionStopped` without re-acquiring the slot. Without the negotiation-entry
+/// guard the slot would be left stuck in `PendingOutgoing` after `shutdown`.
 #[tokio::test(flavor = "multi_thread")]
 async fn reset_sessions_drains_queued_start_call_after_terminal_force_clear() {
     init_test_tracing();
@@ -1028,11 +1012,9 @@ async fn reset_sessions_drains_queued_start_call_after_terminal_force_clear() {
     client_b.telepathy.start_session(&contact_a).await;
     wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
 
-    // Queue a start_call permit on the live session for client_a. Using the
-    // session's `start_call` Notify directly (rather than the public `start_call`
-    // API) ensures the slot is NOT pre-acquired here — the negotiation-entry
-    // cancellation guard in `negotiate_outgoing_call` is the line of defense
-    // being tested, not the public-path write lock.
+    // Notify `start_call` directly so the slot is NOT pre-acquired here — the
+    // negotiation-entry cancellation guard is the line of defense under test,
+    // not the public-path write lock.
     let a_session = client_a
         .telepathy
         .inner
@@ -1044,35 +1026,23 @@ async fn reset_sessions_drains_queued_start_call_after_terminal_force_clear() {
         .expect("client_a should have a session for contact_b");
     a_session.start_call.notify_one();
 
-    // State-driven wait instead of a fixed sleep: poll the call slot until
-    // it transitions to `PendingOutgoing`, which proves the session task has
-    // entered `negotiate_outgoing_call` and called
-    // `PendingDirectCallSlot::try_acquire_outgoing`. The cancellation guard
-    // under test fires inside that function; we need the session task to
-    // have reached it before triggering shutdown, so the test does not race
-    // the slot acquisition on a slow machine.
+    // Poll for `PendingOutgoing` so we know the session task reached
+    // `negotiate_outgoing_call` before triggering shutdown.
     wait_for_slot_pending_outgoing(&client_a, &peer_id_b.to_string()).await;
 
-    // Trigger terminal teardown on client_a. `shutdown` calls `reset_sessions`
-    // which drains `session_states`, cancels each session's `stop_session` token,
-    // and force-clears any pending slot. The session task in
-    // `negotiate_outgoing_call` will observe the cancellation via the new guard
-    // and return `SessionStopped` without acquiring a slot — closing the
-    // queued-work race window.
+    // `shutdown` -> `reset_sessions` drains `session_states`, cancels each
+    // session's `stop_session` token, and force-clears any pending slot. The
+    // session task in `negotiate_outgoing_call` observes cancellation and
+    // returns `SessionStopped` without acquiring a slot.
     let core_a = client_a.telepathy.inner.clone();
     let reset_task = tokio::spawn(async move {
         core_a.shutdown().await;
     });
 
-    // Wait for the slot to settle to `Idle`. A regression where
-    // `negotiate_outgoing_call` re-pended the slot after the final force-clear
-    // would leave the slot in `PendingOutgoing` here, and the wait would time
-    // out.
     wait_for_slot_idle(&client_a, &peer_id_b.to_string()).await;
 
-    // Stability window: any phantom queued-work acquisition that survived the
-    // final force-clear would re-pend the slot within a few hundred ms. The
-    // cancellation guard must have prevented that.
+    // Stability window: a phantom queued-work acquisition would re-pend the
+    // slot within a few hundred ms.
     sleep(Duration::from_millis(200)).await;
 
     let after = client_a
@@ -1092,29 +1062,12 @@ async fn reset_sessions_drains_queued_start_call_after_terminal_force_clear() {
         "no peer should own the slot after reset_sessions; got {after:?}"
     );
 
-    // Ensure the reset task finishes so we don't leak the manager task. We do
-    // not assert on its result — `reset_sessions` returns `()`, but the test
-    // already validated the observable slot state above.
     let _ = reset_task.await;
 }
 
-/// Regression test for the public `restart_manager()` flow.
-///
-/// `restart_manager()` does more than `reset_sessions()`: it checks the
-/// slot is idle, calls `reset_sessions()`, signals the manager to
-/// tear down, waits for the new manager to come online, clears the
-/// peer output volume cache, and re-spawns sessions for all known
-/// contacts. This test exercises the full public flow and asserts:
-/// 1. The slot must end up `Idle` after restart (no stale ownership).
-/// 2. A *new* session is registered for the known contact (re-spawn
-///    loop, not a no-op).
-/// 3. A subsequent `start_call()` succeeds and acquires a fresh
-///    `PendingOutgoing` slot owned by the contact — the slot must not
-///    be stuck in a pre-restart `PendingIncoming`/`PendingOutgoing`.
-/// 4. The post-restart session is stable end-to-end (both sides have
-///    attached) before the next start_call, so a slow `client_b`
-///    teardown cannot make the dialing half observe a half-orphaned
-///    session.
+/// Full `restart_manager()` flow: slot ends `Idle`, a fresh session is registered
+/// for the known contact, and a subsequent `start_call()` acquires a fresh
+/// `PendingOutgoing` slot — not stuck in any pre-restart pending state.
 #[tokio::test(flavor = "multi_thread")]
 async fn restart_manager_recovers_slot_respawns_sessions_and_allows_fresh_start_call() {
     init_test_tracing();
@@ -1133,9 +1086,8 @@ async fn restart_manager_recovers_slot_respawns_sessions_and_allows_fresh_start_
     let call_states_a = Arc::new(Mutex::new(Vec::new()));
     let call_states_b = Arc::new(Mutex::new(Vec::new()));
 
-    // `client_a` exercises `restart_manager`, so it needs a mock that
-    // permits multiple manager lifecycles. `client_b` does not, so it
-    // uses the standard single-lifecycle builder.
+    // `client_a` needs a multi-lifecycle mock; `client_b` uses the standard
+    // single-lifecycle builder.
     let client_a = build_client_with_options(
         relay_map,
         key_a,
@@ -1168,11 +1120,9 @@ async fn restart_manager_recovers_slot_respawns_sessions_and_allows_fresh_start_
     )
     .await;
 
-    // Ensure shutdown runs on the success path even if an assertion
-    // below panics — the test's `client_b` mock pins `manager_state` to
-    // a single lifecycle, so an aborted run otherwise leaves an unmet
-    // `Stopped` expectation that surfaces as a misleading secondary
-    // panic. Reaching shutdown first keeps the diagnostic chain clean.
+    // `client_b`'s mock pins `manager_state` to a single lifecycle, so a
+    // panic elsewhere would leave an unmet `Stopped` expectation. The
+    // guard keeps the diagnostic chain clean.
     let shutdown_guard = TwoClientShutdownGuard {
         a: &client_a,
         b: &client_b,
@@ -1183,10 +1133,7 @@ async fn restart_manager_recovers_slot_respawns_sessions_and_allows_fresh_start_
     client_b.telepathy.start_session(&contact_a).await;
     wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
 
-    // End any in-flight dial before restart. `restart_manager` rejects
-    // a restart while the slot is non-idle; the public path requires
-    // `Idle`. We exercise the same production flow a user would hit
-    // when a pending dial is cancelled before the restart request.
+    // `restart_manager` rejects a non-idle slot; drain any in-flight dial first.
     client_a
         .telepathy
         .start_call(&contact_b)
@@ -1195,8 +1142,6 @@ async fn restart_manager_recovers_slot_respawns_sessions_and_allows_fresh_start_
     client_a.telepathy.end_call().await;
     wait_for_slot_idle(&client_a, &peer_id_b.to_string()).await;
 
-    // Capture the pre-restart session id; the helper asserts the
-    // post-restart id differs, proving the session was re-spawned.
     let pre_restart_session_id = client_a
         .telepathy
         .inner
@@ -1207,10 +1152,8 @@ async fn restart_manager_recovers_slot_respawns_sessions_and_allows_fresh_start_
         .map(|s| s.id())
         .expect("client_a should have a session for contact_b before restart");
 
-    // Wrap the restart call in a timeout: a regression that hangs
-    // waiting for the new `manager_active` notification would otherwise
-    // stall the test. The public path awaits the new manager
-    // notification before returning.
+    // Timeout: a regression that hangs waiting for the new `manager_active`
+    // notification would stall the test.
     tokio::time::timeout(
         Duration::from_secs(15),
         client_a.telepathy.restart_manager(),
@@ -1236,11 +1179,9 @@ async fn restart_manager_recovers_slot_respawns_sessions_and_allows_fresh_start_
         "no peer should own the slot after restart_manager; got {after_restart:?}"
     );
 
-    // Wait for the *full* post-restart session pair to stabilize, not
-    // just the dialing side. `restart_manager` re-spawns sessions
-    // asynchronously after the new manager activates, and `client_b`'s
-    // pre-restart transport may still be tearing down — a one-sided
-    // wait resolved while the remote was mid-replace.
+    // Wait for the full post-restart session pair to stabilize; `restart_manager`
+    // re-spawns asynchronously after the new manager activates and `client_b`'s
+    // pre-restart transport may still be tearing down.
     wait_for_stable_session_pair(
         &client_a,
         &peer_id_b,
@@ -1250,78 +1191,41 @@ async fn restart_manager_recovers_slot_respawns_sessions_and_allows_fresh_start_
     )
     .await;
 
-    // The new session must succeed and the slot must end up owned by
-    // the contact we asked to call. If the slot were stuck in a stale
-    // non-idle state from a pre-restart leak, `start_call` would return
-    // `CallAlreadyActive` and the test would fail at the `expect`
-    // below; if ownership leaked, the `direct_peer` check would catch
-    // it.
     client_a
         .telepathy
         .start_call(&contact_b)
         .await
         .expect("start_call after restart_manager should succeed");
 
-    // State-driven wait instead of a fixed sleep: the post-restart
-    // session task must observe the `start_call` notify and acquire
-    // the slot. Wait until the slot is owned by the right peer and in
-    // a non-idle call state, then assert it remains stable.
     wait_for_slot_owned_by(&client_a, &peer_id_b).await;
 
-    // End the call cleanly so the slot reaches `Idle` before shutdown.
     client_a.telepathy.end_call().await;
     wait_for_slot_idle(&client_a, &peer_id_b.to_string()).await;
 
-    // Disarm the guard before dropping it so the guard's `Drop` is a
-    // no-op and only the explicit `shutdown` calls below drive the
-    // shutdown. Without the disarm, `drop(shutdown_guard)` would call
-    // `shutdown` on each client, and the explicit `shutdown` calls
-    // would be a redundant second shutdown on each client — exactly
-    // the double-shutdown the `dropped` flag exists to prevent.
     shutdown_guard.disarm();
     drop(shutdown_guard);
     client_a.telepathy.shutdown().await;
     client_b.telepathy.shutdown().await;
 }
 
-// The previous `stale_session_receives_hello_sends_immediate_busy_response`
-// test was removed: it asserted that a stale session would reply with
-// `Busy` on the wire so the dialer doesn't have to wait through
-// `HELLO_TIMEOUT`. Production no longer sends `Busy` from a stale session
-// (it would be a lie: a fresh replacement session may be ready to serve
-// the dialer on its own connection). See `stale_session_with_fresh_replacement_*`
-// and `stale_session_with_no_replacement_*` for the new behaviour.
+// The previous `stale_session_receives_hello_sends_immediate_busy_response` test
+// was removed: production no longer sends `Busy` from a stale session (a fresh
+// replacement may be ready to serve the dialer). See the
+// `stale_session_with_fresh_replacement_*` and `stale_session_with_no_replacement_*`
+// tests for the new behaviour.
 
 /// Test A — stale session with a fresh replacement session in the map.
 ///
-/// Mirrors the two-client setup of the removed test, but instead of
-/// draining Bob's map (which exercises the "no fresh session" branch),
-/// it inserts a fresh `SessionState` for `peer_id_a` so Bob's
-/// `session_states` map holds both the original (now-stale) session and
-/// a new entry with a different id. The listener transport for the
-/// original session is still live, so a `Hello` from Alice arrives on
-/// Bob's old connection and is handled by the stale session task.
+/// The stale listener must NOT send `Busy` (the fresh replacement serves the dialer
+/// on its own connection) and must NOT close its connection (the dialer's `Hello`
+/// is on the stale connection; a premature close surfaces as a transport error).
 ///
-/// Production contract: the stale session must NOT send `Busy` (a lie:
-/// from the caller's perspective the peer is reachable via the fresh
-/// session on its own connection). The stale session also must NOT
-/// close its connection — the fresh session "owns/closes the relevant
-/// connection" only in the sense that it serves the dialer on its own
-/// connection; closing the stale connection here would be wrong because
-/// the dialer's `Hello` is on the stale connection and a premature
-/// close would surface as a transport error to Alice.
+/// Asserted invariants:
+///   1. Alice does not observe an `is busy` `CallEnded`.
+///   2. Bob's current map entry for Alice is the fresh id we inserted.
 ///
-/// Note on Alice's own session: the test only mutates Bob's map to
-/// fake the stale/fresh pair. Alice's live session is an
-/// uncontrolled, collision-susceptible artifact (real two-sided
-/// dialling against the shared relay can legitimately swap or tear
-/// down her session), so this test deliberately does NOT assert on
-/// Alice's session id. The asserted invariants are:
-///   1. Alice does not observe an `is busy` `CallEnded`
-///      (no `Busy` from the stale session), and
-///   2. Bob's current map entry for Alice is the fresh id we inserted
-///      (the stale session's "fresh session exists" branch did not
-///      evict it).
+/// Alice's own session id is intentionally not asserted: real two-sided dialling
+/// against the shared relay can legitimately swap or tear down her session.
 #[tokio::test(flavor = "multi_thread")]
 async fn stale_session_with_fresh_replacement_does_not_send_busy() {
     init_test_tracing();
@@ -1370,8 +1274,6 @@ async fn stale_session_with_fresh_replacement_does_not_send_busy() {
     )
     .await;
 
-    // Guard shutdown on panic so the mock callbacks' pinned `Stopped`
-    // expectations are satisfied before any assertion panic.
     let shutdown_guard = TwoClientShutdownGuard {
         a: &client_a,
         b: &client_b,
@@ -1382,15 +1284,11 @@ async fn stale_session_with_fresh_replacement_does_not_send_busy() {
     client_b.telepathy.start_session(&contact_a).await;
     wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
 
-    // Warm the transport before mutating Bob's map and dialing, so the
-    // post-dial timing measures the stale-`Hello` round trip, not
-    // first-packet QUIC/relay warmup.
+    // Warm the transport before mutating Bob's map so post-dial timing
+    // measures the stale-Hello round trip, not first-packet warmup.
     wait_for_active_transport(&client_a, "client_a").await;
     wait_for_active_transport(&client_b, "client_b").await;
 
-    // Capture Bob's live session id. This session task is still running
-    // on its connection; we will turn it into a "stale" session by
-    // inserting a different `SessionState` in its slot.
     let stale_b_id = client_b
         .telepathy
         .inner
@@ -1401,22 +1299,14 @@ async fn stale_session_with_fresh_replacement_does_not_send_busy() {
         .map(|s| s.id())
         .expect("client_b should have a session for contact_a");
 
-    // Simulate a `session_collision_kept_new` state without actually
-    // dialing a new connection: replace Bob's current map entry for
-    // `peer_id_a` with a fresh `SessionState` (different id) that has
-    // no live task. The original session task (`stale_b_id`) is now
-    // stale — its `stop_session` is NOT cancelled, so it is still
-    // listening for messages on its existing connection. The fresh
-    // entry exists in the map, so the production code's
-    // "fresh session exists" branch should kick in and the stale
-    // session should NOT close its connection.
+    // Replace Bob's map entry with a fresh `SessionState` (no live task).
+    // The original session task is stale — still listening on its connection.
     {
         let mut states = client_b.telepathy.inner.session_states.write().await;
         let fresh: Arc<SessionState> = Arc::new(SessionState::new_for_test());
         states.insert(peer_id_a, fresh);
     }
 
-    // Sanity: the fresh entry id differs from the stale id.
     let fresh_id = client_b
         .telepathy
         .inner
@@ -1432,12 +1322,9 @@ async fn stale_session_with_fresh_replacement_does_not_send_busy() {
          fresh={fresh_id:?}, stale={stale_b_id:?}"
     );
 
-    // Drive an outgoing dial through the public `start_call` API. The
-    // slot moves Idle -> PendingOutgoing; Alice's session task sends
-    // `Hello` to Bob's existing (stale) connection. The stale session
-    // task receives the `Hello`, runs the `is_session_still_current`
-    // guard, sees the fresh entry has a different id, and (with the
-    // fix) does NOT send `Busy` and does NOT close the connection.
+    // Alice's session sends `Hello` to Bob's stale connection. The stale
+    // session task sees the fresh map entry has a different id and must
+    // NOT send `Busy` and must NOT close the connection.
     let dial_started_at = std::time::Instant::now();
     client_a
         .telepathy
@@ -1445,16 +1332,9 @@ async fn stale_session_with_fresh_replacement_does_not_send_busy() {
         .await
         .expect("alice should start the outgoing call");
 
-    // The stale session must NOT emit a `Busy`. The wire-level outcome
-    // we care about is "no `is busy` CallEnded fires", which we can
-    // observe by snapshotting Alice's call-state log. The 8s budget
-    // matches the old test (well below the 10s `HELLO_TIMEOUT`) and
-    // gives the relay/thread contention headroom. The post-dial
-    // `did not respond` outcome is expected here because Alice's
-    // `Hello` went to the stale connection, which is now silent —
-    // the assertion is that we do NOT observe `is busy`, NOT that
-    // we observe `did not respond` within 8s (the latter would only
-    // fire after `HELLO_TIMEOUT`, which is 10s).
+    // 8s budget (well below the 10s `HELLO_TIMEOUT`) absorbs relay-contention
+    // jitter. We assert NO `is busy`; the post-dial `did not respond` outcome
+    // would only fire after `HELLO_TIMEOUT` and is outside the window.
     let busy_message = format!("{} is busy", contact_b.nickname());
     let observe_window = Duration::from_secs(8);
     let observe_deadline = tokio::time::Instant::now() + observe_window;
@@ -1472,12 +1352,6 @@ async fn stale_session_with_fresh_replacement_does_not_send_busy() {
         sleep(Duration::from_millis(100)).await;
     }
 
-    // Capture the post-dial state BEFORE shutdown. We need to know:
-    // - the fresh entry is still in Bob's map (the production code's
-    //   "fresh session exists" branch did not evict it).
-    // Note: we do NOT capture Alice's session id — Alice's live session
-    // is subject to real collision/transport resolution and is not
-    // controlled by this test (see the doc comment above).
     let current_b_id_after = client_b
         .telepathy
         .inner
@@ -1491,17 +1365,13 @@ async fn stale_session_with_fresh_replacement_does_not_send_busy() {
         |state| matches!(state, CallState::CallEnded(reason, true) if reason == &busy_message),
     );
 
-    // Disarm the shutdown guard and shut both clients down BEFORE the
-    // assertion phase. See the removed test for the rationale: this
-    // keeps the `ManagerLifecycle::Single` mocks' `Stopped`
-    // expectations satisfied even if a downstream assertion panics.
+    // Disarm guard, shut down before assertions to satisfy mock
+    // `Stopped` lifecycle even on downstream panic.
     shutdown_guard.disarm();
     drop(shutdown_guard);
     client_a.telepathy.shutdown().await;
     client_b.telepathy.shutdown().await;
 
-    // Primary assertion: Alice did NOT observe `is busy`. The stale
-    // session must not lie about the peer being busy.
     assert!(
         !observed_busy,
         "Alice must not observe an 'is busy' CallEnded; \
@@ -1509,10 +1379,6 @@ async fn stale_session_with_fresh_replacement_does_not_send_busy() {
          states = {states_a:?}"
     );
 
-    // The fresh entry should still be in Bob's map — the stale
-    // session's "fresh session exists" branch does not evict it. The
-    // live replacement's id is the fresh id we inserted, NOT the
-    // captured stale id.
     assert_eq!(
         current_b_id_after,
         Some(fresh_id),
@@ -1528,34 +1394,17 @@ async fn stale_session_with_fresh_replacement_does_not_send_busy() {
 
 /// Test B — stale session with no replacement session in the map.
 ///
-/// Mirrors the removed test's setup, including the drain. Bob's current
-/// map entry for `peer_id_a` is removed, leaving the stale session task
-/// live on its connection with no replacement session.
+/// The stale listener must NOT send `Busy` and must close its own connection so
+/// Alice's read returns a transport error promptly (well before the 10s
+/// `HELLO_TIMEOUT`). The dialer sees NO `CallEnded` (slot is `PendingOutgoing`,
+/// not `ActiveDirect`).
 ///
-/// Production contract: the stale session must NOT send `Busy`. With
-/// no fresh session in the map, nothing else will close the stale
-/// connection, so the stale session must close its own connection so
-/// Alice's read returns a transport error promptly (well before the
-/// 10s `HELLO_TIMEOUT`). The dialer therefore sees NO `CallEnded`
-/// (the slot is `PendingOutgoing`, not `ActiveDirect`, so the
-/// `session_error_while_call_active` path does not emit a
-/// `CallEnded`), and crucially does NOT observe the
-/// `"{nickname} did not respond to the call"` `HELLO_TIMEOUT` branch.
+/// Asserted invariants:
+///   1. Alice does not observe an `is busy` `CallEnded` within 8s.
+///   2. Alice does not observe a `did not respond` `CallEnded` within 8s.
+///   3. Bob's current map entry for Alice is `None`.
 ///
-/// Note on Alice's own session: the test only mutates Bob's map (via
-/// the drain). Alice's live session is an uncontrolled,
-/// collision-susceptible artifact (real two-sided dialling against the
-/// shared relay can legitimately swap or tear down her session), so
-/// this test deliberately does NOT assert on Alice's session id. The
-/// asserted invariants are:
-///   1. Alice does not observe an `is busy` `CallEnded`
-///      (no `Busy` from the stale session),
-///   2. Alice does not observe a `did not respond` `CallEnded` within
-///      8s (the stale session closed the connection well before the
-///      10s `HELLO_TIMEOUT`), and
-///   3. Bob's current map entry for Alice is `None` (the drain took
-///      effect and the stale session's "no fresh session" branch did
-///      not re-insert it).
+/// Alice's own session id is intentionally not asserted (see Test A).
 #[tokio::test(flavor = "multi_thread")]
 async fn stale_session_with_no_replacement_closes_connection_promptly() {
     init_test_tracing();
@@ -1617,31 +1466,21 @@ async fn stale_session_with_no_replacement_closes_connection_promptly() {
     wait_for_active_transport(&client_a, "client_a").await;
     wait_for_active_transport(&client_b, "client_b").await;
 
-    // Drain Bob's current session entry. The live session task is
-    // still running on its connection with no fresh session in the
-    // map; `is_session_still_current` will return `false` for it, so
-    // it is now "stale". The production code's "no fresh session"
-    // branch should close the stale connection.
-    //
-    // The test deliberately does NOT call `stop_session.cancel()` on
-    // Bob's session here — the map-check branch in
-    // `is_session_still_current` is exercised in isolation, without
-    // the concurrent `SessionStopped` path that cancellation would
-    // also drive. Conflating the two would hide a regression that
-    // affected only the map-check branch.
+    // Drain Bob's current session entry. The live session task remains running
+    // on its connection with no fresh session in the map; the "no fresh session"
+    // branch should close the stale connection. We do NOT call
+    // `stop_session.cancel()` so the map-check branch is exercised in
+    // isolation, without the concurrent `SessionStopped` path.
     {
         let mut states = client_b.telepathy.inner.session_states.write().await;
         states.remove(&peer_id_a);
     }
 
-    // Drive an outgoing dial through the public `start_call` API. The
-    // slot moves Idle -> PendingOutgoing; Alice's session task sends
-    // `Hello` to Bob's existing (stale) connection. The stale session
-    // task receives the `Hello`, runs the `is_session_still_current`
-    // guard, sees no entry, and (with the fix) closes the connection
-    // instead of sending `Busy`. Alice's read returns a transport
-    // error, the session loop breaks, and no `CallEnded` is fired
-    // (the slot is `PendingOutgoing`, not `ActiveDirect`).
+    // Alice's session sends `Hello` to Bob's stale connection. The stale
+    // session task sees no entry and must close the connection instead of
+    // sending `Busy`. Alice's read returns a transport error and the session
+    // loop breaks — no `CallEnded` is fired (slot is `PendingOutgoing`,
+    // not `ActiveDirect`).
     let dial_started_at = std::time::Instant::now();
     client_a
         .telepathy
@@ -1649,15 +1488,8 @@ async fn stale_session_with_no_replacement_closes_connection_promptly() {
         .await
         .expect("alice should start the outgoing call");
 
-    // Within the 8s window (well below the 10s `HELLO_TIMEOUT`),
-    // Alice must NOT observe:
-    // - `CallEnded("is busy", true)` — the stale session must not lie
-    //   about the peer being busy.
-    // - `CallEnded("did not respond to the call", true)` — the
-    //   connection closed promptly, so the `HELLO_TIMEOUT` branch
-    //   must not fire. The `HELLO_TIMEOUT` arm of
-    //   `negotiate_outgoing_call` would emit this CallEnded at 10s;
-    //   we poll for 8s to confirm the close happens first.
+    // Within the 8s window (well below the 10s `HELLO_TIMEOUT`), Alice must
+    // NOT observe `is busy` or `did not respond` CallEnded emissions.
     let busy_message = format!("{} is busy", contact_b.nickname());
     let did_not_respond_message = format!("{} did not respond to the call", contact_b.nickname());
     let observe_window = Duration::from_secs(8);
@@ -1687,10 +1519,6 @@ async fn stale_session_with_no_replacement_closes_connection_promptly() {
         sleep(Duration::from_millis(100)).await;
     }
 
-    // Capture the post-drain state for the secondary assertions.
-    // Note: we do NOT capture Alice's session id — Alice's live session
-    // is subject to real collision/transport resolution and is not
-    // controlled by this test (see the doc comment above).
     let current_b_id_after = client_b
         .telepathy
         .inner
@@ -1710,19 +1538,11 @@ async fn stale_session_with_no_replacement_closes_connection_promptly() {
         )
     });
 
-    // Disarm the guard and shut down before asserting (see the
-    // removed test for the rationale).
     shutdown_guard.disarm();
     drop(shutdown_guard);
     client_a.telepathy.shutdown().await;
     client_b.telepathy.shutdown().await;
 
-    // Defensive secondary assertions: lock in the outcomes we already
-    // guarded during the observe window. The bug being fixed is
-    // exactly that the stale session either (a) lied with `Busy`, or
-    // (b) said nothing at all and let the dialer fall through to the
-    // `HELLO_TIMEOUT` "did not respond" branch. With the fix, neither
-    // of those happens.
     assert!(
         !observed_busy,
         "Alice must not observe an 'is busy' CallEnded; \
@@ -1737,9 +1557,6 @@ async fn stale_session_with_no_replacement_closes_connection_promptly() {
          states = {states_a:?}"
     );
 
-    // Confirm the drain actually took effect: the live listener
-    // session that received the `Hello` is no longer the current map
-    // entry for `peer_id_a` on Bob.
     assert!(
         current_b_id_after.is_none(),
         "drain should have removed Bob's session entry; after={current_b_id_after:?}"
@@ -1938,14 +1755,10 @@ async fn audio_test_output_stream_error_propagates_and_clears_state() {
     client.telepathy.shutdown().await;
 }
 
-/// Regression test: a synchronously-failing `setup_output` (e.g. another
-/// process holds the exclusive output device) must surface a single
-/// `CallState::CallEnded` to the dialer with the user-facing
-/// `CALL_END_AUDIO_DEVICE_FAILURE` copy and `remote == false`, so the
-/// frontend can exit the connecting state. Before the fix, the slot
-/// was released inside `call_handshake` before the error reached
-/// `session_outer`, so the `CallEnded` guard was false and the
-/// frontend stayed in `CallLifecycle.connecting` forever.
+/// Synchronously-failing `setup_output` (e.g. another process holds the exclusive
+/// output device) must surface a single `CallState::CallEnded` to the dialer with
+/// `CALL_END_AUDIO_DEVICE_FAILURE` copy and `remote == false`, so the frontend can
+/// exit the connecting state.
 #[tokio::test(flavor = "multi_thread")]
 async fn setup_output_synchronous_failure_emits_call_ended() {
     init_test_tracing();
@@ -2043,10 +1856,10 @@ async fn setup_output_synchronous_failure_emits_call_ended() {
     client_b.telepathy.shutdown().await;
 }
 
-/// Happy-path contrast for [`setup_output_synchronous_failure_emits_call_ended`]:
+/// Happy-path contrast for `setup_output_synchronous_failure_emits_call_ended`:
 /// when the dialer's output device opens successfully, the same host still
-/// produces a `CallState::Connected`. Guards against an over-eager fix that
-/// would short-circuit `call_handshake` before the call becomes active.
+/// produces `Connected`. Guards against an over-eager fix short-circuiting
+/// `call_handshake`.
 #[tokio::test(flavor = "multi_thread")]
 async fn setup_output_synchronous_flag_disabled_still_connects() {
     init_test_tracing();
@@ -2141,6 +1954,16 @@ async fn room_input_stream_error_surfaces_local_message() {
 #[tokio::test(flavor = "multi_thread")]
 async fn room_output_stream_error_surfaces_local_message() {
     room_stream_error_surfaces_local_message(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn room_input_stream_error_sends_audio_error_goodbye_on_control_stream() {
+    room_stream_error_sends_audio_error_goodbye_on_control_stream(true).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn room_output_stream_error_sends_audio_error_goodbye_on_control_stream() {
+    room_stream_error_sends_audio_error_goodbye_on_control_stream(false).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -2706,15 +2529,10 @@ async fn room_reconnect_does_not_emit_stale_room_leave() {
     );
 }
 
-/// Happy-path regression for the room path.
-///
-/// Two mutual contacts both `join_room`. Asserts each side emits
-/// `CallState::Connected` and exactly one `RoomJoin` for the peer, and
-/// that the call slot is `RoomCall` on both clients. This is the
-/// baseline test for the room-generation token: the new `RoomState` is
-/// installed once, no `end_call` -> `join_room` cycle happens, and the
-/// `room_owner`/`room_generation` invariants the controller enforces at
-/// teardown must hold.
+/// Happy-path baseline for the room-generation token: both clients `join_room`,
+/// each side emits `Connected` and exactly one `RoomJoin` for the peer, slot is
+/// `RoomCall` on both, and `RoomState.generation` is bumped. Locks in the
+/// `room_owner`/`room_generation` invariants the controller enforces at teardown.
 #[tokio::test(flavor = "multi_thread")]
 async fn two_client_room_join_connects_and_reports_join() {
     init_test_tracing();
@@ -2780,15 +2598,11 @@ async fn two_client_room_join_connects_and_reports_join() {
         .await
         .expect("client b should join room");
 
-    // Both clients move the slot into `RoomCall` and install a `RoomState`.
     wait_for_slot_room_call(&client_a, "client_a_pre_join").await;
     wait_for_slot_room_call(&client_b, "client_b_pre_join").await;
 
-    // Capture the room-generation token captured by the controller so the
-    // teardown's `release_if_match` can be checked for the right owner.
-    // `RoomCall` does not carry a generation snapshot directly, but the
-    // `RoomState` does; reading it here is a white-box check that
-    // `join_room` bumped the counter and stored a matching value.
+    // White-box check that `join_room` bumped the generation counter and stored
+    // a matching value in `RoomState`.
     let generation_a = client_a
         .telepathy
         .inner
@@ -2846,14 +2660,10 @@ async fn two_client_room_join_connects_and_reports_join() {
     client_b.telepathy.shutdown().await;
 }
 
-/// Regression test for the `end_call` -> `join_room` cycle (R1).
-///
-/// Joins a room on both clients, waits for `RoomJoin`, calls `end_call()`
-/// on both, then re-joins. The post-rejoin must produce a *second*
-/// `RoomJoin` (not be lost to a stale `room_state` carry-over) and must
-/// not emit a spurious `RoomLeave` after the second `RoomJoin` — that
-/// was the exact failure mode in the system-test artifact
-/// `test_room_end_releases_call_slot_for_rejoin`.
+/// Regression for the `end_call` -> `join_room` cycle (R1): the post-rejoin must
+/// produce a *second* `RoomJoin` (not be lost to stale `room_state` carry-over)
+/// and must not emit a spurious `RoomLeave` after it — the failure mode in the
+/// system-test artifact `test_room_end_releases_call_slot_for_rejoin`.
 #[tokio::test(flavor = "multi_thread")]
 async fn room_end_releases_slot_and_allows_rejoin() {
     init_test_tracing();
@@ -2904,6 +2714,14 @@ async fn room_end_releases_slot_and_allows_rejoin() {
     )
     .await;
 
+    // `client_a` and `client_b` mock callbacks pin a single lifecycle; the guard
+    // keeps the diagnostic chain clean if a downstream assertion panics.
+    let shutdown_guard = TwoClientShutdownGuard {
+        a: &client_a,
+        b: &client_b,
+        dropped: AtomicBool::new(false),
+    };
+
     client_a.telepathy.start_session(&contact_b).await;
     client_b.telepathy.start_session(&contact_a).await;
     wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
@@ -2934,10 +2752,33 @@ async fn room_end_releases_slot_and_allows_rejoin() {
         .await
         .expect("client_b should have RoomState after first join");
 
-    // Tear the room down via the public `end_call` API. `wait_for_slot_idle`
-    // is the state-driven precondition for the rejoin: the controller's
-    // teardown must have cleared the slot and the `RoomState` so a fresh
-    // `join_room` can re-acquire both atomically.
+    // Force the stale-permit race: in production an incoming room `Hello`
+    // can win `session_inner`'s `select!` while a queued room-start
+    // `start_call.notify_one()` stays latched. Without `room_handshake`'s
+    // terminal cleanup the permit survives into the next `session_inner`
+    // iteration and the session task treats it as a fresh direct-call
+    // intent, flipping the slot to `PendingOutgoing`/`ActiveDirect`.
+    let a_session_for_b = client_a
+        .telepathy
+        .inner
+        .session_states
+        .read()
+        .await
+        .get(&contact_b.get_peer_id())
+        .cloned()
+        .expect("client_a should have a session for contact_b while in the room");
+    a_session_for_b.start_call.notify_one();
+    let b_session_for_a = client_b
+        .telepathy
+        .inner
+        .session_states
+        .read()
+        .await
+        .get(&contact_a.get_peer_id())
+        .cloned()
+        .expect("client_b should have a session for contact_a while in the room");
+    b_session_for_a.start_call.notify_one();
+
     client_a.telepathy.end_call().await;
     client_b.telepathy.end_call().await;
     wait_for_slot_idle(&client_a, &peer_a).await;
@@ -2963,10 +2804,24 @@ async fn room_end_releases_slot_and_allows_rejoin() {
         "client_b room_state should be cleared after end_call; a stale controller would still be holding the entry"
     );
 
-    // Re-join. The new room must have a strictly greater generation
-    // (counter-bumped in `join_room`) and a fresh `RoomState` must be
-    // installed. Asserting both captures the R1 fix: a stale controller's
-    // late teardown must not clobber the new room.
+    // Stability window: with the seeded permit, `room_handshake` must discard
+    // it before returning control to `session_inner`, otherwise the slot
+    // flips to `PendingOutgoing`/`ActiveDirect` for the former room peer.
+    assert_slot_remains_outside_direct_call_states(
+        &client_a,
+        &contact_b.get_peer_id(),
+        "client_a",
+        Duration::from_secs(2),
+    )
+    .await;
+    assert_slot_remains_outside_direct_call_states(
+        &client_b,
+        &contact_a.get_peer_id(),
+        "client_b",
+        Duration::from_secs(2),
+    )
+    .await;
+
     client_a
         .telepathy
         .join_room(room_members.clone())
@@ -3000,9 +2855,8 @@ async fn room_end_releases_slot_and_allows_rejoin() {
         "re-join should bump the room generation; first={first_generation_b}, second={second_generation_b}"
     );
 
-    // Critical: the post-rejoin window must not produce a spurious
-    // `RoomLeave` after the second `RoomJoin`. This is the exact
-    // failure mode the system test artifacts reported.
+    // The post-rejoin window must not produce a spurious `RoomLeave` after
+    // the second `RoomJoin` — exact failure mode from the system-test artifacts.
     wait_for_no_extra_room_leave(&call_states_a, &peer_b, 0, Duration::from_secs(3)).await;
     wait_for_no_extra_room_leave(&call_states_b, &peer_a, 0, Duration::from_secs(3)).await;
 
@@ -3018,11 +2872,8 @@ async fn room_end_releases_slot_and_allows_rejoin() {
         0,
         "client b should not observe a RoomLeave for client a across the end_call -> join_room cycle; got states={states_b:?}"
     );
-    // The exact ordered sequence we are locking in: Join, Join (no Leave).
-    // The intermediate `end_call` -> `join_room` cycle is observed only
-    // as a stable slot state transition (we asserted `Idle` above), not
-    // as a wire `RoomLeave` event — the controller tears the room down
-    // locally without emitting a `RoomLeave` callback to the UI.
+    // Intermediate `end_call` -> `join_room` is a local slot transition (Idle
+    // asserted above), not a wire `RoomLeave` — locked in as `Join, Join`.
     assert_room_event_sequence(
         &states_a,
         &peer_b,
@@ -3034,58 +2885,28 @@ async fn room_end_releases_slot_and_allows_rejoin() {
         &[RoomEventKind::Join, RoomEventKind::Join],
     );
 
+    shutdown_guard.disarm();
     client_a.telepathy.shutdown().await;
     client_b.telepathy.shutdown().await;
 }
 
-/// Primary regression test for the failing system-test artifact
+/// Primary regression for the failing system-test artifact
 /// `test_room_peer_leave_and_rejoin` (R2/R5).
 ///
-/// Three clients in a room. One client `end_call()`s (leaves). The
-/// remaining two observe exactly one `RoomLeave(leaver)`. The leaver
-/// then `join_room`s again, and the remaining two observe a *second*
-/// `RoomJoin(leaver)` and — critically — no extra `RoomLeave` after it.
-/// The exact ordered sequence `[Join, Leave, Join]` for the leaver on
-/// each remaining client is what locks in the fix: a stale
-/// connection_id-keyed `Leave` after a rejoin would emit a
-/// `RoomLeave(leaver)` after the `RoomJoin(leaver)`, producing
-/// `[Join, Leave, Join, Leave]` and breaking the mesh.
+/// Three clients in a room. One leaves, the remaining two observe exactly one
+/// `RoomLeave(leaver)`. The leaver rejoins, the remaining two observe a second
+/// `RoomJoin(leaver)` and — critically — no extra `RoomLeave` after it. The exact
+/// ordered sequence `[Join, Leave, Join]` for the leaver on each remaining client
+/// locks in the fix: a stale `connection_id`-keyed `Leave` would emit
+/// `RoomLeave(leaver)` after `RoomJoin(leaver)`, producing `[Join, Leave, Join, Leave]`
+/// and breaking the mesh.
 ///
-/// **Slot-busy constraint and test shape:** the R2 race the system-test
-/// artifact described is a fast in-place `end_call` -> `join_room` on
-/// the *same* transport, where a stale `Leave` keyed by the previous
-/// `connection_id` races the new `Join` inside the same
-/// `room_controller` loop. The production guard against that race lives
-/// in `room_controller`'s `RoomMessage::Leave` arm: it matches
-/// `peer_connections[peer] == leave.connection_id` and only emits
-/// `RoomLeave` for the still-active connection, otherwise logging
-/// `room_leave_stale_connection` and dropping the stale `Leave`. We
-/// cannot exercise that in-place race in this integration test because
-/// a fast `end_call` -> `join_room` while the other two clients are
-/// still in `RoomCall` is blocked at the public API layer: the new
-/// `join_room` has to be sequenced after a transport teardown on the
-/// leaver so the receiving peers free the slot for the new
-/// `room_handshake`. So this test reproduces the same race shape in
-/// the closest way the integration harness allows: a real
-/// `stop_session`/`start_session` for the leaver's two sessions,
-/// which produces a fresh `connection_id` on both sides. The new
-/// `Join` on the fresh transport and the previously-emitted `Leave`
-/// from the old transport are now keyed by *different* connection
-/// ids on the receiving peers, which is exactly the condition the
-/// `room_leave_stale_connection` branch detects. The 3-second
-/// post-rejoin stability window + `room_leave_count` assertion is
-/// the concrete guard: if the controller ever regressed to emitting
-/// `RoomLeave` for a stale `connection_id`, the post-rejoin window
-/// would see a second `RoomLeave(C)` on A and B and the assertion
-/// would fail.
-///
-/// The disconnect/reconnect pattern is also already covered by the
-/// narrower 2-client `room_peer_disconnect_then_rejoin_emits_leave_then_join`
-/// and `room_reconnect_does_not_emit_stale_room_leave` tests. This
-/// test's added value over those is the 3-client mesh: the leaver
-/// has two peers, both of which must observe the exact
-/// `[Join, Leave, Join]` ordering, and the room-generation token
-/// must stay monotonic across the leave-and-rejoin cycle.
+/// The R2 in-place race (fast `end_call` -> `join_room` on the same transport) is
+/// blocked at the public API layer; this test reproduces the same race shape with a
+/// real `stop_session`/`start_session` for the leaver's two sessions, producing a
+/// fresh `connection_id` on both sides — exactly the condition the
+/// `room_leave_stale_connection` branch in `room_controller` detects. The 3-second
+/// post-rejoin window is the concrete guard.
 #[tokio::test(flavor = "multi_thread")]
 async fn room_peer_leave_and_rejoin_reestablishes_mesh() {
     init_test_tracing();
@@ -3110,34 +2931,13 @@ async fn room_peer_leave_and_rejoin_reestablishes_mesh() {
     let call_states_b = Arc::new(Mutex::new(Vec::new()));
     let call_states_c = Arc::new(Mutex::new(Vec::new()));
 
-    // Sorted three-member room, matching how production callers sort the
-    // member list before passing it to `join_room`.
+    // Sorted three-member room, matching how production callers sort the member list.
     let mut room_members = vec![peer_a.clone(), peer_b.clone(), peer_c.clone()];
     room_members.sort();
 
-    // `ManagerLifecycle::Single` is safe for all three clients here, even
-    // though C undergoes two `stop_session`/`start_session` cycles mid-test
-    // (one per contact, A and B). The mock's `manager_state` expectation
-    // counts the *manager* state machine events (`Starting`/`Active` on
-    // boot, `Stopped` on shutdown, `Failed` on session-manager error), not
-    // per-peer session lifecycle events. `stop_session` removes a
-    // `SessionState` from the `session_states` map and cancels the
-    // per-session token; `start_session` sends a public key to the
-    // session-manager channel to spawn a new `SessionState`. Neither
-    // path calls `callbacks.manager_state(...)` — the only call sites
-    // are `start_manager` (`Starting`/`Active`/`Failed`) and the
-    // `session_manager` loop's teardown (`Stopped`, only on
-    // `shutdown`/`restart_manager`). Each test client boots once and
-    // shuts down once, so the strict `Single` mock expectation of
-    // `2` (`Starting`+`Active`) + `1` (`Stopped`) holds. If a future
-    // refactor makes `stop_session`/`start_session` plumb through
-    // `manager_state` (e.g. a transient `Failed` on session-manager
-    // error), this test would trip the strict mock and would need to
-    // be switched to `ManagerLifecycle::Restartable` for all three
-    // clients — but the failure mode would be a mockall
-    // "called 0 time(s)" panic on `Stopped` or
-    // `times(2)`/`times(0)` mismatch on `Starting`/`Active`, both of
-    // which are easy to attribute.
+    // `ManagerLifecycle::Single` is safe here: `stop_session`/`start_session`
+    // don't plumb `manager_state` events, so the strict single-lifecycle mock
+    // holds (2 starting/active + 1 stopped per client).
     let client_a = build_client(
         relay_map,
         key_a,
@@ -3193,9 +2993,8 @@ async fn room_peer_leave_and_rejoin_reestablishes_mesh() {
     wait_for_sessions(&client_a, &contact_c, &client_c, &contact_a).await;
     wait_for_sessions(&client_b, &contact_c, &client_c, &contact_b).await;
 
-    // All three join the same room. The `join_room` API auto-accepts
-    // (no accept prompt for room calls), so `build_client` is sufficient
-    // and a single `ManagerLifecycle::Single` mock works.
+    // All three join the same room. `join_room` auto-accepts (no accept prompt for
+    // room calls), so `build_client` is sufficient and the single-lifecycle mock works.
     client_a
         .telepathy
         .join_room(room_members.clone())
@@ -3226,29 +3025,14 @@ async fn room_peer_leave_and_rejoin_reestablishes_mesh() {
     wait_for_no_extra_room_leave(&call_states_c, &peer_a, 0, Duration::from_secs(1)).await;
     wait_for_no_extra_room_leave(&call_states_c, &peer_b, 0, Duration::from_secs(1)).await;
 
-    // Client C leaves the room via `end_call`, then does a full
-    // `stop_session`/`start_session` for both A and B before
-    // `join_room` again. The `end_call` alone cannot be followed by an
-    // in-place `join_room` here because A and B are still in `RoomCall`
-    // for the existing room and the new `room_handshake` on either
-    // side would race the still-active slot. A transport teardown
-    // for the leaver's two peers is what clears the slot on the
-    // listening side and lets the new `room_controller` install a
-    // fresh `RoomState`. This is the same pattern as the existing
-    // `room_peer_disconnect_then_rejoin_emits_leave_then_join` test;
-    // see the test's docstring for why this is the closest the
-    // integration harness can get to the R2 in-place `end_call`
-    // ->`join_room` race.
+    // Client C leaves via `end_call`, then full `stop_session`/`start_session` for
+    // both A and B before re-joining. `end_call` alone cannot be followed by an
+    // in-place `join_room` because A and B are still in `RoomCall` and the new
+    // `room_handshake` would race the still-active slot.
     client_c.telepathy.end_call().await;
     wait_for_slot_idle(&client_c, &peer_c).await;
     wait_for_room_leave_count(&call_states_a, &peer_c, 1).await;
     wait_for_room_leave_count(&call_states_b, &peer_c, 1).await;
-    // Stability window: no extra `RoomLeave(C)` should arrive from a
-    // late `Leave` message produced by the previous transport. The
-    // 1-second window is sized to absorb relay-contention jitter
-    // (single in-flight `Leave` only) without masking a regression
-    // where the old transport's `Leave` arrives after the new
-    // transport's `Join` (the R2 failure mode).
     wait_for_no_extra_room_leave(&call_states_a, &peer_c, 1, Duration::from_secs(1)).await;
     wait_for_no_extra_room_leave(&call_states_b, &peer_c, 1, Duration::from_secs(1)).await;
 
@@ -3265,19 +3049,9 @@ async fn room_peer_leave_and_rejoin_reestablishes_mesh() {
         "client b should observe exactly one RoomLeave(C) after C's end_call; got states={after_leave_b:?}"
     );
 
-    // Re-join: tear down C's sessions to A and B, re-establish them
-    // (a fresh `connection_id` on both sides), then `join_room`. The
-    // remaining two clients must observe a *second* `RoomJoin(C)` and
-    // — critically — no extra `RoomLeave(C)` after it. The fresh
-    // transport means the new `Join` is keyed by a different
-    // `connection_id` than the old `Leave` from `end_call`, which is
-    // the exact condition the `room_leave_stale_connection` branch in
-    // `room_controller` is meant to detect (see `internal/core.rs`).
-    // The 3-second post-rejoin window is the concrete guard: a
-    // regression where the controller emitted `RoomLeave` for a
-    // stale `connection_id` would surface as a second
-    // `RoomLeave(C)` on A or B inside that window and trip the
-    // assertion below.
+    // Fresh `connection_id` on both sides: the new `Join` is keyed by a different
+    // `connection_id` than the old `Leave`, which is the condition
+    // `room_leave_stale_connection` detects.
     client_c.is_active.store(false, Relaxed);
     client_c.telepathy.stop_session(&contact_a).await;
     client_c.telepathy.stop_session(&contact_b).await;
@@ -3292,15 +3066,8 @@ async fn room_peer_leave_and_rejoin_reestablishes_mesh() {
         .expect("client c should re-join room");
     wait_for_room_join_count(&call_states_a, &peer_c, 2).await;
     wait_for_room_join_count(&call_states_b, &peer_c, 2).await;
-    // Stability window for the rejoin. A 3-second window is the
-    // integration-test analog of the post-rejoin wait used in
-    // `room_peer_disconnect_then_rejoin_emits_leave_then_join`; it
-    // catches a stale `Leave` from the previous transport that races
-    // the new `Join` handler. The window is large enough to absorb
-    // relay-contention jitter on a single in-flight stale `Leave`,
-    // and small enough that a regression producing multiple
-    // `RoomLeave` events after the second `Join` cannot hide inside
-    // it.
+    // 3-second window catches a stale `Leave` from the previous transport that
+    // races the new `Join` handler.
     wait_for_no_extra_room_leave(&call_states_a, &peer_c, 1, Duration::from_secs(3)).await;
     wait_for_no_extra_room_leave(&call_states_b, &peer_c, 1, Duration::from_secs(3)).await;
 
@@ -3316,10 +3083,6 @@ async fn room_peer_leave_and_rejoin_reestablishes_mesh() {
         1,
         "client b should observe exactly one RoomLeave(C) across leave+rejoin; got states={states_b:?}"
     );
-    // The exact ordered sequence we are locking in for the leaver. The
-    // exact bug being guarded against would produce a fourth
-    // `RoomLeave(C)` after the second `RoomJoin(C)` (or a spurious
-    // interleaving), failing this assertion.
     assert_room_event_sequence(
         &states_a,
         &peer_c,
@@ -3344,14 +3107,9 @@ async fn room_peer_leave_and_rejoin_reestablishes_mesh() {
     client_c.telepathy.shutdown().await;
 }
 
-/// Slot-contention regression for the room path.
-///
-/// A single client already in a room has the call slot acquired as
-/// `RoomCall`; a second `join_room` must return `Err(CallAlreadyActive)`.
-/// After `end_call()` and `wait_for_slot_idle`, a fresh `join_room`
-/// succeeds and re-acquires `RoomCall`. This guards the
-/// `try_acquire(RoomCall)` contention check and the clean release path
-/// that releases the slot on `end_call`/`shutdown` teardown.
+/// Slot-contention regression: a second `join_room` while the slot is `RoomCall`
+/// must return `Err(CallAlreadyActive)`; after `end_call` a fresh `join_room`
+/// re-acquires `RoomCall` and bumps the generation.
 #[tokio::test(flavor = "multi_thread")]
 async fn room_duplicate_join_is_busy_then_idempotent() {
     init_test_tracing();
@@ -3392,27 +3150,15 @@ async fn room_duplicate_join_is_busy_then_idempotent() {
         .expect("first join_room should succeed");
     wait_for_slot_room_call(&client_a, "after first join").await;
 
-    // Second `join_room` while the slot is still `RoomCall` must fail
-    // with the production `CallAlreadyActive` error. We do not assert
-    // on the exact `ErrorKind` here (the public error type wraps it),
-    // only that the call returns `Err` — a regression where the second
-    // `join_room` silently succeeded would clobber the previous room's
-    // `RoomState` and break the controller.
     let second = client_a.telepathy.join_room(room_members.clone()).await;
     assert!(
         second.is_err(),
         "second join_room while the slot is RoomCall must return Err; got {second:?}"
     );
 
-    // `end_call` releases the slot. The state-driven `wait_for_slot_idle`
-    // is the precondition for the next `join_room` to succeed.
     client_a.telepathy.end_call().await;
     wait_for_slot_idle(&client_a, &peer_a).await;
 
-    // Re-join after the slot is released. The new room must install a
-    // fresh `RoomState` and re-acquire `RoomCall`. The generation must
-    // be strictly greater than the first room's (counter-bumped in
-    // `join_room`).
     let first_generation = 1u64; // the first room's generation was 1
     client_a
         .telepathy
@@ -3434,9 +3180,9 @@ async fn room_duplicate_join_is_busy_then_idempotent() {
     client_a.telepathy.shutdown().await;
 }
 
-/// Regression test: synchronous input setup failure must remove the
-/// `RoomState` installed by public `join_room` and release its `RoomCall`
-/// slot before any room processing starts.
+/// Synchronous input setup failure must remove the `RoomState` installed by
+/// public `join_room` and release its `RoomCall` slot before any room processing
+/// starts.
 #[tokio::test(flavor = "multi_thread")]
 async fn room_input_setup_synchronous_failure_clears_state_and_releases_slot() {
     init_test_tracing();
@@ -3503,8 +3249,8 @@ async fn room_input_setup_synchronous_failure_clears_state_and_releases_slot() {
     client_a.telepathy.shutdown().await;
 }
 
-/// Regression test: synchronous output setup failure after room peers join
-/// must remove the installed `RoomState` and release its `RoomCall` slot.
+/// Synchronous output setup failure after room peers join must remove the
+/// installed `RoomState` and release its `RoomCall` slot.
 #[tokio::test(flavor = "multi_thread")]
 async fn room_output_setup_synchronous_failure_clears_state_and_releases_slot() {
     init_test_tracing();
@@ -3696,6 +3442,7 @@ async fn room_stream_error_surfaces_local_message(trigger_input: bool) {
     )
     .expect("contact b invalid");
 
+    let peer_a = contact_a.get_peer_id().to_string();
     let peer_b = contact_b.get_peer_id().to_string();
     let call_states_a = Arc::new(Mutex::new(Vec::new()));
     let call_states_b = Arc::new(Mutex::new(Vec::new()));
@@ -3723,13 +3470,19 @@ async fn room_stream_error_surfaces_local_message(trigger_input: bool) {
             MockAudioOutput,
             DEFAULT_SAMPLE_RATE,
         ),
-        call_states_b,
+        call_states_b.clone(),
     )
     .await;
 
     client_a.telepathy.start_session(&contact_b).await;
     client_b.telepathy.start_session(&contact_a).await;
     wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
+
+    let shutdown_guard = TwoClientShutdownGuard {
+        a: &client_a,
+        b: &client_b,
+        dropped: AtomicBool::new(false),
+    };
 
     client_a
         .telepathy
@@ -3742,48 +3495,166 @@ async fn room_stream_error_surfaces_local_message(trigger_input: bool) {
         .await
         .expect("client b should join room");
     wait_for_room_join_count(&call_states_a, &peer_b, 1).await;
+    wait_for_room_join_count(&call_states_b, &peer_a, 1).await;
 
     let (probe, expected_message, simulated_message) =
         stream_error_scenario(trigger_input, &input_error_probe, &output_error_probe);
     probe.wait_captured().await;
     probe.trigger(simulated_stream_error(simulated_message));
 
+    // Terminal contract: local `CallEnded`, remote `RoomLeave`, local slot release,
+    // remote peer retains its `RoomCall` slot. No wall-clock budget.
     wait_for_call_ended_contains(&call_states_a, expected_message, false, "room client a").await;
+    wait_for_room_leave_count(&call_states_b, &peer_a, 1).await;
+    wait_for_slot_idle(&client_a, &peer_b).await;
+    wait_for_slot_room_call(&client_b, "room client b after remote stream error").await;
 
+    let states_b = call_state_snapshot(&call_states_b);
+    assert_room_event_sequence(
+        &states_b,
+        &peer_a,
+        &[RoomEventKind::Join, RoomEventKind::Leave],
+    );
+    assert!(
+        states_b
+            .iter()
+            .all(|state| !matches!(state, CallState::CallEnded(_, _))),
+        "remote room member should receive RoomLeave without ending its room call; states were {states_b:?}"
+    );
+
+    shutdown_guard.disarm();
     client_a.telepathy.shutdown().await;
     client_b.telepathy.shutdown().await;
 }
 
-// ---------------------------------------------------------------------------
-// Call-end copy contract tests.
-//
-// These tests pin down the *exact* user-facing message string that
-// `CallState::CallEnded` carries for every backend failure path. They
-// are the regression guard against two distinct bugs:
-//
-//   1. Ad-hoc `format!(...)` / `error.to_string()` calls leaking internal
-//      wording (e.g. `"Poison error: ..."`, `"Channel closed (mpsc send
-//      failed)"`, `"Transport failed on send"`) into the frontend.
-//   2. Different code paths emitting the same backend failure with
-//      different copy (the inconsistency this refactor eliminates).
-//
-// All paths funnel through `CallEndMessage` in
-// `rust/telepathy-core/src/internal/error.rs`. The expected strings
-// below must stay in sync with the `CALL_END_*` constants and the
-// peer-message helpers in that module.
-// ---------------------------------------------------------------------------
+async fn room_stream_error_sends_audio_error_goodbye_on_control_stream(trigger_input: bool) {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+    let codec_config = CodecConfig::new(true, true, 5.0);
 
-/// Locks down the `"{nickname} is busy"` copy that Alice observes when
-/// Bob's listener slot is non-idle and rejects the incoming `Hello`
-/// with `Busy`.
-///
-/// Drives the production paths end-to-end:
-///   * Bob runs `audio_test` so his `CallSlot` is `AudioTest`.
-///   * Alice dials Bob via the public `start_call` API.
-///   * Alice's session task enters `negotiate_outgoing_call`, sends
-///     `Hello`, receives `Busy`, and emits
-///     `CallEnded("Bob is busy", true)` through `handle_outgoing_hello_response`
-///     → `HelloResponse::EndedWith(peer_busy_message(...))`.
+    let key_a = SecretKey::generate();
+    let key_b = SecretKey::generate();
+    let contact_b = Contact::new(
+        "room-wire-error-client-b".to_string(),
+        key_b.public().to_string(),
+    )
+    .expect("contact b invalid");
+
+    let peer_b = contact_b.get_peer_id().to_string();
+    let call_states_a = Arc::new(Mutex::new(Vec::new()));
+    let input_error_probe = StreamErrorProbe::new();
+    let output_error_probe = StreamErrorProbe::new();
+    let raw_endpoint = build_raw_room_endpoint(relay_map, key_b).await;
+
+    let client_a = build_client(
+        relay_map,
+        key_a,
+        vec![contact_b.clone()],
+        &codec_config,
+        CallbackCapturingAudioHost::new(input_error_probe.clone(), output_error_probe.clone()),
+        call_states_a.clone(),
+    )
+    .await;
+
+    client_a.telepathy.start_session(&contact_b).await;
+    let mut raw_peer = accept_raw_room_peer(raw_endpoint).await;
+    wait_for_active_transport(&client_a, "room wire client a").await;
+
+    client_a
+        .telepathy
+        .join_room(vec![peer_b.clone()])
+        .await
+        .expect("client a should join room with raw peer");
+
+    let hello = read_wire_message_skipping_keepalives(&mut raw_peer.control_recv).await;
+    assert!(
+        matches!(
+            hello,
+            WireProtocolMessage::Hello {
+                room_hash: Some(_),
+                ..
+            }
+        ),
+        "room session must negotiate over the established control stream; got {hello:?}"
+    );
+    write_wire_message(
+        &mut raw_peer.control_send,
+        WireProtocolMessage::HelloAck {
+            audio_header: WireAudioHeader {
+                sample_rate: DEFAULT_SAMPLE_RATE,
+                codec_enabled: true,
+                vbr: true,
+                residual_bits: 5.0,
+            },
+        },
+    )
+    .await;
+
+    wait_for_room_join_count(&call_states_a, &peer_b, 1).await;
+    let (probe, expected_message, simulated_message) =
+        stream_error_scenario(trigger_input, &input_error_probe, &output_error_probe);
+    probe.wait_captured().await;
+    probe.trigger(simulated_stream_error(simulated_message));
+
+    // Both the Telepathy client and the raw peer must be torn down so the
+    // pinned `Stopped` lifecycle expectations are satisfied even on wire-protocol
+    // assertion panic.
+    let shutdown_guard = RawPeerShutdownGuard {
+        client: &client_a,
+        raw_endpoint: Some(raw_peer.endpoint.clone()),
+        dropped: AtomicBool::new(false),
+    };
+
+    // Read the terminal Goodbye on the established control stream. Tolerate
+    // control keepalives so a delayed scheduler cannot turn a valid keepalive
+    // into a false failure to receive Goodbye.
+    let goodbye = tokio::time::timeout(
+        Duration::from_secs(10),
+        read_wire_message_skipping_keepalives(&mut raw_peer.control_recv),
+    )
+    .await
+    .expect("room audio error goodbye should arrive on the control stream");
+    assert!(
+        matches!(
+            goodbye,
+            WireProtocolMessage::Goodbye {
+                reason: WireGoodbyeReason::AudioDeviceError,
+            }
+        ),
+        "room audio error must send GoodbyeReason::AudioDeviceError on the existing control stream; got {goodbye:?}"
+    );
+
+    // No replacement stream: after the terminal Goodbye the room controller must
+    // NOT open another bidirectional stream.
+    let connection = raw_peer.connection.clone();
+    let additional_stream =
+        tokio::time::timeout(Duration::from_millis(750), connection.accept_bi()).await;
+    assert!(
+        !matches!(additional_stream, Ok(Ok(_))),
+        "room audio error must not open a second bidirectional stream after Goodbye; got {additional_stream:?}"
+    );
+
+    wait_for_call_ended_contains(
+        &call_states_a,
+        expected_message,
+        false,
+        "room wire client a",
+    )
+    .await;
+
+    shutdown_guard.disarm();
+    client_a.telepathy.shutdown().await;
+    raw_peer.endpoint.close().await;
+}
+
+// Call-end copy contract tests. Each path funnels through `CallEndMessage` in
+// `rust/telepathy-core/src/internal/error.rs`. Expected strings must stay in
+// sync with the `CALL_END_*` constants and the peer-message helpers. Regression
+// guard against: (1) `format!(...)` / `error.to_string()` leaking internal
+// wording into the frontend, (2) inconsistent copy across paths.
+
+/// Lock the `"{nickname} is busy"` copy Alice observes when Bob's listener
+/// rejects the incoming `Hello` with `Busy`.
 #[tokio::test(flavor = "multi_thread")]
 async fn outgoing_call_busy_emits_localized_copy() {
     init_test_tracing();
@@ -3832,14 +3703,9 @@ async fn outgoing_call_busy_emits_localized_copy() {
     client_b.telepathy.start_session(&contact_a).await;
     wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
 
-    // Force Bob's slot into `AudioTest` so his listener path will
-    // reject Alice's `Hello` with `Busy` (the slot is not Idle and
-    // cannot match a pending incoming request — see
-    // `acquire_incoming_call_slot` in `internal/core.rs`). We use
-    // the public slot API here rather than `audio_test()` because
-    // the latter drives a real call loop that would block on
-    // `end_call`; we only need the slot state to be non-idle for
-    // the Busy path to fire.
+    // Force Bob's slot into `AudioTest` so his listener rejects Alice's `Hello` with
+    // `Busy`. We use the slot API directly (rather than `audio_test()`) because the
+    // latter drives a real call loop that would block on `end_call`.
     assert!(
         client_b
             .telepathy
@@ -3851,8 +3717,6 @@ async fn outgoing_call_busy_emits_localized_copy() {
         "Bob's slot must be acquirable for the busy test setup"
     );
 
-    // Drain Bob's mock `accept` path so the listener session is
-    // ready to receive `Hello` immediately.
     client_a
         .telepathy
         .start_call(&contact_b)
@@ -3862,16 +3726,10 @@ async fn outgoing_call_busy_emits_localized_copy() {
     let busy_message = format!("{} is busy", contact_b.nickname());
     wait_for_call_ended_contains(&call_states_a, &busy_message, true, "alice").await;
 
-    // The raw wire reason "Busy" must not leak into the frontend copy.
     assert_no_call_ended_contains(&call_states_a, "Busy", "alice");
 
-    // Release Bob's slot so `shutdown` can take it cleanly. The
-    // production `shutdown` path calls `reset_sessions` which only
-    // touches `PendingDirect*`/`ActiveDirect`/`RoomCall`; an
-    // `AudioTest` slot would block clean teardown, so we release it
-    // explicitly here. The audio-test acquisition in `audio_test()`
-    // does the same release on its own teardown, so this matches the
-    // production lifecycle.
+    // Release Bob's `AudioTest` slot so `shutdown` (which only touches
+    // `PendingDirect*`/`ActiveDirect`/`RoomCall`) can take it cleanly.
     client_b
         .telepathy
         .inner
@@ -3884,31 +3742,18 @@ async fn outgoing_call_busy_emits_localized_copy() {
     client_b.telepathy.shutdown().await;
 }
 
-/// Locks down the `"{nickname} did not respond to the call"` copy that
-/// the `HELLO_TIMEOUT` arm of `negotiate_outgoing_call` emits.
-///
-/// The end-to-end path requires Alice to dial Bob and Bob to never
-/// ack within 10 seconds, which is covered (in the negative form)
-/// by `stale_session_with_no_replacement_closes_connection_promptly`.
-/// Driving the positive case would require either a 10-second
-/// wall-clock wait or a deliberate slowdown of `HELLO_TIMEOUT`; both
-/// are out of scope for this contract test. We instead pin down the
-/// formatter — the single source of the timeout copy — so any future
-/// refactor that re-introduced a `format!("...", ...)` here would
-/// surface as a failed assertion.
+/// Lock the `"{nickname} did not respond to the call"` copy the `HELLO_TIMEOUT`
+/// arm of `negotiate_outgoing_call` emits. Positive end-to-end would require a
+/// 10-second wait; we pin the formatter (the single source of the timeout copy).
 #[test]
 fn outgoing_call_did_not_respond_emits_localized_copy() {
     use telepathy_core::internal::error::peer_no_response_message;
 
-    // Exact wording the production formatter produces. Asserted as a
-    // literal here so an accidental edit to the template is caught.
     assert_eq!(
         peer_no_response_message("Bob"),
         "Bob did not respond to the call"
     );
-    // Empty nickname still produces a user-facing sentence — the
-    // formatter never panics or returns an empty string for edge-case
-    // inputs.
+    // Empty nickname: formatter still produces a user-facing sentence.
     assert_eq!(peer_no_response_message(""), " did not respond to the call");
     // Unicode nickname: contract must round-trip without mangling.
     assert_eq!(
@@ -3917,25 +3762,13 @@ fn outgoing_call_did_not_respond_emits_localized_copy() {
     );
 }
 
-/// Locks down the natural peer-facing sentences produced by
-/// `peer_goodbye_reason_message` for every `GoodbyeReason` variant.
-///
-/// The `Goodbye` arm of `negotiate_outgoing_call`'s hello-response
-/// dispatcher (`handle_outgoing_hello_response`) routes the peer's
-/// reason through this formatter into `HelloResponse::EndedWith`,
-/// which the controller surfaces as `CallState::CallEnded`. End-to-end
-/// driving requires Bob to send `Goodbye` mid-handshake, which is
-/// awkward to arrange deterministically; we instead pin the formatter
-/// directly so any regression that re-introduced raw wire wording
-/// (e.g. `format!("... because of {}", reason.as_wire_str())`) fails
-/// this assertion.
+/// Lock the natural peer-facing sentences produced by `peer_goodbye_reason_message`
+/// for every `GoodbyeReason` variant. Pinning the formatter (the single source)
+/// catches regressions that re-introduce raw wire wording.
 #[test]
 fn outgoing_call_goodbye_emits_localized_copy() {
     use telepathy_core::internal::error::{GoodbyeReason, peer_goodbye_reason_message};
 
-    // Each variant maps to a stable, user-facing sentence. The raw
-    // transport wording (e.g. "session stopped", "audio device error")
-    // must NOT appear in the produced copy.
     assert_eq!(
         peer_goodbye_reason_message("Bob", GoodbyeReason::SessionStopped),
         "Bob did not accept the call because the session was stopped"
@@ -3953,10 +3786,7 @@ fn outgoing_call_goodbye_emits_localized_copy() {
         "Bob did not accept the call"
     );
 
-    // Sanity: the formatter must not leak wire-format vocabulary into
-    // any variant. Each variant produces a sentence that starts with
-    // "{nickname} did not accept the call" — a regression that
-    // re-introduced raw wire wording would break this prefix.
+    // Each variant produces a "{nickname} did not accept the call" prefix.
     for reason in [
         GoodbyeReason::SessionStopped,
         GoodbyeReason::AudioDeviceError,
@@ -3968,8 +3798,7 @@ fn outgoing_call_goodbye_emits_localized_copy() {
             rendered.starts_with("Bob did not accept the call"),
             "goodbye reason {reason:?} did not start with the expected user-facing prefix; got {rendered:?}"
         );
-        // The snake-case wire name (e.g. "session_stopped") must never
-        // appear in the user-facing copy.
+        // The snake-case wire name must never appear in the user-facing copy.
         let wire_name = format!("{reason:?}");
         assert!(
             !rendered.contains(&wire_name),
@@ -3978,20 +3807,9 @@ fn outgoing_call_goodbye_emits_localized_copy() {
     }
 }
 
-/// Regression test: a peer-driven normal hangup must reach the frontend
-/// as a *silent* `CallEnded` so the dialog guard
-/// (`state.field0.isNotEmpty` in `lib/main.dart`) suppresses the
-/// failure toast and the silent hangup tone plays instead.
-///
-/// Before the fix to `CallEndMessage::from_goodbye_reason`, the local
-/// `Goodbye { reason: GoodbyeReason::None }` sent by
-/// `ProtocolMessage::goodbye()` rendered to
-/// `"The call ended unexpectedly"` on the receiving peer. The Flutter
-/// dialog guard considered that non-empty and surfaced a "Call failed"
-/// dialog for every ordinary hangup. The helper now returns an empty
-/// string for `GoodbyeReason::None`; this test pins the end-to-end
-/// behaviour so a regression in either the helper or the call
-/// controller branch is caught immediately.
+/// A peer-driven normal hangup must reach the frontend as a *silent* `CallEnded`
+/// so the dialog guard (`state.field0.isNotEmpty` in `lib/main.dart`) suppresses
+/// the failure toast and the silent hangup tone plays instead.
 #[tokio::test(flavor = "multi_thread")]
 async fn normal_hangup_emits_silent_call_ended_for_remote_peer() {
     init_test_tracing();
@@ -4047,8 +3865,7 @@ async fn normal_hangup_emits_silent_call_ended_for_remote_peer() {
     client_b.telepathy.start_session(&contact_a).await;
     wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
 
-    // Drive a connected direct call (Bob's accept handle returns true
-    // by default in `build_client`).
+    // Drive a connected direct call.
     client_a
         .telepathy
         .start_call(&contact_b)
@@ -4057,24 +3874,15 @@ async fn normal_hangup_emits_silent_call_ended_for_remote_peer() {
     wait_for_connected(&call_states_a, "alice").await;
     wait_for_connected(&call_states_b, "bob").await;
 
-    // Alice hangs up via the public API. Her controller's `end_call.notified()`
-    // branch writes `Goodbye { reason: GoodbyeReason::None }` to Bob and
-    // returns `Silent`; Bob's controller converts the wire reason to an
-    // empty user-facing message via `from_goodbye_reason`.
+    // Alice's controller writes `Goodbye { reason: GoodbyeReason::None }` and
+    // returns `Silent`; Bob's controller converts to an empty user-facing
+    // message via `from_goodbye_reason`.
     client_a.telepathy.end_call().await;
 
-    // Bob must receive exactly one `CallEnded` with an empty message and
-    // `remote = true`. This is the silent path: the frontend dialog
-    // guard on `state.field0.isNotEmpty` short-circuits the dialog and
-    // plays the silent hangup tone.
+    // Exactly one remote silent `CallEnded` on Bob — frontend dialog guard
+    // suppresses and silent hangup tone plays.
     wait_for_call_ended_contains(&call_states_b, "", true, "bob's silent hangup").await;
 
-    // Belt-and-braces: scan every captured `CallEnded` on the receiving
-    // peer and confirm none of them carry the generic "unexpected"
-    // failure copy. A regression that re-introduced the
-    // `GoodbyeReason::None` → `CALL_END_GENERIC` mapping would surface
-    // here as `The call ended unexpectedly` instead of an empty
-    // message.
     let states_b = call_state_snapshot(&call_states_b);
     for state in &states_b {
         if let CallState::CallEnded(message, _) = state {
@@ -4085,9 +3893,6 @@ async fn normal_hangup_emits_silent_call_ended_for_remote_peer() {
         }
     }
 
-    // Confirm exactly one silent `CallEnded` reached Bob, so the test
-    // cannot pass by accident if a future controller change emits an
-    // additional silent `CallEnded` alongside the expected one.
     let silent_end_count = states_b
         .iter()
         .filter(|state| matches!(state, CallState::CallEnded(message, true) if message.is_empty()))
@@ -4097,28 +3902,16 @@ async fn normal_hangup_emits_silent_call_ended_for_remote_peer() {
         "expected exactly one remote silent CallEnded on bob; got {silent_end_count} in {states_b:?}"
     );
 
-    // Neither peer should have observed any call-ended emission before
-    // they reached `Connected` — a stale teardown from a previous
-    // call_state iteration would otherwise slip past the silent-hangup
-    // assertion above.
     assert_no_call_ended_before_connected(&states_b, "bob");
 
     client_a.telepathy.shutdown().await;
     client_b.telepathy.shutdown().await;
 }
 
-/// Locks down the `CallEndMessage::from_error` mapping for
-/// `SessionStopped` errors.
-///
-/// The session-error path in `session_outer` emits
-/// `CallEnded(CallEndMessage::from_error(&error), false)`. A
-/// `SessionStopped` error can only be produced end-to-end by racing
-/// the slot release with `call_handshake`'s `transition_pending_to_active`,
-/// which is difficult to drive from a test. We pin the mapping at
-/// the helper boundary here and rely on the existing audio-stream
-/// integration tests to lock down the production emission paths
-/// (they exercise `from_stream_error`, which is the most common
-/// production failure mode).
+/// Lock the `CallEndMessage::from_error` mapping for `SessionStopped`. A
+/// `SessionStopped` error is hard to drive end-to-end (requires racing slot
+/// release with `transition_pending_to_active`); pin the mapping at the helper
+/// boundary. Audio-stream integration tests cover the production emission paths.
 #[test]
 fn session_stopped_error_emits_localized_copy() {
     use telepathy_core::internal::error::{
@@ -4135,8 +3928,8 @@ fn session_stopped_error_emits_localized_copy() {
         rendered, "The session was stopped",
         "exact wording must stay in sync with the user-facing template"
     );
-    // The legacy `Display` impl produces "Session stopped" (no
-    // "The" prefix); the helper must NOT pass that raw text through.
+    // Legacy `Display` produces "Session stopped" (no "The" prefix); the helper
+    // must NOT pass that raw text through.
     assert_ne!(
         rendered,
         error.to_string(),
@@ -4144,19 +3937,15 @@ fn session_stopped_error_emits_localized_copy() {
     );
 }
 
-/// Locks down the `CallEndMessage::from_error` mapping for generic
-/// non-audio, non-session-stopped, non-timeout errors. The session
-/// error path passes every such error through `CallEndMessage::from_error`,
-/// which must collapse the wording to the generic
-/// `"The call ended unexpectedly"` copy regardless of which
-/// `ErrorKind` triggered it.
+/// Lock the `CallEndMessage::from_error` mapping for generic non-audio,
+/// non-session-stopped, non-timeout errors: must collapse to
+/// `"The call ended unexpectedly"` regardless of which `ErrorKind` triggered it.
 #[test]
 fn generic_controller_failure_emits_localized_copy() {
     use telepathy_core::internal::error::{CALL_END_GENERIC, CallEndMessage, Error, ErrorKind};
 
-    // Unit-level guard: every internal error kind that maps to the
-    // generic copy must produce exactly the expected string and
-    // MUST NOT leak the raw `Display` wording.
+    // Every internal error kind that maps to the generic copy must produce exactly
+    // the expected string and MUST NOT leak the raw `Display` wording.
     let error: Error = ErrorKind::MpscSend.into();
     let rendered = CallEndMessage::from_error(&error).into_string();
     assert_eq!(
@@ -4196,14 +3985,9 @@ fn generic_controller_failure_emits_localized_copy() {
     );
 }
 
-/// Catch-all assertion: the *frontend* copy for every backend failure
-/// is a closed set of user-facing sentences. Any internal wording that
-/// bleeds into `CallState::CallEnded` is a regression.
-///
-/// Asserted against every `CallEnded` emitted by the four scenarios
-/// covered above plus the existing audio-stream tests, so a future
-/// refactor that re-introduces `error.to_string()` (or any other
-/// internal-text leak) at any emission site would fail loudly here.
+/// Catch-all: the *frontend* copy for every backend failure is a closed set of
+/// user-facing sentences. Any internal wording that bleeds into `CallState::CallEnded`
+/// is a regression.
 #[tokio::test(flavor = "multi_thread")]
 async fn raw_internal_error_strings_never_reach_call_ended() {
     init_test_tracing();
@@ -4252,15 +4036,9 @@ async fn raw_internal_error_strings_never_reach_call_ended() {
     client_b.telepathy.start_session(&contact_a).await;
     wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
 
-    // Drive the busy path: Bob's slot is `AudioTest` so he rejects
-    // Alice's `Hello` with `Busy` (the slot is not Idle and cannot
-    // match a pending incoming request — see
-    // `acquire_incoming_call_slot` in `internal/core.rs`). We acquire
-    // the slot directly here rather than driving `audio_test()`
-    // because the latter blocks on a real call loop; we only need the
-    // slot to be non-Idle for the Busy path to fire, and releasing
-    // the slot at the end of the test lets `shutdown` take it
-    // cleanly.
+    // Drive the busy path: Bob's slot is `AudioTest` so he rejects Alice's `Hello`
+    // with `Busy`. Acquire the slot directly rather than driving `audio_test()`
+    // (which blocks on a real call loop).
     assert!(
         client_b
             .telepathy
@@ -4284,9 +4062,8 @@ async fn raw_internal_error_strings_never_reach_call_ended() {
         "alice",
     )
     .await;
-    // Release Bob's `AudioTest` slot so shutdown can take the slot
-    // cleanly. The slot must be released *before* the call-state
-    // snapshot so the shutdown path doesn't race with our walk.
+    // Release Bob's `AudioTest` slot before the call-state snapshot so
+    // the shutdown path doesn't race with our walk.
     client_b
         .telepathy
         .inner
@@ -4295,10 +4072,9 @@ async fn raw_internal_error_strings_never_reach_call_ended() {
         .release()
         .expect("slot release should succeed");
 
-    // Walk every captured `CallEnded` and assert that none of the
-    // known internal Display strings leaked through. The set is
-    // closed: any new emission that violates this contract must add a
-    // row here *and* be routed through `CallEndMessage`.
+    // Walk every captured `CallEnded` and assert no known internal Display
+    // string leaked through. Closed set: any new emission violating this contract
+    // must add a row here AND be routed through `CallEndMessage`.
     let states = call_state_snapshot(&call_states_a);
     let forbidden_substrings = [
         // `ErrorKind::Poison` wording
@@ -4362,9 +4138,8 @@ async fn raw_internal_error_strings_never_reach_call_ended() {
         violations.join("\n  ")
     );
 
-    // Every observed `CallEnded` must match one of the closed user-
-    // facing copy templates. This is the dual of the forbidden-
-    // substring check: it locks down the *positive* contract.
+    // Every observed `CallEnded` must match one of the closed user-facing copy
+    // templates — the dual of the forbidden-substring check.
     for state in &states {
         if let CallState::CallEnded(message, _) = state {
             let known = [
@@ -4406,14 +4181,12 @@ fn init_test_tracing() {
 
 fn shared_relay_map() -> &'static RelayMap {
     RELAY_INIT.call_once(|| {
-        // Initialise the shared address lookup eagerly so every test
-        // client that reads `shared_address_lookup` afterwards observes
-        // a populated `MemoryLookup` instead of a fresh one per call.
+        // Initialise the shared address lookup eagerly so subsequent
+        // `shared_address_lookup` calls see a populated `MemoryLookup`.
         SHARED_ADDRESS_LOOKUP.get_or_init(MemoryLookup::new);
         tokio::spawn(async move {
             let server = iroh::test_utils::run_relay_server().await.unwrap();
             RELAY_DETAILS.get_or_init(|| server.0);
-            // keep the relay server running forever
             sleep(Duration::from_secs(u64::MAX)).await;
         });
     });
@@ -4421,17 +4194,100 @@ fn shared_relay_map() -> &'static RelayMap {
     RELAY_DETAILS.wait()
 }
 
-/// Returns the test-binary-wide `MemoryLookup`. Initialised the first
-/// time `shared_relay_map` runs (which is the first test in the binary
-/// that touches networking), and reused by every subsequent call so
-/// address resolution works across all clients.
+/// Returns the test-binary-wide `MemoryLookup`. Initialised via `shared_relay_map`
+/// (called below to guarantee ordering) and reused by every subsequent call.
 fn shared_address_lookup() -> &'static MemoryLookup {
-    // `shared_relay_map()` is the canonical initialiser; calling it
-    // first guarantees the lookup is populated before we hand it back.
     let _ = shared_relay_map();
     SHARED_ADDRESS_LOOKUP
         .get()
         .expect("shared_address_lookup called before shared_relay_map initialisation")
+}
+
+async fn build_raw_room_endpoint(relay_map: &RelayMap, identity: SecretKey) -> Endpoint {
+    let mut crypto_provider = rustls::crypto::aws_lc_rs::default_provider();
+    crypto_provider.kx_groups = vec![
+        rustls::crypto::aws_lc_rs::kx_group::X25519MLKEM768,
+        rustls::crypto::aws_lc_rs::kx_group::X25519,
+        rustls::crypto::aws_lc_rs::kx_group::SECP256R1,
+        rustls::crypto::aws_lc_rs::kx_group::SECP384R1,
+    ];
+    let endpoint = Endpoint::builder(presets::Empty)
+        .secret_key(identity)
+        .alpns(vec![b"telepathy/session/1".to_vec()])
+        .relay_mode(RelayMode::Custom(relay_map.clone()))
+        .address_lookup(shared_address_lookup().clone())
+        .crypto_provider(Arc::new(crypto_provider))
+        .ca_tls_config(iroh::tls::CaTlsConfig::insecure_skip_verify())
+        .bind()
+        .await
+        .expect("raw room peer endpoint should bind");
+    endpoint.online().await;
+    shared_address_lookup().add_endpoint_info(endpoint.addr());
+    endpoint
+}
+
+async fn accept_raw_room_peer(endpoint: Endpoint) -> RawRoomPeer {
+    let connection = endpoint
+        .accept()
+        .await
+        .expect("raw room peer should receive a connection")
+        .await
+        .expect("raw room peer should accept the connection");
+    let (send, recv) = connection
+        .accept_bi()
+        .await
+        .expect("raw room peer should accept the established control stream");
+
+    RawRoomPeer {
+        endpoint,
+        connection,
+        control_send: LengthDelimitedCodec::builder()
+            .length_field_type::<u64>()
+            .new_write(send),
+        control_recv: LengthDelimitedCodec::builder()
+            .length_field_type::<u64>()
+            .new_read(recv),
+    }
+}
+
+async fn write_wire_message(
+    transport: &mut FramedWrite<SendStream, LengthDelimitedCodec>,
+    message: WireProtocolMessage,
+) {
+    transport
+        .send(Bytes::from(
+            message
+                .write_to_vec()
+                .expect("wire protocol message should serialize"),
+        ))
+        .await
+        .expect("raw room peer should write control message");
+}
+
+async fn read_wire_message(
+    transport: &mut FramedRead<RecvStream, LengthDelimitedCodec>,
+) -> WireProtocolMessage {
+    let frame = transport
+        .next()
+        .await
+        .expect("raw room peer should receive a control frame")
+        .expect("raw room peer control frame should decode");
+    WireProtocolMessage::read_from_buffer(&frame)
+        .expect("raw room peer control message should deserialize")
+}
+
+/// Read wire control messages while skipping `KeepAlive` frames so a
+/// scheduler-delayed keepalive does not get mistaken for the expected terminal
+/// message.
+async fn read_wire_message_skipping_keepalives(
+    transport: &mut FramedRead<RecvStream, LengthDelimitedCodec>,
+) -> WireProtocolMessage {
+    loop {
+        let message = read_wire_message(transport).await;
+        if !matches!(message, WireProtocolMessage::KeepAlive) {
+            return message;
+        }
+    }
 }
 
 async fn build_client<H, I, O>(
@@ -4542,14 +4398,10 @@ where
     }
 }
 
-/// returns mock callbacks that will establish a telepathy instance with the provided contacts
-/// sets is_active to true when the first session connected event is received
-///
-/// `lifecycle` controls how many `manager_state` activations the mock will
-/// accept: `Single` pins to a single activation (2 `Active`/`Starting` and
-/// 1 `Stopped`); `Restartable` accepts any number of activations, stops,
-/// and `Failed` events so tests that exercise `restart_manager()` do not
-/// trip mockall's strict call-count assertion.
+/// Returns mock callbacks that establish a telepathy instance with the provided
+/// contacts. `is_active` flips to true on the first session-connected event.
+/// `lifecycle` controls how many `manager_state` activations the mock accepts
+/// (see `ManagerLifecycle`).
 fn construct_mock_callbacks(
     contacts: Vec<Contact>,
     is_active: Arc<AtomicBool>,
@@ -4560,7 +4412,6 @@ fn construct_mock_callbacks(
 ) -> MockCoreCallbacks<MockCoreStatisticsCallback> {
     let mut mock: MockCoreCallbacks<MockCoreStatisticsCallback> = MockCoreCallbacks::new();
 
-    // handle session status callbacks
     mock.expect_session_status().returning(move |status, peer| {
         info!("session status got called {status:?} {peer}");
         let is_active_clone = is_active.clone();
@@ -4575,38 +4426,34 @@ fn construct_mock_callbacks(
 
     match lifecycle {
         ManagerLifecycle::Single => {
-            // ensure manager activates (one `Starting` + one `Active`)
             mock.expect_manager_state()
                 .withf(|a| matches!(a, ManagerState::Active | ManagerState::Starting))
                 .times(2)
                 .returning(|_| Box::pin(async move {}));
 
-            // ensure manager deactivates
             mock.expect_manager_state()
                 .withf(|a| matches!(a, ManagerState::Stopped))
                 .once()
                 .returning(|_| Box::pin(async move {}));
         }
         ManagerLifecycle::Restartable => {
-            // Each restart cycle emits one `Starting` and one `Active`; the
-            // outer `start_manager` loop can call this any number of times.
+            // Each restart cycle emits one `Starting` and one `Active`;
+            // `start_manager` may invoke this any number of times.
             mock.expect_manager_state()
                 .withf(|a| matches!(a, ManagerState::Active | ManagerState::Starting))
                 .times(..)
                 .returning(|_| Box::pin(async move {}));
 
-            // One `Stopped` per manager teardown (one per cycle plus the
-            // final shutdown).
+            // One `Stopped` per manager teardown (one per cycle + final shutdown).
             mock.expect_manager_state()
                 .withf(|a| matches!(a, ManagerState::Stopped))
                 .times(..)
                 .returning(|_| Box::pin(async move {}));
 
-            // The outer loop in `start_manager` emits `ManagerState::Failed`
-            // before retrying if `setup_endpoint` or the main loop errors.
-            // Accepting any number keeps a transient setup failure (e.g.
-            // relay hiccup) from surfacing as a mockall "no matching
-            // expectation" panic that would mask the real cause.
+            // `start_manager` may emit `Failed` before retrying on
+            // `setup_endpoint`/main-loop error; accept any count so a transient
+            // failure doesn't surface as a mockall "no matching expectation"
+            // panic that masks the real cause.
             mock.expect_manager_state()
                 .withf(|a| matches!(a, ManagerState::Failed))
                 .times(..)
@@ -4614,7 +4461,6 @@ fn construct_mock_callbacks(
         }
     }
 
-    // return the contacts
     let contacts_clone = contacts.clone();
     mock.expect_get_contacts().returning(move || {
         let contacts_clone = contacts_clone.clone();
@@ -4728,16 +4574,11 @@ fn stream_error_scenario<'a>(
     input_error_probe: &'a StreamErrorProbe,
     output_error_probe: &'a StreamErrorProbe,
 ) -> (&'a StreamErrorProbe, &'static str, &'static str) {
-    // Local `CallEnded` copy is direction-specific: input stream errors
-    // surface as `CALL_END_AUDIO_INPUT_FAILURE` ("Microphone error") and
-    // output stream errors as `CALL_END_AUDIO_OUTPUT_FAILURE` ("Speaker
-    // error") — see `CallEndMessage::from_stream_error`. The remote-side
-    // wire reason (`GoodbyeReason::AudioDeviceError`) still maps to the
-    // generic `CALL_END_AUDIO_DEVICE_FAILURE` ("Audio device error") on
-    // receiving peers via `CallEndMessage::from_goodbye_reason`, so the
-    // sanitization check on the remote end remains intact.
-    // The raw cpal/driver message must NOT reach the frontend on either
-    // side.
+    // Local `CallEnded` copy is direction-specific (input -> "Microphone error",
+    // output -> "Speaker error" via `CallEndMessage::from_stream_error`). Remote
+    // wire reason stays generic (`GoodbyeReason::AudioDeviceError` ->
+    // "Audio device error" via `from_goodbye_reason`). Raw cpal/driver wording
+    // must NOT reach the frontend on either side.
     if trigger_input {
         (
             input_error_probe,
@@ -4850,13 +4691,10 @@ async fn wait_for_connected(call_states: &Arc<Mutex<Vec<CallState>>>, label: &st
     }
 }
 
-/// Wait until the underlying transport is actually live on the given
-/// client. `ClientHarness::is_active` is flipped to `true` on the first
-/// `SessionStatus::Connected` callback (see `construct_mock_callbacks`),
-/// so this confirms the QUIC/relay path is warm and not still doing
-/// first-packet setup. The 60s budget mirrors `wait_for_connected` so a
-/// transport that never comes up fails loudly instead of producing a
-/// misleading downstream timing flake.
+/// Wait until the underlying transport is actually live on the given client.
+/// `ClientHarness::is_active` is flipped to `true` on the first
+/// `SessionStatus::Connected` callback, so this confirms the QUIC/relay path is
+/// warm and not still doing first-packet setup.
 async fn wait_for_active_transport<H, I, O>(client: &ClientHarness<H, I, O>, label: &str)
 where
     H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
@@ -4977,11 +4815,10 @@ async fn wait_for_sessions<HA, IA, OA, HB, IB, OB>(
     IB: Send + Sync + 'static,
     OB: Send + Sync + 'static,
 {
-    // Two-phase wait: first confirm both sides have a session entry, then re-check after
-    // a poll interval that the SessionState::id is unchanged. This guards against
-    // returning during a session-collision replacement where one entry has been swapped
-    // but the new owner has not yet stabilized — callers that act on the session
-    // immediately after `wait_for_sessions` would otherwise race the replacement.
+    // Two-phase wait: confirm both sides have a session entry, then re-check after
+    // a poll interval that the SessionState::id is unchanged. Guards against
+    // returning during a session-collision replacement where the new owner has not
+    // yet stabilized.
     let mut poll = interval(Duration::from_millis(100));
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
     let mut prev_a_id = None;
@@ -5033,19 +4870,10 @@ async fn wait_for_sessions<HA, IA, OA, HB, IB, OB>(
     }
 }
 
-/// Waits until both clients have a `SessionState` registered for the
-/// indicated peer AND the session ids remain stable across at least one
-/// polling interval. Optionally asserts that the resulting session id
-/// differs from a previous id (e.g. to confirm `restart_manager` actually
-/// re-spawned the session rather than leaving it in place).
-///
-/// This supersedes the single-sided `wait_for_session` helper: the
-/// restart flow re-spawns sessions asynchronously after manager
-/// activation, while the remote side may still be cleaning up its
-/// pre-restart transport. A one-sided wait on the dialing client
-/// resolved before the remote had a chance to attach, so callers that
-/// act on both halves (e.g. asserting a post-restart slot acquisition
-/// will succeed end-to-end) would race.
+/// Waits until both clients have a `SessionState` registered for the indicated
+/// peer AND session ids remain stable across at least one polling interval.
+/// Optionally asserts the resulting id differs from a previous id (e.g. to confirm
+/// `restart_manager` re-spawned the session).
 async fn wait_for_stable_session_pair<HA, IA, OA, HB, IB, OB>(
     a: &ClientHarness<HA, IA, OA>,
     a_peer: &PublicKey,
@@ -5120,16 +4948,10 @@ async fn wait_for_stable_session_pair<HA, IA, OA, HB, IB, OB>(
     }
 }
 
-/// Waits until the call slot transitions to `PendingOutgoing` for `peer`.
-///
-/// This is the state-driven replacement for a fixed settle sleep: the
+/// Waits until the call slot transitions to `PendingOutgoing` for `peer`. The
 /// session task observes its queued `start_call` notify, enters
 /// `negotiate_outgoing_call`, and acquires the outgoing slot via
-/// `PendingDirectCallSlot::try_acquire_outgoing` — that acquisition is
-/// exactly the `PendingOutgoing` transition. Tests that need the
-/// session task to have reached this acquisition point can poll until
-/// the slot state is `PendingOutgoing` rather than sleeping for an
-/// arbitrary duration that races machine speed.
+/// `PendingDirectCallSlot::try_acquire_outgoing`.
 async fn wait_for_slot_pending_outgoing<H, I, O>(client: &ClientHarness<H, I, O>, peer: &str)
 where
     H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
@@ -5186,10 +5008,50 @@ where
     }
 }
 
-/// Waits until the call slot is in `RoomCall` state, indicating that
-/// `join_room` has installed a `RoomState` and acquired the slot for the
-/// room. Mirrors `wait_for_slot_idle` and `wait_for_slot_pending_outgoing`
-/// for the room-specific slot state.
+/// Polls the call slot across a stability window and asserts it does NOT transition
+/// into `PendingOutgoing` or `ActiveDirect` for `peer`. Post-room-teardown guard for
+/// the stale-start race: a `start_call` permit latched on a session must be discarded
+/// by `room_handshake` before returning control to `session_inner`.
+async fn assert_slot_remains_outside_direct_call_states<H, I, O>(
+    client: &ClientHarness<H, I, O>,
+    peer: &PublicKey,
+    label: &str,
+    window: Duration,
+) where
+    H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
+    I: Send + Sync + 'static,
+    O: Send + Sync + 'static,
+{
+    let mut poll = interval(Duration::from_millis(20));
+    let deadline = tokio::time::Instant::now() + window;
+    loop {
+        poll.tick().await;
+        let snapshot = client
+            .telepathy
+            .inner
+            .core_state
+            .call_slot
+            .snapshot()
+            .expect("call slot snapshot should succeed");
+        assert!(
+            !(snapshot.direct_peer == Some(*peer)
+                && matches!(
+                    snapshot.state,
+                    CallSlotState::PendingOutgoing | CallSlotState::ActiveDirect
+                )),
+            "{label}: slot entered {:?} for former room peer after end_call; \
+             a stale SessionState::start_call permit survived the room teardown. \
+             snapshot={snapshot:?}",
+            snapshot.state
+        );
+        if tokio::time::Instant::now() >= deadline {
+            return;
+        }
+    }
+}
+
+/// Waits until the call slot is in `RoomCall` state, indicating `join_room` has
+/// installed a `RoomState` and acquired the slot for the room.
 async fn wait_for_slot_room_call<H, I, O>(client: &ClientHarness<H, I, O>, label: &str)
 where
     H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
@@ -5217,15 +5079,10 @@ where
     }
 }
 
-/// Waits until the call slot is owned by `peer` and in a non-idle
-/// pending or active call state. This replaces the old fixed-sleep
-/// stability window after a fresh `start_call`: the post-restart session
-/// task observes the `start_call` notify and acquires the slot
-/// asynchronously, so the assertion is state-driven rather than
-/// time-driven. Once observed, the slot is re-checked across one more
-/// poll interval to confirm it does not flip to `Idle` (which would
-/// indicate a phantom second negotiation that immediately ended or a
-/// stale-state leak clobbering the acquisition).
+/// Waits until the call slot is owned by `peer` and in a non-idle pending or
+/// active call state, then re-checks across one more poll interval to confirm it
+/// does not flip to `Idle` (which would indicate a phantom second negotiation or
+/// stale-state leak).
 async fn wait_for_slot_owned_by<H, I, O>(client: &ClientHarness<H, I, O>, peer: &PublicKey)
 where
     H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
@@ -5274,17 +5131,13 @@ where
     }
 }
 
-/// Test-harness cleanup guard for two-client tests. On drop it
-/// schedules shutdowns for both clients so an aborted test reaches
-/// the same shutdown path as a successful one. This prevents
-/// `client_b`'s mock from being left with an unmet `Stopped`
-/// expectation that would surface as a misleading secondary panic
-/// after the real assertion failure has already been reported.
-///
-/// The test is declared `flavor = "multi_thread"`, so `Drop` runs on
-/// a worker thread that owns a tokio runtime handle. We use
-/// `block_in_place` + `block_on` to drive the async shutdowns
-/// synchronously without needing to clone the `ClientHarness`.
+/// Cleanup guard for two-client tests. On drop it schedules shutdowns for both
+/// clients so an aborted test reaches the same shutdown path as a successful one,
+/// preventing `client_b`'s mock from being left with an unmet `Stopped` expectation
+/// that would surface as a misleading secondary panic after the real assertion
+/// failure. `Drop` runs on a multi-thread test worker that owns a tokio runtime
+/// handle; `block_in_place` + `block_on` drive the async shutdowns synchronously
+/// without cloning the `ClientHarness`.
 struct TwoClientShutdownGuard<
     'a,
     HA: AudioHost<InputStream = IA, OutputStream = OA> + Send + Sync + Clone + 'static,
@@ -5308,12 +5161,10 @@ where
     IB: Send + Sync + 'static,
     OB: Send + Sync + 'static,
 {
-    /// Marks the guard as already-handled so its `Drop` becomes a
-    /// no-op. The success path calls this immediately before
-    /// `drop(shutdown_guard)` so the explicit `shutdown` calls that
-    /// follow are the only shutdowns that run; otherwise `Drop` would
-    /// fire a redundant `shutdown` on each client after the explicit
-    /// calls and we would hit the double-shutdown path.
+    /// Marks the guard as already-handled so its `Drop` becomes a no-op. The
+    /// success path calls this immediately before `drop(shutdown_guard)` so the
+    /// explicit `shutdown` calls that follow are the only shutdowns that run;
+    /// without it `Drop` would fire a redundant `shutdown` after each explicit call.
     fn disarm(&self) {
         self.dropped.store(true, Relaxed);
     }
@@ -5329,17 +5180,9 @@ where
     OB: Send + Sync + 'static,
 {
     fn drop(&mut self) {
-        // The success path explicitly drops the guard before the
-        // explicit `shutdown` calls, which sets `dropped` to `true` so
-        // this `Drop` becomes a no-op on the success path. When a test
-        // panics before that explicit drop, the guard's `Drop` runs
-        // and best-effort shuts down both clients to avoid leaving
-        // `client_b`'s mock with an unmet `Stopped` expectation that
-        // would surface as a misleading secondary panic after the real
-        // assertion failure. We use `block_in_place` so the async
-        // shutdowns run synchronously on the multi-threaded test
-        // runtime; the test is declared `flavor = "multi_thread"` so
-        // this is available.
+        // Success path sets `dropped` so this is a no-op. On panic the
+        // guard's `Drop` best-effort shuts down both clients to avoid an
+        // unmet `Stopped` expectation surfacing as a misleading secondary panic.
         if self.dropped.swap(true, Relaxed) {
             return;
         }
@@ -5349,13 +5192,64 @@ where
             a.telepathy.shutdown().await;
             b.telepathy.shutdown().await;
         };
-        // `Handle::current()` panics with a descriptive message if no
-        // runtime is present, which is the desired failure mode here: a
-        // silently-no-op `drop` would leave `client_b`'s mock with an
-        // unmet `Stopped` expectation and surface as a misleading
-        // secondary panic after the real assertion failure.
+        // `Handle::current()` panicking with no runtime is the desired
+        // failure mode: a silently-no-op `drop` would leave `client_b`'s mock
+        // with an unmet `Stopped` expectation.
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(shutdown_both());
+        });
+    }
+}
+
+/// Cleanup guard for single-client + raw-peer tests. On drop it shuts down the
+/// Telepathy client and closes the raw `Endpoint`, preventing mock expectation
+/// panics (the `MockCoreCallbacks` `Stopped` lifecycle, etc.) from being raised
+/// after the real wire-protocol assertion failure.
+struct RawPeerShutdownGuard<'a, H, I, O>
+where
+    H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
+    I: Send + Sync + 'static,
+    O: Send + Sync + 'static,
+{
+    client: &'a ClientHarness<H, I, O>,
+    raw_endpoint: Option<Endpoint>,
+    dropped: AtomicBool,
+}
+
+impl<'a, H, I, O> RawPeerShutdownGuard<'a, H, I, O>
+where
+    H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
+    I: Send + Sync + 'static,
+    O: Send + Sync + 'static,
+{
+    /// Marks the guard as already-handled so its `Drop` becomes a no-op. The
+    /// success path calls this immediately before `drop(shutdown_guard)` so the
+    /// explicit shutdowns that follow are the only ones that run.
+    fn disarm(&self) {
+        self.dropped.store(true, Relaxed);
+    }
+}
+
+impl<H, I, O> Drop for RawPeerShutdownGuard<'_, H, I, O>
+where
+    H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
+    I: Send + Sync + 'static,
+    O: Send + Sync + 'static,
+{
+    fn drop(&mut self) {
+        if self.dropped.swap(true, Relaxed) {
+            return;
+        }
+        let client = self.client;
+        let endpoint = self.raw_endpoint.take();
+        let cleanup = || async move {
+            client.telepathy.shutdown().await;
+            if let Some(ep) = endpoint {
+                ep.close().await;
+            }
+        };
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(cleanup());
         });
     }
 }

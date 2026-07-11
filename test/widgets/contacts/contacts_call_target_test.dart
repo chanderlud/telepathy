@@ -28,14 +28,12 @@ import '../../support/fake_contact.dart';
 
 /// Fakes of the rust bridge types used by the contact/room widgets.
 ///
-/// `Contact`, `Telepathy`, `SoundPlayer`, `FlutterSoundHandle`,
-/// `PublicKey`, and `ArcHost` are `RustOpaqueInterface` markers — they
-/// only require `dispose()`/`isDisposed` at runtime, and the rest of
-/// their methods are abstract. The widget test exercises only the
-/// contact/room call icon's `onPressed` closure, so the fakes return
-/// no-op values for the surfaces the closure does not touch. `Contact`
-/// and `PublicKey` live in `test/support/fake_contact.dart` so other
-/// test files (e.g. the state-controller unit tests) can reuse them.
+/// `Contact`, `Telepathy`, `SoundPlayer`, `FlutterSoundHandle`, `PublicKey`, and
+/// `ArcHost` are `RustOpaqueInterface` markers — they only require
+/// `dispose()`/`isDisposed` at runtime, the rest are abstract. The widget test
+/// exercises only the contact/room call icon's `onPressed` closure, so the fakes
+/// return no-op values for surfaces the closure does not touch. `Contact` and
+/// `PublicKey` live in `test/support/fake_contact.dart` for reuse.
 
 class _FakeArcHost implements ArcHost {
   @override
@@ -141,7 +139,6 @@ class _RecordingTelepathy implements Telepathy {
     return completer.future;
   }
 
-  // Widget tests below record call, room, and control interactions.
   // Remaining members satisfy the abstract bridge surface.
   @override
   Future<void> audioTest() async {}
@@ -217,32 +214,26 @@ class _RecordingTelepathy implements Telepathy {
   bool get isDisposed => false;
 }
 
-/// Stub the `flutter/assets` channel so `readSeaBytes` resolves to a
-/// tiny non-empty payload. Tests then call `rootBundle.clear()` in
-/// `tearDown` to drop the cache before the next case.
+/// Stub the `flutter/assets` channel so `readSeaBytes` resolves to an empty
+/// payload. The fake SoundPlayer ignores its input, and `rootBundle.clear()` in
+/// `tearDown` drops the cache before the next case.
 void _stubOutgoingRingtone(WidgetTester tester) {
   TestWidgetsFlutterBinding.ensureInitialized();
   tester.binding.defaultBinaryMessenger.setMockMessageHandler(
     'flutter/assets',
     (ByteData? message) async {
-      // The closure treats the result as raw bytes; an empty payload
-      // is sufficient because the fake SoundPlayer ignores its input.
       return ByteData(0);
     },
   );
 }
 
-/// `AssetBundle` used in tests so `SvgPicture.asset(...)` requests
-/// resolve to the smallest well-formed SVG (instead of the empty
-/// ByteData the binary messenger stub returns for the ringtone).
-/// Without this, the SVG parser throws "Invalid SVG data" while the
-/// contact/room widgets are building, and the test fails before any
-/// of the call-target assertions run.
+/// AssetBundle that resolves `.svg` requests to the minimal well-formed SVG; the
+/// binary messenger stub returns empty ByteData for the ringtone. Without this
+/// fallback the SVG parser throws "Invalid SVG data" while the widgets build.
 class _SvgAwareAssetBundle extends CachingAssetBundle {
   @override
   Future<ByteData> load(String key) async {
     if (key.endsWith('.svg')) {
-      // The minimal SVG the vector_graphics parser accepts.
       const minimalSvg = '<svg viewBox="0 0 10 10"></svg>';
       final Uint8List bytes = Uint8List.fromList(utf8.encode(minimalSvg));
       return bytes.buffer.asByteData();
@@ -276,11 +267,8 @@ Widget _harness({
   );
 }
 
-/// Mark the contact as `Connected` so the call icon is visible. The
-/// widget's `build` only renders the Phone icon when
-/// `stateController.sessionStatus(contact)` is
-/// `SessionStatus_Connected`; otherwise it would show the Offline
-/// icon and there would be no target to tap.
+/// Mark the contact as `Connected` so the call icon renders; otherwise the
+/// widget shows the Offline icon and there is no target to tap.
 void _markContactConnected(StateController controller, Contact contact) {
   controller.updateSession(
     (
@@ -291,8 +279,8 @@ void _markContactConnected(StateController controller, Contact contact) {
 }
 
 Future<void> _flushAsync(WidgetTester tester) async {
-  // Drain pending microtasks/futures (e.g., the `await telepathy.startCall`
-  // continuation) so post-rebuild assertions observe the resumed state.
+  // Drain pending microtasks/futures so post-rebuild assertions observe the
+  // resumed state.
   await tester.pump();
   await tester.pump(const Duration(milliseconds: 16));
 }
@@ -429,11 +417,8 @@ void main() {
         ),
       );
 
-      // Tap Alice's phone icon. The closure runs through the early
-      // gates, captures `target = alice`, registers pending, and
-      // suspends on `await telepathy.startCall(contact: target)`.
-      // With the test setUp marking Alice as Connected, the only
-      // IconButton the widget renders is the Phone one.
+      // Tap Alice's phone icon. The closure captures `target = alice`, registers
+      // pending, and suspends on `await telepathy.startCall(contact: target)`.
       await tester.tap(find.byType(IconButton));
       await tester.pump();
 
@@ -442,9 +427,8 @@ void main() {
       expect(telepathy.startCallContacts, hasLength(1));
       expect(telepathy.startCallContacts.single, same(alice));
 
-      // Mid-flight swap: replace the widget's contact with Bob using
-      // a stable key so Flutter reuses the same State object. The
-      // closure still references the captured `target = alice`.
+      // Mid-flight swap: stable key so Flutter reuses the same State object;
+      // the closure still references the captured `target = alice`.
       await tester.pumpWidget(
         _harness(
           stateController: stateController,
@@ -459,10 +443,6 @@ void main() {
       );
       await tester.pump();
 
-      // Resolve the backend future so the `await startCall`
-      // continuation resumes. The captured local `target` (alice)
-      // must drive the call, not the freshly-rebuilt `widget.contact`
-      // (now bob).
       telepathy.startCallCallers.single.complete();
       await _flushAsync(tester);
 
@@ -490,10 +470,9 @@ void main() {
       const aliceKey = ValueKey<String>('call-target-row-alice');
       const bobKey = ValueKey<String>('call-target-row-bob');
 
-      // Render both fixtures up front so each has its own state
-      // object — this exercises the production widget tree where the
-      // captured-target semantic is "do not let the second tap
-      // hijack the first".
+      // Render both fixtures so each has its own State object — exercises the
+      // production tree where captured-target semantics prevent a second tap
+      // from hijacking the first.
       await tester.pumpWidget(
         _harness(
           stateController: stateController,
@@ -509,10 +488,6 @@ void main() {
         ),
       );
 
-      // Alice's tap — closure captures `target = alice` and suspends
-      // on her `startCall` future. The first IconButton in the Column
-      // belongs to Alice's ContactWidget (Phone is the only button
-      // rendered when the contact is Connected).
       await tester.tap(find.byType(IconButton).first);
       await tester.pump();
 
@@ -520,10 +495,6 @@ void main() {
       expect(stateController.hasLiveCall, isTrue);
       expect(telepathy.startCallContacts, [alice]);
 
-      // Bob's tap is short-circuited by the `hasLiveCall` gate. The
-      // closure returns early before any state mutation or
-      // `startCall` invocation. Bob's button therefore must not have
-      // changed the recorded target.
       await tester.tap(find.byType(IconButton).last);
       await tester.pump();
 
@@ -534,8 +505,6 @@ void main() {
           reason: 'the captured target stays the only registered pending '
               'target across the short-circuited second tap');
 
-      // Alice's future resolves; only Alice's captured target drives
-      // the promotion.
       telepathy.startCallCallers.single.complete();
       await _flushAsync(tester);
 
@@ -626,10 +595,8 @@ void main() {
         ),
       );
 
-      // Tap Alpha's phone icon. The closure captures `target = alpha`,
-      // registers pending, and suspends on `await joinRoom`. The
-      // RoomWidget renders two IconButtons (Copy + Phone); the Phone
-      // is the *last* one in the row.
+      // Tap Alpha's phone icon. RoomWidget renders [Copy, Phone] in row order;
+// Phone is the last IconButton.
       await tester.tap(find.byType(IconButton).last);
       await tester.pump();
 
@@ -642,9 +609,8 @@ void main() {
           ],
           reason: 'captured room\'s peer ids must be used for joinRoom');
 
-      // Mid-flight swap: replace the widget's room with Bravo using a
-      // stable key so Flutter reuses the same State object. The
-      // in-flight closure still references the captured `target = alpha`.
+      // Mid-flight swap: stable key so Flutter reuses the same State object;
+      // the in-flight closure still references the captured `target = alpha`.
       await tester.pumpWidget(
         _harness(
           stateController: stateController,
@@ -702,12 +668,8 @@ void main() {
         ),
       );
 
-      // Alpha's tap — closure captures `target = alpha` and suspends
-      // on its `joinRoom` future. Within the first RoomWidget row the
-      // widgets are `[Copy, Phone]`, so Alpha's Phone is the second
-      // IconButton in render order. With two rooms the order is
-      // `[Copy_α, Phone_α, Copy_β, Phone_β]`; Alpha's Phone is at
-      // index 1.
+      // Each row's IconButtons are [Copy, Phone]; with two rooms the order is
+      // [Copy_α, Phone_α, Copy_β, Phone_β]. Alpha's Phone is at index 1.
       await tester.tap(find.byType(IconButton).at(1));
       await tester.pump();
 
@@ -717,8 +679,7 @@ void main() {
         <String>['peer-1', 'peer-2'],
       ]);
 
-      // Bravo's tap is short-circuited by the `hasLiveCall` gate.
-      // Bravo's Phone sits at index 3.
+      // Bravo's Phone is at index 3.
       await tester.tap(find.byType(IconButton).at(3));
       await tester.pump();
 
@@ -733,7 +694,6 @@ void main() {
           reason: 'the captured target stays the only registered pending '
               'target across the short-circuited second tap');
 
-      // Resolve Alpha's future; only Alpha is the captured target.
       telepathy.joinRoomCallers.single.complete();
       await _flushAsync(tester);
 
@@ -886,13 +846,10 @@ void main() {
     testWidgets(
         'distinct contact / room identities produce distinct '
         '`ValueKey` strings', (WidgetTester tester) async {
-      // The list at `lib/widgets/contacts/contacts_list.dart` keys
-      // each entry by `'contact:${contact.id()}'` and
-      // `'room:${room.id}'`. Two distinct fixtures must produce
-      // distinct keys so Flutter does not reuse a State object for a
-      // different list item. This assertion guards the contract
-      // without depending on the widget being a perfect drop-in for
-      // end-to-end tap testing.
+      // `lib/widgets/contacts/contacts_list.dart` keys entries by
+      // `'contact:${contact.id()}'` and `'room:${room.id}'`. Distinct
+      // fixtures must produce distinct keys so Flutter does not reuse
+      // a State object for a different list item.
       const aliceKey = ValueKey<String>('contact:contact-alice-id');
       const bobKey = ValueKey<String>('contact:contact-bob-id');
       const alphaKey = ValueKey<String>('room:room-alpha');

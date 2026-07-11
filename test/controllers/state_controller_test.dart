@@ -7,12 +7,8 @@ import 'package:telepathy/models/room.dart';
 import '../support/fake_contact.dart';
 
 /// Reproduces the `callState(CallState)` gate in `lib/main.dart` for tests.
-/// The bug being fixed is that the previous gate (`isCallActive`) dropped
-/// fast `CallEnded` events that arrive during outgoing/room setup. The
-/// recovery uses `hasLiveCall`, so the simulator below mirrors the real
-/// switch-on-event sequence exactly. The returned `String?` is the
-/// failure reason the dialog would have surfaced, or `null` if no dialog
-/// was shown.
+/// Mirrors the real switch-on-event sequence: returns the failure reason the
+/// dialog would have surfaced, or `null` if no dialog was shown.
 Future<String?> _simulateCallState(
     StateController controller, CallState state) async {
   if (!controller.hasLiveCall) {
@@ -127,10 +123,9 @@ void main() {
       controller.setPendingRoom(_roomFixture('room-4'));
       controller.endOfCall();
 
-      // Recreate the moment the widget presses hangup: lifecycle is idle,
-      // so a trailing CallEnded from the backend must NOT be considered a
-      // live call. The main.dart callState gate relies on this so it does
-      // not surface a failure dialog after a local hangup.
+      // Lifecycle is idle after hangup, so a trailing backend CallEnded must
+      // NOT be considered a live call. The main.dart gate relies on this so it
+      // does not surface a failure dialog after a local hangup.
       expect(controller.callLifecycle, CallLifecycle.idle);
       expect(controller.hasLiveCall, isFalse);
     });
@@ -152,10 +147,9 @@ void main() {
 
       controller.setStatus('Active');
 
-      // setStatus only flips the lifecycle phase; the pending slot is
-      // owned by setActiveRoom/setActiveContact. This guards against
-      // accidental drift where a stale setStatus call wipes a pending
-      // target that a slow backend call later tries to claim.
+      // setStatus only flips the lifecycle phase; the pending slot is owned
+      // by setActiveRoom/setActiveContact. Guards against a stale setStatus
+      // call wiping a pending target a slow backend call later claims.
       expect(controller.pendingRoom, isNotNull);
       expect(controller.callLifecycle, CallLifecycle.active);
 
@@ -169,16 +163,14 @@ void main() {
       final controller = StateController();
       final room = _roomFixture('fast-fail');
 
-      // Mirror exactly what `room_widget.dart` does before awaiting
-      // `Telepathy.joinRoom`.
+      // Mirror exactly what `room_widget.dart` does before awaiting `joinRoom`.
       controller.setStatus('Connecting');
       controller.setPendingRoom(room);
       expect(controller.hasLiveCall, isTrue,
           reason: 'gate must be open while we are negotiating');
 
-      // Fast backend failure during setup — this is the regression: with
-      // the old `isCallActive` gate, this event would have been dropped
-      // because the room never reached active state.
+      // Regression: the old `isCallActive` gate dropped this event because the
+      // room never reached active state.
       final surfaced = await _simulateCallState(
           controller,
           const CallState_CallEnded(
@@ -216,8 +208,7 @@ void main() {
       controller.setStatus('Connecting');
       controller.setPendingRoom(_roomFixture('local-hangup'));
 
-      // Local hangup path: the widget sets lifecycle to idle before the
-      // backend echo of `CallEnded` arrives.
+      // Widget sets lifecycle to idle before the backend echo of `CallEnded`.
       controller.endOfCall();
       expect(controller.hasLiveCall, isFalse);
 
@@ -233,11 +224,11 @@ void main() {
         'pending-contact path: lifecycle moves to connecting, the fake '
         'contact occupies the pending slot, fast CallEnded clears everything, '
         'and a late promotion after endOfCall is skipped', () async {
-      // Mirrors exactly what `contact_widget.dart` does when the user taps
-      // the call icon: setStatus('Connecting') then setPendingContact(...)
-      // before awaiting `Telepathy.startCall()`. The native bridge is not
-      // initialized in this unit-test harness, so a real `Contact` cannot
-      // be constructed; `FakeContact` stands in for it.
+      // Mirrors exactly what `contact_widget.dart` does when the user taps the
+      // call icon: setStatus('Connecting') then setPendingContact(...) before
+      // awaiting `Telepathy.startCall()`. The native bridge is not initialized
+      // in this unit-test harness, so a real `Contact` cannot be constructed;
+      // `FakeContact` stands in for it.
       final controller = StateController();
       final alice = FakeContact(
         id: 'alice-12D3KooWAlicePeerIdExampleString',
@@ -247,8 +238,6 @@ void main() {
       controller.setStatus('Connecting');
       controller.setPendingContact(alice);
 
-      // Connecting lifecycle is open and the pending-contact slot holds the
-      // fake contact (no markCallActive() shortcut).
       expect(controller.callLifecycle, CallLifecycle.connecting,
           reason: 'pending-contact transition must open the gate');
       expect(controller.hasLiveCall, isTrue,
@@ -256,9 +245,8 @@ void main() {
       expect(controller.pendingContact, same(alice),
           reason: 'pending-contact slot must own the captured target');
 
-      // Fast backend failure during setup — regression guard: with the old
-      // `isCallActive` gate this would have been dropped because the
-      // contact never reached active state.
+      // Regression: with the old `isCallActive` gate this would have been
+      // dropped because the contact never reached active state.
       final surfaced = await _simulateCallState(
         controller,
         const CallState_CallEnded(
@@ -276,8 +264,7 @@ void main() {
       expect(controller.pendingContact, isNull,
           reason: 'pending slot must be cleared once CallEnded lands');
 
-      // A late `setActiveContact` arrives after the lifecycle was already
-      // reset by endOfCall(). The controller must skip the promotion so the
+      // A late `setActiveContact` after endOfCall() must be skipped so the
       // call does not resurrect and the timer does not restart.
       controller.setActiveContact(alice);
       expect(controller.callLifecycle, CallLifecycle.idle,
@@ -291,12 +278,11 @@ void main() {
     test(
         'fast CallEnded before the start future resumes: promotePendingContact '
         'returns false and does not resurrect the call', () async {
-      // Race scenario: the widget has called setPendingContact, the
-      // backend fires a CallEnded callback that endOfCall()s the
-      // controller to idle, and then the `await startCall` future
-      // resumes. The widget's continuation calls promotePendingContact;
-      // the atomic check must reject the promotion so the call does
-      // not come back from the dead.
+      // Race scenario: the widget has called setPendingContact, the backend fires
+      // a CallEnded callback that endOfCall()s the controller to idle, and then
+      // the `await startCall` future resumes. The widget's continuation calls
+      // promotePendingContact; the atomic check must reject the promotion so
+      // the call does not come back from the dead.
       final controller = StateController();
       final contact = FakeContact(
         id: 'fast-end-race',
@@ -308,10 +294,6 @@ void main() {
       expect(controller.hasLiveCall, isTrue,
           reason: 'gate must be open while we are negotiating');
 
-      // Fast backend failure arrives between the await and its
-      // continuation. The simulateCallState path mirrors the real
-      // callState handler in main.dart, which calls endOfCall on a
-      // CallEnded event.
       final surfaced = await _simulateCallState(
           controller,
           const CallState_CallEnded(
@@ -320,8 +302,6 @@ void main() {
           ));
       expect(surfaced, 'peer went away');
 
-      // Now the startCall future resumes and the widget attempts to
-      // promote. The atomic check must refuse the promotion.
       final promoted = controller.promotePendingContact(contact);
       expect(promoted, isFalse,
           reason:
@@ -336,9 +316,9 @@ void main() {
     test(
         'second call tap during connecting: hasLiveCall guard rejects the tap '
         'and the first call is not disturbed', () async {
-      // The widget check `if (stateController.hasLiveCall) return error`.
-      // Simulate a first call still in the connecting phase, then a
-      // second tap that observes hasLiveCall == true.
+      // Widget check `if (stateController.hasLiveCall) return error`. Simulate a
+      // first call still in the connecting phase, then a second tap that
+      // observes hasLiveCall == true.
       final controller = StateController();
       final firstRoom = _roomFixture('first');
       controller.setStatus('Connecting');
@@ -349,15 +329,10 @@ void main() {
       expect(controller.pendingRoom, firstRoom,
           reason: 'pending slot still holds the first target');
 
-      // The second contact's tap sees the gate open. The widget's
-      // error-dialog path is exercised; here we only assert the
-      // controller state the widget relies on.
       final secondBlocked = controller.hasLiveCall;
       expect(secondBlocked, isTrue,
           reason: 'second tap must observe a live call in the controller');
 
-      // The first call is still the only pending target — the second
-      // tap is short-circuited before any state mutation.
       expect(controller.pendingRoom, firstRoom,
           reason: 'first call slot must be undisturbed by the rejected tap');
     });
@@ -372,8 +347,6 @@ void main() {
       controller.setStatus('Connecting');
       controller.setPendingRoom(first);
 
-      // Wrong room identity: the atomic check must reject the
-      // promotion and leave state unchanged.
       final wrongResult = controller.promotePendingRoom(wrong);
       expect(wrongResult, isFalse,
           reason: 'promote must refuse a mismatched room instance');
@@ -382,8 +355,6 @@ void main() {
       expect(controller.pendingRoom, first,
           reason: 'pending slot must stay intact on a rejected promote');
 
-      // Matching room identity: promotion succeeds and lifecycle
-      // transitions to active.
       final okResult = controller.promotePendingRoom(first);
       expect(okResult, isTrue,
           reason: 'promote must accept the same room instance');

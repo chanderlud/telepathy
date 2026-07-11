@@ -314,11 +314,10 @@ impl AudioStreamError {
     }
 }
 
-/// User-visible copy for a `CallState::CallEnded` emission.
-///
-/// All `CallEnded` emissions must flow through this type so internal
-/// error wording and `GoodbyeReason` wire strings are converted into
-/// stable, user-facing sentences in exactly one place.
+/// User-visible copy for a `CallState::CallEnded` emission. All `CallEnded`
+/// emissions must flow through this type so internal error wording and
+/// `GoodbyeReason` wire strings are converted into stable, user-facing sentences
+/// in exactly one place.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CallEndMessage {
     text: String,
@@ -329,9 +328,8 @@ impl CallEndMessage {
         Self { text: text.into() }
     }
 
-    /// Replaces the previous `error.to_string()` path with an explicit
-    /// per-`ErrorKind` mapping so the frontend never sees raw internal
-    /// wording (e.g. `"Channel closed (mpsc send failed)"`).
+    /// Maps each `ErrorKind` to a user-facing sentence; never passes
+    /// `error.to_string()` through to the frontend.
     pub fn from_error(error: &Error) -> Self {
         let text = match &error.kind {
             ErrorKind::SessionStopped => CALL_END_SESSION_STOPPED.to_string(),
@@ -348,9 +346,8 @@ impl CallEndMessage {
         Self { text }
     }
 
-    /// Audio stream errors are presented as direction-specific
-    /// user-facing copy (microphone vs speaker); the underlying
-    /// cpal/driver wording is intentionally dropped.
+    /// Audio stream errors render as direction-specific copy (microphone /
+    /// speaker); the underlying cpal/driver wording is dropped.
     pub fn from_stream_error(error: &AudioStreamError) -> Self {
         let text = match error.direction {
             AudioStreamDirection::Input => CALL_END_AUDIO_INPUT_FAILURE.to_string(),
@@ -359,16 +356,12 @@ impl CallEndMessage {
         Self { text }
     }
 
-    /// Converts a transport [`GoodbyeReason`] received over the wire
-    /// into the corresponding user-facing sentence. Wire reasons remain
-    /// canonical transport vocabulary; conversion happens only here.
+    /// Converts a transport [`GoodbyeReason`] to user-facing copy. Wire reasons
+    /// remain canonical transport vocabulary; conversion happens only here.
     ///
-    /// A peer-driven normal hangup uses [`GoodbyeReason::None`]; the
-    /// matching frontend `CallEnded` therefore carries an *empty*
-    /// message so the dialog guard in `lib/main.dart`
-    /// (`state.field0.isNotEmpty`) suppresses the failure dialog and a
-    /// silent tone plays instead. Any other reason is treated as an
-    /// unexpected failure and surfaces the generic failure copy.
+    /// `GoodbyeReason::None` produces an empty string so the frontend dialog
+    /// guard (`state.field0.isNotEmpty` in `lib/main.dart`) suppresses the
+    /// failure dialog and the silent hangup tone plays instead.
     pub fn from_goodbye_reason(reason: GoodbyeReason) -> Self {
         let text = match reason {
             GoodbyeReason::None => String::new(),
@@ -384,9 +377,9 @@ impl CallEndMessage {
     }
 }
 
-/// `nickname` is supplied by the caller because the wire contract
-/// deliberately omits the peer nickname; pulling it would require a
-/// re-resolution that the dialer has already done locally.
+/// `nickname` is supplied by the caller; the wire contract deliberately
+/// omits the peer nickname, so pulling it would require a re-resolution the dialer
+/// has already done locally.
 pub fn peer_busy_message(nickname: &str) -> String {
     format!("{nickname} is busy")
 }
@@ -399,10 +392,9 @@ pub fn peer_not_accepted_message(nickname: &str) -> String {
     format!("{nickname} did not accept the call")
 }
 
-/// Formats a peer-facing rejection message keyed on a typed
-/// [`GoodbyeReason`]. Each variant maps to a natural English sentence
-/// so raw transport vocabulary (e.g. "session stopped" or "AudioDeviceError")
-/// never reaches the dialer's UI.
+/// Peer-facing rejection keyed on a typed [`GoodbyeReason`]. Each variant maps
+/// to a natural English sentence so raw transport vocabulary (e.g. "session
+/// stopped" or "AudioDeviceError") never reaches the dialer's UI.
 pub fn peer_goodbye_reason_message(nickname: &str, reason: GoodbyeReason) -> String {
     match reason {
         GoodbyeReason::SessionStopped => {
@@ -466,9 +458,8 @@ mod tests {
 
     #[tokio::test]
     async fn from_error_maps_timeout_to_user_facing_copy() {
-        // Timeout errors are constructed via `From<Elapsed>` in production;
-        // we cannot instantiate `Elapsed` directly in tests, so we
-        // delegate through `tokio::time::timeout` returning `Result<_, Elapsed>`.
+        // Timeout errors are constructed via `From<Elapsed>` in production; we
+        // cannot instantiate `Elapsed` directly, so delegate through `tokio::time::timeout`.
         let error: Error = match tokio::time::timeout(
             std::time::Duration::from_millis(1),
             std::future::pending::<()>(),
@@ -486,9 +477,8 @@ mod tests {
 
     #[test]
     fn from_error_maps_other_kinds_to_generic_copy() {
-        // Non-audio, non-session-stopped, non-already-active, non-timeout
-        // errors must collapse to the generic user-facing copy. The
-        // internal wording must not leak to the frontend.
+        // Non-audio, non-session-stopped, non-already-active, non-timeout errors
+        // must collapse to the generic copy.
         for kind in [
             ErrorKind::Poison("test poison"),
             ErrorKind::MpscSend,
@@ -502,9 +492,9 @@ mod tests {
                 CALL_END_GENERIC,
                 "internal wording for {error:?} leaked to CallEnded"
             );
-            // Sanity: the internal `Display` wording must contain text
-            // that the generic copy does NOT contain. This proves the
-            // generic copy is genuinely free of internal wording.
+            // Sanity: the internal `Display` wording must contain text the
+            // generic copy does NOT — proves the generic copy is genuinely free
+            // of internal wording.
             assert_ne!(error.to_string(), CALL_END_GENERIC);
         }
     }
@@ -525,17 +515,15 @@ mod tests {
             "output stream errors must surface as the speaker copy"
         );
 
-        // The remote-side wire mapping (used for `GoodbyeReason` sent
-        // to peers) must remain generic — direction-specific copy is a
-        // local-only concept and must not leak into the wire payload.
+        // Remote-side wire mapping must stay generic — direction-specific copy is
+        // local-only and must not leak into the wire payload.
         assert_eq!(input_error.remote_reason(), GoodbyeReason::AudioDeviceError);
         assert_eq!(
             output_error.remote_reason(),
             GoodbyeReason::AudioDeviceError
         );
 
-        // Raw cpal/driver wording must never appear in the user-facing
-        // copy for either direction.
+        // Raw cpal/driver wording must never appear in user-facing copy.
         assert!(
             !CallEndMessage::from_stream_error(&input_error)
                 .into_string()
@@ -564,10 +552,8 @@ mod tests {
             CallEndMessage::from_goodbye_reason(GoodbyeReason::Error).into_string(),
             CALL_END_GENERIC
         );
-        // A peer-driven normal hangup must render to an EMPTY string so the
-        // frontend dialog guard (`state.field0.isNotEmpty` in
-        // `lib/main.dart`) keeps the surface dialog-free. Generic or
-        // session-stopped copy here would surface as a failed-call toast.
+        // Normal hangup must render to an EMPTY string so the frontend dialog guard
+        // (`state.field0.isNotEmpty` in `lib/main.dart`) stays silent.
         assert_eq!(
             CallEndMessage::from_goodbye_reason(GoodbyeReason::None).into_string(),
             "",
