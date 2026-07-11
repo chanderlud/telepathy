@@ -1,4 +1,4 @@
-use crate::flutter::CallState;
+use crate::types::CallState;
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::core::{RoomControllerCleanup, TelepathyCore};
 use crate::internal::error::{AudioStreamError, CallEndMessage, Error, ErrorKind};
