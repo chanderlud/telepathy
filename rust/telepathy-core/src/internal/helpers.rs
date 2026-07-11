@@ -1,4 +1,3 @@
-use crate::types::CallState;
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::core::{RoomControllerCleanup, TelepathyCore};
 use crate::internal::error::{AudioStreamError, CallEndMessage, Error, ErrorKind};
@@ -8,8 +7,11 @@ use crate::internal::messages::{ProtocolMessage, StartScreenshare};
 #[cfg(not(target_family = "wasm"))]
 use crate::internal::screenshare;
 use crate::internal::state::{EarlyCallState, StatisticsCollectorState};
+#[cfg(target_os = "ios")]
+use crate::internal::utils::deactivate_audio_session;
 use crate::internal::utils::{KanalSink, KanalSource};
 use crate::internal::{ALPN, Result};
+use crate::types::CallState;
 #[cfg(not(target_family = "wasm"))]
 use crate::types::FrontendNotify;
 use crate::types::{ManagerState, SessionStatus};
