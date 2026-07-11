@@ -718,9 +718,9 @@ impl SessionState {
                             .session_status(
                                 SessionStatus::Connected {
                                     relayed: primary_connection.is_relay(),
-                                    remote_address: match *primary_connection.remote_addr() {
+                                    remote_address: match primary_connection.remote_addr() {
                                         TransportAddr::Ip(socket) => socket.ip().to_string(),
-                                        TransportAddr::Relay(_) => "relay".to_string(),
+                                        TransportAddr::Relay(relay_url) => relay_identifier(relay_url),
                                         TransportAddr::Custom(_) => "custom".to_string(),
                                         _ => "unknown".to_string(),
                                     },
@@ -761,10 +761,60 @@ impl PeerVolume {
     }
 }
 
+fn relay_identifier(relay_url: &iroh::RelayUrl) -> String {
+    let port = relay_url.port().map(|port| format!(":{port}"));
+
+    match relay_url.host() {
+        Some(url::Host::Domain(domain)) => {
+            let mut labels = domain.trim_end_matches('.').split('.');
+            let first = labels.next().unwrap_or("unknown");
+            let identifier = if first.eq_ignore_ascii_case("relay") {
+                labels
+                    .next()
+                    .map(|second| format!("{first}.{second}"))
+                    .unwrap_or_else(|| first.to_string())
+            } else {
+                first.to_string()
+            };
+            format!("{identifier}{}", port.as_deref().unwrap_or_default())
+        }
+        Some(url::Host::Ipv4(address)) => {
+            format!("{address}{}", port.as_deref().unwrap_or_default())
+        }
+        Some(url::Host::Ipv6(address)) => match port {
+            Some(port) => format!("[{address}]{port}"),
+            None => address.to_string(),
+        },
+        None => "unknown".to_string(),
+    }
+}
+
 #[cfg(test)]
 mod call_slot_tests {
-    use super::{CallSlot, CallSlotAcquireResult, CallSlotState};
-    use iroh::SecretKey;
+    use super::{CallSlot, CallSlotAcquireResult, CallSlotState, relay_identifier};
+    use iroh::{RelayUrl, SecretKey};
+
+    #[test]
+    fn relay_identifier_uses_short_distinct_part_of_domain() {
+        let production: RelayUrl = "https://use1-1.relay.n0.iroh.link."
+            .parse()
+            .expect("valid production relay URL");
+        let custom: RelayUrl = "https://relay.example.com"
+            .parse()
+            .expect("valid custom relay URL");
+
+        assert_eq!(relay_identifier(&production), "use1-1");
+        assert_eq!(relay_identifier(&custom), "relay.example");
+    }
+
+    #[test]
+    fn relay_identifier_keeps_ip_and_port_for_local_relays() {
+        let local: RelayUrl = "https://127.0.0.1:3340"
+            .parse()
+            .expect("valid local relay URL");
+
+        assert_eq!(relay_identifier(&local), "127.0.0.1:3340");
+    }
 
     impl CallSlot {
         fn try_transition(&self, from: CallSlotState, to: CallSlotState) -> bool {
