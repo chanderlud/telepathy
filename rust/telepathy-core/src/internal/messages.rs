@@ -4,6 +4,7 @@ use iroh::PublicKey;
 use iroh::endpoint::Connection;
 use serde::Serialize;
 use speedy::{Readable, Writable};
+use tokio::sync::mpsc::UnboundedSender;
 use uuid::Uuid;
 
 /// Canonical reasons for a [`ProtocolMessage::Goodbye`].
@@ -109,12 +110,18 @@ pub(crate) enum RoomMessage {
 
         /// ID for the corresponding session
         session_id: Uuid,
+
+        terminal_sender: UnboundedSender<RoomControl>,
     },
     Leave {
         peer: PublicKey,
         /// [`Connection::stable_id`] for the transport being torn down.
         connection_id: usize,
     },
+}
+
+pub(crate) enum RoomControl {
+    Goodbye(GoodbyeReason),
 }
 
 #[derive(Debug)]

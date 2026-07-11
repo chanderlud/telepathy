@@ -13,7 +13,7 @@ use crate::internal::error::{
 };
 use crate::internal::helpers::OutputHelper;
 use crate::internal::messages::{
-    AudioHeader, GoodbyeReason, ProtocolMessage, RoomMessage, StartScreenshare,
+    AudioHeader, GoodbyeReason, ProtocolMessage, RoomControl, RoomMessage, StartScreenshare,
 };
 use crate::internal::state::{
     CallSlot, CallSlotAcquireResult, CallSlotSnapshot, CallSlotState, CoreState,
@@ -49,7 +49,9 @@ use telepathy_audio::devices::AudioHost;
 use tokio::select;
 #[cfg(target_family = "wasm")]
 use tokio::sync::Mutex;
-use tokio::sync::mpsc::{Receiver, Sender, UnboundedReceiver, channel, unbounded_channel};
+use tokio::sync::mpsc::{
+    Receiver, Sender, UnboundedReceiver, UnboundedSender, channel, unbounded_channel,
+};
 use tokio::sync::{Notify, RwLock};
 #[cfg(not(target_family = "wasm"))]
 use tokio::time::{Instant, Interval, interval, sleep_until, timeout};
@@ -1670,18 +1672,35 @@ where
             .room_handshake_snapshot()
             .await
             .ok_or(ErrorKind::RoomStateMissing)?;
+        let (terminal_sender, mut terminal_receiver) = unbounded_channel();
+        let mut terminal_controls_open = true;
 
         sender
             .send(RoomMessage::Join {
                 connection: connection.clone(),
                 state: call_state,
                 session_id,
+                terminal_sender,
             })
             .await
             .map_err(|_| ErrorKind::RoomStateMissing)?;
 
         loop {
             select! {
+                biased;
+
+                control = terminal_receiver.recv(), if terminal_controls_open => {
+                    match control {
+                        Some(RoomControl::Goodbye(reason)) => {
+                            info!(event = "room_control_goodbye_sending", peer.id = %peer_id, ?reason);
+                            _ = write_message(send, &ProtocolMessage::Goodbye { reason }).await;
+                            break;
+                        }
+                        None => {
+                            terminal_controls_open = false;
+                        }
+                    }
+                }
                 _ = stop_session.cancelled() => {
                     info!(event = "room_session_stopped_sending_goodbye", peer.id = %peer_id);
                     _ = write_message(send, &ProtocolMessage::goodbye()).await;
@@ -1812,38 +1831,18 @@ where
                     if let Some(error) = error {
                         let message = CallEndMessage::from_stream_error(&error).into_string();
                         let remote_reason = error.remote_reason();
-                        // Mirror `call_controller`: notify active room peers with a goodbye
-                        // carrying the audio-device-error reason so they can distinguish a
-                        // local device failure from a normal transport disconnect.
+                        // Each installed handshake owns the framed control writer, so terminal
+                        // commands preserve control-stream ordering without opening a new stream.
                         for (connection_id, room_connection) in connections.iter() {
-                            match room_connection.connection.open_bi().await {
-                                Ok((send_stream, _recv_stream)) => {
-                                    let mut framed = LengthDelimitedCodec::builder()
-                                        .max_frame_length(SESSION_MAX_FRAME_LENGTH)
-                                        .length_field_type::<u64>()
-                                        .new_write(send_stream);
-                                    if let Err(error) = write_message(
-                                        &mut framed,
-                                        &ProtocolMessage::Goodbye {
-                                            reason: remote_reason,
-                                        },
-                                    )
-                                    .await
-                                    {
-                                        warn!(
-                                            event = "room_audio_error_goodbye_failed",
-                                            connection.id = connection_id,
-                                            error = %error
-                                        );
-                                    }
-                                }
-                                Err(error) => {
-                                    warn!(
-                                        event = "room_audio_error_open_bi_failed",
-                                        connection.id = connection_id,
-                                        error = %error
-                                    );
-                                }
+                            if room_connection
+                                .terminal_sender
+                                .send(RoomControl::Goodbye(remote_reason))
+                                .is_err()
+                            {
+                                warn!(
+                                    event = "room_audio_error_goodbye_signal_failed",
+                                    connection.id = connection_id
+                                );
                             }
                         }
                         self.callbacks
@@ -1855,7 +1854,12 @@ where
                 }
                 message = receiver.recv() => {
                     match message {
-                        Some(RoomMessage::Join { connection, state, session_id }) => {
+                        Some(RoomMessage::Join {
+                            connection,
+                            state,
+                            session_id,
+                            terminal_sender,
+                        }) => {
                             if let Some(session) = self.session_states.read().await.get(&state.peer) {
                                 if session.id != session_id {
                                     warn!(event = "room_join_stale_session", peer.id = %state.peer);
@@ -1949,6 +1953,7 @@ where
                                     connection,
                                     _output: helper,
                                     handle,
+                                    terminal_sender,
                                 },
                             );
                             self.callbacks
@@ -2056,20 +2061,21 @@ where
     }
 }
 
-struct RoomConnection<O> {
-    connection: Connection,
+pub(crate) struct RoomConnection<O> {
+    pub(crate) connection: Connection,
     _output: OutputHelper<O>,
     pub(crate) handle: JoinHandle<Result<()>>,
+    terminal_sender: UnboundedSender<RoomControl>,
 }
 
 pub(crate) struct RoomControllerCleanup<O> {
-    end_sessions: CancellationToken,
-    room_owner: CallSlotSnapshot,
-    room_generation: u64,
-    input_handle: Option<JoinHandle<Result<()>>>,
-    connections: HashMap<usize, RoomConnection<O>>,
-    statistics_handle: Option<JoinHandle<()>>,
-    setup_error: Option<Error>,
+    pub(crate) end_sessions: CancellationToken,
+    pub(crate) room_owner: CallSlotSnapshot,
+    pub(crate) room_generation: u64,
+    pub(crate) input_handle: Option<JoinHandle<Result<()>>>,
+    pub(crate) connections: HashMap<usize, RoomConnection<O>>,
+    pub(crate) statistics_handle: Option<JoinHandle<()>>,
+    pub(crate) setup_error: Option<Error>,
 }
 
 enum CallControllerOutcome {
