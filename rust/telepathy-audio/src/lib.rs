@@ -247,6 +247,7 @@ pub mod sea;
 mod platform;
 
 pub use constants::FRAME_SIZE;
+pub use cpal::{Error as CpalError, ErrorKind as CpalErrorKind};
 pub use error::{
     AudioFileError, ChannelError, ConfigError, Error, ProcessingError, StreamError, TaskError,
 };

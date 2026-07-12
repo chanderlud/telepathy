@@ -15,9 +15,6 @@ native = []
 integration-testing = ["mockall", "async-trait", "iroh/test-utils"]
 default = ["flutter"]
 
-[dev-dependencies]
-cpal = "0.18.1"
-
 [dependencies]
 atomic_float = "1"
 async-trait = { version = "0.1", optional = true }

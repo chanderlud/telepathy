@@ -1,7 +1,6 @@
 #![cfg(feature = "integration-testing")]
 
 use bytes::Bytes;
-use cpal::{Error as CpalError, ErrorKind as CpalErrorKind};
 use futures_util::{SinkExt, StreamExt};
 use iroh::address_lookup::memory::MemoryLookup;
 use iroh::endpoint::{Connection, RecvStream, SendStream, presets};
@@ -16,6 +15,7 @@ use telepathy_audio::devices::AudioHost;
 use telepathy_audio::devices::{MockAudioHost, MockAudioInput, MockAudioOutput};
 use telepathy_audio::internal::traits::{AudioInput, AudioOutput};
 use telepathy_audio::io::StreamErrorCallback;
+use telepathy_audio::{CpalError, CpalErrorKind};
 use telepathy_core::internal::TelepathyHandle;
 use telepathy_core::internal::callbacks::{MockCoreCallbacks, MockCoreStatisticsCallback};
 use telepathy_core::internal::state::{CallSlotState, SessionState};
