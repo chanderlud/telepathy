@@ -956,12 +956,10 @@ async fn reset_sessions_clears_pending_incoming_slot() {
     );
 }
 
-/// Queued session work that resumes inside `negotiate_outgoing_call` AFTER
-/// `reset_sessions`'s terminal barrier must observe cancellation and return
-/// `SessionStopped` without re-acquiring the slot. Without the negotiation-entry
-/// guard the slot would be left stuck in `PendingOutgoing` after `shutdown`.
+/// Terminal reset clears a real public outgoing call while its callee remains
+/// blocked on the acceptance prompt.
 #[tokio::test(flavor = "multi_thread")]
-async fn reset_sessions_drains_queued_start_call_after_terminal_force_clear() {
+async fn reset_sessions_cancels_public_pending_outgoing_acceptance() {
     init_test_tracing();
     let relay_map = shared_relay_map();
 
@@ -973,10 +971,10 @@ async fn reset_sessions_drains_queued_start_call_after_terminal_force_clear() {
         .expect("contact a invalid");
     let contact_b = Contact::new("client-b".to_string(), key_b.public().to_string())
         .expect("contact b invalid");
-    let peer_id_b = contact_b.get_peer_id();
 
     let call_states_a = Arc::new(Mutex::new(Vec::new()));
     let call_states_b = Arc::new(Mutex::new(Vec::new()));
+    let accept_probe_b = PendingAcceptProbe::default();
 
     let client_a = build_client(
         relay_map,
@@ -993,7 +991,7 @@ async fn reset_sessions_drains_queued_start_call_after_terminal_force_clear() {
     )
     .await;
 
-    let client_b = build_client(
+    let client_b = build_client_with_accept_probe(
         relay_map,
         key_b,
         vec![contact_a.clone()],
@@ -1005,6 +1003,7 @@ async fn reset_sessions_drains_queued_start_call_after_terminal_force_clear() {
             DEFAULT_SAMPLE_RATE,
         ),
         call_states_b.clone(),
+        accept_probe_b.clone(),
     )
     .await;
 
@@ -1012,38 +1011,16 @@ async fn reset_sessions_drains_queued_start_call_after_terminal_force_clear() {
     client_b.telepathy.start_session(&contact_a).await;
     wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
 
-    // Notify `start_call` directly so the slot is NOT pre-acquired here — the
-    // negotiation-entry cancellation guard is the line of defense under test,
-    // not the public-path write lock.
-    let a_session = client_a
+    client_a
         .telepathy
-        .inner
-        .session_states
-        .read()
+        .start_call(&contact_b)
         .await
-        .get(&contact_b.get_peer_id())
-        .cloned()
-        .expect("client_a should have a session for contact_b");
-    a_session.start_call.notify_one();
+        .expect("alice should start the outgoing call");
+    accept_probe_b.wait_opened().await;
 
-    // Poll for `PendingOutgoing` so we know the session task reached
-    // `negotiate_outgoing_call` before triggering shutdown.
-    wait_for_slot_pending_outgoing(&client_a, &peer_id_b.to_string()).await;
-
-    // `shutdown` -> `reset_sessions` drains `session_states`, cancels each
-    // session's `stop_session` token, and force-clears any pending slot. The
-    // session task in `negotiate_outgoing_call` observes cancellation and
-    // returns `SessionStopped` without acquiring a slot.
-    let core_a = client_a.telepathy.inner.clone();
-    let reset_task = tokio::spawn(async move {
-        core_a.shutdown().await;
-    });
-
-    wait_for_slot_idle(&client_a, &peer_id_b.to_string()).await;
-
-    // Stability window: a phantom queued-work acquisition would re-pend the
-    // slot within a few hundred ms.
-    sleep(Duration::from_millis(200)).await;
+    client_a.telepathy.shutdown().await;
+    client_b.telepathy.shutdown().await;
+    accept_probe_b.wait_cancelled().await;
 
     let after = client_a
         .telepathy
@@ -1055,14 +1032,12 @@ async fn reset_sessions_drains_queued_start_call_after_terminal_force_clear() {
     assert_eq!(
         after.state,
         CallSlotState::Idle,
-        "call slot must be Idle after reset_sessions; a queued start_call permit that resumed negotiate_outgoing_call after the terminal force-clear would have re-pended it. snapshot={after:?}"
+        "call slot must be Idle after reset_sessions clears the public outgoing call; got {after:?}"
     );
     assert_eq!(
         after.direct_peer, None,
         "no peer should own the slot after reset_sessions; got {after:?}"
     );
-
-    let _ = reset_task.await;
 }
 
 /// Full `restart_manager()` flow: slot ends `Idle`, a fresh session is registered
@@ -4944,39 +4919,6 @@ async fn wait_for_stable_session_pair<HA, IA, OA, HB, IB, OB>(
         assert!(
             tokio::time::Instant::now() < deadline,
             "timed out waiting for stable post-restart session pair; a_id={a_id:?}, b_id={b_id:?}"
-        );
-    }
-}
-
-/// Waits until the call slot transitions to `PendingOutgoing` for `peer`. The
-/// session task observes its queued `start_call` notify, enters
-/// `negotiate_outgoing_call`, and acquires the outgoing slot via
-/// `PendingDirectCallSlot::try_acquire_outgoing`.
-async fn wait_for_slot_pending_outgoing<H, I, O>(client: &ClientHarness<H, I, O>, peer: &str)
-where
-    H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
-    I: Send + Sync + 'static,
-    O: Send + Sync + 'static,
-{
-    let mut poll = interval(Duration::from_millis(20));
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        poll.tick().await;
-        let snapshot = client
-            .telepathy
-            .inner
-            .core_state
-            .call_slot
-            .snapshot()
-            .expect("call slot snapshot should succeed");
-        if snapshot.state == CallSlotState::PendingOutgoing {
-            return;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for call slot to reach PendingOutgoing for peer {peer}; \
-             the session task should have entered negotiate_outgoing_call and called \
-             PendingDirectCallSlot::try_acquire_outgoing. last snapshot={snapshot:?}"
         );
     }
 }

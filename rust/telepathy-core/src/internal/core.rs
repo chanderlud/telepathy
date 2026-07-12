@@ -718,6 +718,32 @@ where
         }
     }
 
+    /// Atomically validates a direct-call session and acquires its outgoing slot.
+    async fn acquire_outgoing_call_slot<'a>(
+        &self,
+        call_slot: &'a CallSlot,
+        peer: PublicKey,
+        session_id: Uuid,
+        stop_session: &CancellationToken,
+    ) -> Result<OutgoingSlotDecision<'a>> {
+        // Keep session-map read lock through synchronous slot acquisition.
+        // `reset_sessions` needs map write lock before terminal slot clearing, so
+        // it drains this session before validation or clears after acquisition.
+        // No await occurs while either lock is held.
+        let states = self.session_states.read().await;
+        if stop_session.is_cancelled() {
+            return Ok(OutgoingSlotDecision::SessionStopped);
+        }
+        if states.get(&peer).is_none_or(|state| state.id != session_id) {
+            return Ok(OutgoingSlotDecision::StaleSession);
+        }
+
+        match PendingDirectCallSlot::try_acquire_outgoing(call_slot, peer)? {
+            Some(slot) => Ok(OutgoingSlotDecision::Acquired(slot)),
+            None => Ok(OutgoingSlotDecision::Busy),
+        }
+    }
+
     /// Handles one protocol message received while awaiting `HelloAck` on an outgoing call.
     async fn handle_outgoing_hello_response(
         &self,
@@ -1050,24 +1076,25 @@ where
                 return Ok(OutgoingNegotiationOutcome::CallEnded);
             }
         } else {
-            // Per the per-session ownership invariant, a direct-call pending slot may
-            // only be acquired (or matched) by a session that is still the current map
-            // entry for `peer`. A session that has been replaced by a collision
-            // replacement (or drained by `reset_sessions`) must not be allowed to
-            // re-pend a slot — its replacement session will take over via the
-            // `session_rearmed_pending_outgoing` path in `session_outer`.
-            if !is_session_still_current(&self.session_states, peer, io.state.id).await {
-                info!(event = "outgoing_call_skipped_stale_session", peer.id = %peer);
-                let message =
-                    CallEndMessage::from_text(crate::internal::error::CALL_END_ALREADY_ACTIVE);
-                self.callbacks
-                    .call_state(CallState::CallEnded(message.into_string(), true))
-                    .await;
-                return Ok(OutgoingNegotiationOutcome::CallEnded);
-            }
-            match PendingDirectCallSlot::try_acquire_outgoing(call_slot, peer)? {
-                Some(slot) => pending_slot = Some(slot),
-                None => {
+            match self
+                .acquire_outgoing_call_slot(call_slot, peer, io.state.id, &io.state.stop_session)
+                .await?
+            {
+                OutgoingSlotDecision::SessionStopped => {
+                    info!(event = "outgoing_call_cancelled_before_acquire");
+                    return Ok(OutgoingNegotiationOutcome::SessionStopped);
+                }
+                OutgoingSlotDecision::StaleSession => {
+                    info!(event = "outgoing_call_skipped_stale_session", peer.id = %peer);
+                    let message =
+                        CallEndMessage::from_text(crate::internal::error::CALL_END_ALREADY_ACTIVE);
+                    self.callbacks
+                        .call_state(CallState::CallEnded(message.into_string(), true))
+                        .await;
+                    return Ok(OutgoingNegotiationOutcome::CallEnded);
+                }
+                OutgoingSlotDecision::Acquired(slot) => pending_slot = Some(slot),
+                OutgoingSlotDecision::Busy => {
                     warn!(event = "call_slot_busy_outgoing", peer.id = %peer);
                     let message =
                         CallEndMessage::from_text(crate::internal::error::CALL_END_ALREADY_ACTIVE);
@@ -2160,6 +2187,13 @@ enum IncomingSlotDecision<'a> {
     /// never come.
     StaleSession,
     Acquired(PendingDirectCallSlot<'a>),
+}
+
+enum OutgoingSlotDecision<'a> {
+    Acquired(PendingDirectCallSlot<'a>),
+    Busy,
+    StaleSession,
+    SessionStopped,
 }
 
 /// Result of handling one message while awaiting `HelloAck` on an outgoing call.
