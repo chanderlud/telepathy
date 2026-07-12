@@ -32,6 +32,7 @@ if str(SYSTEM_TEST_ROOT) not in sys.path:
 BINARY_PATHS = {
     "cli": str(RUST_TARGET / "telepathy-cli"),
 }
+FAILED_PROFILES: dict[str, str] = {}
 
 def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption(
@@ -79,6 +80,9 @@ def _ensure_relay_certs() -> None:
 
 
 def pytest_configure(config: pytest.Config) -> None:
+    if not hasattr(config, "workerinput"):
+        FAILED_PROFILES.clear()
+
     _ensure_relay_certs()
 
     # result = subprocess.run(
@@ -119,6 +123,36 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[Any]) -> 
     outcome = yield
     rep = outcome.get_result()
     setattr(item, f"rep_{rep.when}", rep)
+
+    profile = getattr(item, "callspec", None)
+    params = getattr(profile, "params", {})
+    profile_name = getattr(params.get("profile"), "name", None)
+    if isinstance(profile_name, str):
+        rep.user_properties.append(("system_test_profile", profile_name))
+
+
+def pytest_runtest_logreport(report: pytest.TestReport) -> None:
+    if not report.failed:
+        return
+
+    profile = next(
+        (
+            value
+            for key, value in report.user_properties
+            if key == "system_test_profile" and isinstance(value, str)
+        ),
+        "none",
+    )
+    FAILED_PROFILES.setdefault(report.nodeid, profile)
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    _ = exitstatus
+    if hasattr(session.config, "workerinput"):
+        return
+
+    for nodeid, profile in sorted(FAILED_PROFILES.items()):
+        print(f"{nodeid} profile={profile}")
 
 
 def _sanitize_nodeid(nodeid: str) -> str:

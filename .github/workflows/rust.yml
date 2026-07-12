@@ -240,7 +240,7 @@ jobs:
       - name: Run system tests
         run: |
           PYTHON_BIN="$(command -v python)"
-          sudo -E "$PYTHON_BIN" -m pytest system-tests/tests --artifacts-dir system-tests/artifacts --save-artifacts failures
+          sudo -E "$PYTHON_BIN" -m pytest -p no:terminal system-tests/tests --artifacts-dir system-tests/artifacts --save-artifacts failures
 
       - name: Stop iroh discovery containers
         if: always()
