@@ -1693,6 +1693,7 @@ where
             .ok_or(ErrorKind::RoomStateMissing)?;
         let (terminal_sender, mut terminal_receiver) = unbounded_channel();
         let mut terminal_controls_open = true;
+        let mut goodbye_reason = None;
 
         sender
             .send(RoomMessage::Join {
@@ -1733,8 +1734,9 @@ where
                 }
                 result = read_message(recv) => {
                     match result {
-                        Ok(ProtocolMessage::Goodbye { .. }) => {
-                            info!(event = "room_goodbye_received", peer.id = %peer_id);
+                        Ok(ProtocolMessage::Goodbye { reason }) => {
+                            info!(event = "room_goodbye_received", peer.id = %peer_id, ?reason);
+                            goodbye_reason = Some(reason);
                             break;
                         }
                         Ok(ProtocolMessage::Chat { .. }) => {
@@ -1770,7 +1772,9 @@ where
         _ = sender
             .send(RoomMessage::Leave {
                 peer: peer_id,
+                session_id: session.id,
                 connection_id,
+                reason: goodbye_reason,
             })
             .await;
         Ok(())
@@ -1780,17 +1784,21 @@ where
     #[instrument(
         name = "room.controller",
         skip_all,
-        fields(room.hash = field::Empty, room.generation = room_generation)
+        fields(room.hash = field::Empty, room.generation = start.room_generation)
     )]
     pub(crate) async fn room_controller(
         &self,
         mut receiver: Receiver<RoomMessage>,
-        end_sessions: CancellationToken,
         stop_io: &CancellationToken,
-        end_call: Arc<Notify>,
-        room_owner: CallSlotSnapshot,
-        room_generation: u64,
+        start: RoomControllerStart,
     ) -> Result<()> {
+        let RoomControllerStart {
+            end_sessions,
+            end_call,
+            room_owner,
+            room_generation,
+            ready_sender,
+        } = start;
         let room_hash = self.room_hash().await;
         Span::current().record("room.hash", field::debug(room_hash));
         // on ios the audio session must be configured
@@ -1819,6 +1827,7 @@ where
         {
             Ok(helper) => helper,
             Err(error) => {
+                drop(ready_sender);
                 self.notify_setup_failure(&error).await;
                 return self
                     .cleanup_room_controller(
@@ -1836,6 +1845,7 @@ where
                     .await;
             }
         };
+        _ = ready_sender.send(());
         let input_handle = spawn_task(audio_input(
             input_helper.receiver(),
             DynamicConnection::new(
@@ -1944,14 +1954,6 @@ where
                                 peer_connections.remove(&state.peer);
                             }
 
-                            // first connection
-                            if connections.is_empty() {
-                                CONNECTED.store(true, Relaxed);
-                                self.callbacks.call_state(CallState::Connected).await;
-                            }
-
-                            connection_sender.push(connection.clone());
-                            // setup output stack
                             let mut helper = match self
                                 .setup_output(
                                     state.peer,
@@ -1965,11 +1967,35 @@ where
                             {
                                 Ok(helper) => helper,
                                 Err(error) => {
+                                    let reason = GoodbyeReason::AudioDeviceError;
+                                    if terminal_sender.send(RoomControl::Goodbye(reason)).is_err() {
+                                        warn!(
+                                            event = "room_audio_error_goodbye_signal_failed",
+                                            connection.id = connection_id
+                                        );
+                                    }
+                                    for (installed_connection_id, room_connection) in &connections {
+                                        if room_connection
+                                            .terminal_sender
+                                            .send(RoomControl::Goodbye(reason))
+                                            .is_err()
+                                        {
+                                            warn!(
+                                                event = "room_audio_error_goodbye_signal_failed",
+                                                connection.id = installed_connection_id
+                                            );
+                                        }
+                                    }
                                     self.notify_setup_failure(&error).await;
                                     setup_error = Some(error);
                                     break;
                                 }
                             };
+                            if connections.is_empty() {
+                                CONNECTED.store(true, Relaxed);
+                                self.callbacks.call_state(CallState::Connected).await;
+                            }
+                            connection_sender.push(connection.clone());
                             // begin sending
                             let handle = spawn_task(audio_output(
                                 helper.sender(),
@@ -1995,8 +2021,28 @@ where
                         }
                         Some(RoomMessage::Leave {
                             peer,
+                            session_id,
                             connection_id,
+                            reason,
                         }) => {
+                            let current_session = self
+                                .session_states
+                                .read()
+                                .await
+                                .get(&peer)
+                                .is_some_and(|session| session.id == session_id);
+                            if reason == Some(GoodbyeReason::AudioDeviceError) && current_session {
+                                self.callbacks
+                                    .call_state(CallState::CallEnded(
+                                        CallEndMessage::from_goodbye_reason(
+                                            GoodbyeReason::AudioDeviceError,
+                                        )
+                                        .into_string(),
+                                        true,
+                                    ))
+                                    .await;
+                                break;
+                            }
                             match peer_connections.get(&peer).copied() {
                                 Some(active_connection_id)
                                     if active_connection_id == connection_id =>
@@ -2099,6 +2145,14 @@ pub(crate) struct RoomConnection<O> {
     _output: OutputHelper<O>,
     pub(crate) handle: JoinHandle<Result<()>>,
     terminal_sender: UnboundedSender<RoomControl>,
+}
+
+pub(crate) struct RoomControllerStart {
+    pub(crate) end_sessions: CancellationToken,
+    pub(crate) end_call: Arc<Notify>,
+    pub(crate) room_owner: CallSlotSnapshot,
+    pub(crate) room_generation: u64,
+    pub(crate) ready_sender: tokio::sync::oneshot::Sender<()>,
 }
 
 pub(crate) struct RoomControllerCleanup<O> {

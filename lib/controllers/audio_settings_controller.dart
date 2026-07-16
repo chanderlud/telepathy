@@ -1,6 +1,5 @@
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:telepathy/core/rust/lib.dart';
 
 class AudioSettingsController with ChangeNotifier {
   final SharedPreferencesAsync options;
@@ -98,33 +97,6 @@ class AudioSettingsController with ChangeNotifier {
     await _setOptionalString('inputDeviceId', deviceId);
 
     notifyListeners();
-  }
-
-  Future<void> pruneMissingDevices({
-    required List<AudioDevice> inputDevices,
-    required List<AudioDevice> outputDevices,
-  }) async {
-    var changed = false;
-
-    final savedInputId = inputDeviceId;
-    if (savedInputId != null &&
-        !inputDevices.any((device) => device.id == savedInputId)) {
-      inputDeviceId = null;
-      await _setOptionalString('inputDeviceId', null);
-      changed = true;
-    }
-
-    final savedOutputId = outputDeviceId;
-    if (savedOutputId != null &&
-        !outputDevices.any((device) => device.id == savedOutputId)) {
-      outputDeviceId = null;
-      await _setOptionalString('outputDeviceId', null);
-      changed = true;
-    }
-
-    if (changed) {
-      notifyListeners();
-    }
   }
 
   Future<void> _setOptionalString(String key, String? value) {

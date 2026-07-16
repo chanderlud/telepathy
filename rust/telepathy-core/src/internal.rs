@@ -14,7 +14,7 @@ mod utils;
 
 use crate::AudioDevice;
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
-use crate::internal::core::TelepathyCore;
+use crate::internal::core::{RoomControllerStart, TelepathyCore};
 use crate::internal::error::{Error, ErrorKind};
 use crate::internal::messages::{Attachment, ProtocolMessage};
 use crate::internal::state::{
@@ -32,6 +32,7 @@ use std::time::Duration;
 use telepathy_audio::RnnModel;
 use telepathy_audio::devices::AudioHost;
 use tokio::sync::mpsc::channel;
+use tokio::sync::oneshot;
 use tokio::sync::{Mutex, Notify};
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
@@ -238,6 +239,7 @@ where
         let call_state = match self.inner.setup_call(SecretKey::generate().public()).await {
             Ok(state) => state,
             Err(error) => {
+                self.inner.notify_setup_failure(&error).await;
                 self.inner.core_state.call_slot.release()?;
                 return Err(error);
             }
@@ -249,6 +251,38 @@ where
             .next_room_generation
             .fetch_add(1, Relaxed)
             .saturating_add(1);
+        let (ready_sender, ready_receiver) = oneshot::channel();
+        let self_clone = self.inner.clone();
+        let controller_cancel = cancel.clone();
+        let controller_end_call = Arc::clone(&end_call);
+        self.handles.lock().await.push(spawn_task(
+            async move {
+                let stop_io = Default::default();
+                if let Err(error) = self_clone
+                    .room_controller(
+                        receiver,
+                        &stop_io,
+                        RoomControllerStart {
+                            end_sessions: controller_cancel,
+                            end_call: controller_end_call,
+                            room_owner,
+                            room_generation,
+                            ready_sender,
+                        },
+                    )
+                    .await
+                {
+                    error!("error in room controller: {:?}", error);
+                }
+                stop_io.cancel();
+            }
+            .in_current_span(),
+        ));
+
+        if ready_receiver.await.is_err() {
+            return Ok(());
+        }
+
         // set room state
         let old_state_option = self.inner.room_state.write().await.replace(RoomState {
             peers: members.clone(),
@@ -263,39 +297,13 @@ where
             old_state.cancel.cancel();
             old_state.end_call.notify_one();
         }
-        // tries to connect to every member of the room using existing sessions, or new ones if needed
-        // note: sending your own identity to start_session is safe
         for member in members {
             if let Some(state) = self.inner.session_states.read().await.get(&member) {
                 state.start_call.notify_one();
-            } else if let Some(ref sender) = self.inner.start_session {
-                // when the session opens, start_call will be notified
+            } else if let Some(sender) = &self.inner.start_session {
                 _ = sender.send(member).await;
             }
         }
-        // spawn room controller
-        let self_clone = self.inner.clone();
-        self.handles.lock().await.push(spawn_task(
-            async move {
-                let stop_io = Default::default();
-                if let Err(error) = self_clone
-                    .room_controller(
-                        receiver,
-                        cancel,
-                        &stop_io,
-                        end_call,
-                        room_owner,
-                        room_generation,
-                    )
-                    .await
-                {
-                    error!("error in room controller: {:?}", error);
-                }
-                stop_io.cancel();
-            }
-            .in_current_span(),
-        ));
-
         Ok(())
     }
 

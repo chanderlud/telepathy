@@ -295,34 +295,6 @@ where
         Ok(())
     }
 
-    #[cfg(not(target_family = "wasm"))]
-    pub(crate) async fn prune_stale_input_device(&self) -> Option<String> {
-        let mut device_id_guard = self.core_state.input_device.lock().await;
-        prune_stale_device_id(&mut device_id_guard, "input", || {
-            self.host.list_input_devices()
-        })
-        .await
-    }
-
-    #[cfg(target_family = "wasm")]
-    pub(crate) async fn prune_stale_input_device(&self) -> Option<String> {
-        self.core_state.input_device.lock().await.clone()
-    }
-
-    #[cfg(not(target_family = "wasm"))]
-    pub(crate) async fn prune_stale_output_device(&self) -> Option<String> {
-        let mut device_id_guard = self.core_state.output_device.lock().await;
-        prune_stale_device_id(&mut device_id_guard, "output", || {
-            self.host.list_output_devices()
-        })
-        .await
-    }
-
-    #[cfg(target_family = "wasm")]
-    pub(crate) async fn prune_stale_output_device(&self) -> Option<String> {
-        self.core_state.output_device.lock().await.clone()
-    }
-
     /// helper method to set up audio input stack using the telepathy-audio library
     pub(crate) async fn setup_input(
         &self,
@@ -336,7 +308,7 @@ where
         let (sender, receiver) = kanal::unbounded_async();
         let input_end_call = end_call.clone();
 
-        let input_device_id = self.prune_stale_input_device().await;
+        let input_device_id = self.core_state.input_device.lock().await.clone();
 
         let mut builder = AudioInputBuilder::new()
             .device(input_device_id)
@@ -394,7 +366,7 @@ where
         end_call: Arc<Notify>,
         stream_error: UnboundedSender<AudioStreamError>,
     ) -> Result<OutputHelper<O>> {
-        let device_id = self.prune_stale_output_device().await;
+        let device_id = self.core_state.output_device.lock().await.clone();
         // Create the input channel
         let (sender, receiver) = kanal::unbounded();
         // Get the shared volume multiplier
@@ -450,7 +422,7 @@ where
                         .expect("web audio wrapper was not initialized")
                         .sample_rate as u32
                 } else {
-                    let device_id = self.prune_stale_input_device().await;
+                    let device_id = self.core_state.input_device.lock().await.clone();
                     self.host.input_sample_rate(device_id.as_deref())?
                 }
             }
@@ -818,40 +790,6 @@ fn report_stream_error(
     }
 }
 
-#[cfg(not(target_family = "wasm"))]
-async fn prune_stale_device_id<F>(
-    device_id_guard: &mut tokio::sync::MutexGuard<'_, Option<String>>,
-    kind: &str,
-    list_devices: F,
-) -> Option<String>
-where
-    F: FnOnce() -> std::result::Result<
-        Vec<telepathy_audio::devices::AudioDeviceInfo>,
-        telepathy_audio::devices::DeviceError,
-    >,
-{
-    let id = device_id_guard.clone()?;
-    let still_present = match list_devices() {
-        Ok(devices) => devices.iter().any(|device| device.id == id),
-        Err(error) => {
-            warn!(
-                event = format!("{kind}_device_enumeration_skipped"),
-                error = %error,
-                "treating saved device as present because enumeration failed"
-            );
-            true
-        }
-    };
-
-    if !still_present {
-        warn!(event = format!("stale_{kind}_device_cleared"), id = %id);
-        **device_id_guard = None;
-        return None;
-    }
-
-    Some(id)
-}
-
 pub(crate) struct OutputHelper<O> {
     _handle: AudioOutputHandle<O>,
     sender: Option<kanal::Sender<Bytes>>,
@@ -897,94 +835,5 @@ impl<I> InputHelper<I> {
 
     pub(crate) fn receiver(&mut self) -> kanal::AsyncReceiver<PooledBuffer> {
         self.receiver.take().expect("receiver already taken")
-    }
-}
-
-#[cfg(test)]
-#[cfg(not(target_family = "wasm"))]
-mod tests {
-    use super::*;
-    use std::sync::Arc;
-    use telepathy_audio::devices::DeviceError;
-    use tokio::sync::Mutex;
-
-    fn device_info(id: &str) -> telepathy_audio::devices::AudioDeviceInfo {
-        telepathy_audio::devices::AudioDeviceInfo {
-            name: id.to_string(),
-            id: id.to_string(),
-        }
-    }
-
-    #[tokio::test]
-    async fn prune_clears_unknown_id() {
-        let mutex = Mutex::new(Some("missing".to_string()));
-        let mut guard = mutex.lock().await;
-        let list = vec![device_info("present")];
-
-        let pruned = prune_stale_device_id(&mut guard, "input", || Ok(list.clone())).await;
-
-        assert!(pruned.is_none(), "stale ID should be cleared");
-        assert!(
-            guard.is_none(),
-            "in-memory state should reflect the cleared selection"
-        );
-    }
-
-    #[tokio::test]
-    async fn prune_keeps_known_id() {
-        let mutex = Mutex::new(Some("present".to_string()));
-        let mut guard = mutex.lock().await;
-        let list = vec![device_info("present")];
-
-        let pruned = prune_stale_device_id(&mut guard, "input", || Ok(list.clone())).await;
-
-        assert_eq!(pruned.as_deref(), Some("present"));
-        assert_eq!(guard.as_deref(), Some("present"));
-    }
-
-    #[tokio::test]
-    async fn prune_with_no_saved_id_is_noop() {
-        let mutex = Mutex::new(None);
-        let mut guard = mutex.lock().await;
-        let list: Vec<telepathy_audio::devices::AudioDeviceInfo> = vec![];
-
-        let pruned = prune_stale_device_id(&mut guard, "input", || Ok(list.clone())).await;
-
-        assert!(pruned.is_none());
-        assert!(guard.is_none());
-    }
-
-    #[tokio::test]
-    async fn prune_treats_enumeration_failure_as_present() {
-        let mutex = Mutex::new(Some("saved".to_string()));
-        let mut guard = mutex.lock().await;
-
-        let pruned = prune_stale_device_id(&mut guard, "input", || {
-            Err(DeviceError::NoDefaultDevice {
-                direction: telepathy_audio::devices::DeviceDirection::Input,
-            })
-        })
-        .await;
-
-        assert_eq!(
-            pruned.as_deref(),
-            Some("saved"),
-            "enumeration failure must not clear the saved ID"
-        );
-        assert_eq!(guard.as_deref(), Some("saved"));
-    }
-
-    #[tokio::test]
-    async fn prune_clears_shared_arc_mutex_state() {
-        let shared: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(Some("missing".to_string())));
-        let mut guard = shared.lock().await;
-
-        prune_stale_device_id(&mut guard, "input", || Ok(vec![])).await;
-        drop(guard);
-
-        assert!(
-            shared.lock().await.is_none(),
-            "the shared state must reflect the cleared ID"
-        );
     }
 }
