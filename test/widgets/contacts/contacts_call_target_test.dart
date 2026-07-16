@@ -120,6 +120,7 @@ class _RecordingTelepathy implements Telepathy {
   final List<Completer<void>> joinRoomCallers = [];
   final List<List<String>> joinRoomMemberStrings = [];
   int endCallCalls = 0;
+  Completer<void>? endCallCompleter;
   final List<bool> mutedValues = [];
   final List<bool> deafenedValues = [];
 
@@ -149,8 +150,9 @@ class _RecordingTelepathy implements Telepathy {
           required List<(String, Uint8List)> attachments}) =>
       throw UnimplementedError();
   @override
-  Future<void> endCall() async {
+  Future<void> endCall() {
     endCallCalls += 1;
+    return endCallCompleter?.future ?? Future<void>.value();
   }
 
   @override
@@ -443,6 +445,10 @@ void main() {
       );
       await tester.pump();
 
+      // Connected may arrive before the start future resolves. It owns
+      // promotion; the continuation must not change the active target again.
+      stateController
+          .promotePendingCallAttempt(stateController.currentCallAttempt);
       telepathy.startCallCallers.single.complete();
       await _flushAsync(tester);
 
@@ -505,6 +511,8 @@ void main() {
           reason: 'the captured target stays the only registered pending '
               'target across the short-circuited second tap');
 
+      stateController
+          .promotePendingCallAttempt(stateController.currentCallAttempt);
       telepathy.startCallCallers.single.complete();
       await _flushAsync(tester);
 
@@ -625,6 +633,8 @@ void main() {
       );
       await tester.pump();
 
+      stateController
+          .promotePendingCallAttempt(stateController.currentCallAttempt);
       telepathy.joinRoomCallers.single.complete();
       await _flushAsync(tester);
 
@@ -694,6 +704,8 @@ void main() {
           reason: 'the captured target stays the only registered pending '
               'target across the short-circuited second tap');
 
+      stateController
+          .promotePendingCallAttempt(stateController.currentCallAttempt);
       telepathy.joinRoomCallers.single.complete();
       await _flushAsync(tester);
 
@@ -764,6 +776,46 @@ void main() {
           reason: 'end sound failure must not retain active room state');
       expect(stateController.status, 'Inactive',
           reason: 'end sound failure must reset call status');
+      await tester.pump(const Duration(seconds: 1));
+    });
+
+    testWidgets('hangup keeps teardown gate closed until backend confirms',
+        (WidgetTester tester) async {
+      _stubOutgoingRingtone(tester);
+      profilesController.profiles['profile-test'] = Profile(
+        id: 'profile-test',
+        nickname: 'Test Profile',
+        peerId: '12D3KooWTestProfilePeerId111111111111111111111111111111',
+        keypair: const <int>[],
+        contacts: <String, Contact>{},
+        rooms: <String, Room>{},
+      );
+      profilesController.activeProfile = 'profile-test';
+      stateController.setActiveRoom(alpha);
+      telepathy.endCallCompleter = Completer<void>();
+
+      await tester.pumpWidget(
+        _harness(
+          stateController: stateController,
+          profilesController: profilesController,
+          telepathy: telepathy,
+          player: _FakeSoundPlayer(_FakeSoundHandle()),
+          child: const RoomDetailsWidget(),
+        ),
+      );
+
+      await tester.tap(find.byType(IconButton));
+      await tester.pump();
+
+      expect(stateController.callLifecycle, CallLifecycle.ending);
+      expect(stateController.blockAudioChanges, isTrue,
+          reason: 'settings must remain blocked while endCall is pending');
+
+      telepathy.endCallCompleter!.complete();
+      await _flushAsync(tester);
+
+      expect(stateController.callLifecycle, CallLifecycle.idle);
+      expect(stateController.blockAudioChanges, isFalse);
       await tester.pump(const Duration(seconds: 1));
     });
 

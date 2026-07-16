@@ -149,16 +149,8 @@ class RoomWidgetState extends State<RoomWidget> {
                 try {
                   await telepathy.joinRoom(memberStrings: target.peerIds);
                   target.online.clear();
-                  // Only promote to active if the lifecycle is still
-                  // `connecting` and the pending target still matches this
-                  // widget. A fast `CallEnded` callback can race the
-                  // future and reset the lifecycle to `idle`, in which
-                  // case `promotePendingRoom` returns false and the call
-                  // is not resurrected.
-                  if (!stateController.promotePendingRoom(target)) {
-                    outgoingSoundHandle?.cancel();
-                    return;
-                  }
+                  // `CallState.connected` owns promotion. This continuation
+                  // only confirms backend request acceptance.
                 } on DartError catch (e) {
                   stateController.endOfCall();
                   outgoingSoundHandle?.cancel();

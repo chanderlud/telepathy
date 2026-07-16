@@ -20,6 +20,8 @@ class StateController extends ChangeNotifier {
   Contact? _pendingContact;
   Room? _pendingRoom;
   CallLifecycle _callLifecycle = CallLifecycle.idle;
+  int? _callAttempt;
+  int _nextCallAttempt = 0;
 
   String status = 'Inactive';
   bool _deafened = false;
@@ -55,7 +57,8 @@ class StateController extends ChangeNotifier {
   /// backend are still observed during the connecting phase.
   bool get hasLiveCall =>
       _callLifecycle == CallLifecycle.connecting ||
-      _callLifecycle == CallLifecycle.active;
+      _callLifecycle == CallLifecycle.active ||
+      _callLifecycle == CallLifecycle.ending;
 
   bool get isDeafened => _deafened;
 
@@ -93,33 +96,63 @@ class StateController extends ChangeNotifier {
   /// Records the contact the user is attempting to call, before awaiting
   /// `Telepathy.startCall()`. This lets the gate in `callState` observe early
   /// failure events while the backend is still negotiating the call.
-  void setPendingContact(Contact? contact) {
+  int? setPendingContact(Contact? contact) {
     _pendingContact = contact;
     if (contact != null) {
       _callLifecycle = CallLifecycle.connecting;
+      _callAttempt = ++_nextCallAttempt;
+    } else {
+      _callAttempt = null;
     }
     notifyListeners();
+    return _callAttempt;
   }
 
   /// Records the room the user is attempting to join, before awaiting
   /// `Telepathy.joinRoom()`. This lets the gate in `callState` observe early
   /// failure events while the backend is still negotiating the room.
-  void setPendingRoom(Room? room) {
+  int? setPendingRoom(Room? room) {
     _pendingRoom = room;
     if (room != null) {
       _callLifecycle = CallLifecycle.connecting;
+      _callAttempt = ++_nextCallAttempt;
+    } else {
+      _callAttempt = null;
     }
     notifyListeners();
+    return _callAttempt;
   }
 
-  /// Move from `connecting` (or any state) to `active`. Idempotent if already
-  /// active.
-  void markCallActive() {
-    if (_callLifecycle != CallLifecycle.active) {
-      _callLifecycle = CallLifecycle.active;
-      notifyListeners();
+  /// Atomically promotes current pending target only for [attempt].
+  ///
+  /// The backend callback captures [currentCallAttempt] before any await, then
+  /// calls this method before loading its optional sound. A stale callback cannot
+  /// promote a later attempt or resurrect one that is ending.
+  bool promotePendingCallAttempt(int? attempt) {
+    if (attempt == null ||
+        attempt != _callAttempt ||
+        _callLifecycle != CallLifecycle.connecting) {
+      return false;
     }
+
+    final contact = _pendingContact;
+    final room = _pendingRoom;
+    if (contact == null && room == null) {
+      return false;
+    }
+
+    _activeContact = contact;
+    _activeRoom = room;
+    _pendingContact = null;
+    _pendingRoom = null;
+    _callLifecycle = CallLifecycle.active;
+    status = 'Active';
+    _callTimer.start();
+    notifyListeners();
+    return true;
   }
+
+  int? get currentCallAttempt => _callAttempt;
 
   /// Clear any pending call target that has not yet transitioned to active.
   /// Called by the front-end after a fast failure or a transition to active so
@@ -132,31 +165,14 @@ class StateController extends ChangeNotifier {
     }
   }
 
-  /// Promote a pending contact to active only if the lifecycle is still
-  /// `connecting` and the pending target matches [contact] by identity.
-  /// Otherwise a no-op. Guards the `await startCall` continuation in
-  /// `contact_widget.dart` from resurrecting a call the user has ended.
-  bool promotePendingContact(Contact contact) {
-    if (_callLifecycle != CallLifecycle.connecting) {
+  /// Starts local teardown without reopening backend-mutating controls.
+  bool beginCallEnding() {
+    if (_callLifecycle == CallLifecycle.idle ||
+        _callLifecycle == CallLifecycle.ending) {
       return false;
     }
-    if (_pendingContact == null || !identical(_pendingContact, contact)) {
-      return false;
-    }
-    setActiveContact(contact);
-    return true;
-  }
-
-  /// Room counterpart of [promotePendingContact] for the `await joinRoom`
-  /// continuation in `room_widget.dart`.
-  bool promotePendingRoom(Room room) {
-    if (_callLifecycle != CallLifecycle.connecting) {
-      return false;
-    }
-    if (_pendingRoom == null || !identical(_pendingRoom, room)) {
-      return false;
-    }
-    setActiveRoom(room);
+    _callLifecycle = CallLifecycle.ending;
+    notifyListeners();
     return true;
   }
 
@@ -168,6 +184,7 @@ class StateController extends ChangeNotifier {
       _activeRoom = null;
       _pendingContact = null;
       _pendingRoom = null;
+      _callAttempt = null;
       _callLifecycle = CallLifecycle.idle;
       _callTimer.stop();
       _callTimer.reset();
@@ -301,6 +318,7 @@ class StateController extends ChangeNotifier {
     _activeRoom = null;
     _pendingContact = null;
     _pendingRoom = null;
+    _callAttempt = null;
     status = 'Inactive';
     _callLifecycle = CallLifecycle.idle;
     _callTimer.stop();

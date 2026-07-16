@@ -164,6 +164,30 @@ void main() {
               'access the backend holds');
     });
 
+    testWidgets('the "Set Active" button stays disabled during call teardown',
+        (WidgetTester tester) async {
+      final profilesController = FakeProfilesController();
+      await profilesController.createProfile('Teardown Gate Profile');
+      final stateController = StateController();
+      final room = _roomFixture('teardown-pending');
+      final attempt = stateController.setPendingRoom(room);
+      stateController.promotePendingCallAttempt(attempt);
+      stateController.beginCallEnding();
+
+      await tester.pumpProfileSettingsWithState(
+        profilesController: profilesController,
+        stateController: stateController,
+      );
+
+      final setActiveButton = find.widgetWithText(Button, 'Set Active');
+      expect(tester.widget<Button>(setActiveButton).disabled, isTrue,
+          reason: 'profile changes must not race backend slot teardown');
+
+      await tester.tap(setActiveButton);
+      await tester.pumpAndSettle();
+      expect(profilesController.setActiveCalls, isEmpty);
+    });
+
     testWidgets(
         'when the controller is idle, "Set Active" runs the full '
         'setActiveProfile / setIdentity / restartManager sequence',

@@ -88,6 +88,7 @@ struct CallSlotInner {
 #[derive(Clone)]
 pub struct CallSlot {
     inner: Arc<StdMutex<CallSlotInner>>,
+    released: Arc<Notify>,
 }
 
 impl Default for CallSlot {
@@ -98,6 +99,7 @@ impl Default for CallSlot {
                 direct_peer: None,
                 generation: 0,
             })),
+            released: Arc::new(Notify::new()),
         }
     }
 }
@@ -250,7 +252,24 @@ impl CallSlot {
             .map_err(|_| ErrorKind::Poison("call slot mutex poisoned"))?;
         inner.state = CallSlotState::Idle;
         inner.direct_peer = None;
+        drop(inner);
+        self.released.notify_waiters();
         Ok(())
+    }
+
+    /// Waits until the owner represented by [expected] has released the slot.
+    /// A newer generation also proves that this owner released before replacement.
+    pub async fn wait_for_release(&self, expected: CallSlotSnapshot) -> Result<()> {
+        loop {
+            let released = self.released.notified();
+            tokio::pin!(released);
+            released.as_mut().enable();
+            let current = self.snapshot()?;
+            if current.state == CallSlotState::Idle || current.generation != expected.generation {
+                return Ok(());
+            }
+            released.await;
+        }
     }
 
     /// Releases the slot only if the current state, peer, and generation still match `expected`.
@@ -272,6 +291,8 @@ impl CallSlot {
         {
             inner.state = CallSlotState::Idle;
             inner.direct_peer = None;
+            drop(inner);
+            self.released.notify_waiters();
             Ok(true)
         } else {
             warn!(
@@ -298,6 +319,8 @@ impl CallSlot {
             if inner.direct_peer == Some(peer) {
                 inner.state = CallSlotState::Idle;
                 inner.direct_peer = None;
+                drop(inner);
+                self.released.notify_waiters();
             } else {
                 warn!(
                     event = "call_slot_release_skipped_peer_mismatch",
@@ -331,6 +354,8 @@ impl CallSlot {
             inner.state = CallSlotState::Idle;
             inner.direct_peer = None;
             inner.generation = inner.generation.wrapping_add(1);
+            drop(inner);
+            self.released.notify_waiters();
             Ok(true)
         } else {
             Ok(false)
@@ -882,6 +907,26 @@ mod call_slot_tests {
 
         slot.release_if_pending_for_peer(peer).unwrap();
         assert_eq!(slot.current(), CallSlotState::Idle);
+    }
+
+    #[tokio::test]
+    async fn call_slot_wait_for_release_confirms_owner_release() {
+        let slot = CallSlot::default();
+        let peer = SecretKey::generate().public();
+        assert!(
+            slot.try_acquire(CallSlotState::PendingOutgoing, Some(peer))
+                .unwrap()
+        );
+        let owner = slot.snapshot().unwrap();
+        let waiter = {
+            let slot = slot.clone();
+            tokio::spawn(async move { slot.wait_for_release(owner).await })
+        };
+
+        tokio::task::yield_now().await;
+        slot.release().unwrap();
+
+        waiter.await.unwrap().unwrap();
     }
 
     #[test]

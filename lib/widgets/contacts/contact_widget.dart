@@ -249,7 +249,8 @@ class ContactWidgetState extends State<ContactWidget> {
                 onPressed: () async {
                   outgoingSoundHandle?.cancel();
 
-                  telepathy.endCall();
+                  if (!stateController.beginCallEnding()) return;
+                  await telepathy.endCall();
                   stateController.endOfCall();
 
                   List<int> bytes = await readSeaBytes('call_ended');
@@ -298,16 +299,8 @@ class ContactWidgetState extends State<ContactWidget> {
 
                   try {
                     await telepathy.startCall(contact: target);
-                    // Only promote to active if the lifecycle is still
-                    // `connecting` and the pending target still matches
-                    // this widget. A fast `CallEnded` callback can race
-                    // the future and reset the lifecycle to `idle`, in
-                    // which case `promotePendingContact` returns false
-                    // and the call is not resurrected.
-                    if (!stateController.promotePendingContact(target)) {
-                      outgoingSoundHandle?.cancel();
-                      return;
-                    }
+                    // `CallState.connected` owns promotion. This continuation
+                    // only confirms backend request acceptance.
                   } on DartError catch (e) {
                     stateController.endOfCall();
                     outgoingSoundHandle?.cancel();

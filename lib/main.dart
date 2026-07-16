@@ -163,7 +163,6 @@ Future<void> main(List<String> args) async {
       // path uses.
       stateController.setStatus('Connecting');
       stateController.setPendingContact(contact);
-      stateController.promotePendingContact(contact);
     }
 
     return result;
@@ -192,13 +191,16 @@ Future<void> main(List<String> args) async {
 
     switch (state) {
       case CallState_Connected():
-        // handles the initial connect
+        // Promote before loading optional sound. The start future can resolve
+        // after this callback, so it must not own promotion.
+        if (!stateController
+            .promotePendingCallAttempt(stateController.currentCallAttempt)) {
+          return;
+        }
         bytes = await readSeaBytes('connected');
-        // backend confirmed the call is now active; the pending target (if any)
-        // has been promoted to active by the widget that initiated the call.
-        stateController.clearPending();
-        stateController.markCallActive();
-        stateController.setStatus('Active');
+        if (stateController.callLifecycle != CallLifecycle.active) {
+          return;
+        }
       case CallState_Waiting():
         stateController.setStatus('Waiting for peers');
         return;
@@ -209,10 +211,13 @@ Future<void> main(List<String> args) async {
         stateController.roomLeave(state.field0);
         return; // TODO add room leave sound
       case CallState_CallEnded():
-        // Suppress dialogs when the local user just hung up (the widget sets
-        // status to Inactive and clears state synchronously before the backend
-        // `CallEnded` echo arrives). Otherwise surface the failure reason.
-        final localHangup = !stateController.hasLiveCall;
+        // Local hangup remains in `ending` until endCall confirms backend slot
+        // release. Its trailing event must not clear that gate early.
+        final localHangup =
+            stateController.callLifecycle == CallLifecycle.ending;
+        if (localHangup) {
+          return;
+        }
         stateController.endOfCall();
         bytes = await readSeaBytes('call_ended');
 

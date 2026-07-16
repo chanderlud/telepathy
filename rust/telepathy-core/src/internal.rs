@@ -175,24 +175,42 @@ where
 
     /// Ends the current audio test, room, or call in that order
     pub async fn end_call(&self) {
+        let owner = match self.inner.core_state.call_slot.snapshot() {
+            Ok(owner) if owner.state != CallSlotState::Idle => owner,
+            Ok(_) => {
+                warn!("end_call failed to end anything");
+                return;
+            }
+            Err(error) => {
+                error!("end_call could not snapshot call slot: {error}");
+                return;
+            }
+        };
+
         if let Some(end_audio_test) = self.inner.core_state.end_audio_test.lock().await.as_ref() {
             debug!("ending audio test");
             end_audio_test.notify_one();
         } else if let Some(room_state) = self.inner.room_state.read().await.as_ref() {
             debug!("ending room");
             room_state.end_call.notify_one();
-        } else if let Ok(Some(peer)) = self
-            .inner
-            .core_state
-            .call_slot
-            .snapshot()
-            .map(|s| s.direct_peer)
+        } else if let Some(peer) = owner.direct_peer
             && let Some(session_state) = self.inner.session_states.read().await.get(&peer)
         {
             debug!("ending call");
             session_state.end_call.notify_one();
         } else {
             warn!("end_call failed to end anything");
+            return;
+        }
+
+        if let Err(error) = self
+            .inner
+            .core_state
+            .call_slot
+            .wait_for_release(owner)
+            .await
+        {
+            error!("end_call could not confirm call slot release: {error}");
         }
     }
 

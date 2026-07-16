@@ -22,9 +22,7 @@ Future<String?> _simulateCallState(
     controller.endOfCall();
     return (!localHangup && state.field0.isNotEmpty) ? state.field0 : null;
   } else if (state is CallState_Connected) {
-    controller.clearPending();
-    controller.markCallActive();
-    controller.setStatus('Active');
+    controller.promotePendingCallAttempt(controller.currentCallAttempt);
     return null;
   } else if (state is CallState_Waiting) {
     controller.setStatus('Waiting for peers');
@@ -93,11 +91,11 @@ void main() {
       expect(controller.isCallActive, isFalse);
     });
 
-    test('promoting a pending room to active clears the pending slot', () {
+    test('promoting a pending room attempt clears the pending slot', () {
       final controller = StateController();
       final room = _roomFixture('room-2');
-      controller.setPendingRoom(room);
-      controller.setActiveRoom(room);
+      final attempt = controller.setPendingRoom(room);
+      controller.promotePendingCallAttempt(attempt);
 
       expect(controller.pendingRoom, isNull);
       expect(controller.callLifecycle, CallLifecycle.active);
@@ -141,22 +139,6 @@ void main() {
       expect(controller.hasLiveCall, isFalse);
     });
 
-    test('setStatus(Active) keeps the pending room slot until cleared', () {
-      final controller = StateController();
-      controller.setPendingRoom(_roomFixture('room-6'));
-
-      controller.setStatus('Active');
-
-      // setStatus only flips the lifecycle phase; the pending slot is owned
-      // by setActiveRoom/setActiveContact. Guards against a stale setStatus
-      // call wiping a pending target a slow backend call later claims.
-      expect(controller.pendingRoom, isNotNull);
-      expect(controller.callLifecycle, CallLifecycle.active);
-
-      controller.clearPending();
-      expect(controller.pendingRoom, isNull);
-    });
-
     test(
         'fast backend CallEnded during room setup is observed and surfaces '
         'the failure reason (instead of being dropped by the gate)', () async {
@@ -190,7 +172,8 @@ void main() {
         'to active and clears the pending slot', () async {
       final controller = StateController();
       controller.setStatus('Connecting');
-      controller.setPendingRoom(_roomFixture('connects-fast'));
+      final room = _roomFixture('connects-fast');
+      controller.setPendingRoom(room);
 
       final surfaced =
           await _simulateCallState(controller, const CallState_Connected());
@@ -200,6 +183,7 @@ void main() {
       expect(controller.hasLiveCall, isTrue);
       expect(controller.pendingRoom, isNull);
       expect(controller.status, 'Active');
+      expect(controller.activeRoom, same(room));
     });
 
     test('a local hangup that races a trailing backend CallEnded stays silent',
@@ -264,9 +248,9 @@ void main() {
       expect(controller.pendingContact, isNull,
           reason: 'pending slot must be cleared once CallEnded lands');
 
-      // A late `setActiveContact` after endOfCall() must be skipped so the
+      // A late promotion after endOfCall() must be skipped so the
       // call does not resurrect and the timer does not restart.
-      controller.setActiveContact(alice);
+      controller.promotePendingCallAttempt(controller.currentCallAttempt);
       expect(controller.callLifecycle, CallLifecycle.idle,
           reason: 'post-endOfCall promotion must be skipped');
       expect(controller.pendingContact, isNull,
@@ -276,13 +260,12 @@ void main() {
     });
 
     test(
-        'fast CallEnded before the start future resumes: promotePendingContact '
+        'fast CallEnded before the start future resumes: promotion '
         'returns false and does not resurrect the call', () async {
       // Race scenario: the widget has called setPendingContact, the backend fires
       // a CallEnded callback that endOfCall()s the controller to idle, and then
-      // the `await startCall` future resumes. The widget's continuation calls
-      // promotePendingContact; the atomic check must reject the promotion so
-      // the call does not come back from the dead.
+      // the `await startCall` future resumes. The connected callback's atomic
+      // promotion must reject the old attempt so the call does not come back.
       final controller = StateController();
       final contact = FakeContact(
         id: 'fast-end-race',
@@ -290,7 +273,7 @@ void main() {
       );
 
       controller.setStatus('Connecting');
-      controller.setPendingContact(contact);
+      final attempt = controller.setPendingContact(contact);
       expect(controller.hasLiveCall, isTrue,
           reason: 'gate must be open while we are negotiating');
 
@@ -302,7 +285,7 @@ void main() {
           ));
       expect(surfaced, 'peer went away');
 
-      final promoted = controller.promotePendingContact(contact);
+      final promoted = controller.promotePendingCallAttempt(attempt);
       expect(promoted, isFalse,
           reason:
               'promote must refuse after a racing endOfCall cleared the lifecycle');
@@ -311,6 +294,21 @@ void main() {
       expect(controller.hasLiveCall, isFalse, reason: 'gate must stay closed');
       expect(controller.pendingContact, isNull,
           reason: 'pending slot must stay cleared');
+    });
+
+    test('a delayed Connected callback cannot promote a newer attempt', () {
+      final controller = StateController();
+      final firstAttempt = controller.setPendingRoom(_roomFixture('first'));
+      controller.endOfCall();
+      final secondRoom = _roomFixture('second');
+      final secondAttempt = controller.setPendingRoom(secondRoom);
+
+      expect(controller.promotePendingCallAttempt(firstAttempt), isFalse);
+      expect(controller.pendingRoom, same(secondRoom));
+      expect(controller.callLifecycle, CallLifecycle.connecting);
+
+      expect(controller.promotePendingCallAttempt(secondAttempt), isTrue);
+      expect(controller.activeRoom, same(secondRoom));
     });
 
     test(
@@ -337,25 +335,21 @@ void main() {
           reason: 'first call slot must be undisturbed by the rejected tap');
     });
 
-    test(
-        'promotePendingRoom: positive path promotes a matching pending room, '
-        'wrong room identity is rejected', () {
+    test('promotion accepts current attempt and rejects stale attempt', () {
       final controller = StateController();
       final first = _roomFixture('promote-1');
-      final wrong = _roomFixture('promote-2');
 
       controller.setStatus('Connecting');
-      controller.setPendingRoom(first);
+      final attempt = controller.setPendingRoom(first);
 
-      final wrongResult = controller.promotePendingRoom(wrong);
-      expect(wrongResult, isFalse,
-          reason: 'promote must refuse a mismatched room instance');
+      final wrongResult = controller.promotePendingCallAttempt(attempt! - 1);
+      expect(wrongResult, isFalse, reason: 'promote must refuse stale attempt');
       expect(controller.callLifecycle, CallLifecycle.connecting,
           reason: 'lifecycle must stay connecting on a rejected promote');
       expect(controller.pendingRoom, first,
           reason: 'pending slot must stay intact on a rejected promote');
 
-      final okResult = controller.promotePendingRoom(first);
+      final okResult = controller.promotePendingCallAttempt(attempt);
       expect(okResult, isTrue,
           reason: 'promote must accept the same room instance');
       expect(controller.callLifecycle, CallLifecycle.active,
@@ -364,6 +358,22 @@ void main() {
           reason: 'pending slot must be cleared on success');
       expect(controller.activeRoom, first,
           reason: 'active room must be the promoted one');
+    });
+
+    test('ending keeps backend-mutating controls blocked until confirmation',
+        () {
+      final controller = StateController();
+      final attempt = controller.setPendingRoom(_roomFixture('ending'));
+      controller.promotePendingCallAttempt(attempt);
+
+      expect(controller.beginCallEnding(), isTrue);
+      expect(controller.callLifecycle, CallLifecycle.ending);
+      expect(controller.blockAudioChanges, isTrue,
+          reason:
+              'profile and device actions must stay blocked during teardown');
+
+      controller.endOfCall();
+      expect(controller.blockAudioChanges, isFalse);
     });
   });
 }

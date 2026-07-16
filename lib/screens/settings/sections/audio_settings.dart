@@ -166,8 +166,8 @@ class _AudioSettingsState extends State<AudioSettings> {
                   }
 
                   if (inAudioTest) {
+                    await telepathy.endCall();
                     stateController.setInAudioTest(false);
-                    telepathy.endCall();
                   } else {
                     try {
                       await stateController.runAudioTest(telepathy.audioTest);
