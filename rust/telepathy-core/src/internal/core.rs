@@ -1014,13 +1014,12 @@ where
                     }
                     Err(error) => {
                         error!(event = "setup_call_failed", ?error);
-                        write_message(
-                            io.send,
-                            &ProtocolMessage::Goodbye {
-                                reason: GoodbyeReason::AudioDeviceError,
-                            },
-                        )
-                        .await?;
+                        let message = CallEndMessage::from_error(&error);
+                        self.callbacks
+                            .call_state(CallState::CallEnded(message.into_string(), false))
+                            .await;
+                        // Release local ownership before the best-effort peer notification.
+                        // A closed control stream must not leave the direct-call slot pending.
                         release_pending(
                             &self.session_states,
                             peer,
@@ -1028,6 +1027,14 @@ where
                             &mut pending_slot,
                         )
                         .await?;
+                        write_message(
+                            io.send,
+                            &ProtocolMessage::Goodbye {
+                                reason: GoodbyeReason::AudioDeviceError,
+                            },
+                        )
+                        .await
+                        .ok();
                         Err(error)
                     }
                 }

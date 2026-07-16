@@ -1,11 +1,11 @@
 use super::common::{
     CallbackCapturingAudioHost, DEFAULT_SAMPLE_RATE, DeviceSelectionOperation,
-    DeviceSelectionProbe, MOCK_DEVICE_ID, ManagerLifecycle, PendingAcceptProbe,
-    STALE_INPUT_DEVICE_ID, STALE_OUTPUT_DEVICE_ID, StreamErrorProbe, assert_call_slot_idle,
-    assert_no_call_ended_contains, build_client, build_client_with_accept_probe,
-    build_client_with_options, call_state_snapshot, init_test_tracing, shared_relay_map,
-    sorted_room_members, wait_for_call_ended_contains, wait_for_connected, wait_for_sessions,
-    wait_for_slot_idle,
+    DeviceSelectionProbe, InputSampleRateGate, MOCK_DEVICE_ID, ManagerLifecycle,
+    PendingAcceptProbe, STALE_INPUT_DEVICE_ID, STALE_OUTPUT_DEVICE_ID, StreamErrorProbe,
+    assert_call_slot_idle, assert_no_call_ended_contains, build_client,
+    build_client_with_accept_probe, build_client_with_options, call_state_snapshot,
+    init_test_tracing, shared_relay_map, sorted_room_members, wait_for_call_ended_contains,
+    wait_for_connected, wait_for_sessions, wait_for_slot_idle,
 };
 
 use iroh::SecretKey;
@@ -746,6 +746,201 @@ async fn stale_input_device_ends_direct_call_before_connection_and_allows_retry(
     wait_for_connected(&call_states_b, "stale input retry client b").await;
 
     client_a.telepathy.shutdown().await;
+    client_b.telepathy.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn accepting_callee_stale_input_device_notifies_both_sides_and_releases_slot() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+    let codec_config = CodecConfig::new(true, true, 5.0);
+    let key_a = SecretKey::generate();
+    let key_b = SecretKey::generate();
+    let contact_a = Contact::new(
+        "incoming-stale-input-caller".to_string(),
+        key_a.public().to_string(),
+    )
+    .expect("contact a invalid");
+    let contact_b = Contact::new(
+        "incoming-stale-input-callee".to_string(),
+        key_b.public().to_string(),
+    )
+    .expect("contact b invalid");
+    let call_states_a = Arc::new(Mutex::new(Vec::new()));
+    let call_states_b = Arc::new(Mutex::new(Vec::new()));
+    let accept_probe_b = PendingAcceptProbe::default();
+
+    let client_a = build_client(
+        relay_map,
+        key_a,
+        vec![contact_b.clone()],
+        &codec_config,
+        MockAudioHost::<MockAudioInput, MockAudioOutput>::default(),
+        call_states_a.clone(),
+    )
+    .await;
+    let client_b = build_client_with_accept_probe(
+        relay_map,
+        key_b,
+        vec![contact_a.clone()],
+        &codec_config,
+        CallbackCapturingAudioHost::new(StreamErrorProbe::new(), StreamErrorProbe::new()),
+        call_states_b.clone(),
+        accept_probe_b.clone(),
+    )
+    .await;
+
+    client_b
+        .telepathy
+        .set_input_device(Some(STALE_INPUT_DEVICE_ID.to_string()))
+        .await;
+    client_a.telepathy.start_session(&contact_b).await;
+    client_b.telepathy.start_session(&contact_a).await;
+    wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
+
+    client_a
+        .telepathy
+        .start_call(&contact_b)
+        .await
+        .expect("caller should start outgoing call");
+    accept_probe_b.wait_opened().await;
+    client_b
+        .telepathy
+        .start_call(&contact_a)
+        .await
+        .expect("callee should accept incoming call");
+
+    wait_for_call_ended_contains(
+        &call_states_b,
+        "Audio device error",
+        false,
+        "accepting callee",
+    )
+    .await;
+    wait_for_call_ended_contains(
+        &call_states_a,
+        "audio device problem",
+        true,
+        "caller receiving audio-device goodbye",
+    )
+    .await;
+    wait_for_slot_idle(&client_b, &contact_a.get_peer_id().to_string()).await;
+    assert_call_slot_idle(
+        &client_b,
+        "accepting callee must release pending direct-call ownership",
+    );
+
+    let callee_states = call_state_snapshot(&call_states_b);
+    assert_eq!(
+        callee_states
+            .iter()
+            .filter(|state| matches!(state, CallState::CallEnded(_, _)))
+            .count(),
+        1,
+        "accepting callee must emit exactly one CallEnded; states={callee_states:?}"
+    );
+
+    client_a.telepathy.shutdown().await;
+    client_b.telepathy.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn accepting_callee_stale_input_device_releases_slot_when_control_stream_is_closed() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+    let codec_config = CodecConfig::new(true, true, 5.0);
+    let key_a = SecretKey::generate();
+    let key_b = SecretKey::generate();
+    let contact_a = Contact::new(
+        "closed-stream-stale-input-caller".to_string(),
+        key_a.public().to_string(),
+    )
+    .expect("contact a invalid");
+    let contact_b = Contact::new(
+        "closed-stream-stale-input-callee".to_string(),
+        key_b.public().to_string(),
+    )
+    .expect("contact b invalid");
+    let call_states_b = Arc::new(Mutex::new(Vec::new()));
+    let accept_probe_b = PendingAcceptProbe::default();
+    let device_probe_b = DeviceSelectionProbe::default();
+    let setup_gate = InputSampleRateGate::default();
+
+    let client_a = build_client(
+        relay_map,
+        key_a,
+        vec![contact_b.clone()],
+        &codec_config,
+        MockAudioHost::<MockAudioInput, MockAudioOutput>::default(),
+        Default::default(),
+    )
+    .await;
+    let client_b = build_client_with_accept_probe(
+        relay_map,
+        key_b,
+        vec![contact_a.clone()],
+        &codec_config,
+        CallbackCapturingAudioHost::new(StreamErrorProbe::new(), StreamErrorProbe::new())
+            .with_device_selection_probe(device_probe_b.clone())
+            .with_input_sample_rate_gate(setup_gate.clone()),
+        call_states_b.clone(),
+        accept_probe_b.clone(),
+    )
+    .await;
+
+    client_b
+        .telepathy
+        .set_input_device(Some(STALE_INPUT_DEVICE_ID.to_string()))
+        .await;
+    client_a.telepathy.start_session(&contact_b).await;
+    client_b.telepathy.start_session(&contact_a).await;
+    wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
+
+    client_a
+        .telepathy
+        .start_call(&contact_b)
+        .await
+        .expect("caller should start outgoing call");
+    accept_probe_b.wait_opened().await;
+    client_b
+        .telepathy
+        .start_call(&contact_a)
+        .await
+        .expect("callee should accept incoming call");
+    device_probe_b
+        .wait_for(
+            DeviceSelectionOperation::InputSampleRate,
+            STALE_INPUT_DEVICE_ID,
+            1,
+        )
+        .await;
+
+    client_a.telepathy.shutdown().await;
+    setup_gate.release();
+
+    wait_for_call_ended_contains(
+        &call_states_b,
+        "Audio device error",
+        false,
+        "accepting callee after closed control stream",
+    )
+    .await;
+    wait_for_slot_idle(&client_b, &contact_a.get_peer_id().to_string()).await;
+    assert_call_slot_idle(
+        &client_b,
+        "closed control stream must not retain pending direct-call ownership",
+    );
+
+    let callee_states = call_state_snapshot(&call_states_b);
+    assert_eq!(
+        callee_states
+            .iter()
+            .filter(|state| matches!(state, CallState::CallEnded(_, _)))
+            .count(),
+        1,
+        "accepting callee must emit exactly one CallEnded; states={callee_states:?}"
+    );
+
     client_b.telepathy.shutdown().await;
 }
 

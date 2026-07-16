@@ -6,7 +6,7 @@ use iroh::{Endpoint, PublicKey, RelayMap, RelayMode, SecretKey};
 use speedy::{Readable, Writable};
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
-use std::sync::{Arc, Mutex, Once, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, Once, OnceLock};
 use std::thread;
 use std::time::Duration;
 use telepathy_audio::devices::{AudioHost, DeviceDirection, DeviceError};
@@ -125,6 +125,29 @@ pub(super) struct StreamErrorProbe {
     ready: Arc<Notify>,
 }
 
+/// Blocks `input_sample_rate` after recording its device selection. Tests use
+/// this to close the control stream before a setup failure resumes.
+#[derive(Clone, Default)]
+pub(super) struct InputSampleRateGate {
+    released: Arc<(Mutex<bool>, Condvar)>,
+}
+
+impl InputSampleRateGate {
+    pub(super) fn release(&self) {
+        let (released, wake) = &*self.released;
+        *released.lock().unwrap() = true;
+        wake.notify_all();
+    }
+
+    fn wait(&self) {
+        let (released, wake) = &*self.released;
+        let mut released = released.lock().unwrap();
+        while !*released {
+            released = wake.wait(released).unwrap();
+        }
+    }
+}
+
 impl StreamErrorProbe {
     pub(super) fn new() -> Self {
         Self {
@@ -171,6 +194,7 @@ pub(super) struct CallbackCapturingAudioHost {
     /// the stream error callback.
     pub(super) fail_output_synchronously: Arc<AtomicBool>,
     pub(super) fail_input_synchronously: Arc<AtomicBool>,
+    input_sample_rate_gate: Option<InputSampleRateGate>,
 }
 
 impl CallbackCapturingAudioHost {
@@ -184,11 +208,17 @@ impl CallbackCapturingAudioHost {
             device_selection_probe: DeviceSelectionProbe::default(),
             fail_output_synchronously: Arc::new(AtomicBool::new(false)),
             fail_input_synchronously: Arc::new(AtomicBool::new(false)),
+            input_sample_rate_gate: None,
         }
     }
 
     pub(super) fn with_device_selection_probe(mut self, probe: DeviceSelectionProbe) -> Self {
         self.device_selection_probe = probe;
+        self
+    }
+
+    pub(super) fn with_input_sample_rate_gate(mut self, gate: InputSampleRateGate) -> Self {
+        self.input_sample_rate_gate = Some(gate);
         self
     }
 }
@@ -302,6 +332,9 @@ impl AudioHost for CallbackCapturingAudioHost {
     ) -> Result<u32, telepathy_audio::devices::DeviceError> {
         self.device_selection_probe
             .record(DeviceSelectionOperation::InputSampleRate, device_id);
+        if let Some(gate) = &self.input_sample_rate_gate {
+            gate.wait();
+        }
         if device_id == Some(STALE_INPUT_DEVICE_ID) {
             return Err(DeviceError::DeviceNotFound {
                 direction: DeviceDirection::Input,
