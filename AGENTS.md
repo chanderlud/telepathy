@@ -17,20 +17,48 @@
 - For example, after editing files in telepathy-core, you should run `cargo clippy --manifest-path ./rust/Cargo.toml -p telepathy_core`.
 - After editing Dart files, run `flutter analyze` in the project root directory, then run `dart format .` when all cleanup if finished.
 
-## Test Execution Rules
+## Rust Tests
 
-- Prefer `cargo nextest run` over `cargo test` for Rust tests. The nextest config lives at `./rust/.config/nextest.toml`, so run nextest commands from `./rust` or pass `--manifest-path ./rust/Cargo.toml`.
-- Main Rust test pass: from the project root, run `cd rust && cargo nextest run --all-targets -E 'not kind(=bench) and not binary(=core_integration_test)'`. Use this after ordinary Rust changes; it runs unit and non-benchmark test targets without enabling the `integration-testing` feature.
-- Core integration suite: root target remains `core_integration_test`; implementation lives in `rust/telepathy-core/tests/core_integration_test/`. From `rust/`, run `cargo nextest run -p telepathy_core --test core_integration_test --features integration-testing` once for the full suite.
-- Focused core integration group: from `rust/`, run `cargo nextest run -p telepathy_core --test core_integration_test --features integration-testing <module_name>::`.
-- Focused core integration test: from `rust/`, run `cargo nextest run -p telepathy_core --test core_integration_test --features integration-testing <module_name>::<test_name>`.
-- Core integration module selection: use `session_lifecycle::` for discovery, transport sessions, collisions, and stale sessions; `call_lifecycle::` for direct calls, call-slot transitions, resets, and manager restart; `audio_streams::` for audio ordering, runtime errors, and wire goodbyes; `device_failures::` for device selection/setup failures and retries; `room_lifecycle::` for room join/leave, reconnect, generation, and mesh behavior; `call_end_copy::` for user-facing `CallEnded` messages.
-- Core integration stress pass: from the project root, run `cd rust && cargo nextest run -p telepathy_core --test core_integration_test --features integration-testing --stress-count 10`. Use this after changes touching telepathy-core sessions, calls, rooms, networking, teardown, or anything that may affect the `rust/telepathy-core/tests/core_integration_test/` suite.
-- Full CI-equivalent Rust test sequence: run the main Rust test pass first, then the core integration stress pass. Use this before handing off substantial Rust changes.
-- Targeted package tests: use `cd rust && cargo nextest run -p <package_name> -E 'not kind(=bench)'` for quick package-local validation when the core integration suite is unrelated.
-- Targeted single test debugging: use `cd rust && cargo nextest run -p <package_name> <test_name>` while iterating on a specific failure, then run the broader applicable pass before finalizing.
-- Only fall back to `cargo test` when nextest cannot run a required test mode; explain why in your handoff if you do.
-- System tests must be manually executed in WSL by the developer, prompt them to do so
+* Prefer `cargo nextest run`; use `cargo test` only when nextest cannot support the required mode, and note why.
+* Run from the project root with `--manifest-path ./rust/Cargo.toml` for Bash and PowerShell compatibility.
+
+Main Rust pass:
+
+```sh
+cargo nextest run --manifest-path ./rust/Cargo.toml --all-targets -E 'not kind(=bench) and not binary(=core_integration_test)'
+```
+
+Core integration suite:
+
+```sh
+cargo nextest run --manifest-path ./rust/Cargo.toml -p telepathy_core --test core_integration_test --features integration-testing
+```
+
+Focused integration module or test:
+
+```sh
+cargo nextest run --manifest-path ./rust/Cargo.toml -p telepathy_core --test core_integration_test --features integration-testing <module>::
+cargo nextest run --manifest-path ./rust/Cargo.toml -p telepathy_core --test core_integration_test --features integration-testing <module>::<test>
+```
+
+Modules: `session_lifecycle`, `call_lifecycle`, `audio_streams`, `device_failures`, `room_lifecycle`, `call_end_copy`.
+
+Package or single-test validation:
+
+```sh
+cargo nextest run --manifest-path ./rust/Cargo.toml -p <package> -E 'not kind(=bench)'
+cargo nextest run --manifest-path ./rust/Cargo.toml -p <package> <test>
+```
+
+After changes affecting core sessions, calls, rooms, networking, or teardown, run:
+
+```sh
+cargo nextest run --manifest-path ./rust/Cargo.toml -p telepathy_core --test core_integration_test --features integration-testing --stress-count 10
+```
+
+Before handing off substantial Rust changes, run the main pass, then the stress pass.
+
+System tests must be run manually by the developer in WSL; prompt them when applicable.
 
 ## Flutter Rust Bridge Rules
 
