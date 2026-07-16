@@ -34,6 +34,8 @@ use crate::error::{
     AudioFileError, ChannelError, Error, ProcessingError, StreamDirection, StreamError, TaskError,
 };
 use crate::internal::processing::wide_mul;
+#[cfg(target_family = "wasm")]
+use crate::internal::thread::safe_spawn;
 use crate::internal::traits::CHANNEL_SIZE;
 use crate::internal::utils::{db_to_multiplier, resampler_factory};
 use crate::sea::codec::file::SeaFileHeader;
@@ -1262,8 +1264,8 @@ fn unpack_wav_frame<T: SampleConversion + Clone>(
 /// Runs a CPU-bound closure on a blocking context and returns its result.
 ///
 /// On native targets uses `tokio::task::spawn_blocking` for optimal performance.
-/// On WASM runs inline because `wasm_bindgen::JsValue`-backed errors are not
-/// `Send` and cannot cross a worker/channel boundary.
+/// On WASM uses the thread abstraction with a oneshot channel to bridge synchronous
+/// execution to an awaitable future (no multi-threaded runtime in browser).
 #[cfg(not(target_family = "wasm"))]
 async fn spawn_cpu_task<F, R>(f: F) -> Result<R, Error>
 where
@@ -1276,9 +1278,15 @@ where
 #[cfg(target_family = "wasm")]
 async fn spawn_cpu_task<F, R>(f: F) -> Result<R, Error>
 where
-    F: FnOnce() -> Result<R, Error>,
+    F: FnOnce() -> Result<R, Error> + Send + 'static,
+    R: Send + 'static,
 {
-    f()
+    let (tx, rx) = oneshot::channel();
+    safe_spawn(move || {
+        let result = f();
+        let _ = tx.send(result);
+    })?;
+    rx.await?
 }
 
 #[cfg(test)]
