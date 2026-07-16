@@ -112,10 +112,8 @@ pub(crate) enum RoomMessage {
     },
     Leave {
         peer: PublicKey,
-        session_id: Uuid,
         /// [`Connection::stable_id`] for the transport being torn down.
         connection_id: usize,
-        reason: Option<GoodbyeReason>,
     },
 }
 

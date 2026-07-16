@@ -1693,7 +1693,6 @@ where
             .ok_or(ErrorKind::RoomStateMissing)?;
         let (terminal_sender, mut terminal_receiver) = unbounded_channel();
         let mut terminal_controls_open = true;
-        let mut goodbye_reason = None;
 
         sender
             .send(RoomMessage::Join {
@@ -1736,7 +1735,6 @@ where
                     match result {
                         Ok(ProtocolMessage::Goodbye { reason }) => {
                             info!(event = "room_goodbye_received", peer.id = %peer_id, ?reason);
-                            goodbye_reason = Some(reason);
                             break;
                         }
                         Ok(ProtocolMessage::Chat { .. }) => {
@@ -1772,9 +1770,7 @@ where
         _ = sender
             .send(RoomMessage::Leave {
                 peer: peer_id,
-                session_id: session.id,
                 connection_id,
-                reason: goodbye_reason,
             })
             .await;
         Ok(())
@@ -2021,28 +2017,8 @@ where
                         }
                         Some(RoomMessage::Leave {
                             peer,
-                            session_id,
                             connection_id,
-                            reason,
                         }) => {
-                            let current_session = self
-                                .session_states
-                                .read()
-                                .await
-                                .get(&peer)
-                                .is_some_and(|session| session.id == session_id);
-                            if reason == Some(GoodbyeReason::AudioDeviceError) && current_session {
-                                self.callbacks
-                                    .call_state(CallState::CallEnded(
-                                        CallEndMessage::from_goodbye_reason(
-                                            GoodbyeReason::AudioDeviceError,
-                                        )
-                                        .into_string(),
-                                        true,
-                                    ))
-                                    .await;
-                                break;
-                            }
                             match peer_connections.get(&peer).copied() {
                                 Some(active_connection_id)
                                     if active_connection_id == connection_id =>
