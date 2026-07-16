@@ -87,8 +87,7 @@ class _AudioSettingsState extends State<AudioSettings> {
                   selectedOutputDevice: audioSettingsController.outputDeviceId,
                 ),
                 builder: (BuildContext context, _DeviceDropdownState state, _) {
-                  final inputInitialSelection =
-                      state.selectedInputDevice ?? '';
+                  final inputInitialSelection = state.selectedInputDevice ?? '';
                   final outputInitialSelection =
                       state.selectedOutputDevice ?? '';
 
