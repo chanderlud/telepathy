@@ -261,7 +261,6 @@ where
         let call_state = match self.inner.setup_call(SecretKey::generate().public()).await {
             Ok(state) => state,
             Err(error) => {
-                self.inner.notify_setup_failure(&error).await;
                 self.inner.core_state.call_slot.release()?;
                 return Err(error);
             }

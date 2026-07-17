@@ -444,7 +444,7 @@ async fn room_input_error_during_open_clears_state_releases_slot_and_skips_membe
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn stale_input_device_ends_room_before_member_notification() {
+async fn stale_input_device_returns_room_setup_error_without_call_ended() {
     init_test_tracing();
     let relay_map = shared_relay_map();
     let codec_config = CodecConfig::new(true, true, 5.0);
@@ -510,13 +510,6 @@ async fn stale_input_device_ends_room_before_member_notification() {
         "room input failure should preserve stale-device error; error={error}"
     );
 
-    wait_for_call_ended_contains(
-        &call_states_a,
-        "Audio device error",
-        false,
-        "room input setup failure",
-    )
-    .await;
     wait_for_slot_idle(&client_a, &contact_a.get_peer_id().to_string()).await;
     assert_eq!(
         client_a.telepathy.inner.current_room_generation().await,
@@ -538,6 +531,11 @@ async fn stale_input_device_ends_room_before_member_notification() {
     device_probe.assert_no_default_attempt(DeviceSelectionOperation::InputSampleRate);
     device_probe.assert_no_default_attempt(DeviceSelectionOperation::OpenInput);
     device_probe.assert_no_default_attempt(DeviceSelectionOperation::OpenOutput);
+    assert_no_call_ended_contains(
+        &call_states_a,
+        "",
+        "synchronous room setup errors must only return through join_room",
+    );
     sleep(Duration::from_millis(750)).await;
     assert_eq!(
         accept_probe_b.opened.load(Relaxed),

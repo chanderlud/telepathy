@@ -589,6 +589,45 @@ void main() {
     });
 
     testWidgets(
+        'a synchronous room setup error resets state and shows one dialog',
+        (WidgetTester tester) async {
+      _stubOutgoingRingtone(tester);
+      var stateResets = 0;
+      var previousLifecycle = stateController.callLifecycle;
+      stateController.addListener(() {
+        if (previousLifecycle != CallLifecycle.idle &&
+            stateController.callLifecycle == CallLifecycle.idle) {
+          stateResets += 1;
+        }
+        previousLifecycle = stateController.callLifecycle;
+      });
+
+      await tester.pumpWidget(
+        _harness(
+          stateController: stateController,
+          profilesController: profilesController,
+          telepathy: telepathy,
+          player: player,
+          child: RoomWidget(room: alpha),
+        ),
+      );
+
+      await tester.tap(find.byType(IconButton).last);
+      await tester.pump();
+      telepathy.joinRoomCallers.single.completeError(
+        const DartError(message: 'selected input device is unavailable'),
+      );
+      await tester.pumpAndSettle();
+
+      expect(stateResets, 1,
+          reason: 'returned setup error must be the only reset path');
+      expect(stateController.callLifecycle, CallLifecycle.idle);
+      expect(find.text('Call failed'), findsOneWidget);
+      expect(find.text('selected input device is unavailable'), findsOneWidget);
+      await tester.pump(const Duration(seconds: 1));
+    });
+
+    testWidgets(
         'a mid-flight target swap does not redirect the captured '
         'joinRoom continuation onto the new room', (WidgetTester tester) async {
       _stubOutgoingRingtone(tester);
