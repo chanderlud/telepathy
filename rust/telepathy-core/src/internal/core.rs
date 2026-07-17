@@ -24,8 +24,8 @@ use crate::internal::utils::{JoinHandle, spawn_task};
 use crate::internal::utils::{configure_audio_session, deactivate_audio_session};
 use crate::internal::utils::{loopback, read_message, statistics_collector, write_message};
 use crate::internal::{
-    ALPN, EarlyCallState, HELLO_TIMEOUT, KEEP_ALIVE, Result, RoomState, SESSION_MAX_FRAME_LENGTH,
-    SessionState,
+    ALPN, EarlyCallState, HELLO_TIMEOUT, KEEP_ALIVE, MAX_RINGTONE_LENGTH, Result, RoomState,
+    SESSION_MAX_FRAME_LENGTH, SessionState,
 };
 use crate::overlay::CONNECTED;
 use crate::overlay::Overlay;
@@ -1269,6 +1269,15 @@ where
                             write_message(io.send, &ProtocolMessage::Reject).await?;
                             return Ok(false);
                         }
+                        if !ringtone_is_within_limit(&ringtone) {
+                            warn!(
+                                event = "oversized_ringtone_rejected",
+                                size = ringtone.as_ref().map_or(0, Vec::len),
+                                limit = MAX_RINGTONE_LENGTH
+                            );
+                            write_message(io.send, &ProtocolMessage::Reject).await?;
+                            return Ok(false);
+                        }
 
                         remote_audio_header = audio_header;
                         peer_room_hash = room_hash;
@@ -2463,8 +2472,39 @@ async fn abort_negotiation_session_stopped(
     Ok(())
 }
 
+fn ringtone_is_within_limit(ringtone: &Option<Vec<u8>>) -> bool {
+    ringtone
+        .as_ref()
+        .is_none_or(|ringtone| ringtone.len() <= MAX_RINGTONE_LENGTH)
+}
+
 #[cfg(test)]
 mod tests {
+    use super::{MAX_RINGTONE_LENGTH, ProtocolMessage, ringtone_is_within_limit};
+    use crate::internal::messages::AudioHeader;
+    use speedy::{Readable, Writable};
+
+    #[test]
+    fn oversized_hello_ringtone_is_rejected_before_prompting() {
+        let message = ProtocolMessage::Hello {
+            ringtone: Some(vec![0; MAX_RINGTONE_LENGTH + 1]),
+            audio_header: AudioHeader {
+                sample_rate: 48_000,
+                codec_enabled: true,
+                vbr: false,
+                residual_bits: 4.0,
+            },
+            room_hash: None,
+        };
+        let encoded = message.write_to_vec().unwrap();
+        let ProtocolMessage::Hello { ringtone, .. } =
+            ProtocolMessage::read_from_buffer(&encoded).unwrap()
+        else {
+            panic!("expected Hello message");
+        };
+
+        assert!(!ringtone_is_within_limit(&ringtone));
+    }
     use super::{
         MANAGER_RETRY_BASE_MS, MANAGER_RETRY_MAX_MS, manager_retry_delay_ms,
         should_keep_new_session,

@@ -327,6 +327,13 @@ impl std::error::Error for TaskError {
 /// Failures raised when parsing a WAV or SEA file.
 #[derive(Debug)]
 pub enum AudioFileError {
+    /// Decoding this file would exceed the player's bounded in-memory frame limit.
+    TooLarge {
+        /// Number of encoded SEA frames.
+        actual: usize,
+        /// Maximum accepted encoded SEA frames.
+        limit: usize,
+    },
     /// The byte buffer is shorter than the minimum required for a valid header.
     TooShort {
         /// Actual byte length of the input buffer.
@@ -365,6 +372,11 @@ pub enum AudioFileError {
 impl std::fmt::Display for AudioFileError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            AudioFileError::TooLarge { actual, limit } => write!(
+                f,
+                "audio file contains too many frames: got {}, limit {}",
+                actual, limit
+            ),
             AudioFileError::TooShort { actual, required } => write!(
                 f,
                 "audio file is too short: got {} bytes, need at least {}",

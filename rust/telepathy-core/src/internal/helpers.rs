@@ -10,7 +10,7 @@ use crate::internal::state::{EarlyCallState, StatisticsCollectorState};
 #[cfg(target_os = "ios")]
 use crate::internal::utils::deactivate_audio_session;
 use crate::internal::utils::{KanalSink, KanalSource};
-use crate::internal::{ALPN, Result};
+use crate::internal::{ALPN, MAX_RINGTONE_LENGTH, Result};
 use crate::types::CallState;
 #[cfg(not(target_family = "wasm"))]
 use crate::types::FrontendNotify;
@@ -454,11 +454,22 @@ where
                     None
                 } else {
                     match File::open("ringtone.sea").await {
-                        Ok(mut file) => {
+                        Ok(file) => {
                             let mut buffer = Vec::new();
 
-                            if let Err(error) = file.read_to_end(&mut buffer).await {
+                            if let Err(error) = file
+                                .take((MAX_RINGTONE_LENGTH + 1) as u64)
+                                .read_to_end(&mut buffer)
+                                .await
+                            {
                                 error!("failed to read ringtone: {:?}", error);
+                                None
+                            } else if buffer.len() > MAX_RINGTONE_LENGTH {
+                                warn!(
+                                    event = "custom_ringtone_too_large",
+                                    size = buffer.len(),
+                                    limit = MAX_RINGTONE_LENGTH
+                                );
                                 None
                             } else {
                                 Some(buffer)

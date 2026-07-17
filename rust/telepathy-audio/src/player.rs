@@ -70,6 +70,8 @@ use wasm_sync::{Condvar, Mutex as SyncMutex};
 #[cfg(target_family = "wasm")]
 use wasmtimer::std::Instant;
 
+/// Bound accumulated decoded SEA data before offloading playback work.
+const MAX_DECODED_SEA_FRAMES: usize = 60 * 48_000 / FRAME_SIZE;
 /// Number of frames to fade out when canceling playback.
 /// This prevents audio pops/clicks when stopping playback abruptly.
 const FADE_FRAMES: usize = 60;
@@ -790,9 +792,12 @@ async fn play_sound_with_device(
             let mut decoder =
                 SeaDecoder::new(header).map_err(|e| Error::AudioFile(AudioFileError::Codec(e)))?;
 
+            let frame_count = local_bytes[14..].chunks(chunk_size).len();
+            validate_sea_frame_count(frame_count)?;
+
             samples = Some(
                 spawn_cpu_task(move || {
-                    let mut decoded = Vec::new();
+                    let mut decoded = Vec::with_capacity(frame_count);
                     let mut buffer = [0_i16; FRAME_SIZE];
 
                     for chunk in local_bytes[14..].chunks(chunk_size) {
@@ -1289,6 +1294,16 @@ where
     rx.await?
 }
 
+fn validate_sea_frame_count(frame_count: usize) -> Result<(), Error> {
+    if frame_count > MAX_DECODED_SEA_FRAMES {
+        return Err(Error::AudioFile(AudioFileError::TooLarge {
+            actual: frame_count,
+            limit: MAX_DECODED_SEA_FRAMES,
+        }));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1303,6 +1318,15 @@ mod tests {
                 "sample {idx} mismatch: expected {expected}, got {actual}"
             );
         }
+    }
+
+    #[test]
+    fn sea_decode_rejects_frame_counts_above_memory_limit() {
+        assert!(validate_sea_frame_count(MAX_DECODED_SEA_FRAMES).is_ok());
+        assert!(matches!(
+            validate_sea_frame_count(MAX_DECODED_SEA_FRAMES + 1),
+            Err(Error::AudioFile(AudioFileError::TooLarge { .. }))
+        ));
     }
 
     fn make_wav_header(

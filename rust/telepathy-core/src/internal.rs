@@ -25,6 +25,7 @@ use crate::overlay::Overlay;
 use crate::types::{ChatMessage, CodecConfig, Contact, NetworkConfig, ScreenshareConfig};
 use chrono::Local;
 use iroh::SecretKey;
+use speedy::Writable;
 use std::mem;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
@@ -49,7 +50,10 @@ const KEEP_ALIVE: Duration = Duration::from_secs(10);
 /// the protocol identifier for Telepathy sessions
 const ALPN: &[u8] = b"telepathy/session/1";
 /// Maximum allowed size for a single length-delimited control/message frame on the session stream.
-const SESSION_MAX_FRAME_LENGTH: usize = 1024 * 1024 * 1024;
+/// Attachments larger than this require a separately bounded or streamed transport.
+pub(crate) const SESSION_MAX_FRAME_LENGTH: usize = 8 * 1024 * 1024;
+/// Maximum encoded custom ringtone size accepted from disk or a remote peer.
+pub(crate) const MAX_RINGTONE_LENGTH: usize = 4 * 1024 * 1024;
 
 pub struct TelepathyHandle<C, S, H, I, O>
 where
@@ -479,13 +483,13 @@ where
 
     /// Sends a chat message
     pub async fn send_chat(&self, message: &mut ChatMessage) -> Result<()> {
-        if message
-            .attachments
-            .iter()
-            .map(|a| a.data.len())
-            .sum::<usize>()
-            > SESSION_MAX_FRAME_LENGTH
-        {
+        let frame_len = ProtocolMessage::Chat {
+            text: message.text.clone(),
+            attachments: message.attachments.clone(),
+        }
+        .write_to_vec()?
+        .len();
+        if frame_len > SESSION_MAX_FRAME_LENGTH {
             return Err(ErrorKind::AttachmentsTooLarge.into());
         }
 
@@ -629,5 +633,23 @@ where
 
         *self.inner.core_state.denoise_model.write().await = model;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SESSION_MAX_FRAME_LENGTH;
+    use bytes::BytesMut;
+    use tokio_util::codec::{Decoder, LengthDelimitedCodec};
+
+    #[test]
+    fn session_codec_rejects_oversized_length_prefix_before_payload_allocation() {
+        let mut codec = LengthDelimitedCodec::builder()
+            .max_frame_length(SESSION_MAX_FRAME_LENGTH)
+            .length_field_type::<u64>()
+            .new_codec();
+        let mut input = BytesMut::from(&(SESSION_MAX_FRAME_LENGTH as u64 + 1).to_be_bytes()[..]);
+
+        assert!(codec.decode(&mut input).is_err());
     }
 }
