@@ -52,7 +52,7 @@ use tokio::sync::Mutex;
 use tokio::sync::mpsc::{
     Receiver, Sender, UnboundedReceiver, UnboundedSender, channel, unbounded_channel,
 };
-use tokio::sync::{Notify, RwLock};
+use tokio::sync::{Notify, RwLock, oneshot};
 #[cfg(not(target_family = "wasm"))]
 use tokio::time::{Instant, Interval, interval, sleep_until, timeout};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
@@ -1801,6 +1801,7 @@ where
             room_owner,
             room_generation,
             ready_sender,
+            publication_receiver,
         } = start;
         let room_hash = self.room_hash().await;
         Span::current().record("room.hash", field::debug(room_hash));
@@ -1848,7 +1849,50 @@ where
                     .await;
             }
         };
-        _ = ready_sender.send(());
+
+        // An input callback can fail synchronously from `open_input`. Preserve
+        // that error until RoomState publication has completed.
+        let pending_stream_error = stream_error_receiver.try_recv().ok();
+        if ready_sender.send(pending_stream_error.is_some()).is_err()
+            || publication_receiver.await.is_err()
+        {
+            return self
+                .cleanup_room_controller(
+                    stop_io,
+                    RoomControllerCleanup {
+                        end_sessions,
+                        room_owner,
+                        room_generation,
+                        input_handle: None,
+                        connections: HashMap::new(),
+                        statistics_handle: None,
+                        setup_error: None,
+                    },
+                )
+                .await;
+        }
+
+        if let Some(error) = pending_stream_error {
+            let message = CallEndMessage::from_stream_error(&error).into_string();
+            self.callbacks
+                .call_state(CallState::CallEnded(message, false))
+                .await;
+            return self
+                .cleanup_room_controller(
+                    stop_io,
+                    RoomControllerCleanup {
+                        end_sessions,
+                        room_owner,
+                        room_generation,
+                        input_handle: None,
+                        connections: HashMap::new(),
+                        statistics_handle: None,
+                        setup_error: Some(error.into_error_kind().into()),
+                    },
+                )
+                .await;
+        }
+
         let input_handle = spawn_task(audio_input(
             input_helper.receiver(),
             DynamicConnection::new(
@@ -2135,7 +2179,8 @@ pub(crate) struct RoomControllerStart {
     pub(crate) end_call: Arc<Notify>,
     pub(crate) room_owner: CallSlotSnapshot,
     pub(crate) room_generation: u64,
-    pub(crate) ready_sender: tokio::sync::oneshot::Sender<()>,
+    pub(crate) ready_sender: oneshot::Sender<bool>,
+    pub(crate) publication_receiver: oneshot::Receiver<()>,
 }
 
 pub(crate) struct RoomControllerCleanup<O> {

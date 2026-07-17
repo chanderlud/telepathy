@@ -194,6 +194,7 @@ pub(super) struct CallbackCapturingAudioHost {
     /// the stream error callback.
     pub(super) fail_output_synchronously: Arc<AtomicBool>,
     pub(super) fail_input_synchronously: Arc<AtomicBool>,
+    pub(super) fail_input_immediately: Arc<AtomicBool>,
     input_sample_rate_gate: Option<InputSampleRateGate>,
 }
 
@@ -208,6 +209,7 @@ impl CallbackCapturingAudioHost {
             device_selection_probe: DeviceSelectionProbe::default(),
             fail_output_synchronously: Arc::new(AtomicBool::new(false)),
             fail_input_synchronously: Arc::new(AtomicBool::new(false)),
+            fail_input_immediately: Arc::new(AtomicBool::new(false)),
             input_sample_rate_gate: None,
         }
     }
@@ -366,7 +368,12 @@ impl AudioHost for CallbackCapturingAudioHost {
             self.input_error_probe.signal_setup_attempt();
             return Err(telepathy_audio::devices::DeviceError::NoOutputDevice);
         }
-        self.input_error_probe.capture(error_callback);
+        if self.fail_input_immediately.load(Relaxed) {
+            let mut callback = error_callback.expect("input error callback should be installed");
+            callback(simulated_stream_error("input unavailable during open"));
+        } else {
+            self.input_error_probe.capture(error_callback);
+        }
         Ok((MockAudioInput::default(), DEFAULT_SAMPLE_RATE, ()))
     }
 

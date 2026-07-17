@@ -270,6 +270,7 @@ where
             .fetch_add(1, Relaxed)
             .saturating_add(1);
         let (ready_sender, ready_receiver) = oneshot::channel();
+        let (publication_sender, publication_receiver) = oneshot::channel();
         let self_clone = self.inner.clone();
         let controller_cancel = cancel.clone();
         let controller_end_call = Arc::clone(&end_call);
@@ -286,6 +287,7 @@ where
                             room_owner,
                             room_generation,
                             ready_sender,
+                            publication_receiver,
                         },
                     )
                     .await
@@ -297,11 +299,13 @@ where
             .in_current_span(),
         ));
 
-        if ready_receiver.await.is_err() {
-            return Ok(());
-        }
+        let setup_has_stream_error = match ready_receiver.await {
+            Ok(value) => value,
+            Err(_) => return Ok(()),
+        };
 
-        // set room state
+        // Publish this generation before the controller can process stream errors.
+        // A dropped acknowledgement makes the controller tear down this generation.
         let old_state_option = self.inner.room_state.write().await.replace(RoomState {
             peers: members.clone(),
             sender,
@@ -310,6 +314,10 @@ where
             early_state: call_state.clone(),
             generation: room_generation,
         });
+        if publication_sender.send(()).is_err() || setup_has_stream_error {
+            return Ok(());
+        }
+
         // clean up old state
         if let Some(old_state) = old_state_option {
             old_state.cancel.cancel();

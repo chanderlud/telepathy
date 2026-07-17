@@ -351,6 +351,99 @@ async fn room_input_setup_synchronous_failure_clears_state_and_releases_slot() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn room_input_error_during_open_clears_state_releases_slot_and_skips_members() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+    let codec_config = CodecConfig::new(true, true, 5.0);
+    let key_a = SecretKey::generate();
+    let key_b = SecretKey::generate();
+    let contact_a = Contact::new(
+        "room-immediate-input-error-client-a".to_string(),
+        key_a.public().to_string(),
+    )
+    .expect("contact a invalid");
+    let contact_b = Contact::new(
+        "room-immediate-input-error-client-b".to_string(),
+        key_b.public().to_string(),
+    )
+    .expect("contact b invalid");
+    let call_states_a = Arc::new(Mutex::new(Vec::new()));
+    let accept_probe_b = PendingAcceptProbe::default();
+
+    let host = CallbackCapturingAudioHost::new(StreamErrorProbe::new(), StreamErrorProbe::new());
+    host.fail_input_immediately.store(true, Relaxed);
+    let client_a = build_client(
+        relay_map,
+        key_a,
+        vec![contact_b.clone()],
+        &codec_config,
+        host,
+        call_states_a.clone(),
+    )
+    .await;
+    let client_b = build_client_with_accept_probe(
+        relay_map,
+        key_b,
+        vec![contact_a.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        Arc::new(Mutex::new(Vec::new())),
+        accept_probe_b.clone(),
+    )
+    .await;
+
+    client_a.telepathy.start_session(&contact_b).await;
+    client_b.telepathy.start_session(&contact_a).await;
+    wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
+
+    client_a
+        .telepathy
+        .join_room(sorted_room_members(&contact_a, &contact_b))
+        .await
+        .expect("join_room should cancel a failed generation");
+
+    wait_for_call_ended_contains(
+        &call_states_a,
+        "Microphone error",
+        false,
+        "immediate room input error",
+    )
+    .await;
+    wait_for_slot_idle(&client_a, &contact_a.get_peer_id().to_string()).await;
+    assert_eq!(
+        client_a.telepathy.inner.current_room_generation().await,
+        None,
+        "immediate input error must not leave a RoomState behind"
+    );
+    assert_call_slot_idle(
+        &client_a,
+        "immediate input error must release the RoomCall slot",
+    );
+    assert_eq!(
+        accept_probe_b.opened.load(Relaxed),
+        0,
+        "failed room setup must not notify members"
+    );
+    assert!(
+        call_state_snapshot(&call_states_a)
+            .iter()
+            .all(|state| !matches!(
+                state,
+                CallState::Waiting | CallState::Connected | CallState::RoomJoin(_)
+            )),
+        "failed room setup must not publish room member state"
+    );
+
+    client_a.telepathy.shutdown().await;
+    client_b.telepathy.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn stale_input_device_ends_room_before_member_notification() {
     init_test_tracing();
     let relay_map = shared_relay_map();
