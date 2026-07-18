@@ -1,12 +1,12 @@
 use super::common::{
     CallbackCapturingAudioHost, DEFAULT_SAMPLE_RATE, DeviceSelectionOperation,
     DeviceSelectionProbe, InputSampleRateGate, MOCK_DEVICE_ID, RoomEventKind, StreamErrorProbe,
-    TwoClientShutdownGuard, assert_call_slot_idle, assert_room_event_sequence,
-    assert_slot_remains_outside_direct_call_states, build_client, call_state_snapshot,
-    init_test_tracing, room_join_count, room_leave_count, shared_relay_map, sorted_room_members,
-    wait_for_call_ended_contains, wait_for_connected, wait_for_no_extra_room_leave,
-    wait_for_room_join_count, wait_for_room_leave_count, wait_for_sessions, wait_for_slot_idle,
-    wait_for_slot_room_call,
+    TwoClientShutdownGuard, WaitingCallbackGate, assert_call_slot_idle, assert_room_event_sequence,
+    assert_slot_remains_outside_direct_call_states, build_client, build_client_with_waiting_gate,
+    call_state_snapshot, init_test_tracing, room_join_count, room_leave_count, shared_relay_map,
+    sorted_room_members, wait_for_call_ended_contains, wait_for_connected,
+    wait_for_no_extra_room_leave, wait_for_room_join_count, wait_for_room_leave_count,
+    wait_for_sessions, wait_for_slot_idle, wait_for_slot_room_call,
 };
 
 use iroh::SecretKey;
@@ -1755,4 +1755,95 @@ async fn room_duplicate_join_is_busy_then_idempotent() {
     );
 
     client_a.telepathy.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn room_end_call_during_parked_waiting_callback_tears_down() {
+    init_test_tracing();
+    let call_states = Arc::new(Mutex::new(Vec::new()));
+    let waiting_gate = WaitingCallbackGate::new();
+
+    let client = build_client_with_waiting_gate(
+        shared_relay_map(),
+        SecretKey::generate(),
+        vec![],
+        &CodecConfig::new(true, true, 5.0),
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states.clone(),
+        waiting_gate.clone(),
+    )
+    .await;
+
+    // Drive join_room through publication. The controller reaches the Waiting
+    // observation asynchronously after publication_sender is acknowledged.
+    client
+        .telepathy
+        .join_room(vec![])
+        .await
+        .expect("join_room should publish RoomState and return");
+
+    // Block the test until the controller actually invokes the Waiting
+    // callback. By this point the standalone select! would have latched its
+    // end_call.notified() branch.
+    waiting_gate.wait_for_waiting().await;
+
+    // Sanity: RoomState is published and the slot is held while Waiting parks.
+    let generation = client
+        .telepathy
+        .inner
+        .current_room_generation()
+        .await
+        .expect("RoomState should be installed while Waiting is parked");
+    assert!(
+        generation > 0,
+        "Waiting must be parked against a real RoomState generation; got {generation}"
+    );
+    wait_for_slot_room_call(&client, "slot held while Waiting parked").await;
+
+    // Reproduce the local hangup race: end_call fires while the controller is
+    // still mid-Waiting. With the unfixed standalone select!, end_call's
+    // notify was consumed here but the controller never reached cleanup, so
+    // wait_for_release would hang forever and this timeout would fire.
+    tokio::time::timeout(Duration::from_secs(15), client.telepathy.end_call())
+        .await
+        .expect("end_call must return when Waiting is parked; a stale controller would block wait_for_release forever");
+
+    // Teardown proof #1: room_state was cleared by cleanup_room_controller.
+    assert!(
+        client
+            .telepathy
+            .inner
+            .current_room_generation()
+            .await
+            .is_none(),
+        "room_state must be cleared after end_call tore down the parked controller"
+    );
+
+    // Teardown proof #2: the call slot released back to Idle.
+    assert_call_slot_idle(
+        &client,
+        "end_call during parked Waiting must release the call slot",
+    );
+
+    // The Waiting observation was abandoned mid-flight: deliver_room_observation
+    // returned false and dropped the parked callback future before it pushed
+    // Waiting. The local user must never observe Waiting after teardown won.
+    let states = call_state_snapshot(&call_states);
+    assert!(
+        !states
+            .iter()
+            .any(|state| matches!(state, CallState::Waiting)),
+        "Waiting must not be delivered after teardown won the race; states={states:?}"
+    );
+
+    // Release the gate so any lingering waits resolve before shutdown joins
+    // the controller task. The controller already exited via cleanup.
+    waiting_gate.release();
+
+    client.telepathy.shutdown().await;
 }

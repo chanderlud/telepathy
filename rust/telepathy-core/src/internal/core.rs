@@ -2116,11 +2116,35 @@ where
                 )
                 .await;
         }
-        select! {
-            _ = self.callbacks.call_state(CallState::Waiting) => {}
-            _ = end_call.notified() => {}
-            _ = end_sessions.cancelled() => {}
-            _ = operation.cancelled() => {}
+        // Frontend callback delivery must not block authoritative teardown.
+        // If teardown is signaled while the Waiting observation is pending,
+        // abandon it and proceed straight to clean up so the call slot and
+        // room_state are released; otherwise the local hangup is consumed
+        // here and the controller never exits.
+        if !self
+            .deliver_room_observation(
+                &end_call,
+                &end_sessions,
+                &operation,
+                self.callbacks.call_state(CallState::Waiting),
+            )
+            .await
+        {
+            return self
+                .cleanup_room_controller(
+                    stop_io,
+                    RoomControllerCleanup {
+                        end_sessions,
+                        room_owner,
+                        room_generation,
+                        input_handle: input_handle.take(),
+                        connections,
+                        statistics_handle: Some(statistics_handle),
+                        terminal_error: None,
+                        outcome: RoomControllerOutcome::Silent,
+                    },
+                )
+                .await;
         }
         let mut outcome = RoomControllerOutcome::Silent;
 
