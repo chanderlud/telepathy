@@ -1813,7 +1813,7 @@ where
         mut receiver: Receiver<RoomMessage>,
         stop_io: &CancellationToken,
         start: RoomControllerStart,
-    ) -> Result<()> {
+    ) -> RoomControllerOutcome {
         let RoomControllerStart {
             end_sessions,
             end_call,
@@ -1863,6 +1863,7 @@ where
                             connections: HashMap::new(),
                             statistics_handle: None,
                             terminal_error: Some(error),
+                            outcome: RoomControllerOutcome::Silent,
                         },
                     )
                     .await;
@@ -1886,6 +1887,7 @@ where
                         connections: HashMap::new(),
                         statistics_handle: None,
                         terminal_error: None,
+                        outcome: RoomControllerOutcome::Silent,
                     },
                 )
                 .await;
@@ -1907,12 +1909,13 @@ where
                         connections: HashMap::new(),
                         statistics_handle: None,
                         terminal_error: Some(error.into_error_kind().into()),
+                        outcome: RoomControllerOutcome::Silent,
                     },
                 )
                 .await;
         }
 
-        let input_handle = spawn_task(audio_input(
+        let mut input_handle = spawn_task(audio_input(
             input_helper.receiver(),
             DynamicConnection::new(
                 connection_sender.clone(),
@@ -1931,6 +1934,7 @@ where
 
         // kick the UI out of connecting mode
         self.callbacks.call_state(CallState::Waiting).await;
+        let mut outcome = RoomControllerOutcome::Silent;
 
         loop {
             select! {
@@ -2016,6 +2020,7 @@ where
                                         }
                                         Err(error) => {
                                             terminal_error = Some(error.into());
+                                            outcome = RoomControllerOutcome::Notify;
                                             break;
                                         }
                                     }
@@ -2107,9 +2112,10 @@ where
                                             Ok(Err(error)) => {
                                                 warn!(event = "room_output_closed_on_leave", ?error);
                                             }
-                                            Err(error) => {
-                                                terminal_error = Some(error.into());
-                                                break;
+                                        Err(error) => {
+                                            terminal_error = Some(error.into());
+                                            outcome = RoomControllerOutcome::Notify;
+                                            break;
                                             }
                                         }
                                         info!(
@@ -2138,12 +2144,22 @@ where
                         }
                         None => {
                             warn!(event = "room_controller_channel_closed_unexpectedly");
+                            outcome = RoomControllerOutcome::Notify;
                             break;
                         }
                     }
                 }
                 _ = end_call.notified() => {
                     info!(event = "room_call_ended_signal");
+                    break;
+                }
+                result = &mut input_handle => {
+                    match result {
+                        Ok(Ok(())) => warn!(event = "room_input_stopped_unexpectedly"),
+                        Ok(Err(error)) => warn!(event = "room_input_closed_unexpectedly", ?error),
+                        Err(error) => warn!(event = "room_input_join_failed_unexpectedly", ?error),
+                    }
+                    outcome = RoomControllerOutcome::Notify;
                     break;
                 }
             }
@@ -2155,10 +2171,11 @@ where
                 end_sessions,
                 room_owner,
                 room_generation,
-                input_handle: Some(input_handle),
+                input_handle: None,
                 connections,
                 statistics_handle: Some(statistics_handle),
                 terminal_error,
+                outcome,
             },
         )
         .await
@@ -2216,6 +2233,13 @@ pub(crate) struct RoomControllerCleanup<O> {
     pub(crate) connections: HashMap<usize, RoomConnection<O>>,
     pub(crate) statistics_handle: Option<JoinHandle<()>>,
     pub(crate) terminal_error: Option<Error>,
+    pub(crate) outcome: RoomControllerOutcome,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RoomControllerOutcome {
+    Silent,
+    Notify,
 }
 
 enum CallControllerOutcome {

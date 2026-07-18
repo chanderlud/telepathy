@@ -25,7 +25,7 @@ use crate::overlay::Overlay;
 use crate::types::{ChatMessage, CodecConfig, Contact, NetworkConfig, ScreenshareConfig};
 use chrono::Local;
 use iroh::SecretKey;
-use speedy::Writable;
+use speedy::{LittleEndian, Writable, Writer};
 use std::mem;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
@@ -54,6 +54,80 @@ const ALPN: &[u8] = b"telepathy/session/1";
 pub(crate) const SESSION_MAX_FRAME_LENGTH: usize = 8 * 1024 * 1024;
 /// Maximum encoded custom ringtone size accepted from disk or a remote peer.
 pub(crate) const MAX_RINGTONE_LENGTH: usize = 4 * 1024 * 1024;
+
+/// Counts a `speedy` encoding without allocating its payload and rejects writes
+/// that would exceed the session frame limit.
+struct BoundedSizeWriter {
+    size: usize,
+}
+
+impl BoundedSizeWriter {
+    fn new() -> Self {
+        Self { size: 0 }
+    }
+}
+
+impl Writer<LittleEndian> for BoundedSizeWriter {
+    fn write_bytes(&mut self, bytes: &[u8]) -> std::result::Result<(), speedy::Error> {
+        self.size = self
+            .size
+            .checked_add(bytes.len())
+            .filter(|&size| size <= SESSION_MAX_FRAME_LENGTH)
+            .ok_or_else(|| speedy::Error::custom("chat frame exceeds maximum size"))?;
+        Ok(())
+    }
+
+    fn context(&self) -> &LittleEndian {
+        static CONTEXT: LittleEndian = LittleEndian {};
+        &CONTEXT
+    }
+
+    fn context_mut(&mut self) -> &mut LittleEndian {
+        panic!("the bounded size writer does not mutate its serialization context")
+    }
+}
+
+/// A borrowed representation of the `ProtocolMessage::Chat` wire format.
+struct ChatFrame<'a> {
+    text: &'a str,
+    attachments: &'a [Attachment],
+}
+
+impl Writable<LittleEndian> for ChatFrame<'_> {
+    fn write_to<T: ?Sized + Writer<LittleEndian>>(
+        &self,
+        writer: &mut T,
+    ) -> std::result::Result<(), speedy::Error> {
+        // `Chat` is the sixth `ProtocolMessage` variant and uses Speedy's
+        // default u32 enum tag and collection-length encodings.
+        writer.write_u32(5)?;
+        write_sized_bytes(writer, self.text.as_bytes())?;
+        let attachment_count = u32::try_from(self.attachments.len())
+            .map_err(|_| speedy::Error::custom("too many chat attachments"))?;
+        writer.write_u32(attachment_count)?;
+        for attachment in self.attachments {
+            write_sized_bytes(writer, attachment.name.as_bytes())?;
+            write_sized_bytes(writer, &attachment.data)?;
+        }
+        Ok(())
+    }
+}
+
+fn write_sized_bytes<T: ?Sized + Writer<LittleEndian>>(
+    writer: &mut T,
+    bytes: &[u8],
+) -> std::result::Result<(), speedy::Error> {
+    let length = u32::try_from(bytes.len())
+        .map_err(|_| speedy::Error::custom("chat field exceeds wire length"))?;
+    writer.write_u32(length)?;
+    writer.write_bytes(bytes)
+}
+
+fn chat_message_fits_frame(text: &str, attachments: &[Attachment]) -> bool {
+    ChatFrame { text, attachments }
+        .write_to(&mut BoundedSizeWriter::new())
+        .is_ok()
+}
 
 pub struct TelepathyHandle<C, S, H, I, O>
 where
@@ -280,7 +354,7 @@ where
         self.handles.lock().await.push(spawn_task(
             async move {
                 let stop_io = Default::default();
-                if let Err(error) = self_clone
+                if self_clone
                     .room_controller(
                         receiver,
                         &stop_io,
@@ -294,8 +368,15 @@ where
                         },
                     )
                     .await
+                    == crate::internal::core::RoomControllerOutcome::Notify
                 {
-                    error!("error in room controller: {:?}", error);
+                    self_clone
+                        .callbacks
+                        .call_state(crate::types::CallState::CallEnded(
+                            crate::internal::error::CALL_END_GENERIC.to_string(),
+                            false,
+                        ))
+                        .await;
                 }
                 stop_io.cancel();
             }
@@ -482,13 +563,7 @@ where
 
     /// Sends a chat message
     pub async fn send_chat(&self, message: &mut ChatMessage) -> Result<()> {
-        let frame_len = ProtocolMessage::Chat {
-            text: message.text.clone(),
-            attachments: message.attachments.clone(),
-        }
-        .write_to_vec()?
-        .len();
-        if frame_len > SESSION_MAX_FRAME_LENGTH {
+        if !chat_message_fits_frame(&message.text, &message.attachments) {
             return Err(ErrorKind::AttachmentsTooLarge.into());
         }
 
@@ -637,8 +712,12 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::SESSION_MAX_FRAME_LENGTH;
+    use super::{
+        Attachment, BoundedSizeWriter, ProtocolMessage, SESSION_MAX_FRAME_LENGTH, Writer,
+        chat_message_fits_frame,
+    };
     use bytes::BytesMut;
+    use speedy::Writable;
     use tokio_util::codec::{Decoder, LengthDelimitedCodec};
 
     #[test]
@@ -650,5 +729,77 @@ mod tests {
         let mut input = BytesMut::from(&(SESSION_MAX_FRAME_LENGTH as u64 + 1).to_be_bytes()[..]);
 
         assert!(codec.decode(&mut input).is_err());
+    }
+
+    #[test]
+    fn chat_frame_accepts_exact_limit_attachment_metadata() {
+        // Enum tag, text length, attachment count, attachment name length, and
+        // attachment data length are each encoded as u32.
+        const METADATA_LENGTH: usize = 5 * size_of::<u32>();
+        let attachments = [Attachment {
+            name: "m".repeat(SESSION_MAX_FRAME_LENGTH - METADATA_LENGTH),
+            data: Vec::new(),
+        }];
+
+        assert!(chat_message_fits_frame("", &attachments));
+        assert_eq!(
+            ProtocolMessage::Chat {
+                text: String::new(),
+                attachments: attachments.into(),
+            }
+            .write_to_vec()
+            .unwrap()
+            .len(),
+            SESSION_MAX_FRAME_LENGTH
+        );
+    }
+
+    #[test]
+    fn chat_frame_rejects_oversized_text() {
+        let text = "x".repeat(SESSION_MAX_FRAME_LENGTH - 11);
+
+        assert!(!chat_message_fits_frame(&text, &[]));
+    }
+
+    #[test]
+    fn chat_frame_rejects_oversized_attachment_name() {
+        let attachment = Attachment {
+            name: "n".repeat(SESSION_MAX_FRAME_LENGTH),
+            data: Vec::new(),
+        };
+
+        assert!(!chat_message_fits_frame("", &[attachment]));
+    }
+
+    #[test]
+    fn chat_frame_accounts_for_all_attachments() {
+        let attachment = || Attachment {
+            name: "quarter.bin".to_string(),
+            data: vec![7; SESSION_MAX_FRAME_LENGTH / 2],
+        };
+
+        assert!(!chat_message_fits_frame("", &[attachment(), attachment()]));
+    }
+
+    #[test]
+    fn chat_frame_handles_overflow_safe_accumulation() {
+        let mut writer = BoundedSizeWriter { size: usize::MAX };
+
+        assert!(writer.write_bytes(&[0]).is_err());
+        assert_eq!(writer.size, usize::MAX);
+    }
+
+    #[test]
+    fn chat_frame_rejects_very_large_payload_without_copying_it() {
+        let data = vec![0xA5; SESSION_MAX_FRAME_LENGTH * 8];
+        let attachments = [Attachment {
+            name: "archive.bin".to_string(),
+            data,
+        }];
+        let original_data = attachments[0].data.as_ptr();
+
+        assert!(!chat_message_fits_frame("", &attachments));
+        assert_eq!(attachments[0].data.as_ptr(), original_data);
+        assert_eq!(attachments[0].data.len(), SESSION_MAX_FRAME_LENGTH * 8);
     }
 }

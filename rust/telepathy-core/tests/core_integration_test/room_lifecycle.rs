@@ -1,9 +1,11 @@
 use super::common::{
-    DEFAULT_SAMPLE_RATE, RoomEventKind, TwoClientShutdownGuard, assert_room_event_sequence,
+    CallbackCapturingAudioHost, DEFAULT_SAMPLE_RATE, RoomEventKind, TwoClientShutdownGuard,
+    assert_call_slot_idle, assert_room_event_sequence,
     assert_slot_remains_outside_direct_call_states, build_client, call_state_snapshot,
     init_test_tracing, room_join_count, room_leave_count, shared_relay_map, sorted_room_members,
-    wait_for_connected, wait_for_no_extra_room_leave, wait_for_room_join_count,
-    wait_for_room_leave_count, wait_for_sessions, wait_for_slot_idle, wait_for_slot_room_call,
+    wait_for_call_ended_contains, wait_for_connected, wait_for_no_extra_room_leave,
+    wait_for_room_join_count, wait_for_room_leave_count, wait_for_sessions, wait_for_slot_idle,
+    wait_for_slot_room_call,
 };
 
 use iroh::SecretKey;
@@ -14,6 +16,60 @@ use std::time::Duration;
 use telepathy_audio::devices::{MockAudioHost, MockAudioInput, MockAudioOutput};
 use telepathy_core::types::{CallState, CodecConfig, Contact};
 use tokio::time::sleep;
+
+#[tokio::test(flavor = "multi_thread")]
+async fn room_input_task_panic_clears_ownership_and_notifies_once() {
+    init_test_tracing();
+    let call_states = Arc::new(Mutex::new(Vec::new()));
+    let host = CallbackCapturingAudioHost::new(
+        super::common::StreamErrorProbe::new(),
+        super::common::StreamErrorProbe::new(),
+    );
+    let client = build_client(
+        shared_relay_map(),
+        SecretKey::generate(),
+        vec![],
+        &CodecConfig::new(true, true, 5.0),
+        host.clone(),
+        call_states.clone(),
+    )
+    .await;
+
+    client
+        .telepathy
+        .join_room(vec![])
+        .await
+        .expect("room should start before its input task panics");
+    host.panic_input.store(true, Relaxed);
+
+    wait_for_call_ended_contains(
+        &call_states,
+        "The call ended unexpectedly",
+        false,
+        "room input task panic",
+    )
+    .await;
+    wait_for_slot_idle(&client, "room input task panic should release its slot").await;
+    assert!(
+        client
+            .telepathy
+            .inner
+            .current_room_generation()
+            .await
+            .is_none()
+    );
+    assert_call_slot_idle(&client, "room input task panic should leave slot idle");
+    assert_eq!(
+        call_state_snapshot(&call_states)
+            .iter()
+            .filter(|state| matches!(state, CallState::CallEnded(_, _)))
+            .count(),
+        1,
+        "room input task panic must emit exactly one terminal callback"
+    );
+
+    client.telepathy.shutdown().await;
+}
 
 #[tokio::test(flavor = "multi_thread")]
 async fn room_two_peers_join_emits_remote_room_join() {

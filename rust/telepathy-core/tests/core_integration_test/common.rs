@@ -184,6 +184,22 @@ impl StreamErrorProbe {
     }
 }
 
+#[derive(Debug, Clone)]
+struct ControlledInput {
+    inner: MockAudioInput,
+    panic_on_read: Arc<AtomicBool>,
+}
+
+impl AudioInput for ControlledInput {
+    fn read_into(&mut self, dst: &mut [f32]) -> Result<usize, telepathy_audio::Error> {
+        assert!(
+            !self.panic_on_read.swap(false, Relaxed),
+            "simulated room input task panic"
+        );
+        self.inner.read_into(dst)
+    }
+}
+
 #[derive(Clone)]
 pub(super) struct CallbackCapturingAudioHost {
     pub(super) input_error_probe: StreamErrorProbe,
@@ -195,6 +211,7 @@ pub(super) struct CallbackCapturingAudioHost {
     pub(super) fail_output_synchronously: Arc<AtomicBool>,
     pub(super) fail_input_synchronously: Arc<AtomicBool>,
     pub(super) fail_input_immediately: Arc<AtomicBool>,
+    pub(super) panic_input: Arc<AtomicBool>,
     input_sample_rate_gate: Option<InputSampleRateGate>,
 }
 
@@ -210,6 +227,7 @@ impl CallbackCapturingAudioHost {
             fail_output_synchronously: Arc::new(AtomicBool::new(false)),
             fail_input_synchronously: Arc::new(AtomicBool::new(false)),
             fail_input_immediately: Arc::new(AtomicBool::new(false)),
+            panic_input: Arc::new(AtomicBool::new(false)),
             input_sample_rate_gate: None,
         }
     }
@@ -374,7 +392,14 @@ impl AudioHost for CallbackCapturingAudioHost {
         } else {
             self.input_error_probe.capture(error_callback);
         }
-        Ok((MockAudioInput::default(), DEFAULT_SAMPLE_RATE, ()))
+        Ok((
+            ControlledInput {
+                inner: MockAudioInput::default(),
+                panic_on_read: self.panic_input.clone(),
+            },
+            DEFAULT_SAMPLE_RATE,
+            (),
+        ))
     }
 
     fn open_output(

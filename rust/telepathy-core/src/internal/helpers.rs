@@ -1,5 +1,5 @@
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
-use crate::internal::core::{RoomControllerCleanup, TelepathyCore};
+use crate::internal::core::{RoomControllerCleanup, RoomControllerOutcome, TelepathyCore};
 use crate::internal::error::{AudioStreamError, CallEndMessage, Error, ErrorKind};
 use crate::internal::messages::{AudioHeader, RoomMessage};
 #[cfg(not(target_family = "wasm"))]
@@ -695,7 +695,7 @@ where
         &self,
         stop_io: &CancellationToken,
         cleanup: RoomControllerCleanup<O>,
-    ) -> Result<()> {
+    ) -> RoomControllerOutcome {
         let RoomControllerCleanup {
             end_sessions,
             room_owner,
@@ -704,6 +704,7 @@ where
             connections,
             statistics_handle,
             terminal_error,
+            outcome,
         } = cleanup;
 
         debug!(event = "room_processing_teardown_start");
@@ -790,10 +791,10 @@ where
                 }
             }
         }
-        match terminal_error {
-            Some(error) => Err(error),
-            None => Ok(()),
+        if let Some(error) = terminal_error {
+            error!(event = "room_controller_terminated_with_error", ?error);
         }
+        outcome
     }
 
     pub(crate) async fn notify_setup_failure(&self, error: &Error) {

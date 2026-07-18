@@ -68,6 +68,7 @@ System tests must be run manually by the developer in WSL; prompt them when appl
 ## Test Quality Policy
 
 - Tests must verify real behavior through the full stack where possible
+- Test production paths only. Never add test-only production code, feature-gated test hooks, or runtime switches solely to make tests possible.
 - Mocks are ONLY acceptable for external services (third-party APIs, email, payment providers)
 - If you mock a database query or internal service, justify WHY in a code comment
 - NEVER mock the thing you are testing
