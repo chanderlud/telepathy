@@ -417,7 +417,7 @@ pub struct CoreState {
     pub(crate) input_device: SharedDeviceId,
 
     /// Manually set the output device
-    pub output_device: SharedDeviceId,
+    pub(crate) output_device: SharedDeviceId,
 
     /// The current iroh secret key
     pub identity: Arc<RwLock<Option<SecretKey>>>,

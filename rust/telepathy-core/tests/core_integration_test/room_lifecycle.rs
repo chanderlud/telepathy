@@ -1,12 +1,12 @@
 use super::common::{
     CallbackCapturingAudioHost, DEFAULT_SAMPLE_RATE, DeviceSelectionOperation,
-    DeviceSelectionProbe, InputSampleRateGate, MOCK_DEVICE_ID, RoomEventKind, StreamErrorProbe,
-    TwoClientShutdownGuard, WaitingCallbackGate, assert_call_slot_idle, assert_room_event_sequence,
-    assert_slot_remains_outside_direct_call_states, build_client, build_client_with_waiting_gate,
-    call_state_snapshot, init_test_tracing, room_join_count, room_leave_count, shared_relay_map,
-    sorted_room_members, wait_for_call_ended_contains, wait_for_connected,
-    wait_for_no_extra_room_leave, wait_for_room_join_count, wait_for_room_leave_count,
-    wait_for_sessions, wait_for_slot_idle, wait_for_slot_room_call,
+    DeviceSelectionProbe, InputSampleRateGate, MOCK_DEVICE_ID, OutputOpenGate, RoomEventKind,
+    StreamErrorProbe, TwoClientShutdownGuard, WaitingCallbackGate, assert_call_slot_idle,
+    assert_room_event_sequence, assert_slot_remains_outside_direct_call_states, build_client,
+    build_client_with_waiting_gate, call_state_snapshot, init_test_tracing, room_join_count,
+    room_leave_count, shared_relay_map, sorted_room_members, wait_for_call_ended_contains,
+    wait_for_connected, wait_for_no_extra_room_leave, wait_for_room_join_count,
+    wait_for_room_leave_count, wait_for_sessions, wait_for_slot_idle, wait_for_slot_room_call,
 };
 
 use iroh::SecretKey;
@@ -300,17 +300,21 @@ async fn cancelled_room_interrupts_gated_peer_output_setup() {
     let call_states_b = Arc::new(Mutex::new(Vec::new()));
     let room_members = sorted_room_members(&contact_a, &contact_b);
 
+    // Gate A's `setup_output` at the host's `open_output` call (the production
+    // path through `AudioOutputBuilder::build`). `CoreState::output_device` is
+    // `pub(crate)`, so the test must drive the gate via host behavior.
+    let device_probe = DeviceSelectionProbe::default();
+    let output_gate = OutputOpenGate::default();
+    let host_a = CallbackCapturingAudioHost::new(StreamErrorProbe::new(), StreamErrorProbe::new())
+        .with_device_selection_probe(device_probe.clone())
+        .with_output_open_gate(output_gate.clone());
+
     let client_a = build_client(
         relay_map,
         key_a,
         vec![contact_b.clone()],
         &codec_config,
-        MockAudioHost::new(
-            MockAudioInput::default(),
-            DEFAULT_SAMPLE_RATE,
-            MockAudioOutput,
-            DEFAULT_SAMPLE_RATE,
-        ),
+        host_a,
         call_states_a.clone(),
     )
     .await;
@@ -333,24 +337,30 @@ async fn cancelled_room_interrupts_gated_peer_output_setup() {
     client_b.telepathy.start_session(&contact_a).await;
     wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
 
-    // Hold A's output_device lock so A's per-peer setup_output (its first await)
-    // blocks. Without the cancellation race this strands A's room controller on
-    // the awaited setup_output; with the race, cancelling the operation
-    // interrupts it and tears this generation down.
-    let (held_tx, held_rx) = tokio::sync::oneshot::channel::<()>();
-    let release_output = Arc::new(Notify::new());
-    let output_device = client_a.telepathy.inner.core_state.output_device.clone();
-    let release_clone = release_output.clone();
-    let hold_output = tokio::spawn(async move {
-        let _guard = output_device.lock().await;
-        let _ = held_tx.send(());
-        release_clone.notified().await;
-    });
-    held_rx
-        .await
-        .expect("output_device lock should be acquired");
+    client_a
+        .telepathy
+        .set_output_device(Some(MOCK_DEVICE_ID.to_string()))
+        .await;
 
     let operation_a = CancellationToken::new();
+    // Cancel A's room operation once its per-peer `setup_output` reaches the
+    // host (recorded as `OpenOutput`), then release the gate so the cancelled
+    // call can return. Without the cancellation race A's room controller
+    // strands on the gated `open_output`; with the race, cancelling interrupts
+    // it and tears this generation down.
+    let cancel_after_open_output = {
+        let device_probe = device_probe.clone();
+        let operation = operation_a.clone();
+        let output_gate = output_gate.clone();
+        tokio::spawn(async move {
+            device_probe
+                .wait_for(DeviceSelectionOperation::OpenOutput, MOCK_DEVICE_ID, 1)
+                .await;
+            operation.cancel();
+            output_gate.release();
+        })
+    };
+
     client_a
         .telepathy
         .join_room_with_operation(room_members.clone(), &operation_a)
@@ -363,13 +373,15 @@ async fn cancelled_room_interrupts_gated_peer_output_setup() {
         .expect("client b should join room");
 
     // B observing A's RoomJoin means the room handshake completed both ways; A
-    // has therefore received B's Join and is blocked inside setup_output.
+    // has therefore received B's Join and its `setup_output` is blocked inside
+    // the gated `open_output`.
     wait_for_room_join_count(&call_states_b, &peer_a, 1).await;
-    for _ in 0..16 {
-        tokio::task::yield_now().await;
-    }
 
     operation_a.cancel();
+    output_gate.release();
+    cancel_after_open_output
+        .await
+        .expect("output gate cancellation task should finish");
 
     wait_for_slot_idle(&client_a, &peer_a).await;
     assert!(
@@ -381,11 +393,6 @@ async fn cancelled_room_interrupts_gated_peer_output_setup() {
             .is_none(),
         "A's room_state must be cleared after cancelling gated peer output setup"
     );
-
-    release_output.notify_one();
-    hold_output
-        .await
-        .expect("output_device lock-hold task should finish");
 
     client_a.telepathy.shutdown().await;
     client_b.telepathy.shutdown().await;

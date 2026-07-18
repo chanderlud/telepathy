@@ -145,6 +145,30 @@ impl InputSampleRateGate {
     }
 }
 
+/// Blocks `open_output` after recording its device selection. Tests use this
+/// to gate the production `setup_output` path through the host instead of
+/// locking `CoreState::output_device`, which is `pub(crate)`.
+#[derive(Clone, Default)]
+pub(super) struct OutputOpenGate {
+    released: Arc<(Mutex<bool>, Condvar)>,
+}
+
+impl OutputOpenGate {
+    pub(super) fn release(&self) {
+        let (released, wake) = &*self.released;
+        *released.lock().unwrap() = true;
+        wake.notify_all();
+    }
+
+    fn wait(&self) {
+        let (released, wake) = &*self.released;
+        let mut released = released.lock().unwrap();
+        while !*released {
+            released = wake.wait(released).unwrap();
+        }
+    }
+}
+
 /// Parks the `Waiting` call-state observation inside the room controller's
 /// `deliver_room_observation` so a test can drive teardown while the
 /// controller is still mid-callback. Tests observe `wait_for_waiting` before
@@ -252,6 +276,7 @@ pub(super) struct CallbackCapturingAudioHost {
     pub(super) fail_input_immediately: Arc<AtomicBool>,
     pub(super) panic_input: Arc<AtomicBool>,
     input_sample_rate_gate: Option<InputSampleRateGate>,
+    output_open_gate: Option<OutputOpenGate>,
 }
 
 impl CallbackCapturingAudioHost {
@@ -268,6 +293,7 @@ impl CallbackCapturingAudioHost {
             fail_input_immediately: Arc::new(AtomicBool::new(false)),
             panic_input: Arc::new(AtomicBool::new(false)),
             input_sample_rate_gate: None,
+            output_open_gate: None,
         }
     }
 
@@ -278,6 +304,11 @@ impl CallbackCapturingAudioHost {
 
     pub(super) fn with_input_sample_rate_gate(mut self, gate: InputSampleRateGate) -> Self {
         self.input_sample_rate_gate = Some(gate);
+        self
+    }
+
+    pub(super) fn with_output_open_gate(mut self, gate: OutputOpenGate) -> Self {
+        self.output_open_gate = Some(gate);
         self
     }
 }
@@ -451,6 +482,9 @@ impl AudioHost for CallbackCapturingAudioHost {
     > {
         self.device_selection_probe
             .record(DeviceSelectionOperation::OpenOutput, device_id);
+        if let Some(gate) = &self.output_open_gate {
+            gate.wait();
+        }
         if device_id == Some(STALE_OUTPUT_DEVICE_ID) {
             self.output_error_probe.signal_setup_attempt();
             return Err(DeviceError::DeviceNotFound {
