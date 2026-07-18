@@ -143,6 +143,21 @@ where
     handles: Arc<Mutex<Vec<JoinHandle<()>>>>,
 }
 
+/// Tears down one room generation's controller and awaits its completion.
+///
+/// `cancel` is that generation's `end_sessions` token, so every post-spawn
+/// cancellation branch in `join_room_with_operation` can route through this single
+/// helper to signal the exact generation and wait for its slot/room_state release.
+async fn abort_room_generation(
+    cancel: &CancellationToken,
+    end_call: &Notify,
+    completion: &mut oneshot::Receiver<()>,
+) {
+    cancel.cancel();
+    end_call.notify_one();
+    let _ = completion.await;
+}
+
 impl<C, S, H, I, O> TelepathyHandle<C, S, H, I, O>
 where
     C: CoreCallbacks<S> + Send + Sync + 'static,
@@ -190,17 +205,39 @@ where
         }
     }
 
-    /// Attempts to start a call through an existing session
+    /// Attempts to start a call through an existing session.
+    ///
+    /// [operation] is scoped to this request: a cancellation observed before
+    /// the session task is notified releases its pending slot without affecting
+    /// a later call attempt.
     pub async fn start_call(&self, contact: &Contact) -> Result<()> {
-        // The session presence check and the pending-slot acquisition are
-        // atomic: both happen under the same `session_states` read lock
-        // guard, so the slot can only be acquired for a session that is
-        // currently in the map.
-        // The subsequent `notify_one` is a separate, best-effort operation:
-        // if the session has been removed in the meantime (after the guard
-        // is released), the acquired slot is released and `NoSessionForContact`
-        // is returned to avoid leaking the slot.
-        let slot_result = {
+        self.start_call_with_operation(contact, &CancellationToken::new())
+            .await
+    }
+
+    /// Attempts to start a call and observes cancellation for this operation.
+    pub async fn start_call_with_operation(
+        &self,
+        contact: &Contact,
+        operation: &CancellationToken,
+    ) -> Result<()> {
+        if operation.is_cancelled() {
+            return Ok(());
+        }
+
+        // Acquire the slot and capture its ownership snapshot atomically: both
+        // happen under a single mutex hold inside `try_acquire_or_match_with_owner`,
+        // so the snapshot reflects exactly the ownership this call established.
+        // Deriving the snapshot from a later `snapshot()` call would re-acquire the
+        // slot mutex and could observe a state that was transitioned or replaced
+        // after acquisition (e.g. a concurrent handshake moving the slot to
+        // `ActiveDirect`); releasing against that later snapshot would then release
+        // a call this operation never owned.
+        //
+        // `Matched*` results are explicitly non-owning: the original acquirer owns
+        // the slot and is responsible for its lifecycle, so `direct_owner` is `Some`
+        // only on `Acquired`.
+        let (slot_result, direct_owner) = {
             let state_lock = self.inner.session_states.read().await;
             if state_lock.get(&contact.peer_id).is_none() {
                 return Err(ErrorKind::NoSessionForContact.into());
@@ -208,11 +245,18 @@ where
             self.inner
                 .core_state
                 .call_slot
-                .try_acquire_or_match(CallSlotState::PendingOutgoing, contact.peer_id)?
+                .try_acquire_or_match_with_owner(CallSlotState::PendingOutgoing, contact.peer_id)?
         };
 
         if slot_result == CallSlotAcquireResult::Failed {
             return Err(ErrorKind::CallAlreadyActive.into());
+        }
+
+        if operation.is_cancelled() {
+            if let Some(owner) = direct_owner {
+                let _ = self.inner.core_state.call_slot.release_if_match(owner)?;
+            }
+            return Ok(());
         }
 
         // The slot is already `PendingOutgoing` for this peer, meaning the session task
@@ -226,16 +270,33 @@ where
         #[cfg(target_family = "wasm")]
         {
             if let Err(error) = self.inner.init_web_audio().await {
-                self.inner
-                    .core_state
-                    .call_slot
-                    .release_if_pending_for_peer(contact.peer_id)?;
+                if let Some(owner) = direct_owner {
+                    let _ = self.inner.core_state.call_slot.release_if_match(owner)?;
+                }
                 return Err(error);
+            }
+            if operation.is_cancelled() {
+                if let Some(owner) = direct_owner {
+                    let _ = self.inner.core_state.call_slot.release_if_match(owner)?;
+                }
+                return Ok(());
             }
         }
 
         let state_lock = self.inner.session_states.read().await;
+        if operation.is_cancelled() {
+            if let Some(owner) = direct_owner {
+                let _ = self.inner.core_state.call_slot.release_if_match(owner)?;
+            }
+            return Ok(());
+        }
         if let Some(state) = state_lock.get(&contact.peer_id) {
+            if operation.is_cancelled() {
+                if let Some(owner) = direct_owner {
+                    let _ = self.inner.core_state.call_slot.release_if_match(owner)?;
+                }
+                return Ok(());
+            }
             state.start_call.notify_one();
             Ok(())
         } else {
@@ -243,10 +304,9 @@ where
                 event = "start_call_no_current_session_releasing_slot",
                 peer.id = %contact.peer_id,
             );
-            self.inner
-                .core_state
-                .call_slot
-                .release_if_pending_for_peer(contact.peer_id)?;
+            if let Some(owner) = direct_owner {
+                let _ = self.inner.core_state.call_slot.release_if_match(owner)?;
+            }
             Err(ErrorKind::NoSessionForContact.into())
         }
     }
@@ -292,8 +352,22 @@ where
         }
     }
 
-    /// The only entry point into participating in a room
+    /// The only entry point into participating in a room.
     pub async fn join_room(&self, member_strings: Vec<String>) -> Result<()> {
+        self.join_room_with_operation(member_strings, &CancellationToken::new())
+            .await
+    }
+
+    /// Joins a room and observes cancellation for this operation.
+    pub async fn join_room_with_operation(
+        &self,
+        member_strings: Vec<String>,
+        operation: &CancellationToken,
+    ) -> Result<()> {
+        if operation.is_cancelled() {
+            return Ok(());
+        }
+
         if !self
             .inner
             .core_state
@@ -303,22 +377,36 @@ where
             return Err(ErrorKind::CallAlreadyActive.into());
         }
 
-        #[cfg(target_family = "wasm")]
-        if let Err(error) = self.inner.init_web_audio().await {
-            self.inner.core_state.call_slot.release()?;
-            return Err(error);
+        let room_owner = self.inner.core_state.call_slot.snapshot()?;
+
+        if operation.is_cancelled() {
+            let _ = self
+                .inner
+                .core_state
+                .call_slot
+                .release_if_match(room_owner)?;
+            return Ok(());
         }
 
-        // capture the exact ownership snapshot this room acquired so the room controller's
-        // teardown can release the slot against the same generation we own, even if the slot
-        // was released and re-acquired (e.g. a newer room) while the controller was running.
-        let room_owner = match self.inner.core_state.call_slot.snapshot() {
-            Ok(snapshot) => snapshot,
-            Err(error) => {
-                self.inner.core_state.call_slot.release()?;
+        #[cfg(target_family = "wasm")]
+        {
+            if let Err(error) = self.inner.init_web_audio().await {
+                let _ = self
+                    .inner
+                    .core_state
+                    .call_slot
+                    .release_if_match(room_owner)?;
                 return Err(error);
             }
-        };
+            if operation.is_cancelled() {
+                let _ = self
+                    .inner
+                    .core_state
+                    .call_slot
+                    .release_if_match(room_owner)?;
+                return Ok(());
+            }
+        }
 
         // parse members
         let members: Vec<_> = member_strings
@@ -332,11 +420,31 @@ where
         // gracefully ends the room call
         let end_call = Arc::new(Notify::new());
         // the same early call state is used throughout the room, the real peer ids are set later
-        let call_state = match self.inner.setup_call(SecretKey::generate().public()).await {
-            Ok(state) => state,
-            Err(error) => {
-                self.inner.core_state.call_slot.release()?;
-                return Err(error);
+        // Pre-spawn cancellation branches release the slot directly (no controller yet);
+        // post-spawn branches route through `abort_room_generation` to await this exact
+        // generation's controller teardown.
+        let call_state = {
+            let result = tokio::select! {
+                state = self.inner.setup_call(SecretKey::generate().public()) => state,
+                _ = operation.cancelled() => {
+                    let _ = self
+                        .inner
+                        .core_state
+                        .call_slot
+                        .release_if_match(room_owner)?;
+                    return Ok(());
+                }
+            };
+            match result {
+                Ok(state) => state,
+                Err(error) => {
+                    let _ = self
+                        .inner
+                        .core_state
+                        .call_slot
+                        .release_if_match(room_owner)?;
+                    return Err(error);
+                }
             }
         };
         // acquire fresh generation for the new state
@@ -348,49 +456,85 @@ where
             .saturating_add(1);
         let (ready_sender, ready_receiver) = oneshot::channel();
         let (publication_sender, publication_receiver) = oneshot::channel();
+        let (controller_completion_sender, mut controller_completion_receiver) = oneshot::channel();
         let self_clone = self.inner.clone();
         let controller_cancel = cancel.clone();
         let controller_end_call = Arc::clone(&end_call);
-        self.handles.lock().await.push(spawn_task(
-            async move {
-                let stop_io = Default::default();
-                if self_clone
-                    .room_controller(
-                        receiver,
-                        &stop_io,
-                        RoomControllerStart {
-                            end_sessions: controller_cancel,
-                            end_call: controller_end_call,
-                            room_owner,
-                            room_generation,
-                            ready_sender,
-                            publication_receiver,
-                        },
-                    )
-                    .await
-                    == crate::internal::core::RoomControllerOutcome::Notify
-                {
-                    self_clone
-                        .callbacks
-                        .call_state(crate::types::CallState::CallEnded(
-                            crate::internal::error::CALL_END_GENERIC.to_string(),
-                            false,
-                        ))
-                        .await;
+        let controller_operation = operation.clone();
+        {
+            let mut handles = tokio::select! {
+                guard = self.handles.lock() => guard,
+                _ = operation.cancelled() => {
+                    let _ = self
+                        .inner
+                        .core_state
+                        .call_slot
+                        .release_if_match(room_owner)?;
+                    return Ok(());
                 }
-                stop_io.cancel();
-            }
-            .in_current_span(),
-        ));
+            };
+            handles.push(spawn_task(
+                async move {
+                    let stop_io = Default::default();
+                    let outcome = self_clone
+                        .room_controller(
+                            receiver,
+                            &stop_io,
+                            RoomControllerStart {
+                                end_sessions: controller_cancel,
+                                end_call: controller_end_call,
+                                operation: controller_operation,
+                                room_owner,
+                                room_generation,
+                                ready_sender,
+                                publication_receiver,
+                            },
+                        )
+                        .await;
+                    let _ = controller_completion_sender.send(());
+                    if outcome == crate::internal::core::RoomControllerOutcome::Notify {
+                        self_clone
+                            .callbacks
+                            .call_state(crate::types::CallState::CallEnded(
+                                crate::internal::error::CALL_END_GENERIC.to_string(),
+                                false,
+                            ))
+                            .await;
+                    }
+                    stop_io.cancel();
+                }
+                .in_current_span(),
+            ));
+        }
 
-        let setup_has_stream_error = match ready_receiver.await {
-            Ok(value) => value,
-            Err(_) => return Ok(()),
+        let setup_has_stream_error = tokio::select! {
+            ready = ready_receiver => match ready {
+                Ok(value) => value,
+                Err(_) => return Ok(()),
+            },
+            _ = operation.cancelled() => {
+                abort_room_generation(&cancel, &end_call, &mut controller_completion_receiver)
+                    .await;
+                return Ok(());
+            }
         };
 
         // Publish this generation before the controller can process stream errors.
         // A dropped acknowledgement makes the controller tear down this generation.
-        let old_state_option = self.inner.room_state.write().await.replace(RoomState {
+        let mut room_guard = tokio::select! {
+            guard = self.inner.room_state.write() => guard,
+            _ = operation.cancelled() => {
+                abort_room_generation(&cancel, &end_call, &mut controller_completion_receiver)
+                    .await;
+                return Ok(());
+            }
+        };
+        if operation.is_cancelled() {
+            drop(room_guard);
+            abort_room_generation(&cancel, &end_call, &mut controller_completion_receiver).await;
+            return Ok(());
+        }
+        let old_state_option = room_guard.replace(RoomState {
             peers: members.clone(),
             sender,
             cancel: cancel.clone(),
@@ -398,20 +542,54 @@ where
             early_state: call_state.clone(),
             generation: room_generation,
         });
+        drop(room_guard);
+        if operation.is_cancelled() {
+            drop(publication_sender);
+            abort_room_generation(&cancel, &end_call, &mut controller_completion_receiver).await;
+            return Ok(());
+        }
         if publication_sender.send(()).is_err() || setup_has_stream_error {
             return Ok(());
         }
 
         // clean up old state
+        if operation.is_cancelled() {
+            abort_room_generation(&cancel, &end_call, &mut controller_completion_receiver).await;
+            return Ok(());
+        }
         if let Some(old_state) = old_state_option {
             old_state.cancel.cancel();
             old_state.end_call.notify_one();
         }
         for member in members {
-            if let Some(state) = self.inner.session_states.read().await.get(&member) {
+            let read_guard = tokio::select! {
+                guard = self.inner.session_states.read() => guard,
+                _ = operation.cancelled() => {
+                    abort_room_generation(
+                        &cancel,
+                        &end_call,
+                        &mut controller_completion_receiver,
+                    )
+                    .await;
+                    return Ok(());
+                }
+            };
+            if let Some(state) = read_guard.get(&member) {
                 state.start_call.notify_one();
             } else if let Some(sender) = &self.inner.start_session {
-                _ = sender.send(member).await;
+                let cancelled_during_send = tokio::select! {
+                    _ = operation.cancelled() => true,
+                    send_result = sender.send(member) => {
+                        let _ = send_result;
+                        false
+                    }
+                };
+                if cancelled_during_send {
+                    drop(read_guard);
+                    abort_room_generation(&cancel, &end_call, &mut controller_completion_receiver)
+                        .await;
+                    return Ok(());
+                }
             }
         }
         Ok(())

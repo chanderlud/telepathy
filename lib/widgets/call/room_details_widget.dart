@@ -62,6 +62,7 @@ class RoomDetailsWidget extends StatelessWidget {
             ),
             onPressed: () async {
               outgoingSoundHandle?.cancel();
+              stateController.cancelCurrentStartOperation();
 
               if (!stateController.beginCallEnding()) return;
               await telepathy.endCall();

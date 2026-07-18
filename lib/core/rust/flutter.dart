@@ -41,6 +41,11 @@ abstract class FlutterCallbacks implements RustOpaqueInterface {
           screenshareStarted: screenshareStarted);
 }
 
+// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<StartOperation>>
+abstract class StartOperation implements RustOpaqueInterface {
+  void cancel();
+}
+
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Telepathy>>
 abstract class Telepathy implements RustOpaqueInterface {
   /// Blocks while an audio test is running
@@ -54,8 +59,9 @@ abstract class Telepathy implements RustOpaqueInterface {
   /// Ends the current audio test, room, or call in that order
   Future<void> endCall();
 
-  /// The only entry point into participating in a room
-  Future<void> joinRoom({required List<String> memberStrings});
+  /// The only entry point into participating in a room.
+  Future<void> joinRoom(
+      {required List<String> memberStrings, required StartOperation operation});
 
   /// Lists the input and output devices
   Future<(List<AudioDevice>, List<AudioDevice>)> listDevices();
@@ -74,6 +80,9 @@ abstract class Telepathy implements RustOpaqueInterface {
           overlay: overlay,
           codecConfig: codecConfig,
           callbacks: callbacks);
+
+  /// Creates an operation token that can cancel one pending call or room start.
+  StartOperation newStartOperation();
 
   void pauseStatistics();
 
@@ -118,8 +127,9 @@ abstract class Telepathy implements RustOpaqueInterface {
   /// shuts down the entire rust backend
   Future<void> shutdown();
 
-  /// Attempts to start a call through an existing session
-  Future<void> startCall({required Contact contact});
+  /// Attempts to start a call through an existing session.
+  Future<void> startCall(
+      {required Contact contact, required StartOperation operation});
 
   Future<void> startManager();
 

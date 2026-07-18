@@ -169,6 +169,38 @@ impl CallSlot {
         state: CallSlotState,
         peer: PublicKey,
     ) -> Result<CallSlotAcquireResult> {
+        Ok(self.try_acquire_or_match_with_owner(state, peer)?.0)
+    }
+
+    /// Atomic variant of [`try_acquire_or_match`] that also returns the exact
+    /// [`CallSlotSnapshot`] captured under the same mutex acquisition.
+    ///
+    /// The returned snapshot is `Some(_)` only on [`CallSlotAcquireResult::Acquired`]:
+    /// it reflects precisely the ownership this call established (the new pending
+    /// state, the requesting peer, and the freshly bumped generation). A concurrent
+    /// caller (for example a handshake thread transitioning the slot from pending
+    /// to active) cannot leak its transition into this snapshot because both the
+    /// acquisition and the snapshot read happen under a single lock hold.
+    ///
+    /// [`CallSlotAcquireResult::MatchedPendingIncoming`] and
+    /// [`CallSlotAcquireResult::MatchedPendingOutgoing`] deliberately return `None`:
+    /// the matcher does not own the slot (the original acquirer does) and must not
+    /// be able to release it through the snapshot-based path. [`Failed`] likewise
+    /// returns `None`.
+    ///
+    /// Callers that observe the operation they used to acquire the slot (e.g.
+    /// cancellation of a `start_call` operation) must release through
+    /// [`release_if_match`] using the snapshot returned here. Deriving the snapshot
+    /// from a later [`snapshot`] call re-acquires the mutex and can observe a state
+    /// that was transitioned or replaced after acquisition, which would let the
+    /// cancellation release a call this operation never owned.
+    ///
+    /// [`Failed`]: CallSlotAcquireResult::Failed
+    pub fn try_acquire_or_match_with_owner(
+        &self,
+        state: CallSlotState,
+        peer: PublicKey,
+    ) -> Result<(CallSlotAcquireResult, Option<CallSlotSnapshot>)> {
         let mut inner = self
             .inner
             .lock()
@@ -176,17 +208,27 @@ impl CallSlot {
         if let Some(matched) =
             Self::matched_pending_for_peer(state, inner.state, peer, inner.direct_peer)
         {
-            return Ok(matched);
+            // Matched callers do not own the slot; the original acquirer does. Return
+            // no snapshot so the matcher cannot release ownership it never held.
+            return Ok((matched, None));
         }
 
         if inner.state == CallSlotState::Idle {
             inner.state = state;
             inner.direct_peer = Some(peer);
             inner.generation = inner.generation.wrapping_add(1);
-            return Ok(CallSlotAcquireResult::Acquired);
+            // Capture the ownership snapshot under the same lock that performed the
+            // acquisition. A release keyed on this snapshot can never match a state
+            // that a concurrent caller transitioned to after this method returned.
+            let snapshot = CallSlotSnapshot {
+                state: inner.state,
+                direct_peer: inner.direct_peer,
+                generation: inner.generation,
+            };
+            return Ok((CallSlotAcquireResult::Acquired, Some(snapshot)));
         }
 
-        Ok(CallSlotAcquireResult::Failed)
+        Ok((CallSlotAcquireResult::Failed, None))
     }
 
     /// Returns the [`CallSlotAcquireResult::Matched*`] variant for the held pending state when
@@ -375,7 +417,7 @@ pub struct CoreState {
     pub(crate) input_device: SharedDeviceId,
 
     /// Manually set the output device
-    pub(crate) output_device: SharedDeviceId,
+    pub output_device: SharedDeviceId,
 
     /// The current iroh secret key
     pub identity: Arc<RwLock<Option<SecretKey>>>,
@@ -1280,6 +1322,158 @@ mod call_slot_tests {
             // Clean up so the next iteration starts from a known idle state.
             slot.release().unwrap();
         }
+    }
+
+    #[test]
+    fn call_slot_try_acquire_or_match_with_owner_acquired_carries_snapshot() {
+        use super::CallSlotSnapshot;
+
+        let slot = CallSlot::default();
+        let peer = SecretKey::generate().public();
+
+        let (result, owner) = slot
+            .try_acquire_or_match_with_owner(CallSlotState::PendingOutgoing, peer)
+            .unwrap();
+        assert_eq!(result, CallSlotAcquireResult::Acquired);
+        let owner = owner.expect("Acquired must carry an ownership snapshot");
+        assert_eq!(
+            owner,
+            CallSlotSnapshot {
+                state: CallSlotState::PendingOutgoing,
+                direct_peer: Some(peer),
+                generation: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn call_slot_try_acquire_or_match_with_owner_matched_is_non_owning() {
+        let slot = CallSlot::default();
+        let peer = SecretKey::generate().public();
+
+        assert!(
+            slot.try_acquire(CallSlotState::PendingOutgoing, Some(peer))
+                .unwrap()
+        );
+
+        let (result, owner) = slot
+            .try_acquire_or_match_with_owner(CallSlotState::PendingIncoming, peer)
+            .unwrap();
+        assert_eq!(result, CallSlotAcquireResult::MatchedPendingOutgoing);
+        assert!(
+            owner.is_none(),
+            "Matched* must be explicitly non-owning: the original acquirer owns the slot"
+        );
+
+        let (result, owner) = slot
+            .try_acquire_or_match_with_owner(CallSlotState::PendingOutgoing, peer)
+            .unwrap();
+        assert_eq!(result, CallSlotAcquireResult::MatchedPendingOutgoing);
+        assert!(owner.is_none());
+    }
+
+    #[test]
+    fn call_slot_try_acquire_or_match_with_owner_failed_is_non_owning() {
+        let slot = CallSlot::default();
+        let peer = SecretKey::generate().public();
+        let other = SecretKey::generate().public();
+
+        assert!(
+            slot.try_acquire(CallSlotState::PendingOutgoing, Some(peer))
+                .unwrap()
+        );
+
+        let (result, owner) = slot
+            .try_acquire_or_match_with_owner(CallSlotState::PendingOutgoing, other)
+            .unwrap();
+        assert_eq!(result, CallSlotAcquireResult::Failed);
+        assert!(owner.is_none());
+    }
+
+    #[test]
+    fn call_slot_acquisition_snapshot_does_not_release_post_acquisition_transition() {
+        // Regression guard for the atomic ownership snapshot: a snapshot captured
+        // atomically with acquisition must reflect the acquisition-time state, so
+        // releasing against it after a concurrent handshake transitioned the slot
+        // to ActiveDirect must NOT release the active call.
+        //
+        // transition_pending_to_active_for_peer preserves the generation, so a
+        // non-atomic snapshot taken after the transition would share the
+        // generation but report ActiveDirect; release_if_match against it would
+        // succeed and release the active call. The atomic snapshot reports the
+        // acquisition-time PendingOutgoing state, so the state mismatch prevents
+        // the release.
+        let slot = CallSlot::default();
+        let peer = SecretKey::generate().public();
+
+        let (result, owner) = slot
+            .try_acquire_or_match_with_owner(CallSlotState::PendingOutgoing, peer)
+            .unwrap();
+        assert_eq!(result, CallSlotAcquireResult::Acquired);
+        let acquisition_snapshot = owner.expect("Acquired must carry an ownership snapshot");
+        let acquisition_generation = acquisition_snapshot.generation;
+
+        assert!(
+            slot.transition_pending_to_active_for_peer(peer).unwrap(),
+            "pending slot must transition to ActiveDirect for the acquiring peer"
+        );
+        let after_transition = slot.snapshot().unwrap();
+        assert_eq!(after_transition.state, CallSlotState::ActiveDirect);
+        assert_eq!(after_transition.direct_peer, Some(peer));
+        assert_eq!(
+            after_transition.generation, acquisition_generation,
+            "transition_pending_to_active_for_peer must preserve the acquisition generation"
+        );
+
+        let released = slot.release_if_match(acquisition_snapshot).unwrap();
+        assert!(
+            !released,
+            "cancelling the original operation must not release the active slot a \
+             concurrent handshake transitioned to after acquisition"
+        );
+
+        let final_snapshot = slot.snapshot().unwrap();
+        assert_eq!(final_snapshot.state, CallSlotState::ActiveDirect);
+        assert_eq!(final_snapshot.direct_peer, Some(peer));
+        assert_eq!(final_snapshot.generation, acquisition_generation);
+
+        slot.release().unwrap();
+    }
+
+    #[test]
+    fn call_slot_acquisition_snapshot_does_not_release_replacement_generation() {
+        // Companion to the transition test above: if the slot is released and
+        // re-acquired (rather than transitioned) after acquisition, the new owner
+        // has a different generation. The acquisition-time snapshot must not match
+        // the replacement, so the cancellation release is skipped.
+        let slot = CallSlot::default();
+        let peer_a = SecretKey::generate().public();
+        let peer_b = SecretKey::generate().public();
+
+        let (result, owner_a) = slot
+            .try_acquire_or_match_with_owner(CallSlotState::PendingOutgoing, peer_a)
+            .unwrap();
+        assert_eq!(result, CallSlotAcquireResult::Acquired);
+        let acquisition_snapshot = owner_a.expect("Acquired must carry an ownership snapshot");
+
+        slot.release().unwrap();
+        let (result, _owner_b) = slot
+            .try_acquire_or_match_with_owner(CallSlotState::PendingOutgoing, peer_b)
+            .unwrap();
+        assert_eq!(result, CallSlotAcquireResult::Acquired);
+
+        let released = slot.release_if_match(acquisition_snapshot).unwrap();
+        assert!(
+            !released,
+            "cancelling the original operation must not release a replacement \
+             acquisition's slot (different generation)"
+        );
+
+        let final_snapshot = slot.snapshot().unwrap();
+        assert_eq!(final_snapshot.state, CallSlotState::PendingOutgoing);
+        assert_eq!(final_snapshot.direct_peer, Some(peer_b));
+
+        slot.release().unwrap();
     }
 
     #[test]

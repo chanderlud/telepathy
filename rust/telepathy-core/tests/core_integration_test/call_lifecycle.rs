@@ -1,21 +1,188 @@
 use super::common::{
     DEFAULT_SAMPLE_RATE, ManagerLifecycle, PendingAcceptProbe, TwoClientShutdownGuard,
-    assert_no_busy_end, assert_no_call_ended_before_connected, build_client,
+    assert_call_slot_idle, assert_no_busy_end, assert_no_call_ended_before_connected, build_client,
     build_client_with_accept_probe, build_client_with_options, call_state_snapshot,
     init_test_tracing, shared_relay_map, wait_for_connected, wait_for_sessions, wait_for_slot_idle,
     wait_for_slot_owned_by, wait_for_stable_session_pair,
 };
 
 use iroh::SecretKey;
+use std::future::Future;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::{Arc, Mutex};
+use std::task::Poll;
 use std::time::Duration;
 use telepathy_audio::devices::{MockAudioHost, MockAudioInput, MockAudioOutput};
-use telepathy_core::internal::state::CallSlotState;
+use telepathy_core::internal::state::{CallSlotAcquireResult, CallSlotState};
 use telepathy_core::types::Contact;
 use telepathy_core::types::{CallState, CodecConfig};
 use tokio::time::sleep;
+use tokio_util::sync::CancellationToken;
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cancelled_start_call_before_acquisition_leaves_slot_idle() {
+    init_test_tracing();
+    let client = build_client(
+        shared_relay_map(),
+        SecretKey::generate(),
+        vec![],
+        &CodecConfig::new(true, true, 5.0),
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        Arc::new(Mutex::new(Vec::new())),
+    )
+    .await;
+    let cancelled = CancellationToken::new();
+    cancelled.cancel();
+    let contact = Contact::new(
+        "cancelled peer".to_string(),
+        SecretKey::generate().public().to_string(),
+    )
+    .expect("contact should be valid");
+
+    client
+        .telepathy
+        .start_call_with_operation(&contact, &cancelled)
+        .await
+        .expect("a cancelled operation is a successful no-op");
+
+    assert_call_slot_idle(
+        &client,
+        "cancelling before direct-call acquisition must leave the slot idle",
+    );
+    client.telepathy.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cancelled_idempotent_retry_preserves_original_pending_call_generation() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+    let codec_config = CodecConfig::new(true, true, 5.0);
+    let key_a = SecretKey::generate();
+    let key_b = SecretKey::generate();
+    let contact_a = Contact::new("retry-client-a".to_string(), key_a.public().to_string())
+        .expect("contact a invalid");
+    let contact_b = Contact::new("retry-client-b".to_string(), key_b.public().to_string())
+        .expect("contact b invalid");
+    let call_states_a = Arc::new(Mutex::new(Vec::new()));
+    let call_states_b = Arc::new(Mutex::new(Vec::new()));
+    let accept_probe_b = PendingAcceptProbe::default();
+
+    let client_a = build_client(
+        relay_map,
+        key_a,
+        vec![contact_b.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_a.clone(),
+    )
+    .await;
+    let client_b = build_client_with_accept_probe(
+        relay_map,
+        key_b,
+        vec![contact_a.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_b.clone(),
+        accept_probe_b.clone(),
+    )
+    .await;
+
+    client_a.telepathy.start_session(&contact_b).await;
+    client_b.telepathy.start_session(&contact_a).await;
+    wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
+
+    client_a
+        .telepathy
+        .start_call(&contact_b)
+        .await
+        .expect("original outgoing call should start");
+    accept_probe_b.wait_opened().await;
+
+    let original_owner = client_a
+        .telepathy
+        .inner
+        .core_state
+        .call_slot
+        .snapshot()
+        .expect("original pending call slot snapshot should succeed");
+    assert_eq!(original_owner.state, CallSlotState::PendingOutgoing);
+    assert_eq!(original_owner.direct_peer, Some(contact_b.get_peer_id()));
+
+    // Hold the session map write lock so manually polling the retry proves it has
+    // observed its initial non-cancelled state and is waiting before acquisition.
+    let session_lock = client_a.telepathy.inner.session_states.write().await;
+    let retry_operation = CancellationToken::new();
+    let retry = client_a
+        .telepathy
+        .start_call_with_operation(&contact_b, &retry_operation);
+    tokio::pin!(retry);
+    let first_poll =
+        std::future::poll_fn(|context| Poll::Ready(retry.as_mut().poll(context))).await;
+    assert!(
+        matches!(first_poll, Poll::Pending),
+        "retry must wait for the session lock after passing its initial cancellation check"
+    );
+    retry_operation.cancel();
+    drop(session_lock);
+
+    retry
+        .await
+        .expect("cancelled idempotent retry should complete without error");
+
+    let owner_after_retry = client_a
+        .telepathy
+        .inner
+        .core_state
+        .call_slot
+        .snapshot()
+        .expect("call slot snapshot should succeed after retry cancellation");
+    assert_eq!(
+        owner_after_retry, original_owner,
+        "cancelling a matched retry must not release or replace original call ownership"
+    );
+
+    client_b
+        .telepathy
+        .start_call(&contact_a)
+        .await
+        .expect("peer should be able to complete original pending call");
+    wait_for_connected(&call_states_a, "original caller").await;
+    wait_for_connected(&call_states_b, "peer").await;
+
+    let connected_owner = client_a
+        .telepathy
+        .inner
+        .core_state
+        .call_slot
+        .snapshot()
+        .expect("connected call slot snapshot should succeed");
+    assert_eq!(connected_owner.state, CallSlotState::ActiveDirect);
+    assert_eq!(connected_owner.direct_peer, original_owner.direct_peer);
+    assert_eq!(
+        connected_owner.generation, original_owner.generation,
+        "original call must retain its generation through cancelled matched retry"
+    );
+
+    client_a.telepathy.end_call().await;
+    client_a.telepathy.shutdown().await;
+    client_b.telepathy.shutdown().await;
+}
 
 #[tokio::test(flavor = "multi_thread")]
 async fn call_simultaneous_dial_matches_pending_incoming_and_connects() {
@@ -642,4 +809,146 @@ async fn restart_manager_recovers_slot_respawns_sessions_and_allows_fresh_start_
     drop(shutdown_guard);
     client_a.telepathy.shutdown().await;
     client_b.telepathy.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cancelled_start_call_releases_only_acquisition_time_ownership_not_post_acquisition_state()
+{
+    init_test_tracing();
+
+    let client = build_client(
+        shared_relay_map(),
+        SecretKey::generate(),
+        vec![],
+        &CodecConfig::new(true, true, 5.0),
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        Arc::new(Mutex::new(Vec::new())),
+    )
+    .await;
+
+    let peer = SecretKey::generate().public();
+    let call_slot = client.telepathy.inner.core_state.call_slot.clone();
+
+    // `start_call_with_operation`'s acquisition path: claim the pending outgoing
+    // slot and capture its ownership snapshot under a single lock hold.
+    let (result, owner) = call_slot
+        .try_acquire_or_match_with_owner(CallSlotState::PendingOutgoing, peer)
+        .expect("acquisition on an idle slot should succeed");
+    assert_eq!(result, CallSlotAcquireResult::Acquired);
+    let acquisition_snapshot = owner.expect("Acquired result must carry an ownership snapshot");
+    assert_eq!(acquisition_snapshot.state, CallSlotState::PendingOutgoing);
+    assert_eq!(acquisition_snapshot.direct_peer, Some(peer));
+    let acquisition_generation = acquisition_snapshot.generation;
+
+    // Reproduce the post-acquisition transition `call_handshake` performs once
+    // the peer accepts. `transition_pending_to_active_for_peer` preserves the
+    // generation, so a non-atomic snapshot captured after this transition would
+    // share the acquisition generation but report `ActiveDirect` — the exact
+    // stale-owner race the atomic acquisition eliminates.
+    assert!(
+        call_slot
+            .transition_pending_to_active_for_peer(peer)
+            .unwrap(),
+        "pending slot must transition to ActiveDirect for the acquiring peer"
+    );
+
+    let after_transition = call_slot
+        .snapshot()
+        .expect("snapshot after transition should succeed");
+    assert_eq!(after_transition.state, CallSlotState::ActiveDirect);
+    assert_eq!(after_transition.direct_peer, Some(peer));
+    assert_eq!(
+        after_transition.generation, acquisition_generation,
+        "transition_pending_to_active_for_peer must preserve the acquisition generation"
+    );
+
+    // The cancellation path in `start_call_with_operation` releases only against
+    // the acquisition-time snapshot. The state mismatch (PendingOutgoing vs
+    // ActiveDirect) is what the atomic snapshot guarantees it always observes.
+    let released = call_slot
+        .release_if_match(acquisition_snapshot)
+        .expect("release_if_match should not error");
+    assert!(
+        !released,
+        "cancelling the original operation must not release the active slot a \
+         concurrent handshake transitioned to after acquisition; the atomic \
+         acquisition-time snapshot must not match the post-transition state"
+    );
+
+    let final_snapshot = call_slot.snapshot().expect("final snapshot should succeed");
+    assert_eq!(final_snapshot.state, CallSlotState::ActiveDirect);
+    assert_eq!(final_snapshot.direct_peer, Some(peer));
+    assert_eq!(final_snapshot.generation, acquisition_generation);
+
+    call_slot.release().expect("cleanup release should succeed");
+    client.telepathy.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cancelled_start_call_releases_only_acquisition_time_ownership_not_replacement_generation()
+{
+    init_test_tracing();
+
+    let client = build_client(
+        shared_relay_map(),
+        SecretKey::generate(),
+        vec![],
+        &CodecConfig::new(true, true, 5.0),
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        Arc::new(Mutex::new(Vec::new())),
+    )
+    .await;
+
+    let peer_a = SecretKey::generate().public();
+    let peer_b = SecretKey::generate().public();
+    let call_slot = client.telepathy.inner.core_state.call_slot.clone();
+
+    let (result, owner_a) = call_slot
+        .try_acquire_or_match_with_owner(CallSlotState::PendingOutgoing, peer_a)
+        .expect("acquisition for peer_a on an idle slot should succeed");
+    assert_eq!(result, CallSlotAcquireResult::Acquired);
+    let acquisition_snapshot = owner_a.expect("Acquired result must carry an ownership snapshot");
+    let acquisition_generation = acquisition_snapshot.generation;
+
+    // Release peer_a and re-acquire for peer_b, mirroring the replacement path
+    // `start_call_with_operation`'s cancellation must not clobber: the new owner
+    // gets a fresh generation.
+    call_slot.release().expect("release should succeed");
+    let (result, owner_b) = call_slot
+        .try_acquire_or_match_with_owner(CallSlotState::PendingOutgoing, peer_b)
+        .expect("re-acquisition for peer_b on an idle slot should succeed");
+    assert_eq!(result, CallSlotAcquireResult::Acquired);
+    let replacement_snapshot =
+        owner_b.expect("re-Acquired result must carry an ownership snapshot");
+    assert_ne!(
+        replacement_snapshot.generation, acquisition_generation,
+        "replacement acquisition must bump the generation"
+    );
+
+    let released = call_slot
+        .release_if_match(acquisition_snapshot)
+        .expect("release_if_match should not error");
+    assert!(
+        !released,
+        "cancelling the original operation must not release a replacement \
+         acquisition's slot (different generation)"
+    );
+
+    let final_snapshot = call_slot.snapshot().expect("final snapshot should succeed");
+    assert_eq!(final_snapshot.state, CallSlotState::PendingOutgoing);
+    assert_eq!(final_snapshot.direct_peer, Some(peer_b));
+    assert_eq!(final_snapshot.generation, replacement_snapshot.generation);
+
+    call_slot.release().expect("cleanup release should succeed");
+    client.telepathy.shutdown().await;
 }

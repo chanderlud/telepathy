@@ -110,7 +110,24 @@ class _ThrowingSoundPlayer implements SoundPlayer {
   bool get isDisposed => false;
 }
 
+class _FakeStartOperation implements StartOperation {
+  bool cancelled = false;
+
+  @override
+  void cancel() {
+    cancelled = true;
+  }
+
+  @override
+  void dispose() {}
+
+  @override
+  bool get isDisposed => false;
+}
+
 class _RecordingTelepathy implements Telepathy {
+  final List<_FakeStartOperation> startOperations = [];
+
   /// Completer for the most recent `startCall`. The test owns the
   /// completion timing so it can drive the race against a rebuild.
   final List<Completer<void>> startCallCallers = [];
@@ -125,7 +142,10 @@ class _RecordingTelepathy implements Telepathy {
   final List<bool> deafenedValues = [];
 
   @override
-  Future<void> startCall({required Contact contact}) {
+  Future<void> startCall({
+    required Contact contact,
+    required StartOperation operation,
+  }) {
     final completer = Completer<void>();
     startCallCallers.add(completer);
     startCallContacts.add(contact);
@@ -133,7 +153,10 @@ class _RecordingTelepathy implements Telepathy {
   }
 
   @override
-  Future<void> joinRoom({required List<String> memberStrings}) {
+  Future<void> joinRoom({
+    required List<String> memberStrings,
+    required StartOperation operation,
+  }) {
     final completer = Completer<void>();
     joinRoomCallers.add(completer);
     joinRoomMemberStrings.add(memberStrings);
@@ -158,6 +181,13 @@ class _RecordingTelepathy implements Telepathy {
   @override
   Future<(List<AudioDevice>, List<AudioDevice>)> listDevices() async =>
       (<AudioDevice>[], <AudioDevice>[]);
+  @override
+  StartOperation newStartOperation() {
+    final operation = _FakeStartOperation();
+    startOperations.add(operation);
+    return operation;
+  }
+
   @override
   void pauseStatistics() {}
   @override
@@ -433,8 +463,18 @@ void main() {
       await tester.pump();
 
       expect(telepathy.endCallCalls, 1);
+      expect(telepathy.startOperations.single.cancelled, isTrue,
+          reason: 'hangup must cancel the exact deferred start operation');
+      expect(stateController.callLifecycle, CallLifecycle.ending);
+      expect(stateController.pendingContact, same(alice),
+          reason: 'the frontend attempt remains until its request settles');
+
+      telepathy.startCallCallers.single.complete();
+      await _flushAsync(tester);
+
       expect(stateController.callLifecycle, CallLifecycle.idle);
-      expect(stateController.pendingContact, isNull);
+      expect(stateController.pendingContact, isNull,
+          reason: 'settled cancelled start must clean up its frontend slot');
       await tester.pump(const Duration(seconds: 1));
     });
 
@@ -653,8 +693,69 @@ void main() {
       await tester.pump();
 
       expect(telepathy.endCallCalls, 1);
+      expect(telepathy.startOperations.single.cancelled, isTrue,
+          reason: 'hangup must cancel the exact deferred room operation');
+      expect(stateController.callLifecycle, CallLifecycle.ending);
+      expect(stateController.pendingRoom, same(alpha),
+          reason: 'the frontend attempt remains until its request settles');
+
+      telepathy.joinRoomCallers.single.complete();
+      await _flushAsync(tester);
+
       expect(stateController.callLifecycle, CallLifecycle.idle);
-      expect(stateController.pendingRoom, isNull);
+      expect(stateController.pendingRoom, isNull,
+          reason: 'settled cancelled join must clean up its frontend slot');
+      await tester.pump(const Duration(seconds: 1));
+    });
+
+    testWidgets(
+        'cancelling a deferred room join waits for backend hangup before teardown',
+        (WidgetTester tester) async {
+      _stubOutgoingRingtone(tester);
+      final endCallCompleter = Completer<void>();
+      telepathy.endCallCompleter = endCallCompleter;
+
+      await tester.pumpWidget(
+        _harness(
+          stateController: stateController,
+          profilesController: profilesController,
+          telepathy: telepathy,
+          player: player,
+          child: RoomWidget(room: alpha),
+        ),
+      );
+
+      await tester.tap(find.byType(IconButton).last);
+      await tester.pump();
+
+      final operation = telepathy.startOperations.single;
+      await tester.tap(find.bySemanticsLabel('End call icon'));
+      await tester.pump();
+
+      expect(operation.cancelled, isTrue,
+          reason: 'hangup must cancel the operation created for this join');
+      expect(telepathy.endCallCalls, 1,
+          reason: 'cancelling one room join must request one backend hangup');
+      expect(stateController.callLifecycle, CallLifecycle.ending,
+          reason:
+              'lifecycle must remain ending while backend hangup is pending');
+      expect(stateController.pendingRoom, same(alpha),
+          reason: 'deferred join target must survive until backend teardown');
+
+      endCallCompleter.complete();
+      await _flushAsync(tester);
+
+      expect(stateController.callLifecycle, CallLifecycle.ending,
+          reason: 'deferred join still owns lifecycle cleanup after hangup');
+      expect(stateController.pendingRoom, same(alpha),
+          reason: 'deferred join target must remain pending until it settles');
+
+      telepathy.joinRoomCallers.single.complete();
+      await _flushAsync(tester);
+
+      expect(stateController.callLifecycle, CallLifecycle.idle);
+      expect(stateController.pendingRoom, isNull,
+          reason: 'settled cancelled join must release its pending room');
       await tester.pump(const Duration(seconds: 1));
     });
 

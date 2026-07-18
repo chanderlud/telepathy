@@ -250,6 +250,7 @@ class ContactWidgetState extends State<ContactWidget> {
                 onPressed: () async {
                   outgoingSoundHandle?.cancel();
 
+                  stateController.cancelCurrentStartOperation();
                   if (!stateController.beginCallEnding()) return;
                   await telepathy.endCall();
                   stateController.endOfCall();
@@ -289,21 +290,28 @@ class ContactWidgetState extends State<ContactWidget> {
                   // user clicked, even if the widget is rebuilt against a
                   // different contact while `startCall` is still resolving.
                   final Contact target = widget.contact;
+                  final operation = telepathy.newStartOperation();
                   stateController.setStatus('Connecting');
-                  final attempt = stateController.setPendingContact(target);
+                  final attempt =
+                      stateController.setPendingContact(target, operation);
 
                   try {
-                    await telepathy.startCall(contact: target);
+                    await telepathy.startCall(
+                      contact: target,
+                      operation: operation,
+                    );
                     // `CallState.connected` owns promotion. This continuation
                     // only confirms backend request acceptance.
                     if (!stateController.isCurrentCallAttempt(attempt) ||
-                        stateController.callLifecycle == CallLifecycle.ending) {
+                        stateController.callLifecycle !=
+                            CallLifecycle.connecting) {
                       return;
                     }
 
                     List<int> bytes = await readSeaBytes('outgoing');
                     if (!stateController.isCurrentCallAttempt(attempt) ||
-                        stateController.callLifecycle == CallLifecycle.ending) {
+                        stateController.callLifecycle !=
+                            CallLifecycle.connecting) {
                       return;
                     }
                     final soundHandle = await playSoundEffect(
@@ -312,17 +320,24 @@ class ContactWidgetState extends State<ContactWidget> {
                       sound: 'outgoing',
                     );
                     if (!stateController.isCurrentCallAttempt(attempt) ||
-                        stateController.callLifecycle == CallLifecycle.ending) {
+                        stateController.callLifecycle !=
+                            CallLifecycle.connecting) {
                       soundHandle?.cancel();
                       return;
                     }
                     outgoingSoundHandle = soundHandle;
                   } on DartError catch (e) {
-                    if (!stateController.isCurrentCallAttempt(attempt)) return;
+                    if (!stateController.isCurrentCallAttempt(attempt) ||
+                        stateController.callLifecycle !=
+                            CallLifecycle.connecting) {
+                      return;
+                    }
                     stateController.endOfCall();
                     outgoingSoundHandle?.cancel();
                     if (!context.mounted) return;
                     showErrorDialog(context, 'Call failed', e.message);
+                  } finally {
+                    stateController.settleStartAttempt(attempt);
                   }
                 },
               )

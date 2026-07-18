@@ -1802,6 +1802,33 @@ where
         Ok(())
     }
 
+    /// Races delivery of a frontend observation callback against the three
+    /// authoritative teardown signals (`end_call`, `end_sessions`, `operation`)
+    /// so a stalled frontend delivery cannot block `cleanup_room_controller`.
+    ///
+    /// Returns `true` when the callback completed normally. Returns `false` when
+    /// teardown was signalled first; callers must then skip any further
+    /// observation work and proceed straight to `cleanup_room_controller`.
+    async fn deliver_room_observation<F>(
+        &self,
+        end_call: &Notify,
+        end_sessions: &CancellationToken,
+        operation: &CancellationToken,
+        callback: F,
+    ) -> bool
+    where
+        F: std::future::Future<Output = ()>,
+    {
+        tokio::pin!(callback);
+        tokio::select! {
+            biased;
+            _ = end_call.notified() => false,
+            _ = end_sessions.cancelled() => false,
+            _ = operation.cancelled() => false,
+            _ = &mut callback => true,
+        }
+    }
+
     /// The controller for rooms
     #[instrument(
         name = "room.controller",
@@ -1817,13 +1844,57 @@ where
         let RoomControllerStart {
             end_sessions,
             end_call,
+            operation,
             room_owner,
             room_generation,
             ready_sender,
             publication_receiver,
         } = start;
-        let room_hash = self.room_hash().await;
+        let room_hash = tokio::select! {
+            _ = async {
+                tokio::select! {
+                    _ = end_sessions.cancelled() => {}
+                    _ = operation.cancelled() => {}
+                }
+            } => {
+                drop(ready_sender);
+                return self
+                    .cleanup_room_controller(
+                        stop_io,
+                        RoomControllerCleanup {
+                            end_sessions,
+                            room_owner,
+                            room_generation,
+                            input_handle: None,
+                            connections: HashMap::new(),
+                            statistics_handle: None,
+                            terminal_error: None,
+                            outcome: RoomControllerOutcome::Silent,
+                        },
+                    )
+                    .await;
+            }
+            room_hash = self.room_hash() => room_hash,
+        };
         Span::current().record("room.hash", field::debug(room_hash));
+        if end_sessions.is_cancelled() || operation.is_cancelled() {
+            drop(ready_sender);
+            return self
+                .cleanup_room_controller(
+                    stop_io,
+                    RoomControllerCleanup {
+                        end_sessions,
+                        room_owner,
+                        room_generation,
+                        input_handle: None,
+                        connections: HashMap::new(),
+                        statistics_handle: None,
+                        terminal_error: None,
+                        outcome: RoomControllerOutcome::Silent,
+                    },
+                )
+                .await;
+        }
         // on ios the audio session must be configured
         #[cfg(target_os = "ios")]
         configure_audio_session();
@@ -1839,19 +1910,61 @@ where
         let mut stream_errors_open = true;
         let mut terminal_error = None;
 
-        let mut input_helper = match self
-            .setup_input(
+        let mut input_helper = match tokio::select! {
+            _ = end_sessions.cancelled() => {
+                drop(ready_sender);
+                return self
+                    .cleanup_room_controller(
+                        stop_io,
+                        RoomControllerCleanup {
+                            end_sessions,
+                            room_owner,
+                            room_generation,
+                            input_handle: None,
+                            connections: HashMap::new(),
+                            statistics_handle: None,
+                            terminal_error: None,
+                            outcome: RoomControllerOutcome::Silent,
+                        },
+                    )
+                    .await;
+            }
+            _ = operation.cancelled() => {
+                drop(ready_sender);
+                return self
+                    .cleanup_room_controller(
+                        stop_io,
+                        RoomControllerCleanup {
+                            end_sessions,
+                            room_owner,
+                            room_generation,
+                            input_handle: None,
+                            connections: HashMap::new(),
+                            statistics_handle: None,
+                            terminal_error: None,
+                            outcome: RoomControllerOutcome::Silent,
+                        },
+                    )
+                    .await;
+            }
+            result = self.setup_input(
                 (true, true, 5_f32), // hard coded room codec options
                 &statistics_state,
                 &end_call,
                 stream_error_sender.clone(),
-            )
-            .await
-        {
+            ) => result,
+        } {
             Ok(helper) => helper,
             Err(error) => {
                 drop(ready_sender);
-                self.notify_setup_failure(&error).await;
+                // Frontend callback delivery must not block authoritative teardown;
+                // if teardown is signalled while the CallEnded observation is
+                // pending, abandon it and proceed straight to cleanup.
+                let _ = self
+                    .deliver_room_observation(&end_call, &end_sessions, &operation, async {
+                        self.notify_setup_failure(&error).await;
+                    })
+                    .await;
                 return self
                     .cleanup_room_controller(
                         stop_io,
@@ -1873,9 +1986,29 @@ where
         // An input callback can fail synchronously from `open_input`. Preserve
         // that error until RoomState publication has completed.
         let pending_stream_error = stream_error_receiver.try_recv().ok();
-        if ready_sender.send(pending_stream_error.is_some()).is_err()
-            || publication_receiver.await.is_err()
-        {
+        if ready_sender.send(pending_stream_error.is_some()).is_err() {
+            return self
+                .cleanup_room_controller(
+                    stop_io,
+                    RoomControllerCleanup {
+                        end_sessions,
+                        room_owner,
+                        room_generation,
+                        input_handle: None,
+                        connections: HashMap::new(),
+                        statistics_handle: None,
+                        terminal_error: None,
+                        outcome: RoomControllerOutcome::Silent,
+                    },
+                )
+                .await;
+        }
+        let publication_received = tokio::select! {
+            _ = end_sessions.cancelled() => false,
+            _ = operation.cancelled() => false,
+            result = publication_receiver => result.is_ok(),
+        };
+        if !publication_received {
             return self
                 .cleanup_room_controller(
                     stop_io,
@@ -1895,8 +2028,14 @@ where
 
         if let Some(error) = pending_stream_error {
             let message = CallEndMessage::from_stream_error(&error).into_string();
-            self.callbacks
-                .call_state(CallState::CallEnded(message, false))
+            // Frontend callback delivery must not block authoritative teardown;
+            // abandon the observation if teardown is signalled first.
+            let _ = self
+                .deliver_room_observation(&end_call, &end_sessions, &operation, async {
+                    self.callbacks
+                        .call_state(CallState::CallEnded(message, false))
+                        .await;
+                })
                 .await;
             return self
                 .cleanup_room_controller(
@@ -1933,13 +2072,41 @@ where
         ));
 
         // kick the UI out of connecting mode
-        self.callbacks.call_state(CallState::Waiting).await;
+        if end_sessions.is_cancelled() || operation.is_cancelled() {
+            return self
+                .cleanup_room_controller(
+                    stop_io,
+                    RoomControllerCleanup {
+                        end_sessions,
+                        room_owner,
+                        room_generation,
+                        input_handle: Some(input_handle),
+                        connections,
+                        statistics_handle: Some(statistics_handle),
+                        terminal_error: None,
+                        outcome: RoomControllerOutcome::Silent,
+                    },
+                )
+                .await;
+        }
+        select! {
+            _ = self.callbacks.call_state(CallState::Waiting) => {}
+            _ = end_call.notified() => {}
+            _ = end_sessions.cancelled() => {}
+            _ = operation.cancelled() => {}
+        }
         let mut outcome = RoomControllerOutcome::Silent;
 
         loop {
             select! {
                 biased;
 
+                _ = end_sessions.cancelled() => {
+                    break;
+                }
+                _ = operation.cancelled() => {
+                    break;
+                }
                 error = stream_error_receiver.recv(), if stream_errors_open => {
                     if let Some(error) = error {
                         let message = CallEndMessage::from_stream_error(&error).into_string();
@@ -1958,8 +2125,19 @@ where
                                 );
                             }
                         }
-                        self.callbacks
-                            .call_state(CallState::CallEnded(message, false))
+                        // Frontend callback delivery must not block authoritative
+                        // teardown; abandon the observation if teardown is signalled.
+                        let _ = self
+                            .deliver_room_observation(
+                                &end_call,
+                                &end_sessions,
+                                &operation,
+                                async {
+                                    self.callbacks
+                                        .call_state(CallState::CallEnded(message, false))
+                                        .await;
+                                },
+                            )
                             .await;
                         break;
                     }
@@ -2028,17 +2206,25 @@ where
                                 peer_connections.remove(&state.peer);
                             }
 
-                            let mut helper = match self
-                                .setup_output(
+                            let setup_output_result = tokio::select! {
+                                result = self.setup_output(
                                     state.peer,
                                     state.remote_configuration.sample_rate as f64,
                                     true,
                                     &statistics_state,
                                     end_call.clone(),
                                     stream_error_sender.clone(),
-                                )
-                                .await
-                            {
+                                ) => result,
+                                _ = end_sessions.cancelled() => {
+                                    info!(event = "room_setup_output_interrupted_end_sessions", peer.id = %state.peer);
+                                    break;
+                                }
+                                _ = operation.cancelled() => {
+                                    info!(event = "room_setup_output_interrupted_operation", peer.id = %state.peer);
+                                    break;
+                                }
+                            };
+                            let mut helper = match setup_output_result {
                                 Ok(helper) => helper,
                                 Err(error) => {
                                     let reason = GoodbyeReason::AudioDeviceError;
@@ -2060,14 +2246,37 @@ where
                                             );
                                         }
                                     }
-                                    self.notify_setup_failure(&error).await;
+                                    // Frontend callback delivery must not block authoritative
+                                    // teardown; abandon the observation if teardown is signalled.
+                                    let _ = self
+                                        .deliver_room_observation(
+                                            &end_call,
+                                            &end_sessions,
+                                            &operation,
+                                            async {
+                                                self.notify_setup_failure(&error).await;
+                                            },
+                                        )
+                                        .await;
                                     terminal_error = Some(error);
                                     break;
                                 }
                             };
                             if connections.is_empty() {
                                 CONNECTED.store(true, Relaxed);
-                                self.callbacks.call_state(CallState::Connected).await;
+                                // Frontend callback delivery must not block authoritative
+                                // teardown; abandon Connected and break to cleanup.
+                                if !self
+                                    .deliver_room_observation(
+                                        &end_call,
+                                        &end_sessions,
+                                        &operation,
+                                        self.callbacks.call_state(CallState::Connected),
+                                    )
+                                    .await
+                                {
+                                    break;
+                                }
                             }
                             connection_sender.push(connection.clone());
                             // begin sending
@@ -2089,9 +2298,20 @@ where
                                     terminal_sender,
                                 },
                             );
-                            self.callbacks
-                                .call_state(CallState::RoomJoin(state.peer.to_string()))
-                                .await;
+                            // Frontend callback delivery must not block authoritative
+                            // teardown; abandon RoomJoin and break to cleanup.
+                            if !self
+                                .deliver_room_observation(
+                                    &end_call,
+                                    &end_sessions,
+                                    &operation,
+                                    self.callbacks
+                                        .call_state(CallState::RoomJoin(state.peer.to_string())),
+                                )
+                                .await
+                            {
+                                break;
+                            }
                         }
                         Some(RoomMessage::Leave {
                             peer,
@@ -2101,9 +2321,20 @@ where
                                 Some(active_connection_id)
                                     if active_connection_id == connection_id =>
                                 {
-                                    self.callbacks
-                                        .call_state(CallState::RoomLeave(peer.to_string()))
-                                        .await;
+                                    // Frontend callback delivery must not block authoritative
+                                    // teardown; abandon RoomLeave and break to cleanup.
+                                    if !self
+                                        .deliver_room_observation(
+                                            &end_call,
+                                            &end_sessions,
+                                            &operation,
+                                            self.callbacks
+                                                .call_state(CallState::RoomLeave(peer.to_string())),
+                                        )
+                                        .await
+                                    {
+                                        break;
+                                    }
                                     peer_connections.remove(&peer);
                                     if let Some(connection) = connections.remove(&connection_id) {
                                         connection_sender.remove(&connection.connection);
@@ -2219,6 +2450,7 @@ pub(crate) struct RoomConnection<O> {
 pub(crate) struct RoomControllerStart {
     pub(crate) end_sessions: CancellationToken,
     pub(crate) end_call: Arc<Notify>,
+    pub(crate) operation: CancellationToken,
     pub(crate) room_owner: CallSlotSnapshot,
     pub(crate) room_generation: u64,
     pub(crate) ready_sender: oneshot::Sender<bool>,

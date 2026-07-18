@@ -123,6 +123,7 @@ class RoomWidgetState extends State<RoomWidget> {
                 ),
                 onPressed: () async {
                   outgoingSoundHandle?.cancel();
+                  stateController.cancelCurrentStartOperation();
                   if (!stateController.beginCallEnding()) return;
                   await telepathy.endCall();
                   stateController.endOfCall();
@@ -162,13 +163,19 @@ class RoomWidgetState extends State<RoomWidget> {
                   // clicked, even if the widget is rebuilt against a
                   // different room while `joinRoom` is still resolving.
                   final Room target = widget.room;
+                  final operation = telepathy.newStartOperation();
                   stateController.setStatus('Connecting');
-                  final attempt = stateController.setPendingRoom(target);
+                  final attempt =
+                      stateController.setPendingRoom(target, operation);
 
                   try {
-                    await telepathy.joinRoom(memberStrings: target.peerIds);
+                    await telepathy.joinRoom(
+                      memberStrings: target.peerIds,
+                      operation: operation,
+                    );
                     if (!stateController.isCurrentCallAttempt(attempt) ||
-                        stateController.callLifecycle == CallLifecycle.ending) {
+                        stateController.callLifecycle !=
+                            CallLifecycle.connecting) {
                       return;
                     }
                     target.online.clear();
@@ -176,7 +183,8 @@ class RoomWidgetState extends State<RoomWidget> {
                     // only confirms backend request acceptance.
                     List<int> bytes = await readSeaBytes('outgoing');
                     if (!stateController.isCurrentCallAttempt(attempt) ||
-                        stateController.callLifecycle == CallLifecycle.ending) {
+                        stateController.callLifecycle !=
+                            CallLifecycle.connecting) {
                       return;
                     }
                     final soundHandle = await playSoundEffect(
@@ -185,17 +193,24 @@ class RoomWidgetState extends State<RoomWidget> {
                       sound: 'outgoing',
                     );
                     if (!stateController.isCurrentCallAttempt(attempt) ||
-                        stateController.callLifecycle == CallLifecycle.ending) {
+                        stateController.callLifecycle !=
+                            CallLifecycle.connecting) {
                       soundHandle?.cancel();
                       return;
                     }
                     outgoingSoundHandle = soundHandle;
                   } on DartError catch (e) {
-                    if (!stateController.isCurrentCallAttempt(attempt)) return;
+                    if (!stateController.isCurrentCallAttempt(attempt) ||
+                        stateController.callLifecycle !=
+                            CallLifecycle.connecting) {
+                      return;
+                    }
                     stateController.endOfCall();
                     outgoingSoundHandle?.cancel();
                     if (!context.mounted) return;
                     showErrorDialog(context, 'Call failed', e.message);
+                  } finally {
+                    stateController.settleStartAttempt(attempt);
                   }
                 },
               )

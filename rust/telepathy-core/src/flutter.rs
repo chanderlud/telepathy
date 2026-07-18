@@ -14,6 +14,7 @@ use telepathy_audio::Stream;
 use telepathy_audio::devices::CpalAudioHost;
 use telepathy_audio::io::SendStream;
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 
 type DartVoid<A> = Arc<Mutex<dyn Fn(A) -> DartFnFuture<()> + Send>>;
 type DartMethod<A, R> = Arc<Mutex<dyn Fn(A) -> DartFnFuture<R> + Send>>;
@@ -21,6 +22,18 @@ type AcceptCallArgs = (String, Option<Vec<u8>>, FrontendNotify);
 type SessionStatusArgs = (String, SessionStatus);
 type ScreenshareStartedArgs = (FrontendNotify, bool);
 type ManagerActiveArgs = ManagerState;
+
+#[frb(opaque)]
+pub struct StartOperation {
+    cancel: CancellationToken,
+}
+
+impl StartOperation {
+    #[frb(sync)]
+    pub fn cancel(&self) {
+        self.cancel.cancel();
+    }
+}
 
 /// Rust API for FRB frontend. Mirrors `impl NativeTelepathy` 1:1; both
 /// forward to `impl TelepathyHandle`.
@@ -66,10 +79,22 @@ impl Telepathy {
         self.handle.start_session(contact).await;
     }
 
-    /// Attempts to start a call through an existing session
-    pub async fn start_call(&self, contact: &Contact) -> Result<(), DartError> {
+    /// Creates an operation token that can cancel one pending call or room start.
+    #[frb(sync)]
+    pub fn new_start_operation(&self) -> StartOperation {
+        StartOperation {
+            cancel: tokio_util::sync::CancellationToken::new(),
+        }
+    }
+
+    /// Attempts to start a call through an existing session.
+    pub async fn start_call(
+        &self,
+        contact: &Contact,
+        operation: &StartOperation,
+    ) -> Result<(), DartError> {
         self.handle
-            .start_call(contact)
+            .start_call_with_operation(contact, &operation.cancel)
             .await
             .map_err(DartError::from)
     }
@@ -79,10 +104,14 @@ impl Telepathy {
         self.handle.end_call().await;
     }
 
-    /// The only entry point into participating in a room
-    pub async fn join_room(&self, member_strings: Vec<String>) -> Result<(), DartError> {
+    /// The only entry point into participating in a room.
+    pub async fn join_room(
+        &self,
+        member_strings: Vec<String>,
+        operation: &StartOperation,
+    ) -> Result<(), DartError> {
         self.handle
-            .join_room(member_strings)
+            .join_room_with_operation(member_strings, &operation.cancel)
             .await
             .map_err(DartError::from)
     }

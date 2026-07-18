@@ -148,6 +148,90 @@ impl InputSampleRateGate {
     }
 }
 
+/// Gates frontend `call_state` delivery for a chosen variant so tests can prove
+/// that an awaited room callback cannot block authoritative teardown. While the
+/// matching callback is parked on [`Self::release`], `end_call` / cancellation
+/// must still drive `cleanup_room_controller` to completion.
+pub(super) struct RoomCallbackGate {
+    inner: Arc<RoomCallbackGateInner>,
+}
+
+struct RoomCallbackGateInner {
+    /// Variant selector. Matching is by `mem::discriminant` so payload-bearing
+    /// variants like `RoomJoin(_)` are gated without comparing the payload.
+    discriminant: std::mem::Discriminant<CallState>,
+    /// States observed by the callback, appended in delivery order.
+    received: Mutex<Vec<CallState>>,
+    /// Signalled each time a callback is parked on the gate.
+    parked: Notify,
+    /// Signalled by the test to release all parked callbacks exactly once.
+    release: Notify,
+    /// Tracks how many invocations of `release` have been requested so a later
+    /// `release` call wakes callbacks parked after an earlier release.
+    released_generation: Mutex<u64>,
+}
+
+impl RoomCallbackGate {
+    /// Creates a gate that parks `call_state` callbacks matching `gated_state`
+    /// (by variant) until [`Self::release`] is invoked.
+    pub(super) fn new(gated_state: CallState) -> Self {
+        Self {
+            inner: Arc::new(RoomCallbackGateInner {
+                discriminant: std::mem::discriminant(&gated_state),
+                received: Mutex::new(Vec::new()),
+                parked: Notify::new(),
+                release: Notify::new(),
+                released_generation: Mutex::new(0),
+            }),
+        }
+    }
+
+    /// Waits for the gated callback to be parked inside `deliver`. Returns the
+    /// states observed so far (including the parked one).
+    pub(super) async fn wait_until_parked(&self) {
+        self.inner.parked.notified().await;
+    }
+
+    /// Releases every currently-parked callback (and any future ones, since
+    /// each delivery captures the generation at entry).
+    pub(super) fn release(&self) {
+        let mut generation = self.inner.released_generation.lock().unwrap();
+        *generation += 1;
+        self.inner.release.notify_waiters();
+    }
+
+    /// Snapshot of every `call_state` value observed so far, in delivery order.
+    pub(super) fn received(&self) -> Vec<CallState> {
+        self.inner.received.lock().unwrap().clone()
+    }
+
+    async fn deliver(&self, state: CallState) {
+        if std::mem::discriminant(&state) != self.inner.discriminant {
+            // Non-gated variants complete immediately and are recorded as
+            // completed deliveries.
+            self.inner.received.lock().unwrap().push(state);
+            return;
+        }
+        // Park on the gate: take a ticket from the current generation, notify
+        // any waiter that we're parked, and wait until `release` advances the
+        // generation past our ticket. The state is only recorded as a completed
+        // delivery after the park resolves, so a still-parked callback will not
+        // appear in `received()`.
+        self.inner.parked.notify_waiters();
+        let ticket = *self.inner.released_generation.lock().unwrap();
+        loop {
+            let release = self.inner.release.notified();
+            tokio::pin!(release);
+            let current = *self.inner.released_generation.lock().unwrap();
+            if current > ticket {
+                self.inner.received.lock().unwrap().push(state);
+                return;
+            }
+            release.as_mut().await;
+        }
+    }
+}
+
 impl StreamErrorProbe {
     pub(super) fn new() -> Self {
         Self {
@@ -557,6 +641,39 @@ where
     .await
 }
 
+/// Builds a client whose `call_state` callback is gated by `gate`. The mock
+/// still records every delivered state into `call_states` in delivery order;
+/// the gate only parks futures that match its configured variant until
+/// [`RoomCallbackGate::release`] is invoked.
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn build_client_with_room_callback_gate<H, I, O>(
+    relay_map: &RelayMap,
+    identity: SecretKey,
+    contacts: Vec<Contact>,
+    codec_config: &CodecConfig,
+    host: H,
+    call_states: Arc<Mutex<Vec<CallState>>>,
+    gate: Arc<RoomCallbackGate>,
+) -> ClientHarness<H, I, O>
+where
+    H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
+    I: Send + Sync + 'static,
+    O: Send + Sync + 'static,
+{
+    build_client_with_options_and_gate(
+        relay_map,
+        identity,
+        contacts,
+        codec_config,
+        host,
+        call_states,
+        None,
+        ManagerLifecycle::Single,
+        Some(gate),
+    )
+    .await
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn build_client_with_options<H, I, O>(
     relay_map: &RelayMap,
@@ -567,6 +684,37 @@ pub(super) async fn build_client_with_options<H, I, O>(
     call_states: Arc<Mutex<Vec<CallState>>>,
     accept_probe: Option<PendingAcceptProbe>,
     lifecycle: ManagerLifecycle,
+) -> ClientHarness<H, I, O>
+where
+    H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
+    I: Send + Sync + 'static,
+    O: Send + Sync + 'static,
+{
+    build_client_with_options_and_gate(
+        relay_map,
+        identity,
+        contacts,
+        codec_config,
+        host,
+        call_states,
+        accept_probe,
+        lifecycle,
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn build_client_with_options_and_gate<H, I, O>(
+    relay_map: &RelayMap,
+    identity: SecretKey,
+    contacts: Vec<Contact>,
+    codec_config: &CodecConfig,
+    host: H,
+    call_states: Arc<Mutex<Vec<CallState>>>,
+    accept_probe: Option<PendingAcceptProbe>,
+    lifecycle: ManagerLifecycle,
+    call_state_gate: Option<Arc<RoomCallbackGate>>,
 ) -> ClientHarness<H, I, O>
 where
     H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
@@ -593,6 +741,7 @@ where
         call_states,
         accept_probe,
         lifecycle,
+        call_state_gate,
     );
 
     let mut telepathy: MockTelepathyHandle<H, I, O> = TelepathyHandle::new(
@@ -624,6 +773,7 @@ pub(super) fn construct_mock_callbacks(
     call_states: Arc<Mutex<Vec<CallState>>>,
     accept_probe: Option<PendingAcceptProbe>,
     lifecycle: ManagerLifecycle,
+    call_state_gate: Option<Arc<RoomCallbackGate>>,
 ) -> MockCoreCallbacks<MockCoreStatisticsCallback> {
     let mut mock: MockCoreCallbacks<MockCoreStatisticsCallback> = MockCoreCallbacks::new();
 
@@ -719,8 +869,14 @@ pub(super) fn construct_mock_callbacks(
 
     mock.expect_call_state().returning(move |state| {
         info!("got call state: {state:?}");
-        call_states.lock().unwrap().push(state);
-        Box::pin(async move {})
+        let call_states = call_states.clone();
+        let gate = call_state_gate.clone();
+        Box::pin(async move {
+            call_states.lock().unwrap().push(state.clone());
+            if let Some(gate) = gate.as_ref() {
+                gate.deliver(state).await;
+            }
+        })
     });
 
     mock.expect_statistics_callback().returning(|| {

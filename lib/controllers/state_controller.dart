@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:telepathy/core/utils/index.dart';
+import 'package:telepathy/core/rust/flutter.dart';
 import 'package:telepathy/core/rust/types.dart';
 import 'package:telepathy/models/index.dart';
 
@@ -22,6 +23,8 @@ class StateController extends ChangeNotifier {
   CallLifecycle _callLifecycle = CallLifecycle.idle;
   int? _callAttempt;
   int _nextCallAttempt = 0;
+  StartOperation? _startOperation;
+  bool _startRequestPending = false;
 
   String status = 'Inactive';
   bool _deafened = false;
@@ -96,13 +99,17 @@ class StateController extends ChangeNotifier {
   /// Records the contact the user is attempting to call, before awaiting
   /// `Telepathy.startCall()`. This lets the gate in `callState` observe early
   /// failure events while the backend is still negotiating the call.
-  int? setPendingContact(Contact? contact) {
+  int? setPendingContact(Contact? contact, [StartOperation? operation]) {
     _pendingContact = contact;
     if (contact != null) {
       _callLifecycle = CallLifecycle.connecting;
       _callAttempt = ++_nextCallAttempt;
+      _startOperation = operation;
+      _startRequestPending = operation != null;
     } else {
       _callAttempt = null;
+      _startOperation = null;
+      _startRequestPending = false;
     }
     notifyListeners();
     return _callAttempt;
@@ -111,13 +118,17 @@ class StateController extends ChangeNotifier {
   /// Records the room the user is attempting to join, before awaiting
   /// `Telepathy.joinRoom()`. This lets the gate in `callState` observe early
   /// failure events while the backend is still negotiating the room.
-  int? setPendingRoom(Room? room) {
+  int? setPendingRoom(Room? room, [StartOperation? operation]) {
     _pendingRoom = room;
     if (room != null) {
       _callLifecycle = CallLifecycle.connecting;
       _callAttempt = ++_nextCallAttempt;
+      _startOperation = operation;
+      _startRequestPending = operation != null;
     } else {
       _callAttempt = null;
+      _startOperation = null;
+      _startRequestPending = false;
     }
     notifyListeners();
     return _callAttempt;
@@ -158,6 +169,26 @@ class StateController extends ChangeNotifier {
   bool isCurrentCallAttempt(int? attempt) =>
       attempt != null && attempt == _callAttempt;
 
+  bool get isStartRequestPending => _startRequestPending;
+
+  /// Cancels the operation that owns the current pending start request.
+  /// The attempt remains installed until its request future has settled.
+  void cancelCurrentStartOperation() {
+    _startOperation?.cancel();
+  }
+
+  /// Settles the request associated with [attempt]. A locally cancelled start
+  /// remains in `ending` until this point so a delayed backend acquisition is
+  /// still cancelled by its original operation handle.
+  void settleStartAttempt(int? attempt) {
+    if (!isCurrentCallAttempt(attempt)) return;
+    _startOperation = null;
+    _startRequestPending = false;
+    if (_callLifecycle == CallLifecycle.ending) {
+      endOfCall();
+    }
+  }
+
   /// Clear any pending call target that has not yet transitioned to active.
   /// Called by the front-end after a fast failure or a transition to active so
   /// the pending slot doesn't leak into another call attempt.
@@ -188,8 +219,12 @@ class StateController extends ChangeNotifier {
       _activeRoom = null;
       _pendingContact = null;
       _pendingRoom = null;
-      _callAttempt = null;
-      _callLifecycle = CallLifecycle.idle;
+      if (!_startRequestPending) {
+        _callAttempt = null;
+        _startOperation = null;
+      }
+      _callLifecycle =
+          _startRequestPending ? CallLifecycle.ending : CallLifecycle.idle;
       _callTimer.stop();
       _callTimer.reset();
     } else if (status == 'Active') {
@@ -315,21 +350,33 @@ class StateController extends ChangeNotifier {
     }
   }
 
-  /// a group of actions run when the call ends
+  /// A group of actions run when the call ends.
   void endOfCall() {
     _activeRoom?.online.clear();
     _activeContact = null;
     _activeRoom = null;
+    _callTimer.stop();
+    _callTimer.reset();
+    stopScreenshare(true, false);
+    stopScreenshare(false, false);
+
+    if (_startRequestPending) {
+      // Keep the target, attempt, and operation until the original start future
+      // settles. Its cancellation handle must remain associated with the exact
+      // request that could still acquire backend ownership.
+      status = 'Ending';
+      _callLifecycle = CallLifecycle.ending;
+      notifyListeners();
+      return;
+    }
+
     _pendingContact = null;
     _pendingRoom = null;
     _callAttempt = null;
+    _startOperation = null;
     status = 'Inactive';
     _callLifecycle = CallLifecycle.idle;
-    _callTimer.stop();
-    _callTimer.reset();
     disableCallsTemporarily();
-    stopScreenshare(true, false);
-    stopScreenshare(false, false);
     notifyListeners();
   }
 }

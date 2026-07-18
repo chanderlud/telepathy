@@ -1,11 +1,12 @@
 use super::common::{
-    CallbackCapturingAudioHost, DEFAULT_SAMPLE_RATE, RoomEventKind, TwoClientShutdownGuard,
-    assert_call_slot_idle, assert_room_event_sequence,
-    assert_slot_remains_outside_direct_call_states, build_client, call_state_snapshot,
-    init_test_tracing, room_join_count, room_leave_count, shared_relay_map, sorted_room_members,
-    wait_for_call_ended_contains, wait_for_connected, wait_for_no_extra_room_leave,
-    wait_for_room_join_count, wait_for_room_leave_count, wait_for_sessions, wait_for_slot_idle,
-    wait_for_slot_room_call,
+    CallbackCapturingAudioHost, DEFAULT_SAMPLE_RATE, DeviceSelectionOperation,
+    DeviceSelectionProbe, InputSampleRateGate, MOCK_DEVICE_ID, RoomCallbackGate, RoomEventKind,
+    StreamErrorProbe, TwoClientShutdownGuard, assert_call_slot_idle, assert_room_event_sequence,
+    assert_slot_remains_outside_direct_call_states, build_client,
+    build_client_with_room_callback_gate, call_state_snapshot, init_test_tracing, room_join_count,
+    room_leave_count, shared_relay_map, sorted_room_members, wait_for_call_ended_contains,
+    wait_for_connected, wait_for_no_extra_room_leave, wait_for_room_join_count,
+    wait_for_room_leave_count, wait_for_sessions, wait_for_slot_idle, wait_for_slot_room_call,
 };
 
 use iroh::SecretKey;
@@ -15,7 +16,380 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use telepathy_audio::devices::{MockAudioHost, MockAudioInput, MockAudioOutput};
 use telepathy_core::types::{CallState, CodecConfig, Contact};
+use tokio::sync::Notify;
 use tokio::time::sleep;
+use tokio_util::sync::CancellationToken;
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cancelled_room_join_before_acquisition_leaves_slot_idle() {
+    init_test_tracing();
+    let client = build_client(
+        shared_relay_map(),
+        SecretKey::generate(),
+        vec![],
+        &CodecConfig::new(true, true, 5.0),
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        Arc::new(Mutex::new(Vec::new())),
+    )
+    .await;
+    let cancelled = CancellationToken::new();
+    cancelled.cancel();
+
+    client
+        .telepathy
+        .join_room_with_operation(vec![], &cancelled)
+        .await
+        .expect("a cancelled room operation is a successful no-op");
+
+    assert_call_slot_idle(
+        &client,
+        "cancelling before room acquisition must leave the slot idle",
+    );
+    client.telepathy.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cancelled_room_join_after_acquisition_does_not_publish_or_promote_room() {
+    init_test_tracing();
+    let call_states = Arc::new(Mutex::new(Vec::new()));
+    let device_probe = DeviceSelectionProbe::default();
+    let setup_gate = InputSampleRateGate::default();
+    let host = CallbackCapturingAudioHost::new(StreamErrorProbe::new(), StreamErrorProbe::new())
+        .with_device_selection_probe(device_probe.clone())
+        .with_input_sample_rate_gate(setup_gate.clone());
+    let client = build_client(
+        shared_relay_map(),
+        SecretKey::generate(),
+        vec![],
+        &CodecConfig::new(true, true, 5.0),
+        host,
+        call_states.clone(),
+    )
+    .await;
+    client
+        .telepathy
+        .set_input_device(Some(MOCK_DEVICE_ID.to_string()))
+        .await;
+
+    let operation = CancellationToken::new();
+    let cancel_after_setup_starts = {
+        let device_probe = device_probe.clone();
+        let operation = operation.clone();
+        let setup_gate = setup_gate.clone();
+        tokio::spawn(async move {
+            device_probe
+                .wait_for(DeviceSelectionOperation::InputSampleRate, MOCK_DEVICE_ID, 1)
+                .await;
+            operation.cancel();
+            setup_gate.release();
+        })
+    };
+
+    client
+        .telepathy
+        .join_room_with_operation(vec![], &operation)
+        .await
+        .expect("cancelled room join should complete without error");
+    cancel_after_setup_starts
+        .await
+        .expect("setup cancellation task should finish");
+
+    let states = call_state_snapshot(&call_states);
+    let published_room = client
+        .telepathy
+        .inner
+        .current_room_generation()
+        .await
+        .is_some();
+    let cancelled_slot = client
+        .telepathy
+        .inner
+        .core_state
+        .call_slot
+        .snapshot()
+        .expect("cancelled room slot snapshot should succeed");
+    let promoted = states
+        .iter()
+        .any(|state| matches!(state, CallState::Waiting | CallState::Connected));
+    if published_room
+        || cancelled_slot.state != telepathy_core::internal::state::CallSlotState::Idle
+        || promoted
+    {
+        client.telepathy.end_call().await;
+        client.telepathy.shutdown().await;
+    }
+    assert!(
+        !promoted,
+        "cancelled room join must not publish Waiting or Connected; states={states:?}"
+    );
+    assert!(
+        !published_room,
+        "cancelled room join must leave room_state unpublished"
+    );
+    assert_eq!(
+        cancelled_slot.state,
+        telepathy_core::internal::state::CallSlotState::Idle,
+        "cancelled room join after setup must release RoomCall ownership; slot={cancelled_slot:?}"
+    );
+
+    client
+        .telepathy
+        .join_room(vec![])
+        .await
+        .expect("fresh room join should acquire ownership after cancellation cleanup");
+    wait_for_slot_room_call(&client, "fresh room join after cancelled setup").await;
+    assert!(
+        client
+            .telepathy
+            .inner
+            .current_room_generation()
+            .await
+            .is_some(),
+        "fresh room join should publish a new room_state"
+    );
+
+    client.telepathy.end_call().await;
+    assert_call_slot_idle(
+        &client,
+        "fresh room retry should release ownership on end_call",
+    );
+    client.telepathy.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cancelled_room_join_while_queuing_members_resolves_and_tears_down() {
+    init_test_tracing();
+    let call_states = Arc::new(Mutex::new(Vec::new()));
+    let client = build_client(
+        shared_relay_map(),
+        SecretKey::generate(),
+        vec![],
+        &CodecConfig::new(true, true, 5.0),
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states.clone(),
+    )
+    .await;
+
+    // Hold the session_states write lock so the member-queue loop's
+    // `session_states.read()` (and any subsequent `start_session.send`) inside
+    // `join_room_with_operation` blocks deterministically. The room controller
+    // never touches session_states before it receives a Join, so this neither
+    // stalls its startup nor its cleanup.
+    let (held_tx, held_rx) = tokio::sync::oneshot::channel::<()>();
+    let release_lock = Arc::new(Notify::new());
+    let session_states = client.telepathy.inner.session_states.clone();
+    let release_clone = release_lock.clone();
+    let hold_task = tokio::spawn(async move {
+        let _guard = session_states.write().await;
+        let _ = held_tx.send(());
+        release_clone.notified().await;
+    });
+    held_rx
+        .await
+        .expect("session_states write lock should be acquired");
+
+    // A member with no live session forces the member-queue loop onto the
+    // start_session path; the read() that gates that path blocks on the held lock.
+    let member = SecretKey::generate().public().to_string();
+    let operation = CancellationToken::new();
+    let join_future = client
+        .telepathy
+        .join_room_with_operation(vec![member], &operation);
+    tokio::pin!(join_future);
+
+    // Wait until join_room has published the RoomState (it sits immediately before
+    // the member-queue loop), then cancel while its session_states.read() is pending.
+    let wait_for_publish = async {
+        loop {
+            if client
+                .telepathy
+                .inner
+                .current_room_generation()
+                .await
+                .is_some()
+            {
+                return;
+            }
+            sleep(Duration::from_millis(5)).await;
+        }
+    };
+    tokio::select! {
+        _ = &mut join_future => {
+            panic!("join_room must block on the held session_states lock until cancelled");
+        }
+        _ = wait_for_publish => {
+            operation.cancel();
+        }
+    }
+    join_future
+        .await
+        .expect("cancelled room join while queuing members must resolve cleanly");
+
+    release_lock.notify_one();
+    hold_task
+        .await
+        .expect("session_states lock-hold task should finish");
+
+    let states_before_window = call_state_snapshot(&call_states);
+    assert!(
+        !states_before_window
+            .iter()
+            .any(|state| matches!(state, CallState::Connected)),
+        "cancelled room join must never reach Connected; states={states_before_window:?}"
+    );
+
+    // Cancellation must have torn this generation down: room_state cleared, slot idle.
+    assert!(
+        client
+            .telepathy
+            .inner
+            .current_room_generation()
+            .await
+            .is_none(),
+        "cancelled room join must clear room_state"
+    );
+    assert_call_slot_idle(
+        &client,
+        "cancelled room join while queuing members must release the slot",
+    );
+
+    // Stability window: no late Waiting/Connected arrives after teardown.
+    sleep(Duration::from_millis(500)).await;
+    let states_after_window = call_state_snapshot(&call_states);
+    let promotions = |states: &[CallState]| {
+        states
+            .iter()
+            .filter(|state| matches!(state, CallState::Waiting | CallState::Connected))
+            .count()
+    };
+    assert_eq!(
+        promotions(&states_after_window),
+        promotions(&states_before_window),
+        "no late Waiting/Connected expected after cancelled room join; \
+         before={states_before_window:?} after={states_after_window:?}"
+    );
+
+    client.telepathy.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cancelled_room_interrupts_gated_peer_output_setup() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+    let codec_config = CodecConfig::new(true, true, 5.0);
+
+    let key_a = SecretKey::generate();
+    let key_b = SecretKey::generate();
+    let contact_a = Contact::new("room-output-a".to_string(), key_a.public().to_string())
+        .expect("contact a invalid");
+    let contact_b = Contact::new("room-output-b".to_string(), key_b.public().to_string())
+        .expect("contact b invalid");
+
+    let peer_a = contact_a.get_peer_id().to_string();
+    let call_states_a = Arc::new(Mutex::new(Vec::new()));
+    let call_states_b = Arc::new(Mutex::new(Vec::new()));
+    let room_members = sorted_room_members(&contact_a, &contact_b);
+
+    let client_a = build_client(
+        relay_map,
+        key_a,
+        vec![contact_b.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_a.clone(),
+    )
+    .await;
+    let client_b = build_client(
+        relay_map,
+        key_b,
+        vec![contact_a.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_b.clone(),
+    )
+    .await;
+
+    client_a.telepathy.start_session(&contact_b).await;
+    client_b.telepathy.start_session(&contact_a).await;
+    wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
+
+    // Hold A's output_device lock so A's per-peer setup_output (its first await)
+    // blocks. Without the cancellation race this strands A's room controller on
+    // the awaited setup_output; with the race, cancelling the operation
+    // interrupts it and tears this generation down.
+    let (held_tx, held_rx) = tokio::sync::oneshot::channel::<()>();
+    let release_output = Arc::new(Notify::new());
+    let output_device = client_a.telepathy.inner.core_state.output_device.clone();
+    let release_clone = release_output.clone();
+    let hold_output = tokio::spawn(async move {
+        let _guard = output_device.lock().await;
+        let _ = held_tx.send(());
+        release_clone.notified().await;
+    });
+    held_rx
+        .await
+        .expect("output_device lock should be acquired");
+
+    let operation_a = CancellationToken::new();
+    client_a
+        .telepathy
+        .join_room_with_operation(room_members.clone(), &operation_a)
+        .await
+        .expect("client a should join room");
+    client_b
+        .telepathy
+        .join_room(room_members)
+        .await
+        .expect("client b should join room");
+
+    // B observing A's RoomJoin means the room handshake completed both ways; A
+    // has therefore received B's Join and is blocked inside setup_output.
+    wait_for_room_join_count(&call_states_b, &peer_a, 1).await;
+    for _ in 0..16 {
+        tokio::task::yield_now().await;
+    }
+
+    operation_a.cancel();
+
+    wait_for_slot_idle(&client_a, &peer_a).await;
+    assert!(
+        client_a
+            .telepathy
+            .inner
+            .current_room_generation()
+            .await
+            .is_none(),
+        "A's room_state must be cleared after cancelling gated peer output setup"
+    );
+
+    release_output.notify_one();
+    hold_output
+        .await
+        .expect("output_device lock-hold task should finish");
+
+    client_a.telepathy.shutdown().await;
+    client_b.telepathy.shutdown().await;
+}
 
 #[tokio::test(flavor = "multi_thread")]
 async fn room_input_task_panic_clears_ownership_and_notifies_once() {
@@ -1381,4 +1755,140 @@ async fn room_duplicate_join_is_busy_then_idempotent() {
     );
 
     client_a.telepathy.shutdown().await;
+}
+
+/// Authoritative teardown must complete even when the frontend's awaited room
+/// callback is parked indefinitely. A gated `Connected` callback simulates a
+/// stalled frontend; `end_call` must still drive `cleanup_room_controller` to
+/// completion (slot idle, room_state cleared) without releasing the gate.
+#[tokio::test(flavor = "multi_thread")]
+async fn end_call_tears_down_room_while_gated_callback_is_parked() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+    let codec_config = CodecConfig::new(true, true, 5.0);
+
+    let key_a = SecretKey::generate();
+    let key_b = SecretKey::generate();
+    let contact_a = Contact::new("room-callback-a".to_string(), key_a.public().to_string())
+        .expect("contact a invalid");
+    let contact_b = Contact::new("room-callback-b".to_string(), key_b.public().to_string())
+        .expect("contact b invalid");
+
+    let peer_a = contact_a.get_peer_id().to_string();
+    let room_members = sorted_room_members(&contact_a, &contact_b);
+
+    let call_states_a = Arc::new(Mutex::new(Vec::new()));
+    let call_states_b = Arc::new(Mutex::new(Vec::new()));
+
+    // Gate A's `Connected` callback: it parks inside the mock and never returns
+    // until `release` is invoked. Teardown must proceed without that release.
+    let connected_gate = Arc::new(RoomCallbackGate::new(CallState::Connected));
+
+    let client_a = build_client_with_room_callback_gate(
+        relay_map,
+        key_a,
+        vec![contact_b.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_a.clone(),
+        Arc::clone(&connected_gate),
+    )
+    .await;
+    let client_b = build_client(
+        relay_map,
+        key_b,
+        vec![contact_a.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_b.clone(),
+    )
+    .await;
+
+    client_a.telepathy.start_session(&contact_b).await;
+    client_b.telepathy.start_session(&contact_a).await;
+    wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
+
+    let operation_a = CancellationToken::new();
+
+    // Drive both joins concurrently: each `join_room` publishes its own
+    // `room_state` and only resolves once the member-queue loop has finished,
+    // so awaiting them serially would deadlock (each waits for the other's
+    // publication). The room controller tasks continue running afterwards and
+    // deliver `Connected` once the room handshake actually completes.
+    let (result_a, result_b) = tokio::join!(
+        client_a
+            .telepathy
+            .join_room_with_operation(room_members.clone(), &operation_a),
+        client_b.telepathy.join_room(room_members),
+    );
+    result_a.expect("client a should join room");
+    result_b.expect("client b should join room");
+
+    // A's operation has settled; wait until A's controller reaches the gated
+    // `Connected` callback (which the mock parks indefinitely).
+    wait_for_slot_room_call(&client_a, "A holds RoomCall after join settles").await;
+    connected_gate.wait_until_parked().await;
+
+    // The `Connected` callback is now parked on the gate. Authoritative teardown
+    // via `end_call` must not be blocked by that pending observation.
+    client_a.telepathy.end_call().await;
+
+    wait_for_slot_idle(&client_a, &peer_a).await;
+    assert!(
+        client_a
+            .telepathy
+            .inner
+            .current_room_generation()
+            .await
+            .is_none(),
+        "end_call must clear room_state even with a parked room callback"
+    );
+    assert_call_slot_idle(
+        &client_a,
+        "end_call must release the call slot even with a parked room callback",
+    );
+
+    // The gate must still be parked (callback future never completed): if it had
+    // been released, the `Connected` state would appear in delivery order.
+    assert!(
+        !connected_gate
+            .received()
+            .iter()
+            .any(|state| matches!(state, CallState::Connected)),
+        "the gated Connected callback must not have completed before release"
+    );
+
+    // Release the gate so the parked callback future can settle and the spawned
+    // controller task can finish without holding test resources.
+    connected_gate.release();
+
+    // Give the released callback future a brief moment to settle; it must not
+    // promote a fresh call slot or resurrect room_state.
+    sleep(Duration::from_millis(200)).await;
+    assert_call_slot_idle(
+        &client_a,
+        "releasing the gate after teardown must not promote a new call",
+    );
+    assert!(
+        client_a
+            .telepathy
+            .inner
+            .current_room_generation()
+            .await
+            .is_none(),
+        "releasing the gate after teardown must not republish room_state"
+    );
+
+    client_a.telepathy.shutdown().await;
+    client_b.telepathy.shutdown().await;
 }
