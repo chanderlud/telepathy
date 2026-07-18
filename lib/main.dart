@@ -191,10 +191,13 @@ Future<void> main(List<String> args) async {
 
     switch (state) {
       case CallState_Connected():
-        // Promote before loading optional sound. The start future can resolve
-        // after this callback, so it must not own promotion.
+        // Distinguish a first promotion (connecting -> active) from an
+        // already-active room (e.g. after a `Waiting` event promoted the
+        // pending slot first). Stale callbacks for idle/ending/attempts are
+        // rejected. The start future can resolve after this callback, so it
+        // must not own promotion.
         if (!stateController
-            .promotePendingCallAttempt(stateController.currentCallAttempt)) {
+            .handleConnectedEvent(stateController.currentCallAttempt)) {
           return;
         }
         bytes = await readSeaBytes('connected');
