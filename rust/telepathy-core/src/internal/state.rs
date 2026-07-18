@@ -36,6 +36,11 @@ pub enum CallSlotState {
     ActiveDirect,
     RoomCall,
     AudioTest,
+    /// Held while the signing identity is being swapped and the session
+    /// manager restarted. [`crate::internal::TelepathyHandle::switch_identity_and_restart_manager`]
+    /// acquires this state atomically with its idle check so a call cannot
+    /// start between validation, identity mutation, and manager restart.
+    IdentitySwitch,
 }
 
 /// Result of [`CallSlot::try_acquire_or_match`].

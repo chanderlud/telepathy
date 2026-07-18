@@ -43,7 +43,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1371870020;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1833701350;
 
 // Section: executor
 
@@ -5172,6 +5172,67 @@ fn wire__crate__flutter__Telepathy_stop_session_impl(
         },
     )
 }
+fn wire__crate__flutter__Telepathy_switch_identity_and_restart_manager_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "Telepathy_switch_identity_and_restart_manager",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Telepathy>,
+            >>::sse_decode(&mut deserializer);
+            let api_key = <Vec<u8>>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| async move {
+                transform_result_sse::<_, crate::types::DartError>(
+                    (move || async move {
+                        let mut api_that_guard = None;
+                        let decode_indices_ =
+                            flutter_rust_bridge::for_generated::lockable_compute_decode_order(
+                                vec![flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                                    &api_that, 0, false,
+                                )],
+                            );
+                        for i in decode_indices_ {
+                            match i {
+                                0 => {
+                                    api_that_guard =
+                                        Some(api_that.lockable_decode_async_ref().await)
+                                }
+                                _ => unreachable!(),
+                            }
+                        }
+                        let api_that_guard = api_that_guard.unwrap();
+                        let output_ok =
+                            crate::flutter::Telepathy::switch_identity_and_restart_manager(
+                                &*api_that_guard,
+                                api_key,
+                            )
+                            .await?;
+                        Ok(output_ok)
+                    })()
+                    .await,
+                )
+            }
+        },
+    )
+}
 fn wire__crate__flutter__logging__create_log_stream_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -6624,14 +6685,20 @@ fn pde_ffi_dispatcher_primary_impl(
         ),
         99 => wire__crate__flutter__Telepathy_start_session_impl(port, ptr, rust_vec_len, data_len),
         100 => wire__crate__flutter__Telepathy_stop_session_impl(port, ptr, rust_vec_len, data_len),
-        103 => wire__crate__player__load_ringtone_impl(port, ptr, rust_vec_len, data_len),
-        106 => wire__crate__flutter__utils__screenshare_available_impl(
+        101 => wire__crate__flutter__Telepathy_switch_identity_and_restart_manager_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        107 => wire__crate__types__statistics_default_impl(port, ptr, rust_vec_len, data_len),
+        104 => wire__crate__player__load_ringtone_impl(port, ptr, rust_vec_len, data_len),
+        107 => wire__crate__flutter__utils__screenshare_available_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        108 => wire__crate__types__statistics_default_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -6738,11 +6805,11 @@ fn pde_ffi_dispatcher_sync_impl(
             rust_vec_len,
             data_len,
         ),
-        101 => wire__crate__flutter__logging__create_log_stream_impl(ptr, rust_vec_len, data_len),
-        102 => wire__crate__flutter__utils__generate_keys_impl(ptr, rust_vec_len, data_len),
-        104 => wire__crate__flutter__utils__room_hash_impl(ptr, rust_vec_len, data_len),
-        105 => wire__crate__flutter__logging__rust_set_up_impl(ptr, rust_vec_len, data_len),
-        108 => wire__crate__flutter__utils__validate_peer_id_impl(ptr, rust_vec_len, data_len),
+        102 => wire__crate__flutter__logging__create_log_stream_impl(ptr, rust_vec_len, data_len),
+        103 => wire__crate__flutter__utils__generate_keys_impl(ptr, rust_vec_len, data_len),
+        105 => wire__crate__flutter__utils__room_hash_impl(ptr, rust_vec_len, data_len),
+        106 => wire__crate__flutter__logging__rust_set_up_impl(ptr, rust_vec_len, data_len),
+        109 => wire__crate__flutter__utils__validate_peer_id_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }

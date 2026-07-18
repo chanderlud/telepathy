@@ -5,6 +5,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'package:provider/provider.dart';
 import 'package:telepathy/controllers/index.dart';
 import 'package:telepathy/core/rust/flutter.dart';
+import 'package:telepathy/core/utils/console.dart';
 import 'package:telepathy/models/index.dart';
 import 'package:telepathy/widgets/common/index.dart';
 
@@ -151,7 +152,7 @@ class ProfileSettingsState extends State<ProfileSettings> {
                           // `blockAudioChanges` covers the connecting and
                           // active phases and audio tests, all of which
                           // occupy the backend call slot and would race
-                          // with `restartManager()` / `setIdentity`. Using
+                          // with the atomic identity swap. Using
                           // `isCallActive` here is not enough because the
                           // slot is occupied before promotion.
                           disabled: stateController.blockAudioChanges ||
@@ -160,15 +161,30 @@ class ProfileSettingsState extends State<ProfileSettings> {
                             // Defensive recheck inside the handler so a
                             // build-cycle race between `disabled` being
                             // painted and the user tapping cannot reach the
-                            // mutating setActiveProfile / setIdentity /
-                            // restartManager sequence.
+                            // mutating atomic identity swap.
                             if (stateController.blockAudioChanges) {
                               return;
                             }
-                            await profilesController
-                                .setActiveProfile(profile.id);
-                            await telepathy.setIdentity(key: profile.keypair);
-                            await telepathy.restartManager();
+                            // Commit the frontend active-profile change only
+                            // after the atomic backend op succeeds. If the
+                            // backend rejects the swap the frontend stays on
+                            // the current profile. The error is logged but
+                            // not rethrown: this handler runs inside a tap
+                            // callback, and propagating would surface as an
+                            // unhandled exception with no UI to recover it.
+                            try {
+                              await telepathy.switchIdentityAndRestartManager(
+                                key: profile.keypair,
+                              );
+                              await profilesController
+                                  .setActiveProfile(profile.id);
+                            } catch (error) {
+                              DebugConsole.warn(
+                                'switchIdentityAndRestartManager failed for '
+                                '${profile.id}: $error; '
+                                'frontend active profile left unchanged',
+                              );
+                            }
                           },
                           noSplash: true,
                           disabledColor:
@@ -193,33 +209,110 @@ class ProfileSettingsState extends State<ProfileSettings> {
                             )),
                         IconButton(
                           tooltip: 'Delete Profile',
-                          onPressed: () {
-                            showDialog(
-                                context: listContext,
-                                builder: (BuildContext dialogContext) {
-                                  return AlertDialog(
-                                    title: const Text('Delete Profile'),
-                                    content: const Text(
-                                        'Are you sure you want to delete this profile?'),
-                                    actions: [
-                                      Button(
-                                        text: 'Cancel',
-                                        onPressed: () {
-                                          Navigator.of(dialogContext).pop();
-                                        },
-                                      ),
-                                      Button(
-                                        text: 'Delete',
-                                        onPressed: () {
-                                          profilesController
-                                              .removeProfile(profile.id);
-                                          Navigator.of(dialogContext).pop();
-                                        },
-                                      )
-                                    ],
-                                  );
-                                });
-                          },
+                          // Deleting the active profile must run the same
+                          // atomic identity swap the Set Active button uses;
+                          // both must be gated by `blockAudioChanges` so the
+                          // backend identity switch + manager restart cannot
+                          // race an in-flight call. Deleting a non-active
+                          // profile is safe during a call because it touches
+                          // neither the call slot nor the active identity.
+                          onPressed: stateController.blockAudioChanges &&
+                                  profilesController.activeProfile == profile.id
+                              ? null
+                              : () {
+                                  showDialog(
+                                      context: listContext,
+                                      builder: (BuildContext dialogContext) {
+                                        return AlertDialog(
+                                          title: const Text('Delete Profile'),
+                                          content: const Text(
+                                              'Are you sure you want to delete this profile?'),
+                                          actions: [
+                                            Button(
+                                              text: 'Cancel',
+                                              onPressed: () {
+                                                Navigator.of(dialogContext)
+                                                    .pop();
+                                              },
+                                            ),
+                                            Button(
+                                              text: 'Delete',
+                                              onPressed: () async {
+                                                final navigator =
+                                                    Navigator.of(dialogContext);
+                                                final previousActive =
+                                                    profilesController
+                                                        .activeProfile;
+                                                final wasActive =
+                                                    previousActive ==
+                                                        profile.id;
+                                                Profile? replacement;
+                                                if (wasActive) {
+                                                  replacement =
+                                                      _replacementProfileAfter(
+                                                    profilesController,
+                                                    excludeId: profile.id,
+                                                  );
+                                                }
+                                                try {
+                                                  // Sync the replacement
+                                                  // identity first (atomic
+                                                  // backend op). Only after
+                                                  // it succeeds do we commit
+                                                  // the frontend deletion,
+                                                  // which switches the
+                                                  // active profile to the
+                                                  // same replacement.
+                                                  if (wasActive &&
+                                                      replacement != null) {
+                                                    await telepathy
+                                                        .switchIdentityAndRestartManager(
+                                                      key: replacement.keypair,
+                                                    );
+                                                  }
+                                                  await profilesController
+                                                      .removeProfile(
+                                                          profile.id);
+                                                  if (mounted) {
+                                                    navigator.pop();
+                                                  }
+                                                } catch (error) {
+                                                  // Backend rejected or
+                                                  // removeProfile failed.
+                                                  // Restore the frontend to
+                                                  // the prior active profile
+                                                  // so the UI stays
+                                                  // consistent with whatever
+                                                  // identity the backend is
+                                                  // actually running.
+                                                  DebugConsole.warn(
+                                                    'delete of profile '
+                                                    '${profile.id} failed: '
+                                                    '$error; restoring active '
+                                                    'profile to $previousActive',
+                                                  );
+                                                  if (wasActive &&
+                                                      profilesController
+                                                              .activeProfile !=
+                                                          previousActive &&
+                                                      profilesController
+                                                          .profiles
+                                                          .containsKey(
+                                                              previousActive)) {
+                                                    await profilesController
+                                                        .setActiveProfile(
+                                                            previousActive);
+                                                  }
+                                                  if (mounted) {
+                                                    navigator.pop();
+                                                  }
+                                                }
+                                              },
+                                            )
+                                          ],
+                                        );
+                                      });
+                                },
                           icon: SvgPicture.asset(
                             'assets/icons/Trash.svg',
                             semanticsLabel: 'Delete Profile',
@@ -295,4 +388,23 @@ class ProfileSettingsState extends State<ProfileSettings> {
       ),
     );
   }
+}
+
+/// Returns the [Profile] that would become active if [excludeId] were removed
+/// from [controller], mirroring the fallback [_removeProfile] applies inside
+/// [ProfilesController]: the first remaining profile by insertion order.
+///
+/// Returns `null` when [controller] has no other profile to promote; in that
+/// case [_removeProfile] itself creates a fresh default profile and the
+/// frontend has no pre-existing identity to swap into the backend.
+Profile? _replacementProfileAfter(
+  ProfilesController controller, {
+  required String excludeId,
+}) {
+  for (final MapEntry<String, Profile> entry in controller.profiles.entries) {
+    if (entry.key != excludeId) {
+      return entry.value;
+    }
+  }
+  return null;
 }

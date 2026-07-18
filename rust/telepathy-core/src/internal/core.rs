@@ -1857,8 +1857,11 @@ where
                 })
                 .collect();
 
-        let mut end_call_future = std::pin::pin!(end_call.notified());
-        let mut callback = std::pin::pin!(callback);
+        // Do not switch back to `std::pin::pin!`: under edition 2024 it
+        // expands to `super let`, which `flutter_rust_bridge_codegen`'s
+        // bundled `syn` cannot parse, blocking all pub-API codegen cycles.
+        let mut end_call_future = Box::pin(end_call.notified());
+        let mut callback = Box::pin(callback);
 
         // Biased: end_call -> each token -> callback. Teardown always wins over
         // a stalled callback; wakers from any branch re-arm this poll_fn.

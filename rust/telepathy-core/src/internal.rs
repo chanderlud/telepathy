@@ -626,26 +626,79 @@ where
     /// Restarts the session manager
     pub async fn restart_manager(&self) -> Result<()> {
         if self.inner.core_state.call_slot.current() != CallSlotState::Idle {
-            Err(ErrorKind::ManagerRestartDuringCall.into())
-        } else {
-            // pre-register the readiness awaiter before triggering the restart.
-            let manager_ready = self.inner.core_state.manager_active.notified();
-            tokio::pin!(manager_ready);
-            manager_ready.as_mut().enable();
-            // reset sessions so manager can clean up
-            self.inner.reset_sessions().await;
-            // restart the manager
-            self.inner.restart_manager.notify_one();
-            // wait for a new manager to start
-            manager_ready.await;
-            // ensure volume cache resets fully
-            self.inner.core_state.reset_peer_output_volumes()?;
-            // start a session for all contacts
-            for contact in self.inner.callbacks.get_contacts().await {
-                self.start_session(&contact).await;
-            }
-            Ok(())
+            return Err(ErrorKind::ManagerRestartDuringCall.into());
         }
+        self.restart_manager_inner().await
+    }
+
+    /// Same as [`restart_manager`](Self::restart_manager) but skips the
+    /// idle-slot precondition.
+    ///
+    /// Callers must already hold the call slot in a non-idle gate state
+    /// (e.g. [`CallSlotState::IdentitySwitch`]) so a concurrent `start_call`
+    /// cannot race the restart. Used by
+    /// [`switch_identity_and_restart_manager`](Self::switch_identity_and_restart_manager)
+    /// to keep the slot reserved across identity mutation AND restart.
+    async fn restart_manager_inner(&self) -> Result<()> {
+        // pre-register the readiness awaiter before triggering the restart.
+        let manager_ready = self.inner.core_state.manager_active.notified();
+        tokio::pin!(manager_ready);
+        manager_ready.as_mut().enable();
+        // reset sessions so manager can clean up
+        self.inner.reset_sessions().await;
+        // restart the manager
+        self.inner.restart_manager.notify_one();
+        // wait for a new manager to start
+        manager_ready.await;
+        // ensure volume cache resets fully
+        self.inner.core_state.reset_peer_output_volumes()?;
+        // start a session for all contacts
+        for contact in self.inner.callbacks.get_contacts().await {
+            self.start_session(&contact).await;
+        }
+        Ok(())
+    }
+
+    /// Atomically swaps the signing identity and restarts the session manager
+    /// while holding the call slot, so a call cannot start between the idle
+    /// validation, the identity mutation, and the manager restart.
+    ///
+    /// This is the transactional path every frontend profile switch must go
+    /// through: the separate `set_identity` + `restart_manager` sequence races
+    /// because `restart_manager` re-checks the slot idle precondition after
+    /// `set_identity` has already committed the new key, and a `start_call`
+    /// can sneak past that second check.
+    ///
+    /// On failure the slot is released and the original error is surfaced;
+    /// the frontend must roll back any optimistic active-profile change.
+    pub async fn switch_identity_and_restart_manager(&self, key: &[u8; 32]) -> Result<()> {
+        let acquired = self
+            .inner
+            .core_state
+            .call_slot
+            .try_acquire(CallSlotState::IdentitySwitch, None)?;
+        if !acquired {
+            return Err(ErrorKind::ManagerRestartDuringCall.into());
+        }
+
+        let outcome = self.run_identity_switch(key).await;
+
+        // Always release the slot. A failure here must not wedge the backend:
+        // callers surface the original error and roll back the frontend.
+        if let Err(error) = self.inner.core_state.call_slot.release() {
+            warn!(
+                event = "identity_switch_slot_release_failed",
+                error = %error,
+                "switch_identity_and_restart_manager could not release the slot; \
+                 the backend may be unable to start new calls until recovery",
+            );
+        }
+        outcome
+    }
+
+    async fn run_identity_switch(&self, key: &[u8; 32]) -> Result<()> {
+        *self.inner.core_state.identity.write().await = Some(SecretKey::from_bytes(key));
+        self.restart_manager_inner().await
     }
 
     /// shuts down the entire rust backend

@@ -86,7 +86,13 @@ abstract class Telepathy implements RustOpaqueInterface {
 
   void pauseStatistics();
 
-  /// Restarts the session manager
+  /// Restarts the session manager without changing the signing identity.
+  ///
+  /// Use this when only the manager needs recycling (e.g. network-config
+  /// save, manual recovery button). For profile switches use
+  /// [switchIdentityAndRestartManager] instead — the separate
+  /// `set_identity` + `restart_manager` sequence races `start_call`
+  /// between validation and identity mutation.
   Future<void> restartManager();
 
   void resumeStatistics();
@@ -103,7 +109,12 @@ abstract class Telepathy implements RustOpaqueInterface {
 
   void setEfficiencyMode({required bool enabled});
 
-  /// Sets the signing key (called when the profile changes)
+  /// Sets the signing key without restarting the manager.
+  ///
+  /// Intended for the bootstrap path before the manager is running. For
+  /// any post-startup identity change use [switchIdentityAndRestartManager]
+  /// instead — the atomic op holds the call slot across mutation and
+  /// restart, which the separate calls cannot do.
   Future<void> setIdentity({required List<int> key});
 
   Future<void> setInputDevice({String? deviceId});
@@ -140,4 +151,11 @@ abstract class Telepathy implements RustOpaqueInterface {
 
   /// Stops a specific session (called when a contact is deleted)
   Future<void> stopSession({required Contact contact});
+
+  /// Atomically swaps the signing identity and restarts the session manager
+  /// while reserving the call slot, so a call cannot start between
+  /// validation, identity mutation, and manager restart. This is the
+  /// transactional path frontend profile switches must use instead of
+  /// separate `set_identity` + `restart_manager` calls.
+  Future<void> switchIdentityAndRestartManager({required List<int> key});
 }

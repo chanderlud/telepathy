@@ -121,6 +121,22 @@ impl Telepathy {
         self.handle.restart_manager().await.map_err(DartError::from)
     }
 
+    /// Atomically swaps the signing identity and restarts the session manager
+    /// while reserving the call slot, so a call cannot start between
+    /// validation, identity mutation, and manager restart. This is the
+    /// transactional path frontend profile switches must use instead of
+    /// separate `set_identity` + `restart_manager` calls.
+    pub async fn switch_identity_and_restart_manager(&self, key: Vec<u8>) -> Result<(), DartError> {
+        self.handle
+            .switch_identity_and_restart_manager(
+                &(key
+                    .try_into()
+                    .map_err(|_| DartError::from(IDENTITY_KEY_LENGTH_MESSAGE.to_string()))?),
+            )
+            .await
+            .map_err(DartError::from)
+    }
+
     /// shuts down the entire rust backend
     pub async fn shutdown(&self) {
         self.handle.shutdown().await;

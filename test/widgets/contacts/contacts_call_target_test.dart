@@ -193,6 +193,10 @@ class _RecordingTelepathy implements Telepathy {
   void pauseStatistics() {}
   @override
   Future<void> restartManager() async {}
+
+  @override
+  Future<void> switchIdentityAndRestartManager(
+      {required List<int> key}) async {}
   @override
   void resumeStatistics() {}
   @override
