@@ -4,9 +4,9 @@ use super::common::{
     assert_call_slot_idle, assert_no_call_ended_contains, assert_room_event_sequence, build_client,
     build_client_with_accept_probe, build_client_with_options, call_state_snapshot,
     init_test_tracing, shared_relay_map, simulated_stream_error, sorted_room_members,
-    stream_error_scenario, wait_for_active_transport, wait_for_call_ended_contains,
-    wait_for_connected, wait_for_no_extra_room_leave, wait_for_room_join_count,
-    wait_for_room_leave_count, wait_for_sessions, wait_for_slot_idle, wait_for_slot_room_call,
+    stream_error_scenario, wait_for_call_ended_contains, wait_for_connected,
+    wait_for_no_extra_room_leave, wait_for_room_join_count, wait_for_room_leave_count,
+    wait_for_sessions, wait_for_slot_idle, wait_for_slot_room_call,
 };
 
 use iroh::SecretKey;

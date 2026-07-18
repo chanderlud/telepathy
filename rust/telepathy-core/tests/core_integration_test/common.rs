@@ -1,6 +1,5 @@
 use iroh::address_lookup::memory::MemoryLookup;
-use iroh::endpoint::{Connection, RecvStream, SendStream};
-use iroh::{Endpoint, PublicKey, RelayMap, SecretKey};
+use iroh::{PublicKey, RelayMap, SecretKey};
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::{Arc, Condvar, Mutex, Once, OnceLock};
@@ -21,7 +20,6 @@ use telepathy_core::types::{
 };
 use tokio::sync::Notify;
 use tokio::time::{interval, sleep};
-use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
@@ -56,13 +54,6 @@ where
 {
     pub(super) telepathy: MockTelepathyHandle<H, I, O>,
     pub(super) is_active: Arc<AtomicBool>,
-}
-
-pub(super) struct RawRoomPeer {
-    pub(crate) endpoint: Endpoint,
-    pub(crate) connection: Connection,
-    pub(crate) control_send: FramedWrite<SendStream, LengthDelimitedCodec>,
-    pub(crate) control_recv: FramedRead<RecvStream, LengthDelimitedCodec>,
 }
 
 #[derive(Debug, Clone)]
