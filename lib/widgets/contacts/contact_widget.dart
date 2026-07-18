@@ -80,8 +80,17 @@ class ContactWidgetState extends State<ContactWidget> {
                       const Text('Edit Contact'),
                       IconButton(
                         onPressed: () async {
-                          if (!stateController
-                              .isActiveContact(widget.contact)) {
+                          // Lifecycle-lock: deleting a pending target would
+                          // remove the only frontend hangup control while the
+                          // backend start request is still in flight. The
+                          // target must remain editable-only after the
+                          // lifecycle returns to idle, matching the active
+                          // target gate.
+                          final bool isCallTarget =
+                              stateController.isActiveContact(widget.contact) ||
+                                  stateController.pendingContact?.id() ==
+                                      widget.contact.id();
+                          if (!isCallTarget) {
                             bool confirm = await showDialog<bool>(
                                     context: context,
                                     builder: (BuildContext context) {
@@ -132,8 +141,12 @@ class ContactWidgetState extends State<ContactWidget> {
                               Navigator.pop(context);
                             }
                           } else {
-                            showErrorDialog(context, 'Warning',
-                                'Cannot delete a contact while in an active call');
+                            showErrorDialog(
+                                context,
+                                'Warning',
+                                stateController.isActiveContact(widget.contact)
+                                    ? 'Cannot delete a contact while in an active call'
+                                    : 'Cannot delete a contact while a call is being placed');
                           }
                         },
                         icon: SvgPicture.asset('assets/icons/Trash.svg',
@@ -148,7 +161,9 @@ class ContactWidgetState extends State<ContactWidget> {
                   children: [
                     TextInput(
                         enabled:
-                            !stateController.isActiveContact(widget.contact),
+                            !(stateController.isActiveContact(widget.contact) ||
+                                stateController.pendingContact?.id() ==
+                                    widget.contact.id()),
                         controller: _nicknameInput,
                         labelText: 'Nickname',
                         onChanged: (value) {

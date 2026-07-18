@@ -236,7 +236,15 @@ class RoomWidgetState extends State<RoomWidget> {
               const Text('Edit Room'),
               IconButton(
                 onPressed: () async {
-                  if (!stateController.isActiveRoom(widget.room)) {
+                  // Lifecycle-lock: deleting a pending room would remove the
+                  // only frontend hangup control while the backend join is
+                  // still in flight. The target must remain until the
+                  // lifecycle returns to idle, matching the active target
+                  // gate.
+                  final bool isCallTarget =
+                      stateController.isActiveRoom(widget.room) ||
+                          stateController.pendingRoom?.id == widget.room.id;
+                  if (!isCallTarget) {
                     bool confirm = await _confirmDelete(dialogContext);
                     if (confirm) {
                       profilesController.removeRoom(widget.room);
@@ -248,7 +256,9 @@ class RoomWidgetState extends State<RoomWidget> {
                     showErrorDialog(
                       dialogContext,
                       'Warning',
-                      'Cannot delete a room while in an active call',
+                      stateController.isActiveRoom(widget.room)
+                          ? 'Cannot delete a room while in an active call'
+                          : 'Cannot delete a room while a call is being placed',
                     );
                   }
                 },
@@ -263,16 +273,25 @@ class RoomWidgetState extends State<RoomWidget> {
               const EdgeInsets.only(top: 25, left: 25, right: 25, bottom: 20),
           children: [
             TextInput(
-                enabled: !stateController.isActiveRoom(widget.room),
+                enabled: !(stateController.isActiveRoom(widget.room) ||
+                    stateController.pendingRoom?.id == widget.room.id),
                 controller: _nicknameInput,
                 labelText: 'Nickname'),
             const SizedBox(height: 20),
             Button(
               text: 'Save',
               onPressed: () {
-                if (stateController.isActiveRoom(widget.room)) {
-                  showErrorDialog(dialogContext, 'Warning',
-                      'Cannot rename a room while in an active call');
+                final bool isCallTarget =
+                    stateController.isActiveRoom(widget.room) ||
+                        stateController.pendingRoom?.id == widget.room.id;
+                if (isCallTarget) {
+                  showErrorDialog(
+                    dialogContext,
+                    'Warning',
+                    stateController.isActiveRoom(widget.room)
+                        ? 'Cannot rename a room while in an active call'
+                        : 'Cannot rename a room while a call is being placed',
+                  );
                   return;
                 }
 

@@ -21,6 +21,7 @@ import 'package:telepathy/core/utils/sound_effects.dart';
 import 'package:telepathy/models/index.dart';
 import 'package:telepathy/widgets/call/call_controls.dart';
 import 'package:telepathy/widgets/call/room_details_widget.dart';
+import 'package:telepathy/widgets/common/text_input.dart' as common_widgets;
 import 'package:telepathy/widgets/contacts/contact_widget.dart';
 import 'package:telepathy/widgets/contacts/room_widget.dart';
 
@@ -1121,6 +1122,214 @@ void main() {
           reason: 'distinct contact identities must produce distinct keys');
       expect(alphaKey, isNot(equals(bravoKey)),
           reason: 'distinct room identities must produce distinct keys');
+    });
+  });
+
+  group('ContactWidget edit dialog lifecycle-locks pending targets', () {
+    late _FakeSoundHandle handle;
+    late _FakeSoundPlayer player;
+    late _RecordingTelepathy telepathy;
+    late StateController stateController;
+    late ProfilesController profilesController;
+    late FakeContact alice;
+
+    setUp(() {
+      FlutterSecureStorage.setMockInitialValues(<String, String>{});
+      SharedPreferencesAsyncPlatform.instance =
+          InMemorySharedPreferencesAsync.empty();
+      handle = _FakeSoundHandle();
+      player = _FakeSoundPlayer(handle);
+      telepathy = _RecordingTelepathy();
+      stateController = StateController();
+      profilesController = ProfilesController(
+        storage: const FlutterSecureStorage(),
+        options: SharedPreferencesAsync(),
+        roomHasher: ({required List<String> peers}) => peers.join('|'),
+      );
+      alice = FakeContact(
+        id: 'contact-alice-id',
+        contactNickname: 'Alice Ng',
+      );
+      _markContactConnected(stateController, alice);
+    });
+
+    testWidgets('a pending contact cannot be deleted from the edit dialog',
+        (WidgetTester tester) async {
+      _stubOutgoingRingtone(tester);
+
+      await tester.pumpWidget(
+        _harness(
+          stateController: stateController,
+          profilesController: profilesController,
+          telepathy: telepathy,
+          player: player,
+          child: ContactWidget(contact: alice),
+        ),
+      );
+
+      // Mark alice as pending so the lifecycle-lock engages. The deferred
+      // `startCall` future is left un-settled; the target must remain
+      // editable-rejecting until the lifecycle returns to idle.
+      final StartOperation operation = telepathy.newStartOperation();
+      stateController.setPendingContact(alice, operation);
+      await tester.pump();
+
+      expect(stateController.pendingContact, same(alice),
+          reason: 'fixture precondition: alice must be the pending target');
+
+      // Tapping the row body (not an IconButton) opens the edit dialog.
+      await tester.tap(find.text('Alice Ng'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.bySemanticsLabel('Delete contact icon'));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text('Cannot delete a contact while a call is being placed'),
+        findsOneWidget,
+        reason: 'pending target delete must be rejected with a dedicated '
+            'message that distinguishes it from the active-call case',
+      );
+      expect(stateController.pendingContact, same(alice),
+          reason: 'rejected delete must not tear down the pending slot');
+    });
+
+    testWidgets('a pending contact nickname field is disabled',
+        (WidgetTester tester) async {
+      _stubOutgoingRingtone(tester);
+
+      await tester.pumpWidget(
+        _harness(
+          stateController: stateController,
+          profilesController: profilesController,
+          telepathy: telepathy,
+          player: player,
+          child: ContactWidget(contact: alice),
+        ),
+      );
+
+      final StartOperation operation = telepathy.newStartOperation();
+      stateController.setPendingContact(alice, operation);
+      await tester.pump();
+
+      await tester.tap(find.text('Alice Ng'));
+      await tester.pumpAndSettle();
+
+      final common_widgets.TextInput input =
+          tester.widget<common_widgets.TextInput>(
+              find.byType(common_widgets.TextInput));
+      expect(input.enabled, isFalse,
+          reason: 'pending target must not allow identity-changing edits '
+              'while the backend start request is in flight');
+    });
+  });
+
+  group('RoomWidget edit dialog lifecycle-locks pending targets', () {
+    late _FakeSoundHandle handle;
+    late _FakeSoundPlayer player;
+    late _RecordingTelepathy telepathy;
+    late StateController stateController;
+    late ProfilesController profilesController;
+    late Room alpha;
+
+    setUp(() {
+      FlutterSecureStorage.setMockInitialValues(<String, String>{});
+      SharedPreferencesAsyncPlatform.instance =
+          InMemorySharedPreferencesAsync.empty();
+      handle = _FakeSoundHandle();
+      player = _FakeSoundPlayer(handle);
+      telepathy = _RecordingTelepathy();
+      stateController = StateController();
+      profilesController = ProfilesController(
+        storage: const FlutterSecureStorage(),
+        options: SharedPreferencesAsync(),
+        roomHasher: ({required List<String> peers}) => peers.join('|'),
+      );
+      alpha = Room(
+        id: 'room-alpha',
+        peerIds: const ['peer-1', 'peer-2'],
+        nickname: 'Alpha Room',
+      );
+    });
+
+    testWidgets('a pending room cannot be deleted from the edit dialog',
+        (WidgetTester tester) async {
+      _stubOutgoingRingtone(tester);
+
+      await tester.pumpWidget(
+        _harness(
+          stateController: stateController,
+          profilesController: profilesController,
+          telepathy: telepathy,
+          player: player,
+          child: RoomWidget(room: alpha),
+        ),
+      );
+
+      final StartOperation operation = telepathy.newStartOperation();
+      stateController.setPendingRoom(alpha, operation);
+      await tester.pump();
+
+      expect(stateController.pendingRoom, same(alpha),
+          reason: 'fixture precondition: alpha must be the pending target');
+
+      await tester.tap(find.text('Alpha Room'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.bySemanticsLabel('Delete room icon'));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text('Cannot delete a room while a call is being placed'),
+        findsOneWidget,
+        reason: 'pending target delete must be rejected with a dedicated '
+            'message that distinguishes it from the active-call case',
+      );
+      expect(stateController.pendingRoom, same(alpha),
+          reason: 'rejected delete must not tear down the pending slot');
+    });
+
+    testWidgets('a pending room nickname cannot be saved from the edit dialog',
+        (WidgetTester tester) async {
+      _stubOutgoingRingtone(tester);
+
+      await tester.pumpWidget(
+        _harness(
+          stateController: stateController,
+          profilesController: profilesController,
+          telepathy: telepathy,
+          player: player,
+          child: RoomWidget(room: alpha),
+        ),
+      );
+
+      final StartOperation operation = telepathy.newStartOperation();
+      stateController.setPendingRoom(alpha, operation);
+      await tester.pump();
+
+      await tester.tap(find.text('Alpha Room'));
+      await tester.pumpAndSettle();
+
+      // The TextInput itself is disabled, but Save is also gated so a stale
+      // controller value (or a third-party input event) cannot rename the
+      // room out from under the in-flight join.
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text('Cannot rename a room while a call is being placed'),
+        findsOneWidget,
+        reason: 'pending target rename must be rejected with a dedicated '
+            'message that distinguishes it from the active-call case',
+      );
+      expect(alpha.nickname, 'Alpha Room',
+          reason: 'rejected rename must leave the room identity intact');
+
+      final common_widgets.TextInput input =
+          tester.widget<common_widgets.TextInput>(
+              find.byType(common_widgets.TextInput));
+      expect(input.enabled, isFalse,
+          reason: 'pending target must not allow identity-changing edits');
     });
   });
 }
