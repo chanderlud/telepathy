@@ -35,6 +35,24 @@ The UI is built with [Flutter](https://flutter.dev/) enabling the app to target 
 - macOS and iOS development requires Xcode
 - Web development requires the latest wasm-pack and wasm-opt & the nightly Rust toolchain
 
+## Verifying Release Artifacts
+
+Every artifact published to a GitHub Release is signed with a [Sigstore](https://sigstore.dev/) build-provenance attestation that binds it to the workflow run and commit that produced it. Verify any downloaded asset before installing:
+
+```sh
+gh attestation verify <downloaded-file> --repo chanderlud/telepathy
+```
+
+Example:
+
+```sh
+gh attestation verify telepathy-1.2.3-windows-installer-x86_64.exe --repo chanderlud/telepathy
+```
+
+A passing check confirms the file was built from the `chanderlud/telepathy` repository on GitHub Actions and has not been modified since. Requires the [GitHub CLI](https://cli.github.com/) (`gh`) to be installed and authenticated.
+
+Note: attestation is provenance, not code signing. It does not satisfy macOS Gatekeeper or Windows SmartScreen, and the macOS/iOS builds remain unsigned.
+
 ## Architecture
 
 ### High Level Design
