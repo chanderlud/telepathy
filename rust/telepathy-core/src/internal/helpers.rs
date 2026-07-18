@@ -39,9 +39,15 @@ use tokio::io::AsyncReadExt;
 use tokio::select;
 use tokio::sync::Notify;
 use tokio::sync::mpsc::{Sender, UnboundedSender};
+#[cfg(not(target_family = "wasm"))]
+use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, instrument, trace, warn};
 use url::Url;
+#[cfg(target_family = "wasm")]
+use wasmtimer::tokio::timeout;
+
+const ROOM_TASK_JOIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 impl<C, S, H, I, O> TelepathyCore<C, S, H, I, O>
 where
@@ -697,7 +703,7 @@ where
             input_handle,
             connections,
             statistics_handle,
-            setup_error,
+            terminal_error,
         } = cleanup;
 
         debug!(event = "room_processing_teardown_start");
@@ -708,30 +714,43 @@ where
             *self.web_input.lock().await = None;
         }
         stop_io.cancel();
-        let setup_failed = setup_error.is_some();
+        let mut terminal_error = terminal_error;
         if let Some(input_handle) = input_handle {
-            match input_handle.await {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) if setup_failed => {
-                    warn!(event = "room_input_closed_on_setup_failure", ?error);
+            let mut input_handle = input_handle;
+            match timeout(ROOM_TASK_JOIN_TIMEOUT, &mut input_handle).await {
+                Ok(Ok(Ok(()))) => {}
+                Ok(Ok(Err(error))) => {
+                    warn!(event = "room_input_closed_on_teardown", ?error);
+                    record_room_terminal_error(&mut terminal_error, error);
                 }
-                Ok(Err(error)) => return Err(error),
-                Err(error) if setup_failed => {
-                    warn!(event = "room_input_join_failed_on_setup_failure", ?error);
+                Ok(Err(error)) => {
+                    warn!(event = "room_input_join_failed_on_teardown", ?error);
+                    record_room_terminal_error(&mut terminal_error, error.into());
                 }
-                Err(error) => return Err(error.into()),
+                Err(error) => {
+                    abort_room_task(&input_handle);
+                    warn!(event = "room_input_join_timed_out", ?error);
+                    record_room_terminal_error(&mut terminal_error, error.into());
+                }
             }
         }
         for connection in connections.into_values() {
-            match connection.handle.await {
-                Ok(Ok(())) => (),
-                Ok(Err(error)) => {
+            let mut handle = connection.handle;
+            match timeout(ROOM_TASK_JOIN_TIMEOUT, &mut handle).await {
+                Ok(Ok(Ok(()))) => {}
+                Ok(Ok(Err(error))) => {
                     warn!(event = "room_output_closed_on_teardown", ?error);
+                    record_room_terminal_error(&mut terminal_error, error);
                 }
-                Err(error) if setup_failed => {
-                    warn!(event = "room_output_join_failed_on_setup_failure", ?error);
+                Ok(Err(error)) => {
+                    warn!(event = "room_output_join_failed_on_teardown", ?error);
+                    record_room_terminal_error(&mut terminal_error, error.into());
                 }
-                Err(error) => return Err(error.into()),
+                Err(error) => {
+                    abort_room_task(&handle);
+                    warn!(event = "room_output_join_timed_out", ?error);
+                    record_room_terminal_error(&mut terminal_error, error.into());
+                }
             }
         }
         debug!(event = "room_processing_teardown_done");
@@ -751,30 +770,27 @@ where
             }
         }
         // Release the slot only against the exact `room_owner` snapshot.
-        match self.core_state.call_slot.release_if_match(room_owner) {
-            Ok(_) => {}
-            Err(error) if setup_failed => {
-                warn!(
-                    event = "room_call_slot_release_failed_on_setup_failure",
-                    ?error
-                );
-            }
-            Err(error) => return Err(error),
+        if let Err(error) = self.core_state.call_slot.release_if_match(room_owner) {
+            warn!(event = "room_call_slot_release_failed_on_teardown", ?error);
+            record_room_terminal_error(&mut terminal_error, error);
         }
         end_sessions.cancel();
         if let Some(statistics_handle) = statistics_handle {
-            match statistics_handle.await {
-                Ok(()) => {}
-                Err(error) if setup_failed => {
-                    warn!(
-                        event = "room_statistics_join_failed_on_setup_failure",
-                        ?error
-                    );
+            let mut statistics_handle = statistics_handle;
+            match timeout(ROOM_TASK_JOIN_TIMEOUT, &mut statistics_handle).await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    warn!(event = "room_statistics_join_failed_on_teardown", ?error);
+                    record_room_terminal_error(&mut terminal_error, error.into());
                 }
-                Err(error) => return Err(error.into()),
+                Err(error) => {
+                    abort_room_task(&statistics_handle);
+                    warn!(event = "room_statistics_join_timed_out", ?error);
+                    record_room_terminal_error(&mut terminal_error, error.into());
+                }
             }
         }
-        match setup_error {
+        match terminal_error {
             Some(error) => Err(error),
             None => Ok(()),
         }
@@ -788,6 +804,20 @@ where
             ))
             .await;
     }
+}
+
+fn record_room_terminal_error(slot: &mut Option<Error>, error: Error) {
+    if slot.is_none() {
+        *slot = Some(error);
+    }
+}
+
+fn abort_room_task<T>(handle: &crate::internal::utils::JoinHandle<T>) {
+    #[cfg(all(feature = "native", not(feature = "flutter")))]
+    handle.abort();
+
+    #[cfg(not(all(feature = "native", not(feature = "flutter"))))]
+    let _ = handle;
 }
 
 fn report_stream_error(

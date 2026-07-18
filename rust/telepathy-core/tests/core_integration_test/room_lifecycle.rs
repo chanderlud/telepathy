@@ -12,8 +12,7 @@ use std::sync::atomic::Ordering::Relaxed;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use telepathy_audio::devices::{MockAudioHost, MockAudioInput, MockAudioOutput};
-use telepathy_core::types::CodecConfig;
-use telepathy_core::types::Contact;
+use telepathy_core::types::{CallState, CodecConfig, Contact};
 use tokio::time::sleep;
 
 #[tokio::test(flavor = "multi_thread")]
@@ -930,6 +929,132 @@ async fn room_end_releases_slot_and_allows_rejoin() {
     shutdown_guard.disarm();
     client_a.telepathy.shutdown().await;
     client_b.telepathy.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn room_peer_rejection_does_not_end_active_room() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+    let codec_config = CodecConfig::new(true, true, 5.0);
+
+    let key_a = SecretKey::generate();
+    let key_b = SecretKey::generate();
+    let key_c = SecretKey::generate();
+    let contact_a = Contact::new("room-client-a".to_string(), key_a.public().to_string())
+        .expect("contact a invalid");
+    let contact_b = Contact::new("room-client-b".to_string(), key_b.public().to_string())
+        .expect("contact b invalid");
+    let contact_c = Contact::new("room-client-c".to_string(), key_c.public().to_string())
+        .expect("contact c invalid");
+
+    let peer_a = contact_a.get_peer_id().to_string();
+    let peer_b = contact_b.get_peer_id().to_string();
+    let peer_c = contact_c.get_peer_id().to_string();
+    let call_states_a = Arc::new(Mutex::new(Vec::new()));
+    let call_states_b = Arc::new(Mutex::new(Vec::new()));
+    let call_states_c = Arc::new(Mutex::new(Vec::new()));
+    let mut room_members = vec![peer_a.clone(), peer_b.clone(), peer_c];
+    room_members.sort();
+
+    let client_a = build_client(
+        relay_map,
+        key_a,
+        vec![contact_b.clone(), contact_c.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_a.clone(),
+    )
+    .await;
+    let client_b = build_client(
+        relay_map,
+        key_b,
+        vec![contact_a.clone(), contact_c.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_b.clone(),
+    )
+    .await;
+    let client_c = build_client(
+        relay_map,
+        key_c,
+        vec![contact_a.clone(), contact_b.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_c,
+    )
+    .await;
+
+    client_a.telepathy.start_session(&contact_b).await;
+    client_a.telepathy.start_session(&contact_c).await;
+    client_b.telepathy.start_session(&contact_a).await;
+    client_b.telepathy.start_session(&contact_c).await;
+    client_c.telepathy.start_session(&contact_a).await;
+    client_c.telepathy.start_session(&contact_b).await;
+    wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
+    wait_for_sessions(&client_a, &contact_c, &client_c, &contact_a).await;
+    wait_for_sessions(&client_b, &contact_c, &client_c, &contact_b).await;
+
+    // C has live sessions but never enters the room. It rejects A and B's room
+    // Hello messages while their matching room negotiations complete.
+    client_a
+        .telepathy
+        .join_room(room_members.clone())
+        .await
+        .expect("client a should join room");
+    client_b
+        .telepathy
+        .join_room(room_members)
+        .await
+        .expect("client b should join room");
+    wait_for_room_join_count(&call_states_a, &peer_b, 1).await;
+    wait_for_room_join_count(&call_states_b, &peer_a, 1).await;
+    wait_for_slot_room_call(&client_a, "client a after peer rejection").await;
+    wait_for_slot_room_call(&client_b, "client b after peer rejection").await;
+
+    // Exceed the original 10-second HelloAck timeout. Before this fix, each
+    // rejected negotiation waited for that timeout and then emitted CallEnded.
+    sleep(Duration::from_secs(11)).await;
+    wait_for_slot_room_call(&client_a, "client a after rejection timeout window").await;
+    wait_for_slot_room_call(&client_b, "client b after rejection timeout window").await;
+    let states_a = call_state_snapshot(&call_states_a);
+    let states_b = call_state_snapshot(&call_states_b);
+    assert!(
+        !states_a
+            .iter()
+            .any(|state| matches!(state, CallState::CallEnded(_, _))),
+        "client a emitted global CallEnded after C rejected its room negotiation; states={states_a:?}"
+    );
+    assert!(
+        !states_b
+            .iter()
+            .any(|state| matches!(state, CallState::CallEnded(_, _))),
+        "client b emitted global CallEnded after C rejected its room negotiation; states={states_b:?}"
+    );
+
+    // Explicit room termination remains the operation that releases its slot.
+    client_a.telepathy.end_call().await;
+    client_b.telepathy.end_call().await;
+    wait_for_slot_idle(&client_a, &peer_a).await;
+    wait_for_slot_idle(&client_b, &peer_b).await;
+
+    client_a.telepathy.shutdown().await;
+    client_b.telepathy.shutdown().await;
+    client_c.telepathy.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

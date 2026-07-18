@@ -779,13 +779,17 @@ where
                     HandshakeDispatch::SessionStopped => Ok(HelloResponse::SessionStopped),
                 }
             }
+            ProtocolMessage::Goodbye { reason } if is_in_room => {
+                info!(event = "room_peer_goodbye_during_negotiation", ?reason);
+                Ok(HelloResponse::EndedSilently)
+            }
             ProtocolMessage::Goodbye { reason } => Ok(HelloResponse::EndedWith(
                 peer_goodbye_reason_message(&args.contact.nickname, reason),
             )),
-            // In a room, peer-level reject/busy is non-fatal: other peers may still join, so keep waiting.
+            // Peer-level rejection ends only this room negotiation; other peers remain connected.
             ProtocolMessage::Reject | ProtocolMessage::Busy if is_in_room => {
-                info!(event = "room_peer_rejected_or_busy_ignored");
-                Ok(HelloResponse::Continue)
+                info!(event = "room_peer_rejected_or_busy_during_negotiation");
+                Ok(HelloResponse::EndedSilently)
             }
             ProtocolMessage::Reject => {
                 info!(event = "call_not_accepted");
@@ -842,6 +846,10 @@ where
                     info!(event = "simultaneous_dial_detected_winning");
                     Ok(HelloResponse::Continue)
                 }
+            }
+            message if is_in_room => {
+                warn!(event = "room_hello_ack_flow_unexpected_message", ?message);
+                Ok(HelloResponse::EndedSilently)
             }
             message => {
                 warn!(event = "hello_ack_flow_unexpected_message", ?message);
@@ -1176,12 +1184,14 @@ where
                                 hello_timeout_ms = hello_timeout.as_millis() as u64,
                                 peer.id = %args.contact.peer_id
                             );
-                            let message = CallEndMessage::from_text(peer_no_response_message(
-                                &args.contact.nickname,
-                            ));
-                            self.callbacks
-                                .call_state(CallState::CallEnded(message.into_string(), true))
-                                .await;
+                            if !is_in_room {
+                                let message = CallEndMessage::from_text(peer_no_response_message(
+                                    &args.contact.nickname,
+                                ));
+                                self.callbacks
+                                    .call_state(CallState::CallEnded(message.into_string(), true))
+                                    .await;
+                            }
                             release_pending(
                                 &self.session_states,
                                 peer,
@@ -1827,7 +1837,7 @@ where
         let mut peer_connections: HashMap<PublicKey, usize> = HashMap::new();
         let (stream_error_sender, mut stream_error_receiver) = unbounded_channel();
         let mut stream_errors_open = true;
-        let mut setup_error = None;
+        let mut terminal_error = None;
 
         let mut input_helper = match self
             .setup_input(
@@ -1852,7 +1862,7 @@ where
                             input_handle: None,
                             connections: HashMap::new(),
                             statistics_handle: None,
-                            setup_error: Some(error),
+                            terminal_error: Some(error),
                         },
                     )
                     .await;
@@ -1875,7 +1885,7 @@ where
                         input_handle: None,
                         connections: HashMap::new(),
                         statistics_handle: None,
-                        setup_error: None,
+                        terminal_error: None,
                     },
                 )
                 .await;
@@ -1896,7 +1906,7 @@ where
                         input_handle: None,
                         connections: HashMap::new(),
                         statistics_handle: None,
-                        setup_error: Some(error.into_error_kind().into()),
+                        terminal_error: Some(error.into_error_kind().into()),
                     },
                 )
                 .await;
@@ -2004,7 +2014,10 @@ where
                                         Ok(Err(error)) => {
                                             warn!(event = "room_output_closed_on_replacement", ?error);
                                         }
-                                        Err(error) => return Err(error.into()),
+                                        Err(error) => {
+                                            terminal_error = Some(error.into());
+                                            break;
+                                        }
                                     }
                                 }
                                 peer_connections.remove(&state.peer);
@@ -2043,7 +2056,7 @@ where
                                         }
                                     }
                                     self.notify_setup_failure(&error).await;
-                                    setup_error = Some(error);
+                                    terminal_error = Some(error);
                                     break;
                                 }
                             };
@@ -2094,7 +2107,10 @@ where
                                             Ok(Err(error)) => {
                                                 warn!(event = "room_output_closed_on_leave", ?error);
                                             }
-                                            Err(error) => return Err(error.into()),
+                                            Err(error) => {
+                                                terminal_error = Some(error.into());
+                                                break;
+                                            }
                                         }
                                         info!(
                                             event = "room_connection_cleaned_up",
@@ -2142,7 +2158,7 @@ where
                 input_handle: Some(input_handle),
                 connections,
                 statistics_handle: Some(statistics_handle),
-                setup_error,
+                terminal_error,
             },
         )
         .await
@@ -2199,7 +2215,7 @@ pub(crate) struct RoomControllerCleanup<O> {
     pub(crate) input_handle: Option<JoinHandle<Result<()>>>,
     pub(crate) connections: HashMap<usize, RoomConnection<O>>,
     pub(crate) statistics_handle: Option<JoinHandle<()>>,
-    pub(crate) setup_error: Option<Error>,
+    pub(crate) terminal_error: Option<Error>,
 }
 
 enum CallControllerOutcome {
