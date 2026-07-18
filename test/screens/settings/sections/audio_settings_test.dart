@@ -83,10 +83,162 @@ void main() {
     expect(find.widgetWithText(Button, 'End Test'), findsNothing);
     expect(stateController.inAudioTest, isFalse);
   });
+
+  testWidgets('does not warn before first refresh or for available selections',
+      (WidgetTester tester) async {
+    final audioDevices = _FakeAudioDevices(telepathy: _FakeTelepathy());
+    final settings = _FakeAudioSettingsController()
+      ..inputDeviceId = 'input-1'
+      ..outputDeviceId = null;
+
+    await _pumpAudioSettings(tester, audioDevices, settings);
+    expect(find.text('Selected input device is unavailable'), findsNothing);
+    expect(find.text('Selected output device is unavailable'), findsNothing);
+
+    audioDevices.publish(
+      inputDevices: const [AudioDevice(name: 'Desk Mic', id: 'input-1')],
+      outputDevices: const [AudioDevice(name: 'Speakers', id: 'output-1')],
+      hasLoadedDevices: true,
+    );
+    await tester.pump();
+
+    expect(find.text('Selected input device is unavailable'), findsNothing);
+    expect(find.text('Selected output device is unavailable'), findsNothing);
+  });
+
+  testWidgets('warns independently when selected devices disappear',
+      (WidgetTester tester) async {
+    final audioDevices = _FakeAudioDevices(telepathy: _FakeTelepathy());
+    final settings = _FakeAudioSettingsController()
+      ..inputDeviceId = 'input-missing'
+      ..outputDeviceId = 'output-missing';
+
+    await _pumpAudioSettings(tester, audioDevices, settings);
+    audioDevices.publish(hasLoadedDevices: true);
+    await tester.pump();
+
+    expect(find.text('Selected input device is unavailable'), findsOneWidget);
+    expect(find.text('Selected output device is unavailable'), findsOneWidget);
+  });
+
+  testWidgets('removes warning after selecting an available device or Default',
+      (WidgetTester tester) async {
+    final audioDevices = _FakeAudioDevices(telepathy: _FakeTelepathy());
+    final settings = _FakeAudioSettingsController()
+      ..inputDeviceId = 'missing-input'
+      ..outputDeviceId = 'missing-output';
+
+    await _pumpAudioSettings(tester, audioDevices, settings);
+    audioDevices.publish(
+      inputDevices: const [AudioDevice(name: 'Desk Mic', id: 'input-1')],
+      hasLoadedDevices: true,
+    );
+    await tester.pump();
+
+    final dropdowns = tester.widgetList<DropDown<dynamic>>(
+      find.byType(DropDown<dynamic>),
+    );
+    dropdowns.first.onSelected('input-1');
+    dropdowns.elementAt(1).onSelected('');
+    await tester.pump();
+
+    expect(find.text('Selected input device is unavailable'), findsNothing);
+    expect(find.text('Selected output device is unavailable'), findsNothing);
+  });
+
+  testWidgets('removes warning when original device reappears',
+      (WidgetTester tester) async {
+    final audioDevices = _FakeAudioDevices(telepathy: _FakeTelepathy());
+    final settings = _FakeAudioSettingsController()..inputDeviceId = 'input-1';
+
+    await _pumpAudioSettings(tester, audioDevices, settings);
+    audioDevices.publish(hasLoadedDevices: true);
+    await tester.pump();
+    expect(find.text('Selected input device is unavailable'), findsOneWidget);
+
+    audioDevices.publish(
+      inputDevices: const [AudioDevice(name: 'Desk Mic', id: 'input-1')],
+    );
+    await tester.pump();
+
+    expect(find.text('Selected input device is unavailable'), findsNothing);
+    expect(
+      tester
+          .widgetList<EditableText>(find.byType(EditableText))
+          .any((field) => field.controller.text == 'Desk Mic'),
+      isTrue,
+    );
+    expect(settings.inputDeviceId, 'input-1');
+  });
+}
+
+Future<void> _pumpAudioSettings(
+  WidgetTester tester,
+  _FakeAudioDevices audioDevices,
+  _FakeAudioSettingsController audioSettingsController,
+) {
+  final telepathy = audioDevices.telepathy as _FakeTelepathy;
+  return tester.pumpWidget(
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider<StateController>.value(value: StateController()),
+        ChangeNotifierProvider<AudioSettingsController>.value(
+          value: audioSettingsController,
+        ),
+        ChangeNotifierProvider<PreferencesController>.value(
+          value: _FakePreferencesController(),
+        ),
+        ChangeNotifierProvider<NetworkSettingsController>.value(
+          value: _FakeNetworkSettingsController(),
+        ),
+        ChangeNotifierProvider<AudioDevices>.value(value: audioDevices),
+        ChangeNotifierProvider<StatisticsController>.value(
+          value: StatisticsController(),
+        ),
+        Provider<Telepathy>.value(value: telepathy),
+        Provider<SoundPlayer>.value(value: _FakeSoundPlayer()),
+      ],
+      child: const MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: AudioSettings(
+              constraints: BoxConstraints(maxWidth: 800, maxHeight: 2000),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
 }
 
 class _FakeAudioDevices extends AudioDevices {
+  List<AudioDevice> _inputDevices = [];
+  List<AudioDevice> _outputDevices = [];
+  bool _hasLoadedDevices = false;
+
   _FakeAudioDevices({required super.telepathy});
+
+  @override
+  List<AudioDevice> get inputDevices =>
+      [const AudioDevice(name: 'Default', id: ''), ..._inputDevices];
+
+  @override
+  List<AudioDevice> get outputDevices =>
+      [const AudioDevice(name: 'Default', id: ''), ..._outputDevices];
+
+  @override
+  bool get hasLoadedDevices => _hasLoadedDevices;
+
+  void publish({
+    List<AudioDevice>? inputDevices,
+    List<AudioDevice>? outputDevices,
+    bool? hasLoadedDevices,
+  }) {
+    _inputDevices = inputDevices ?? _inputDevices;
+    _outputDevices = outputDevices ?? _outputDevices;
+    _hasLoadedDevices = hasLoadedDevices ?? _hasLoadedDevices;
+    notifyListeners();
+  }
 
   @override
   void pauseUpdates() {}
