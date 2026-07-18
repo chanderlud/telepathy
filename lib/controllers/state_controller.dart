@@ -154,6 +154,10 @@ class StateController extends ChangeNotifier {
 
   int? get currentCallAttempt => _callAttempt;
 
+  /// Whether [attempt] still owns the current call lifecycle.
+  bool isCurrentCallAttempt(int? attempt) =>
+      attempt != null && attempt == _callAttempt;
+
   /// Clear any pending call target that has not yet transitioned to active.
   /// Called by the front-end after a fast failure or a transition to active so
   /// the pending slot doesn't leak into another call attempt.

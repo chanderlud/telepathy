@@ -202,6 +202,10 @@ Future<void> main(List<String> args) async {
           return;
         }
       case CallState_Waiting():
+        // Rooms can wait for peers without a Connected callback. Promote the
+        // pending room so its normal call controls, including hangup, render.
+        stateController
+            .promotePendingCallAttempt(stateController.currentCallAttempt);
         stateController.setStatus('Waiting for peers');
         return;
       case CallState_RoomJoin():

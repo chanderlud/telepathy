@@ -50,6 +50,7 @@ class ContactWidgetState extends State<ContactWidget> {
     final player = context.read<SoundPlayer>();
 
     bool active = stateController.isActiveContact(widget.contact);
+    bool pending = stateController.pendingContact?.id() == widget.contact.id();
     SessionStatus status = stateController.sessionStatus(widget.contact);
     bool online = status is SessionStatus_Connected;
     bool connecting = status is SessionStatus_Connecting;
@@ -238,7 +239,7 @@ class ContactWidgetState extends State<ContactWidget> {
               const SizedBox(width: 5),
               Text(connectedStatus.remoteAddress),
             ],
-            if (active)
+            if (active || pending)
               IconButton(
                 visualDensity: VisualDensity.comfortable,
                 icon: SvgPicture.asset(
@@ -261,7 +262,7 @@ class ContactWidgetState extends State<ContactWidget> {
                   );
                 },
               ),
-            if (!active && online)
+            if (!active && !pending && online)
               IconButton(
                 visualDensity: VisualDensity.comfortable,
                 icon: SvgPicture.asset(
@@ -289,19 +290,35 @@ class ContactWidgetState extends State<ContactWidget> {
                   // different contact while `startCall` is still resolving.
                   final Contact target = widget.contact;
                   stateController.setStatus('Connecting');
-                  stateController.setPendingContact(target);
-                  List<int> bytes = await readSeaBytes('outgoing');
-                  outgoingSoundHandle = await playSoundEffect(
-                    player: player,
-                    bytes: bytes,
-                    sound: 'outgoing',
-                  );
+                  final attempt = stateController.setPendingContact(target);
 
                   try {
                     await telepathy.startCall(contact: target);
                     // `CallState.connected` owns promotion. This continuation
                     // only confirms backend request acceptance.
+                    if (!stateController.isCurrentCallAttempt(attempt) ||
+                        stateController.callLifecycle == CallLifecycle.ending) {
+                      return;
+                    }
+
+                    List<int> bytes = await readSeaBytes('outgoing');
+                    if (!stateController.isCurrentCallAttempt(attempt) ||
+                        stateController.callLifecycle == CallLifecycle.ending) {
+                      return;
+                    }
+                    final soundHandle = await playSoundEffect(
+                      player: player,
+                      bytes: bytes,
+                      sound: 'outgoing',
+                    );
+                    if (!stateController.isCurrentCallAttempt(attempt) ||
+                        stateController.callLifecycle == CallLifecycle.ending) {
+                      soundHandle?.cancel();
+                      return;
+                    }
+                    outgoingSoundHandle = soundHandle;
                   } on DartError catch (e) {
+                    if (!stateController.isCurrentCallAttempt(attempt)) return;
                     stateController.endOfCall();
                     outgoingSoundHandle?.cancel();
                     if (!context.mounted) return;

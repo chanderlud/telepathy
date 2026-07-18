@@ -394,14 +394,48 @@ void main() {
       expect(stateController.pendingContact, same(alice),
           reason: 'the clicked contact still becomes pending before sound '
               'playback fails');
+      expect(telepathy.startCallContacts, hasLength(1),
+          reason: 'backend request must start before optional sound playback');
+      telepathy.startCallCallers.single.complete();
+      await _flushAsync(tester);
       expect(throwingPlayer.playCalls, 1,
-          reason: 'best-effort outgoing sound must attempt playback before the '
-              'call continues');
+          reason: 'best-effort outgoing sound must still attempt playback '
+              'after the backend accepts the call');
       expect(telepathy.startCallContacts, hasLength(1),
           reason: 'best-effort outgoing sound must not block startCall even '
               'when SoundPlayer.play throws DartError');
       expect(telepathy.startCallContacts.single, same(alice),
           reason: 'startCall must still target the clicked contact');
+    });
+
+    testWidgets('a never-connected direct call can be cancelled',
+        (WidgetTester tester) async {
+      _stubOutgoingRingtone(tester);
+
+      await tester.pumpWidget(
+        _harness(
+          stateController: stateController,
+          profilesController: profilesController,
+          telepathy: telepathy,
+          player: player,
+          child: ContactWidget(contact: alice),
+        ),
+      );
+
+      await tester.tap(find.byType(IconButton));
+      await tester.pump();
+
+      expect(stateController.pendingContact, same(alice));
+      expect(find.bySemanticsLabel('End call icon'), findsOneWidget);
+      expect(find.bySemanticsLabel('Call icon'), findsNothing);
+
+      await tester.tap(find.bySemanticsLabel('End call icon'));
+      await tester.pump();
+
+      expect(telepathy.endCallCalls, 1);
+      expect(stateController.callLifecycle, CallLifecycle.idle);
+      expect(stateController.pendingContact, isNull);
+      await tester.pump(const Duration(seconds: 1));
     });
 
     testWidgets(
@@ -581,11 +615,47 @@ void main() {
       expect(stateController.pendingRoom, same(alpha),
           reason:
               'the selected room must become pending before playback fails');
+      expect(telepathy.joinRoomMemberStrings, [alpha.peerIds],
+          reason: 'backend request must start before optional sound playback');
+      telepathy.joinRoomCallers.single.complete();
+      await _flushAsync(tester);
       expect(throwingPlayer.playCalls, 1,
-          reason: 'best-effort outgoing sound must attempt playback once');
+          reason: 'best-effort outgoing sound must attempt playback after '
+              'the backend accepts the room request');
       expect(telepathy.joinRoomMemberStrings, [alpha.peerIds],
           reason: 'best-effort outgoing sound must not block joinRoom when '
               'SoundPlayer.play throws DartError');
+    });
+
+    testWidgets('an empty room can be cancelled before any peer connects',
+        (WidgetTester tester) async {
+      _stubOutgoingRingtone(tester);
+
+      await tester.pumpWidget(
+        _harness(
+          stateController: stateController,
+          profilesController: profilesController,
+          telepathy: telepathy,
+          player: player,
+          child: RoomWidget(room: alpha),
+        ),
+      );
+
+      await tester.tap(find.byType(IconButton).last);
+      await tester.pump();
+
+      expect(stateController.pendingRoom, same(alpha));
+      expect(alpha.online, isEmpty);
+      expect(find.bySemanticsLabel('End call icon'), findsOneWidget);
+      expect(find.bySemanticsLabel('Call icon'), findsNothing);
+
+      await tester.tap(find.bySemanticsLabel('End call icon'));
+      await tester.pump();
+
+      expect(telepathy.endCallCalls, 1);
+      expect(stateController.callLifecycle, CallLifecycle.idle);
+      expect(stateController.pendingRoom, isNull);
+      await tester.pump(const Duration(seconds: 1));
     });
 
     testWidgets(

@@ -52,6 +52,8 @@ class RoomWidgetState extends State<RoomWidget> {
     final telepathy = context.read<Telepathy>();
     final profilesController = context.read<ProfilesController>();
     final player = context.read<SoundPlayer>();
+    final active = stateController.isActiveRoom(widget.room);
+    final pending = stateController.pendingRoom?.id == widget.room.id;
 
     return InkWell(
       mouseCursor: SystemMouseCursors.click,
@@ -111,54 +113,92 @@ class RoomWidgetState extends State<RoomWidget> {
                 }
               },
             ),
-            IconButton(
-              visualDensity: VisualDensity.comfortable,
-              icon: SvgPicture.asset(
-                'assets/icons/Phone.svg',
-                semanticsLabel: 'Call icon',
-                width: 32,
-              ),
-              onPressed: () async {
-                if (stateController.hasLiveCall) {
-                  showErrorDialog(
-                      context, 'Call failed', 'There is a call already active');
-                  return;
-                } else if (stateController.inAudioTest) {
-                  showErrorDialog(context, 'Call failed',
-                      'Cannot make a call while in an audio test');
-                  return;
-                } else if (stateController.callEndedRecently) {
-                  // if the call button is pressed right after a call ended, we assume the user did not want to make a call
-                  return;
-                }
-
-                // Capture the target before any await so the continuation
-                // and the `callState` gate observe the same room the user
-                // clicked, even if the widget is rebuilt against a
-                // different room while `joinRoom` is still resolving.
-                final Room target = widget.room;
-                stateController.setStatus('Connecting');
-                stateController.setPendingRoom(target);
-                List<int> bytes = await readSeaBytes('outgoing');
-                outgoingSoundHandle = await playSoundEffect(
-                  player: player,
-                  bytes: bytes,
-                  sound: 'outgoing',
-                );
-
-                try {
-                  await telepathy.joinRoom(memberStrings: target.peerIds);
-                  target.online.clear();
-                  // `CallState.connected` owns promotion. This continuation
-                  // only confirms backend request acceptance.
-                } on DartError catch (e) {
-                  stateController.endOfCall();
+            if (active || pending)
+              IconButton(
+                visualDensity: VisualDensity.comfortable,
+                icon: SvgPicture.asset(
+                  'assets/icons/PhoneOff.svg',
+                  semanticsLabel: 'End call icon',
+                  width: 32,
+                ),
+                onPressed: () async {
                   outgoingSoundHandle?.cancel();
-                  if (!context.mounted) return;
-                  showErrorDialog(context, 'Call failed', e.message);
-                }
-              },
-            )
+                  if (!stateController.beginCallEnding()) return;
+                  await telepathy.endCall();
+                  stateController.endOfCall();
+
+                  List<int> bytes = await readSeaBytes('call_ended');
+                  otherSoundHandle = await playSoundEffect(
+                    player: player,
+                    bytes: bytes,
+                    sound: 'call-ended',
+                  );
+                },
+              ),
+            if (!active && !pending)
+              IconButton(
+                visualDensity: VisualDensity.comfortable,
+                icon: SvgPicture.asset(
+                  'assets/icons/Phone.svg',
+                  semanticsLabel: 'Call icon',
+                  width: 32,
+                ),
+                onPressed: () async {
+                  if (stateController.hasLiveCall) {
+                    showErrorDialog(context, 'Call failed',
+                        'There is a call already active');
+                    return;
+                  } else if (stateController.inAudioTest) {
+                    showErrorDialog(context, 'Call failed',
+                        'Cannot make a call while in an audio test');
+                    return;
+                  } else if (stateController.callEndedRecently) {
+                    // if the call button is pressed right after a call ended, we assume the user did not want to make a call
+                    return;
+                  }
+
+                  // Capture the target before any await so the continuation
+                  // and the `callState` gate observe the same room the user
+                  // clicked, even if the widget is rebuilt against a
+                  // different room while `joinRoom` is still resolving.
+                  final Room target = widget.room;
+                  stateController.setStatus('Connecting');
+                  final attempt = stateController.setPendingRoom(target);
+
+                  try {
+                    await telepathy.joinRoom(memberStrings: target.peerIds);
+                    if (!stateController.isCurrentCallAttempt(attempt) ||
+                        stateController.callLifecycle == CallLifecycle.ending) {
+                      return;
+                    }
+                    target.online.clear();
+                    // `CallState.connected` owns promotion. This continuation
+                    // only confirms backend request acceptance.
+                    List<int> bytes = await readSeaBytes('outgoing');
+                    if (!stateController.isCurrentCallAttempt(attempt) ||
+                        stateController.callLifecycle == CallLifecycle.ending) {
+                      return;
+                    }
+                    final soundHandle = await playSoundEffect(
+                      player: player,
+                      bytes: bytes,
+                      sound: 'outgoing',
+                    );
+                    if (!stateController.isCurrentCallAttempt(attempt) ||
+                        stateController.callLifecycle == CallLifecycle.ending) {
+                      soundHandle?.cancel();
+                      return;
+                    }
+                    outgoingSoundHandle = soundHandle;
+                  } on DartError catch (e) {
+                    if (!stateController.isCurrentCallAttempt(attempt)) return;
+                    stateController.endOfCall();
+                    outgoingSoundHandle?.cancel();
+                    if (!context.mounted) return;
+                    showErrorDialog(context, 'Call failed', e.message);
+                  }
+                },
+              )
           ],
         ),
       ),

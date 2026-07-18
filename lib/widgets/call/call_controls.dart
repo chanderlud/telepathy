@@ -219,6 +219,30 @@ class _CallControlsState extends State<CallControls> {
                                           ? 'assets/icons/SpeakerOff.svg'
                                           : 'assets/icons/Speaker.svg',
                                       width: 28)),
+                              if (stateController.hasLiveCall)
+                                IconButton(
+                                  onPressed: () async {
+                                    outgoingSoundHandle?.cancel();
+                                    if (!stateController.beginCallEnding()) {
+                                      return;
+                                    }
+                                    await telepathy.endCall();
+                                    stateController.endOfCall();
+
+                                    List<int> bytes =
+                                        await readSeaBytes('call_ended');
+                                    otherSoundHandle = await playSoundEffect(
+                                      player: player,
+                                      bytes: bytes,
+                                      sound: 'call-ended',
+                                    );
+                                  },
+                                  icon: SvgPicture.asset(
+                                    'assets/icons/PhoneOff.svg',
+                                    semanticsLabel: 'End call icon',
+                                    width: 28,
+                                  ),
+                                ),
                               IconButton(
                                   onPressed: () {
                                     Navigator.push(
