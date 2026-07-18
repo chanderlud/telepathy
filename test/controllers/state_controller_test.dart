@@ -6,31 +6,6 @@ import 'package:telepathy/core/rust/types.dart';
 import 'package:telepathy/models/room.dart';
 import '../support/fake_contact.dart';
 
-/// Reproduces the `callState(CallState)` gate in `lib/main.dart` for tests.
-/// Mirrors the real switch-on-event sequence: returns the failure reason the
-/// dialog would have surfaced, or `null` if no dialog was shown.
-Future<String?> _simulateCallState(
-    StateController controller, CallState state) async {
-  if (!controller.hasLiveCall) {
-    return null;
-  }
-
-  if (state is CallState_CallEnded) {
-    // localHangup is true iff the lifecycle was already reset (e.g. by
-    // the widget's hangup handler) before the backend echo arrived.
-    final localHangup = !controller.hasLiveCall;
-    controller.endOfCall();
-    return (!localHangup && state.field0.isNotEmpty) ? state.field0 : null;
-  } else if (state is CallState_Connected) {
-    controller.promotePendingCallAttempt(controller.currentCallAttempt);
-    return null;
-  } else if (state is CallState_Waiting) {
-    controller.setStatus('Waiting for peers');
-    return null;
-  }
-  return null;
-}
-
 Room _roomFixture(String id) => Room(
       id: id,
       peerIds: <String>[],
@@ -140,8 +115,8 @@ void main() {
     });
 
     test(
-        'fast backend CallEnded during room setup is observed and surfaces '
-        'the failure reason (instead of being dropped by the gate)', () async {
+        'fast backend CallEnded during room setup is observed by the gate '
+        'and clears the lifecycle to idle', () {
       final controller = StateController();
       final room = _roomFixture('fast-fail');
 
@@ -151,17 +126,12 @@ void main() {
       expect(controller.hasLiveCall, isTrue,
           reason: 'gate must be open while we are negotiating');
 
-      // Regression: the old `isCallActive` gate dropped this event because the
-      // room never reached active state.
-      final surfaced = await _simulateCallState(
-          controller,
-          const CallState_CallEnded(
-            'Room peer unreachable',
-            true,
-          ));
+      // Production handler invoked by `main.dart`'s `callState()` switch once
+      // the gate observes the `CallEnded` event. Dialog surfacing is owned by
+      // `main.dart`, so the controller-level contract is only that the
+      // lifecycle clears to idle while the gate was open.
+      controller.endOfCall();
 
-      expect(surfaced, 'Room peer unreachable',
-          reason: 'reason must reach the UI as a failure dialog');
       expect(controller.callLifecycle, CallLifecycle.idle);
       expect(controller.hasLiveCall, isFalse);
       expect(controller.pendingRoom, isNull);
@@ -169,16 +139,18 @@ void main() {
 
     test(
         'fast backend Connected during outgoing setup promotes lifecycle '
-        'to active and clears the pending slot', () async {
+        'to active and clears the pending slot', () {
       final controller = StateController();
       controller.setStatus('Connecting');
       final room = _roomFixture('connects-fast');
       controller.setPendingRoom(room);
 
-      final surfaced =
-          await _simulateCallState(controller, const CallState_Connected());
+      // Production handler invoked by `main.dart`'s `callState()` switch.
+      final accepted =
+          controller.handleConnectedEvent(controller.currentCallAttempt);
 
-      expect(surfaced, isNull);
+      expect(accepted, isTrue,
+          reason: 'first Connected must promote the connecting lifecycle');
       expect(controller.callLifecycle, CallLifecycle.active);
       expect(controller.hasLiveCall, isTrue);
       expect(controller.pendingRoom, isNull);
@@ -186,28 +158,85 @@ void main() {
       expect(controller.activeRoom, same(room));
     });
 
+    test(
+        'room Connected after Waiting resets stale status and runs the '
+        'connected path', () {
+      // Regression: previously a `Connected` event arriving after `Waiting`
+      // was discarded because `promotePendingCallAttempt` returned false on
+      // the already-active lifecycle. The stale `Waiting for peers` status
+      // lingered and the connected sound was suppressed.
+      final controller = StateController();
+      controller.setStatus('Connecting');
+      final room = _roomFixture('waiting-then-connected');
+      controller.setPendingRoom(room);
+
+      // `main.dart`'s `callState()` promotes the room on `Waiting` so the
+      // call controls render, then surfaces the waiting status. Both calls
+      // are production handlers exercised verbatim here.
+      controller.promotePendingCallAttempt(controller.currentCallAttempt);
+      controller.setStatus('Waiting for peers');
+
+      expect(controller.callLifecycle, CallLifecycle.active);
+      expect(controller.status, 'Waiting for peers');
+      expect(controller.activeRoom, same(room));
+
+      // Production handler invoked when the `Connected` event arrives. Must
+      // NOT be rejected just because the room is already active after the
+      // earlier `Waiting` promotion.
+      final accepted =
+          controller.handleConnectedEvent(controller.currentCallAttempt);
+
+      expect(accepted, isTrue,
+          reason:
+              'connected path must run for an already-active room after Waiting');
+      expect(controller.callLifecycle, CallLifecycle.active);
+      expect(controller.status, 'Active',
+          reason: 'stale Waiting-for-peers label must be cleared');
+      expect(controller.activeRoom, same(room));
+    });
+
+    test(
+        'Connected is rejected in idle and ending lifetimes even for the '
+        'current attempt', () {
+      final controller = StateController();
+      final attempt = controller.setPendingRoom(_roomFixture('idle-reject'));
+      // Move to active then explicitly to ending without going through the
+      // connected handler.
+      controller.promotePendingCallAttempt(attempt);
+      controller.beginCallEnding();
+      expect(controller.callLifecycle, CallLifecycle.ending);
+
+      expect(controller.handleConnectedEvent(attempt), isFalse,
+          reason: 'ending lifecycle must reject a trailing Connected');
+      expect(controller.callLifecycle, CallLifecycle.ending);
+
+      controller.endOfCall();
+      expect(controller.callLifecycle, CallLifecycle.idle);
+      expect(controller.handleConnectedEvent(null), isFalse,
+          reason: 'idle lifecycle must reject a stray Connected');
+    });
+
     test('a local hangup that races a trailing backend CallEnded stays silent',
-        () async {
+        () {
       final controller = StateController();
       controller.setStatus('Connecting');
       controller.setPendingRoom(_roomFixture('local-hangup'));
 
       // Widget sets lifecycle to idle before the backend echo of `CallEnded`.
       controller.endOfCall();
-      expect(controller.hasLiveCall, isFalse);
 
-      final surfaced = await _simulateCallState(
-          controller, const CallState_CallEnded('remote reason', true));
-
-      expect(surfaced, isNull,
-          reason: 'late backend echo after a local hangup must stay silent');
+      // The `main.dart` gate observes `hasLiveCall == false` and drops the
+      // trailing `CallEnded`. The controller's job is to expose that gate
+      // state correctly so the late event is silently ignored.
+      expect(controller.hasLiveCall, isFalse,
+          reason: 'late backend echo after a local hangup must be dropped');
       expect(controller.callLifecycle, CallLifecycle.idle);
     });
 
     test(
         'pending-contact path: lifecycle moves to connecting, the fake '
         'contact occupies the pending slot, fast CallEnded clears everything, '
-        'and a late promotion after endOfCall is skipped', () async {
+        'and a late promotion after endOfCall is skipped', () {
       // Mirrors exactly what `contact_widget.dart` does when the user taps the
       // call icon: setStatus('Connecting') then setPendingContact(...) before
       // awaiting `Telepathy.startCall()`. The native bridge is not initialized
@@ -229,18 +258,10 @@ void main() {
       expect(controller.pendingContact, same(alice),
           reason: 'pending-contact slot must own the captured target');
 
-      // Regression: with the old `isCallActive` gate this would have been
-      // dropped because the contact never reached active state.
-      final surfaced = await _simulateCallState(
-        controller,
-        const CallState_CallEnded(
-          'Peer declined the call',
-          true,
-        ),
-      );
+      // Production handler invoked by `main.dart` once the gate observes the
+      // `CallEnded` event. Dialog surfacing is owned by `main.dart`.
+      controller.endOfCall();
 
-      expect(surfaced, 'Peer declined the call',
-          reason: 'reason must reach the UI as a failure dialog');
       expect(controller.callLifecycle, CallLifecycle.idle,
           reason: 'CallEnded must drop the connecting phase immediately');
       expect(controller.hasLiveCall, isFalse,
@@ -261,11 +282,12 @@ void main() {
 
     test(
         'fast CallEnded before the start future resumes: promotion '
-        'returns false and does not resurrect the call', () async {
-      // Race scenario: the widget has called setPendingContact, the backend fires
-      // a CallEnded callback that endOfCall()s the controller to idle, and then
-      // the `await startCall` future resumes. The connected callback's atomic
-      // promotion must reject the old attempt so the call does not come back.
+        'returns false and does not resurrect the call', () {
+      // Race scenario: the widget has called setPendingContact, the backend
+      // fires a CallEnded callback that endOfCall()s the controller to idle,
+      // and then the `await startCall` future resumes. The connected
+      // callback's atomic promotion must reject the old attempt so the call
+      // does not come back.
       final controller = StateController();
       final contact = FakeContact(
         id: 'fast-end-race',
@@ -277,13 +299,9 @@ void main() {
       expect(controller.hasLiveCall, isTrue,
           reason: 'gate must be open while we are negotiating');
 
-      final surfaced = await _simulateCallState(
-          controller,
-          const CallState_CallEnded(
-            'peer went away',
-            true,
-          ));
-      expect(surfaced, 'peer went away');
+      // Production handler: `endOfCall()` is what `main.dart` invokes once
+      // the gate observes the `CallEnded` event.
+      controller.endOfCall();
 
       final promoted = controller.promotePendingCallAttempt(attempt);
       expect(promoted, isFalse,
@@ -293,7 +311,7 @@ void main() {
           reason: 'lifecycle must stay idle after the racing endOfCall');
       expect(controller.hasLiveCall, isFalse, reason: 'gate must stay closed');
       expect(controller.pendingContact, isNull,
-          reason: 'pending slot must stay cleared');
+          reason: 'pending slot must be cleared');
     });
 
     test('a delayed Connected callback cannot promote a newer attempt', () {
@@ -313,7 +331,7 @@ void main() {
 
     test(
         'second call tap during connecting: hasLiveCall guard rejects the tap '
-        'and the first call is not disturbed', () async {
+        'and the first call is not disturbed', () {
       // Widget check `if (stateController.hasLiveCall) return error`. Simulate a
       // first call still in the connecting phase, then a second tap that
       // observes hasLiveCall == true.

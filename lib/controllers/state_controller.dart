@@ -169,6 +169,42 @@ class StateController extends ChangeNotifier {
   bool isCurrentCallAttempt(int? attempt) =>
       attempt != null && attempt == _callAttempt;
 
+  /// Handles the lifecycle transition for an incoming `CallState_Connected`
+  /// event captured with [attempt]. Returns whether the caller should
+  /// continue the connected path (e.g. play the connected sound).
+  ///
+  /// Returns `true` when:
+  /// - [attempt] still owns the lifecycle and is being promoted from
+  ///   `connecting` to `active` for the first time, OR
+  /// - the same attempt is already `active` because a `Waiting` event
+  ///   promoted the room first, in which case the status is reset to
+  ///   `Active` so the stale `Waiting for peers` label does not linger
+  ///   and the connected-sound path runs.
+  ///
+  /// Returns `false` when the event is stale: lifecycle is `idle` or
+  /// `ending`, or [attempt] no longer owns the current call (so a delayed
+  /// callback from a previous attempt cannot resurrect or disturb it).
+  bool handleConnectedEvent(int? attempt) {
+    if (!isCurrentCallAttempt(attempt)) {
+      return false;
+    }
+    switch (_callLifecycle) {
+      case CallLifecycle.idle:
+      case CallLifecycle.ending:
+        return false;
+      case CallLifecycle.connecting:
+        return promotePendingCallAttempt(attempt);
+      case CallLifecycle.active:
+        // The room may already be active because a `Waiting` event promoted
+        // the pending slot earlier. Reset the status to `Active` so the
+        // stale `Waiting for peers` label does not linger, and let the
+        // connected sound play.
+        status = 'Active';
+        notifyListeners();
+        return true;
+    }
+  }
+
   bool get isStartRequestPending => _startRequestPending;
 
   /// Cancels the operation that owns the current pending start request.
