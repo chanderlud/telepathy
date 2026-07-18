@@ -12,6 +12,7 @@ use crate::internal::error::{
     peer_unexpected_message,
 };
 use crate::internal::helpers::OutputHelper;
+use crate::internal::helpers::{RoomTaskOutcome, join_room_task_bounded};
 use crate::internal::messages::{
     AudioHeader, GoodbyeReason, ProtocolMessage, RoomControl, RoomMessage, StartScreenshare,
 };
@@ -1909,6 +1910,17 @@ where
         let (stream_error_sender, mut stream_error_receiver) = unbounded_channel();
         let mut stream_errors_open = true;
         let mut terminal_error = None;
+        // Completion channel for per-peer output tasks. Each spawned
+        // `audio_output` signals its `connection_id` here on return so the
+        // controller can remove the entry promptly instead of leaving the
+        // handle dormant in the map.
+        let (output_completion_tx, mut output_completion_rx) =
+            unbounded_channel::<(usize, Result<()>)>();
+        // Input task completion channel. The spawned input wrapper reports its
+        // outcome here; a dropped sender (task panic before send) surfaces as
+        // `RecvError`, letting the controller react to panics as well as clean
+        // returns without polling the `JoinHandle` directly.
+        let (input_done_tx, mut input_done_rx) = oneshot::channel::<Result<()>>();
 
         let mut input_helper = match tokio::select! {
             _ = end_sessions.cancelled() => {
@@ -2054,14 +2066,29 @@ where
                 .await;
         }
 
-        let mut input_handle = spawn_task(audio_input(
-            input_helper.receiver(),
-            DynamicConnection::new(
-                connection_sender.clone(),
-                self.core_state.audio_sequence.clone(),
-            ),
-            stop_io.clone(),
-        ));
+        // Keep the input handle in an `Option` so that any completion branch
+        // which does not consume it (e.g. peer-local breaks, end_call, end_sessions)
+        // can hand the still-running task to `cleanup_room_controller` for
+        // bounded cancellation. The spawned wrapper reports its outcome via
+        // `input_done_rx`; the `JoinHandle` itself still resolves to `Ok(())`
+        // so centralized cleanup can timeout+abort a hung task.
+        let input_connection_sender = connection_sender.clone();
+        let input_audio_sequence = self.core_state.audio_sequence.clone();
+        let input_stop_io = stop_io.clone();
+        let input_receiver = input_helper.receiver();
+        let mut input_handle: Option<JoinHandle<Result<()>>> = Some(spawn_task(async move {
+            let result = audio_input(
+                input_receiver,
+                DynamicConnection::new(input_connection_sender, input_audio_sequence),
+                input_stop_io,
+            )
+            .await;
+            // Report completion to the controller loop. If the loop has already
+            // moved on (receiver dropped during teardown), this send fails
+            // silently; the JoinHandle still resolves for cleanup to classify.
+            let _ = input_done_tx.send(result);
+            Ok(())
+        }));
 
         let statistics_handle = spawn_task(statistics_collector(
             statistics_state.clone(),
@@ -2080,7 +2107,7 @@ where
                         end_sessions,
                         room_owner,
                         room_generation,
-                        input_handle: Some(input_handle),
+                        input_handle: input_handle.take(),
                         connections,
                         statistics_handle: Some(statistics_handle),
                         terminal_error: None,
@@ -2191,13 +2218,17 @@ where
                                     old_connection
                                         .connection
                                         .close(VarInt::from_u32(0), b"replaced");
-                                    match old_connection.handle.await {
-                                        Ok(Ok(())) => {}
-                                        Ok(Err(error)) => {
-                                            warn!(event = "room_output_closed_on_replacement", ?error);
-                                        }
-                                        Err(error) => {
-                                            terminal_error = Some(error.into());
+                                    let mut old_handle = old_connection.handle;
+                                    match join_room_task_bounded(
+                                        &mut old_handle,
+                                        "room_output",
+                                        "replacement",
+                                    )
+                                    .await
+                                    {
+                                        RoomTaskOutcome::PeerLocal => {}
+                                        RoomTaskOutcome::Terminal(error) => {
+                                            terminal_error = Some(error);
                                             outcome = RoomControllerOutcome::Notify;
                                             break;
                                         }
@@ -2279,14 +2310,30 @@ where
                                 }
                             }
                             connection_sender.push(connection.clone());
-                            // begin sending
-                            let handle = spawn_task(audio_output(
-                                helper.sender(),
-                                connection.clone(),
-                                stop_io.clone(),
-                                statistics_state.loss.clone(),
-                                state.remote_configuration.sample_rate,
-                            ));
+                            // begin sending. The wrapper reports completion to
+                            // `output_completion_rx` so the controller can
+                            // retire the entry instead of leaving the handle
+                            // dormant in the map. If the receiver was dropped
+                            // (room tearing down), the send fails silently;
+                            // the JoinHandle still resolves for cleanup.
+                            let completion_tx = output_completion_tx.clone();
+                            let output_sender = helper.sender();
+                            let output_connection = connection.clone();
+                            let output_stop_io = stop_io.clone();
+                            let output_loss = statistics_state.loss.clone();
+                            let output_sample_rate = state.remote_configuration.sample_rate;
+                            let handle = spawn_task(async move {
+                                let result = audio_output(
+                                    output_sender,
+                                    output_connection,
+                                    output_stop_io,
+                                    output_loss,
+                                    output_sample_rate,
+                                )
+                                .await;
+                                let _ = completion_tx.send((connection_id, result));
+                                Ok(())
+                            });
 
                             peer_connections.insert(state.peer, connection_id);
                             connections.insert(
@@ -2338,15 +2385,19 @@ where
                                     peer_connections.remove(&peer);
                                     if let Some(connection) = connections.remove(&connection_id) {
                                         connection_sender.remove(&connection.connection);
-                                        match connection.handle.await {
-                                            Ok(Ok(())) => (),
-                                            Ok(Err(error)) => {
-                                                warn!(event = "room_output_closed_on_leave", ?error);
-                                            }
-                                        Err(error) => {
-                                            terminal_error = Some(error.into());
-                                            outcome = RoomControllerOutcome::Notify;
-                                            break;
+                                        let mut handle = connection.handle;
+                                        match join_room_task_bounded(
+                                            &mut handle,
+                                            "room_output",
+                                            "leave",
+                                        )
+                                        .await
+                                        {
+                                            RoomTaskOutcome::PeerLocal => {}
+                                            RoomTaskOutcome::Terminal(error) => {
+                                                terminal_error = Some(error);
+                                                outcome = RoomControllerOutcome::Notify;
+                                                break;
                                             }
                                         }
                                         info!(
@@ -2384,11 +2435,49 @@ where
                     info!(event = "room_call_ended_signal");
                     break;
                 }
-                result = &mut input_handle => {
+                completion = output_completion_rx.recv() => {
+                    if let Some((connection_id, result)) = completion
+                        && let Some(connection) = connections.remove(&connection_id)
+                    {
+                        connection_sender.remove(&connection.connection);
+                        let mut handle = connection.handle;
+                        match join_room_task_bounded(
+                            &mut handle,
+                            "room_output",
+                            "completion",
+                        )
+                        .await
+                        {
+                            RoomTaskOutcome::PeerLocal => {
+                                let classification = match &result {
+                                    Ok(()) => "clean",
+                                    Err(_) => "error",
+                                };
+                                info!(
+                                    event = "room_output_completed",
+                                    connection.id = connection_id,
+                                    completion.classification = classification,
+                                );
+                            }
+                            RoomTaskOutcome::Terminal(error) => {
+                                terminal_error = Some(error);
+                                outcome = RoomControllerOutcome::Notify;
+                                break;
+                            }
+                        }
+                    }
+                }
+                result = &mut input_done_rx => {
+                    // Input task reported completion (or panicked before
+                    // sending, surfacing as `RecvError`). Take the handle so
+                    // centralized cleanup does not double-await it.
+                    input_handle = None;
                     match result {
                         Ok(Ok(())) => warn!(event = "room_input_stopped_unexpectedly"),
-                        Ok(Err(error)) => warn!(event = "room_input_closed_unexpectedly", ?error),
-                        Err(error) => warn!(event = "room_input_join_failed_unexpectedly", ?error),
+                        Ok(Err(error)) => {
+                            warn!(event = "room_input_closed_unexpectedly", ?error);
+                        }
+                        Err(_) => warn!(event = "room_input_join_failed_unexpectedly"),
                     }
                     outcome = RoomControllerOutcome::Notify;
                     break;
@@ -2402,7 +2491,7 @@ where
                 end_sessions,
                 room_owner,
                 room_generation,
-                input_handle: None,
+                input_handle: input_handle.take(),
                 connections,
                 statistics_handle: Some(statistics_handle),
                 terminal_error,

@@ -87,3 +87,27 @@ System tests must be run manually by the developer in WSL; prompt them when appl
 - Mock internal code just to make tests easier to write
 - Create fixtures with placeholder data like 'name="test"' or value=123
 - Write tests that only verify "no exception was raised"
+
+## API Surface Rules
+
+When extending the public or crate-level API, prefer behavior over raw state.
+
+- Do NOT expose new `pub` fields that callers can read or mutate freely. Fields
+  that are part of the construction-time contract should be `pub(crate)` and
+  reached through methods, constructors, or `Deref`-style accessors.
+- Prefer adding new public structs, enums, methods, traits, or functions over
+  widening an existing struct's visibility. Constructors (`Self::new(...)`,
+  builders) and focused methods (`fn X(&self) -> &T`, `fn set_X(&mut self, ...)`)
+  are the preferred shape — they keep invariants inside the type and let it
+  evolve without a breaking change.
+- The same rule applies to test harnesses and fixtures in `tests/`/
+  `system-tests/`: expose builder methods and accessors rather than `pub` fields
+  that future tests can poke into an invalid state.
+- If a value genuinely must be transparent to callers (e.g. plain DTOs crossing
+  the FFI boundary, newtype wrappers with `#[transparent]`), keep the type
+  trivial and document why free field access is safe.
+
+Rationale: mutating public fields lets callers bypass invariants the type's own
+methods enforce. Once a field is `pub`, any future tightening (validation, lazy
+init, change of representation) is a breaking change across every downstream
+including the generated Flutter bindings.

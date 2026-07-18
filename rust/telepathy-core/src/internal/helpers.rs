@@ -25,6 +25,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
+use std::time::Duration;
 #[cfg(target_family = "wasm")]
 use telepathy_audio::WebAudioWrapper;
 use telepathy_audio::devices::AudioHost;
@@ -47,7 +48,7 @@ use url::Url;
 #[cfg(target_family = "wasm")]
 use wasmtimer::tokio::timeout;
 
-const ROOM_TASK_JOIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+const ROOM_TASK_JOIN_TIMEOUT: Duration = Duration::from_secs(5);
 
 impl<C, S, H, I, O> TelepathyCore<C, S, H, I, O>
 where
@@ -716,41 +717,20 @@ where
         }
         stop_io.cancel();
         let mut terminal_error = terminal_error;
-        if let Some(input_handle) = input_handle {
-            let mut input_handle = input_handle;
-            match timeout(ROOM_TASK_JOIN_TIMEOUT, &mut input_handle).await {
-                Ok(Ok(Ok(()))) => {}
-                Ok(Ok(Err(error))) => {
-                    warn!(event = "room_input_closed_on_teardown", ?error);
+        if let Some(mut input_handle) = input_handle {
+            match join_room_task_bounded(&mut input_handle, "room_input", "teardown").await {
+                RoomTaskOutcome::PeerLocal => {}
+                RoomTaskOutcome::Terminal(error) => {
                     record_room_terminal_error(&mut terminal_error, error);
-                }
-                Ok(Err(error)) => {
-                    warn!(event = "room_input_join_failed_on_teardown", ?error);
-                    record_room_terminal_error(&mut terminal_error, error.into());
-                }
-                Err(error) => {
-                    abort_room_task(&input_handle);
-                    warn!(event = "room_input_join_timed_out", ?error);
-                    record_room_terminal_error(&mut terminal_error, error.into());
                 }
             }
         }
         for connection in connections.into_values() {
             let mut handle = connection.handle;
-            match timeout(ROOM_TASK_JOIN_TIMEOUT, &mut handle).await {
-                Ok(Ok(Ok(()))) => {}
-                Ok(Ok(Err(error))) => {
-                    warn!(event = "room_output_closed_on_teardown", ?error);
+            match join_room_task_bounded(&mut handle, "room_output", "teardown").await {
+                RoomTaskOutcome::PeerLocal => {}
+                RoomTaskOutcome::Terminal(error) => {
                     record_room_terminal_error(&mut terminal_error, error);
-                }
-                Ok(Err(error)) => {
-                    warn!(event = "room_output_join_failed_on_teardown", ?error);
-                    record_room_terminal_error(&mut terminal_error, error.into());
-                }
-                Err(error) => {
-                    abort_room_task(&handle);
-                    warn!(event = "room_output_join_timed_out", ?error);
-                    record_room_terminal_error(&mut terminal_error, error.into());
                 }
             }
         }
@@ -776,8 +756,7 @@ where
             record_room_terminal_error(&mut terminal_error, error);
         }
         end_sessions.cancel();
-        if let Some(statistics_handle) = statistics_handle {
-            let mut statistics_handle = statistics_handle;
+        if let Some(mut statistics_handle) = statistics_handle {
             match timeout(ROOM_TASK_JOIN_TIMEOUT, &mut statistics_handle).await {
                 Ok(Ok(())) => {}
                 Ok(Err(error)) => {
@@ -807,6 +786,20 @@ where
     }
 }
 
+/// Bounded join classification for room tasks.
+///
+/// `PeerLocal` covers expected connection closure: the task completed cleanly
+/// or returned an `Err` from a peer-side condition (e.g. socket close). Such
+/// outcomes propagate as ordinary room events.
+///
+/// `Terminal` covers unexpected failures: a panic, a join error, or a timeout
+/// exceeding [`ROOM_TASK_JOIN_TIMEOUT`]. These propagate as terminal room
+/// errors and trigger user-visible notification.
+pub(crate) enum RoomTaskOutcome {
+    PeerLocal,
+    Terminal(Error),
+}
+
 fn record_room_terminal_error(slot: &mut Option<Error>, error: Error) {
     if slot.is_none() {
         *slot = Some(error);
@@ -819,6 +812,36 @@ fn abort_room_task<T>(handle: &crate::internal::utils::JoinHandle<T>) {
 
     #[cfg(not(all(feature = "native", not(feature = "flutter"))))]
     let _ = handle;
+}
+
+/// Joins a room task with a bounded timeout and classifies the outcome.
+///
+/// `task_kind` (e.g. `"input"`, `"output"`, `"statistics"`) and `event_kind`
+/// (e.g. `"teardown"`, `"replacement"`, `"leave"`) are composed into tracing
+/// event names that match the legacy cleanup identifiers, so existing log
+/// dashboards keep working.
+pub(crate) async fn join_room_task_bounded(
+    handle: &mut crate::internal::utils::JoinHandle<Result<()>>,
+    task_kind: &'static str,
+    event_kind: &'static str,
+) -> RoomTaskOutcome {
+    match timeout(ROOM_TASK_JOIN_TIMEOUT, &mut *handle).await {
+        Ok(Ok(Ok(()))) => RoomTaskOutcome::PeerLocal,
+        Ok(Ok(Err(error))) => {
+            warn!(event = %format!("{task_kind}_closed_on_{event_kind}"), ?error);
+            RoomTaskOutcome::PeerLocal
+        }
+        Ok(Err(error)) => {
+            abort_room_task(handle);
+            warn!(event = %format!("{task_kind}_join_failed_on_{event_kind}"), ?error);
+            RoomTaskOutcome::Terminal(error.into())
+        }
+        Err(error) => {
+            abort_room_task(handle);
+            warn!(event = %format!("{task_kind}_timed_out_on_{event_kind}"), ?error);
+            RoomTaskOutcome::Terminal(error.into())
+        }
+    }
 }
 
 fn report_stream_error(
