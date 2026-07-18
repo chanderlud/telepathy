@@ -1,12 +1,13 @@
 use super::common::{
-    CallbackCapturingAudioHost, DEFAULT_SAMPLE_RATE, DeviceSelectionOperation,
+    CallEndedPark, CallbackCapturingAudioHost, DEFAULT_SAMPLE_RATE, DeviceSelectionOperation,
     DeviceSelectionProbe, InputSampleRateGate, MOCK_DEVICE_ID, OutputOpenGate, RoomEventKind,
     StreamErrorProbe, TwoClientShutdownGuard, WaitingCallbackGate, assert_call_slot_idle,
     assert_room_event_sequence, assert_slot_remains_outside_direct_call_states, build_client,
-    build_client_with_waiting_gate, call_state_snapshot, init_test_tracing, room_join_count,
-    room_leave_count, shared_relay_map, sorted_room_members, wait_for_call_ended_contains,
-    wait_for_connected, wait_for_no_extra_room_leave, wait_for_room_join_count,
-    wait_for_room_leave_count, wait_for_sessions, wait_for_slot_idle, wait_for_slot_room_call,
+    build_client_with_call_ended_park, build_client_with_waiting_gate, call_state_snapshot,
+    init_test_tracing, room_join_count, room_leave_count, shared_relay_map, sorted_room_members,
+    wait_for_call_ended_contains, wait_for_connected, wait_for_no_extra_room_leave,
+    wait_for_room_join_count, wait_for_room_leave_count, wait_for_sessions, wait_for_slot_idle,
+    wait_for_slot_room_call,
 };
 
 use iroh::SecretKey;
@@ -1853,4 +1854,173 @@ async fn room_end_call_during_parked_waiting_callback_tears_down() {
     waiting_gate.release();
 
     client.telepathy.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn parked_call_ended_callback_does_not_wedge_room_slot_ownership() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+    let codec_config = CodecConfig::new(true, true, 5.0);
+
+    let key_a = SecretKey::generate();
+    let key_b = SecretKey::generate();
+    let contact_a = Contact::new(
+        "wedge-room-client-a".to_string(),
+        key_a.public().to_string(),
+    )
+    .expect("contact a invalid");
+    let contact_b = Contact::new(
+        "wedge-room-client-b".to_string(),
+        key_b.public().to_string(),
+    )
+    .expect("contact b invalid");
+
+    let peer_a = contact_a.get_peer_id().to_string();
+    let peer_b = contact_b.get_peer_id().to_string();
+    let call_states_a = Arc::new(Mutex::new(Vec::new()));
+    let call_states_b = Arc::new(Mutex::new(Vec::new()));
+    let room_members = sorted_room_members(&contact_a, &contact_b);
+    let call_ended_park_a = CallEndedPark::new();
+
+    let host_a = CallbackCapturingAudioHost::new(StreamErrorProbe::new(), StreamErrorProbe::new());
+
+    let client_a = build_client_with_call_ended_park(
+        relay_map,
+        key_a,
+        vec![contact_b.clone()],
+        &codec_config,
+        host_a.clone(),
+        call_states_a.clone(),
+        call_ended_park_a.clone(),
+    )
+    .await;
+
+    let client_b = build_client(
+        relay_map,
+        key_b,
+        vec![contact_a.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_b.clone(),
+    )
+    .await;
+
+    let shutdown_guard = TwoClientShutdownGuard {
+        a: &client_a,
+        b: &client_b,
+        dropped: AtomicBool::new(false),
+    };
+
+    client_a.telepathy.start_session(&contact_b).await;
+    client_b.telepathy.start_session(&contact_a).await;
+    wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
+
+    client_a
+        .telepathy
+        .join_room(room_members.clone())
+        .await
+        .expect("client a should join room");
+    client_b
+        .telepathy
+        .join_room(room_members.clone())
+        .await
+        .expect("client b should join room");
+    wait_for_room_join_count(&call_states_a, &peer_b, 1).await;
+    wait_for_room_join_count(&call_states_b, &peer_a, 1).await;
+    let first_generation_a = client_a
+        .telepathy
+        .inner
+        .current_room_generation()
+        .await
+        .expect("client_a should have RoomState after first join");
+
+    let slot_in_room = client_a
+        .telepathy
+        .inner
+        .core_state
+        .call_slot
+        .snapshot()
+        .expect("room slot snapshot should succeed while room is active");
+    assert_eq!(
+        slot_in_room.state,
+        telepathy_core::internal::state::CallSlotState::RoomCall,
+        "slot should be RoomCall while the room is up; got {slot_in_room:?}"
+    );
+
+    // Trigger a terminal Notify outcome on client_a by panicking its input
+    // task. The controller breaks, runs cleanup_room_controller (releasing
+    // room_state and the slot), then delivers CallEnded from the outer task.
+    // With the old ordering the inline deliver_callback_against_teardown
+    // would have parked here and blocked cleanup, wedging the slot.
+    host_a.panic_input.store(true, Relaxed);
+
+    tokio::time::timeout(
+        Duration::from_secs(15),
+        call_ended_park_a.wait_for_call_ended(),
+    )
+    .await
+    .expect("client_a must observe CallEnded from its input task panic");
+
+    // The decisive assertion: room_state is cleared and the call slot is Idle
+    // on client_a, even though the CallEnded callback is still parked. The old
+    // ordering would have kept room_state installed and the slot at RoomCall.
+    let room_generation_after_panic = tokio::time::timeout(
+        Duration::from_secs(15),
+        client_a.telepathy.inner.current_room_generation(),
+    )
+    .await
+    .expect("current_room_generation must resolve within 15s");
+    assert!(
+        room_generation_after_panic.is_none(),
+        "client_a room_state must be cleared after the controller tore down; \
+         a regression would leave it installed and wedge a fresh join"
+    );
+    wait_for_slot_idle(&client_a, &peer_a).await;
+    assert_call_slot_idle(
+        &client_a,
+        "client_a slot must be Idle while the CallEnded callback is parked; \
+         a regression would leave it RoomCall",
+    );
+
+    // A fresh join_room must succeed on the now-Idle slot, proving the parked
+    // callback from the previous room does not hold backend ownership. client_b
+    // must first leave its still-active room so the mesh re-establishes cleanly.
+    call_ended_park_a.release();
+    client_b.telepathy.end_call().await;
+    wait_for_slot_idle(&client_b, &peer_b).await;
+    client_a
+        .telepathy
+        .join_room(room_members.clone())
+        .await
+        .expect("client_a should re-join room after the previous slot was released");
+    client_b
+        .telepathy
+        .join_room(room_members.clone())
+        .await
+        .expect("client_b should re-join room");
+    wait_for_room_join_count(&call_states_a, &peer_b, 2).await;
+    wait_for_room_join_count(&call_states_b, &peer_a, 2).await;
+    let second_generation_a = client_a
+        .telepathy
+        .inner
+        .current_room_generation()
+        .await
+        .expect("client_a should have RoomState after re-join");
+    assert!(
+        second_generation_a > first_generation_a,
+        "re-join should bump the room generation; first={first_generation_a}, second={second_generation_a}"
+    );
+
+    shutdown_guard.disarm();
+    client_a.telepathy.end_call().await;
+    client_b.telepathy.end_call().await;
+    wait_for_slot_idle(&client_a, &peer_a).await;
+    wait_for_slot_idle(&client_b, &peer_b).await;
+    client_a.telepathy.shutdown().await;
+    client_b.telepathy.shutdown().await;
 }

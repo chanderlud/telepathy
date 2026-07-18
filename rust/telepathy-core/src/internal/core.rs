@@ -1412,26 +1412,41 @@ where
         // ensure that all background i/o threads are stopped
         stop_io.cancel();
         // the call has ended; release only against the snapshot captured before `call()` ran.
-        if call_slot.release_if_match(expected_active)? {
+        let slot_released = call_slot.release_if_match(expected_active)?;
+        if slot_released {
             // hide the overlay
             self.overlay.hide();
+        }
+        // Terminal `CallEnded` delivery happens AFTER authoritative teardown: by
+        // this point I/O is joined and the call slot has been released (when this
+        // session still owns it), so a stalled Dart callback cannot wedge backend
+        // ownership. The session-stopped path stays silent (handled upstream as
+        // `HandshakeDispatch::SessionStopped`); every other error path emits the
+        // user-facing copy here.
+        let terminal_payload = match result.as_ref() {
+            Ok(Some((message, remote))) => Some((message.clone(), *remote)),
+            Ok(None) => None,
+            Err(error) if !error.is_session_stopped() => {
+                let message = CallEndMessage::from_error(error);
+                Some((message.into_string(), false))
+            }
+            Err(_) => None,
+        };
+        if let Some((message, remote)) = terminal_payload {
+            self.callbacks
+                .call_state(CallState::CallEnded(message, remote))
+                .await;
         }
         // send a goodbye message on errors and notify the frontend so the caller
         // exits the connecting state. Session-stopped is intentionally silent
         // (handled as `HandshakeDispatch::SessionStopped` upstream).
         if let Err(error) = result.as_ref() {
-            if !error.is_session_stopped() {
-                let message = CallEndMessage::from_error(error);
-                self.callbacks
-                    .call_state(CallState::CallEnded(message.into_string(), false))
-                    .await;
-            }
             warn!(event = "call_handshake_sending_error_goodbye", ?error);
             let message = ProtocolMessage::error_goodbye(error);
             write_message(send, &message).await?;
         }
 
-        result
+        result.map(|_| ())
     }
 
     /// Normal call & self-test logic
@@ -1450,7 +1465,7 @@ where
         call_state: EarlyCallState,
         end_call: &Arc<Notify>,
         optional: Option<OptionalCallArgs<'_>>,
-    ) -> Result<()> {
+    ) -> Result<Option<(String, bool)>> {
         // on ios the audio session must be configured
         #[cfg(target_os = "ios")]
         configure_audio_session();
@@ -1528,12 +1543,6 @@ where
                 _ => None,
             };
 
-            if let Some((message, remote)) = call_ended {
-                self.callbacks
-                    .call_state(CallState::CallEnded(message, remote))
-                    .await;
-            }
-
             info!(event = "call_controller_done_notifying_stop_io");
             stop_io.cancel();
 
@@ -1558,7 +1567,7 @@ where
             }
 
             info!(event = "call_controller_returned");
-            Ok(())
+            Ok(call_ended)
         } else {
             let result = loopback(
                 input_helper.receiver(),
@@ -1569,7 +1578,7 @@ where
             )
             .await;
             stop_io.cancel();
-            result
+            result.map(|_| None)
         };
 
         debug!(event = "call_teardown_start");
@@ -2021,18 +2030,10 @@ where
             Ok(helper) => helper,
             Err(error) => {
                 drop(ready_sender);
-                // Frontend callback delivery must not block authoritative teardown;
-                // if teardown is signalled while the CallEnded observation is
-                // pending, abandon it and proceed straight to cleanup.
-                let _ = self
-                    .deliver_callback_against_teardown(
-                        &end_call,
-                        &[&end_sessions, &operation],
-                        async {
-                            self.notify_setup_failure(&error).await;
-                        },
-                    )
-                    .await;
+                // Terminal observation is delivered from the outer controller task
+                // after `cleanup_room_controller` releases `room_state` and the
+                // slot, so a stalled Dart callback cannot wedge backend ownership.
+                let message = CallEndMessage::from_error(&error).into_string();
                 return self
                     .cleanup_room_controller(
                         stop_io,
@@ -2044,7 +2045,7 @@ where
                             connections: HashMap::new(),
                             statistics_handle: None,
                             terminal_error: Some(error),
-                            outcome: RoomControllerOutcome::Silent,
+                            outcome: RoomControllerOutcome::Notify { message },
                         },
                     )
                     .await;
@@ -2096,15 +2097,6 @@ where
 
         if let Some(error) = pending_stream_error {
             let message = CallEndMessage::from_stream_error(&error).into_string();
-            // Frontend callback delivery must not block authoritative teardown;
-            // abandon the observation if teardown is signalled first.
-            let _ = self
-                .deliver_callback_against_teardown(&end_call, &[&end_sessions, &operation], async {
-                    self.callbacks
-                        .call_state(CallState::CallEnded(message, false))
-                        .await;
-                })
-                .await;
             return self
                 .cleanup_room_controller(
                     stop_io,
@@ -2116,7 +2108,7 @@ where
                         connections: HashMap::new(),
                         statistics_handle: None,
                         terminal_error: Some(error.into_error_kind().into()),
-                        outcome: RoomControllerOutcome::Silent,
+                        outcome: RoomControllerOutcome::Notify { message },
                     },
                 )
                 .await;
@@ -2231,19 +2223,7 @@ where
                                 );
                             }
                         }
-                        // Frontend callback delivery must not block authoritative
-                        // teardown; abandon the observation if teardown is signalled.
-                        let _ = self
-                            .deliver_callback_against_teardown(
-                                &end_call,
-                                &[&end_sessions, &operation],
-                                async {
-                                    self.callbacks
-                                        .call_state(CallState::CallEnded(message, false))
-                                        .await;
-                                },
-                            )
-                            .await;
+                        outcome = RoomControllerOutcome::Notify { message };
                         break;
                     }
                     stream_errors_open = false;
@@ -2307,7 +2287,10 @@ where
                                         RoomTaskOutcome::PeerLocal => {}
                                         RoomTaskOutcome::Terminal(error) => {
                                             terminal_error = Some(error);
-                                            outcome = RoomControllerOutcome::Notify;
+                                            outcome = RoomControllerOutcome::Notify {
+                                                message: crate::internal::error::CALL_END_GENERIC
+                                                    .to_string(),
+                                            };
                                             break;
                                         }
                                     }
@@ -2355,18 +2338,9 @@ where
                                             );
                                         }
                                     }
-                                    // Frontend callback delivery must not block authoritative
-                                    // teardown; abandon the observation if teardown is signalled.
-                                    let _ = self
-                                        .deliver_callback_against_teardown(
-                                            &end_call,
-                                            &[&end_sessions, &operation],
-                                            async {
-                                                self.notify_setup_failure(&error).await;
-                                            },
-                                        )
-                                        .await;
+                                    let message = CallEndMessage::from_error(&error).into_string();
                                     terminal_error = Some(error);
+                                    outcome = RoomControllerOutcome::Notify { message };
                                     break;
                                 }
                             };
@@ -2470,7 +2444,10 @@ where
                                             RoomTaskOutcome::PeerLocal => {}
                                             RoomTaskOutcome::Terminal(error) => {
                                                 terminal_error = Some(error);
-                                                outcome = RoomControllerOutcome::Notify;
+                                                outcome = RoomControllerOutcome::Notify {
+                                                    message: crate::internal::error::CALL_END_GENERIC
+                                                        .to_string(),
+                                                };
                                                 break;
                                             }
                                         }
@@ -2500,7 +2477,9 @@ where
                         }
                         None => {
                             warn!(event = "room_controller_channel_closed_unexpectedly");
-                            outcome = RoomControllerOutcome::Notify;
+                            outcome = RoomControllerOutcome::Notify {
+                                message: crate::internal::error::CALL_END_GENERIC.to_string(),
+                            };
                             break;
                         }
                     }
@@ -2535,7 +2514,9 @@ where
                             }
                             RoomTaskOutcome::Terminal(error) => {
                                 terminal_error = Some(error);
-                                outcome = RoomControllerOutcome::Notify;
+                                outcome = RoomControllerOutcome::Notify {
+                                    message: crate::internal::error::CALL_END_GENERIC.to_string(),
+                                };
                                 break;
                             }
                         }
@@ -2553,7 +2534,9 @@ where
                         }
                         Err(_) => warn!(event = "room_input_join_failed_unexpectedly"),
                     }
-                    outcome = RoomControllerOutcome::Notify;
+                    outcome = RoomControllerOutcome::Notify {
+                        message: crate::internal::error::CALL_END_GENERIC.to_string(),
+                    };
                     break;
                 }
             }
@@ -2631,10 +2614,25 @@ pub(crate) struct RoomControllerCleanup<O> {
     pub(crate) outcome: RoomControllerOutcome,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) enum RoomControllerOutcome {
     Silent,
-    Notify,
+    /// Terminal room observation. The `message` is delivered to the frontend
+    /// from the outer controller task AFTER `cleanup_room_controller` has
+    /// released `room_state` and the call slot, so a stalled Dart callback
+    /// cannot wedge backend ownership.
+    Notify {
+        message: String,
+    },
+}
+
+impl RoomControllerOutcome {
+    pub(crate) fn into_message(self) -> Option<String> {
+        match self {
+            RoomControllerOutcome::Silent => None,
+            RoomControllerOutcome::Notify { message } => Some(message),
+        }
+    }
 }
 
 enum CallControllerOutcome {

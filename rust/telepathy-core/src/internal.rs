@@ -520,13 +520,10 @@ where
                         )
                         .await;
                     let _ = controller_completion_sender.send(());
-                    if outcome == crate::internal::core::RoomControllerOutcome::Notify {
+                    if let Some(message) = outcome.into_message() {
                         self_clone
                             .callbacks
-                            .call_state(crate::types::CallState::CallEnded(
-                                crate::internal::error::CALL_END_GENERIC.to_string(),
-                                false,
-                            ))
+                            .call_state(crate::types::CallState::CallEnded(message, false))
                             .await;
                     }
                     stop_io.cancel();
@@ -792,7 +789,7 @@ where
                     .instrument(call_span)
                     .await;
                 stop_io.cancel();
-                result
+                result.map(|_| ())
             }
             Err(error) => Err(error),
         };

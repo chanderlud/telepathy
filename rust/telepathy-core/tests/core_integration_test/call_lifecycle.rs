@@ -1,10 +1,10 @@
 use super::common::{
-    ConnectedCallbackGate, DEFAULT_SAMPLE_RATE, ManagerLifecycle, PendingAcceptProbe,
-    TwoClientShutdownGuard, assert_call_slot_idle, assert_no_busy_end,
+    CallEndedPark, ConnectedCallbackGate, DEFAULT_SAMPLE_RATE, ManagerLifecycle,
+    PendingAcceptProbe, TwoClientShutdownGuard, assert_call_slot_idle, assert_no_busy_end,
     assert_no_call_ended_before_connected, build_client, build_client_with_accept_probe,
-    build_client_with_connected_gate, build_client_with_options, call_state_snapshot,
-    init_test_tracing, shared_relay_map, wait_for_connected, wait_for_sessions, wait_for_slot_idle,
-    wait_for_slot_owned_by, wait_for_stable_session_pair,
+    build_client_with_call_ended_park, build_client_with_connected_gate, build_client_with_options,
+    call_state_snapshot, init_test_tracing, shared_relay_map, wait_for_connected,
+    wait_for_sessions, wait_for_slot_idle, wait_for_slot_owned_by, wait_for_stable_session_pair,
 };
 
 use iroh::SecretKey;
@@ -1056,4 +1056,132 @@ async fn parked_connected_callback_does_not_block_end_call() {
 
     client_a.telepathy.shutdown().await;
     client_b.telepathy.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn parked_call_ended_callback_does_not_wedge_slot_ownership() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+    let codec_config = CodecConfig::new(true, true, 5.0);
+
+    let key_a = SecretKey::generate();
+    let key_b = SecretKey::generate();
+    let contact_a = Contact::new("wedge-client-a".to_string(), key_a.public().to_string())
+        .expect("contact a invalid");
+    let contact_b = Contact::new("wedge-client-b".to_string(), key_b.public().to_string())
+        .expect("contact b invalid");
+    let peer_id_b = contact_b.get_peer_id();
+
+    let call_states_a = Arc::new(Mutex::new(Vec::new()));
+    let call_states_b = Arc::new(Mutex::new(Vec::new()));
+    let call_ended_park_a = CallEndedPark::new();
+
+    let client_a = build_client_with_call_ended_park(
+        relay_map,
+        key_a,
+        vec![contact_b.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_a.clone(),
+        call_ended_park_a.clone(),
+    )
+    .await;
+
+    let client_b = build_client(
+        relay_map,
+        key_b,
+        vec![contact_a.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_b.clone(),
+    )
+    .await;
+
+    let _shutdown_guard = TwoClientShutdownGuard {
+        a: &client_a,
+        b: &client_b,
+        dropped: AtomicBool::new(false),
+    };
+
+    client_a.telepathy.start_session(&contact_b).await;
+    client_b.telepathy.start_session(&contact_a).await;
+    wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
+
+    client_a
+        .telepathy
+        .start_call(&contact_b)
+        .await
+        .expect("client_a should start the outgoing call");
+    wait_for_connected(&call_states_a, "parked_call_ended_wedge_test").await;
+
+    let active_snapshot = client_a
+        .telepathy
+        .inner
+        .core_state
+        .call_slot
+        .snapshot()
+        .expect("active slot snapshot should succeed once Connected is observed");
+    assert_eq!(
+        active_snapshot.state,
+        CallSlotState::ActiveDirect,
+        "slot should be ActiveDirect while the call is up; got {active_snapshot:?}"
+    );
+    assert_eq!(active_snapshot.direct_peer, Some(peer_id_b));
+
+    // client_b hangs up. Its controller sends a Goodbye, which causes
+    // client_a's controller to break with a terminal Notify outcome. With the
+    // old ordering, client_a would deliver `CallEnded` BEFORE releasing the
+    // slot, so the parked callback would wedge the slot at ActiveDirect.
+    // The fix delivers `CallEnded` AFTER slot release, so the slot must
+    // transition to Idle even while the callback remains parked.
+    tokio::time::timeout(Duration::from_secs(15), client_b.telepathy.end_call())
+        .await
+        .expect("client_b end_call must return promptly");
+
+    // Confirm the CallEnded observation actually arrived on client_a and is
+    // parked. Without this guarantee the test would not exercise the wedge
+    // path.
+    tokio::time::timeout(
+        Duration::from_secs(15),
+        call_ended_park_a.wait_for_call_ended(),
+    )
+    .await
+    .expect("client_a must observe CallEnded from client_b's hangup");
+
+    // The decisive assertion: the slot is Idle even though the CallEnded
+    // callback is still parked. The old ordering would leave it ActiveDirect.
+    wait_for_slot_idle(&client_a, &peer_id_b.to_string()).await;
+    assert_call_slot_idle(
+        &client_a,
+        "client_a's slot must be Idle while the CallEnded callback is parked; \
+         a regression would leave it ActiveDirect and wedge a fresh call",
+    );
+
+    // A fresh call must be able to start on the now-Idle slot, proving the
+    // previous parked callback does not hold backend ownership.
+    tokio::time::timeout(
+        Duration::from_secs(15),
+        client_a.telepathy.start_call(&contact_b),
+    )
+    .await
+    .expect("client_a should start a fresh call after the previous slot was released")
+    .expect("client_a fresh start_call should succeed");
+
+    // Drain the fresh call so the test can shut down cleanly. Release the
+    // parked callback from the FIRST call first so any bookkeeping finishes.
+    call_ended_park_a.release();
+    tokio::time::timeout(Duration::from_secs(15), client_a.telepathy.end_call())
+        .await
+        .expect("client_a fresh-call end_call must return promptly");
+    wait_for_slot_idle(&client_a, &peer_id_b.to_string()).await;
 }

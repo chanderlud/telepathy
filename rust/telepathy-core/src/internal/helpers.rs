@@ -1,6 +1,6 @@
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::core::{RoomControllerCleanup, RoomControllerOutcome, TelepathyCore};
-use crate::internal::error::{AudioStreamError, CallEndMessage, Error, ErrorKind};
+use crate::internal::error::{AudioStreamError, Error, ErrorKind};
 use crate::internal::messages::{AudioHeader, RoomMessage};
 #[cfg(not(target_family = "wasm"))]
 use crate::internal::messages::{ProtocolMessage, StartScreenshare};
@@ -11,7 +11,6 @@ use crate::internal::state::{EarlyCallState, StatisticsCollectorState};
 use crate::internal::utils::deactivate_audio_session;
 use crate::internal::utils::{KanalSink, KanalSource};
 use crate::internal::{ALPN, MAX_RINGTONE_LENGTH, Result};
-use crate::types::CallState;
 #[cfg(not(target_family = "wasm"))]
 use crate::types::FrontendNotify;
 use crate::types::{ManagerState, SessionStatus};
@@ -774,15 +773,6 @@ where
             error!(event = "room_controller_terminated_with_error", ?error);
         }
         outcome
-    }
-
-    pub(crate) async fn notify_setup_failure(&self, error: &Error) {
-        self.callbacks
-            .call_state(CallState::CallEnded(
-                CallEndMessage::from_error(error).into_string(),
-                false,
-            ))
-            .await;
     }
 }
 
