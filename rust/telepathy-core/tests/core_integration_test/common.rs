@@ -202,6 +202,48 @@ impl WaitingCallbackGate {
     }
 }
 
+/// Parks the `Connected` call-state observation inside `call_controller`'s
+/// `deliver_callback_against_teardown` so a test can drive `end_call` while the
+/// controller is still mid-callback. Tests observe `wait_for_connected` before
+/// triggering `end_call`, then `release` only after teardown has settled.
+#[derive(Clone, Default)]
+pub(super) struct ConnectedCallbackGate {
+    released: Arc<AtomicBool>,
+    parked: Arc<Notify>,
+    saw_connected: Arc<AtomicBool>,
+    saw_notify: Arc<Notify>,
+}
+
+impl ConnectedCallbackGate {
+    pub(super) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(super) fn release(&self) {
+        self.released.store(true, Relaxed);
+        self.parked.notify_one();
+    }
+
+    pub(super) async fn wait_for_connected(&self) {
+        if self.saw_connected.load(Relaxed) {
+            return;
+        }
+        self.saw_notify.notified().await;
+    }
+
+    async fn wait(&self) {
+        if self.released.load(Relaxed) {
+            return;
+        }
+        self.parked.notified().await;
+    }
+
+    fn mark_connected(&self) {
+        self.saw_connected.store(true, Relaxed);
+        self.saw_notify.notify_one();
+    }
+}
+
 impl StreamErrorProbe {
     pub(super) fn new() -> Self {
         Self {
@@ -661,6 +703,68 @@ where
         None,
         ManagerLifecycle::Single,
         Some(waiting_gate),
+        None,
+    );
+
+    let mut telepathy: MockTelepathyHandle<H, I, O> = TelepathyHandle::new(
+        host,
+        &network_config,
+        &screenshare,
+        &overlay,
+        codec_config,
+        mock,
+    );
+    *telepathy.inner.core_state.identity.write().await = Some(identity);
+    telepathy.start_manager().await;
+    telepathy.inner.core_state.manager_active.notified().await;
+
+    ClientHarness {
+        telepathy,
+        is_active,
+    }
+}
+
+/// Like `build_client`, but parks the `Connected` call-state observation on
+/// `connected_gate` until the test releases it. Used to reproduce the
+/// direct-call deadlock where `end_call` arrives while the controller is still
+/// mid-`Connected` delivery.
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn build_client_with_connected_gate<H, I, O>(
+    relay_map: &RelayMap,
+    identity: SecretKey,
+    contacts: Vec<Contact>,
+    codec_config: &CodecConfig,
+    host: H,
+    call_states: Arc<Mutex<Vec<CallState>>>,
+    connected_gate: ConnectedCallbackGate,
+) -> ClientHarness<H, I, O>
+where
+    H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
+    I: Send + Sync + 'static,
+    O: Send + Sync + 'static,
+{
+    let network_config = NetworkConfig::mock(
+        0,
+        relay_map,
+        None,
+        None,
+        None,
+        Some(shared_address_lookup().clone()),
+    );
+    let screenshare = ScreenshareConfig::default();
+    let overlay = Overlay::default();
+
+    let is_active = Arc::new(AtomicBool::new(false));
+    let is_relayed = Arc::new(AtomicBool::new(false));
+    let mock = construct_mock_callbacks(
+        contacts,
+        is_active.clone(),
+        is_relayed.clone(),
+        call_states,
+        None,
+        ManagerLifecycle::Single,
+        None,
+        Some(connected_gate),
     );
 
     let mut telepathy: MockTelepathyHandle<H, I, O> = TelepathyHandle::new(
@@ -718,6 +822,7 @@ where
         accept_probe,
         lifecycle,
         None,
+        None,
     );
 
     let mut telepathy: MockTelepathyHandle<H, I, O> = TelepathyHandle::new(
@@ -741,8 +846,9 @@ where
 /// Returns mock callbacks that establish a telepathy instance with the provided
 /// contacts. `is_active` flips to true on the first session-connected event.
 /// `lifecycle` controls how many `manager_state` activations the mock accepts
-/// (see `ManagerLifecycle`). `waiting_gate`, when set, parks the `Waiting`
-/// call-state observation until the test releases it.
+/// (see `ManagerLifecycle`). `waiting_gate` and `connected_gate`, when set,
+/// park the `Waiting` and `Connected` call-state observations respectively
+/// until the test releases them.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn construct_mock_callbacks(
     contacts: Vec<Contact>,
@@ -752,6 +858,7 @@ pub(super) fn construct_mock_callbacks(
     accept_probe: Option<PendingAcceptProbe>,
     lifecycle: ManagerLifecycle,
     waiting_gate: Option<WaitingCallbackGate>,
+    connected_gate: Option<ConnectedCallbackGate>,
 ) -> MockCoreCallbacks<MockCoreStatisticsCallback> {
     let mut mock: MockCoreCallbacks<MockCoreStatisticsCallback> = MockCoreCallbacks::new();
 
@@ -849,11 +956,18 @@ pub(super) fn construct_mock_callbacks(
         info!("got call state: {state:?}");
         let call_states = call_states.clone();
         let waiting_gate = waiting_gate.clone();
+        let connected_gate = connected_gate.clone();
         Box::pin(async move {
             if matches!(state, CallState::Waiting)
                 && let Some(gate) = waiting_gate.as_ref()
             {
                 gate.mark_waiting();
+                gate.wait().await;
+            }
+            if matches!(state, CallState::Connected)
+                && let Some(gate) = connected_gate.as_ref()
+            {
+                gate.mark_connected();
                 gate.wait().await;
             }
             call_states.lock().unwrap().push(state);

@@ -1601,7 +1601,27 @@ where
         let mut stream_errors_open = true;
 
         CONNECTED.store(true, Relaxed);
-        self.callbacks.call_state(CallState::Connected).await;
+        // Race Connected delivery against the two authoritative teardown signals
+        // so a parked frontend observation cannot keep the controller (and thus
+        // `TelepathyHandle::end_call`) blocked indefinitely. If teardown wins,
+        // emit the same best-effort goodbye the in-loop `end_call` branch does
+        // and return Silent so `call`/`call_handshake` proceed to release the
+        // slot without an extra CallEnded observation.
+        let connected_delivered = self
+            .deliver_callback_against_teardown(
+                end_call,
+                &[&o.state.stop_session],
+                self.callbacks.call_state(CallState::Connected),
+            )
+            .await;
+        if !connected_delivered {
+            info!(
+                event = "call_controller_teardown_during_connected",
+                peer.id = %peer
+            );
+            _ = write_message(o.control_send, &ProtocolMessage::goodbye()).await;
+            return Ok(CallControllerOutcome::Silent);
+        }
 
         loop {
             select! {
@@ -1803,31 +1823,60 @@ where
         Ok(())
     }
 
-    /// Races delivery of a frontend observation callback against the three
-    /// authoritative teardown signals (`end_call`, `end_sessions`, `operation`)
-    /// so a stalled frontend delivery cannot block `cleanup_room_controller`.
+    /// Races delivery of a frontend observation callback against any teardown
+    /// signal so a stalled frontend delivery cannot block teardown paths that
+    /// depend on the controller exiting.
     ///
-    /// Returns `true` when the callback completed normally. Returns `false` when
-    /// teardown was signalled first; callers must then skip any further
-    /// observation work and proceed straight to `cleanup_room_controller`.
-    async fn deliver_room_observation<F>(
+    /// `stop_signals` carries every cancellation token the controller must
+    /// honor in addition to `end_call`: direct calls pass `[&state.stop_session]`,
+    /// room calls pass `[&end_sessions, &operation]`.
+    ///
+    /// Returns `true` when the callback completed normally. Returns `false`
+    /// when any teardown signal won; callers must then skip further observation
+    /// work and proceed straight to authoritative teardown.
+    async fn deliver_callback_against_teardown<F>(
         &self,
         end_call: &Notify,
-        end_sessions: &CancellationToken,
-        operation: &CancellationToken,
+        stop_signals: &[&CancellationToken],
         callback: F,
     ) -> bool
     where
-        F: std::future::Future<Output = ()>,
+        F: std::future::Future<Output = ()> + Send,
     {
-        tokio::pin!(callback);
-        tokio::select! {
-            biased;
-            _ = end_call.notified() => false,
-            _ = end_sessions.cancelled() => false,
-            _ = operation.cancelled() => false,
-            _ = &mut callback => true,
-        }
+        use std::future::Future;
+        use std::pin::Pin;
+        use std::task::{Context, Poll};
+
+        // Box so a runtime-sized slice can be raced uniformly. The boxed future
+        // borrows each token for the lifetime of this call.
+        let mut cancelled_futures: Vec<Pin<Box<dyn Future<Output = ()> + Send + '_>>> =
+            stop_signals
+                .iter()
+                .map(|signal| {
+                    Box::pin(signal.cancelled()) as Pin<Box<dyn Future<Output = ()> + Send + '_>>
+                })
+                .collect();
+
+        let mut end_call_future = std::pin::pin!(end_call.notified());
+        let mut callback = std::pin::pin!(callback);
+
+        // Biased: end_call -> each token -> callback. Teardown always wins over
+        // a stalled callback; wakers from any branch re-arm this poll_fn.
+        std::future::poll_fn(move |cx: &mut Context<'_>| -> Poll<bool> {
+            if end_call_future.as_mut().poll(cx).is_ready() {
+                return Poll::Ready(false);
+            }
+            for cancelled in &mut cancelled_futures {
+                if cancelled.as_mut().poll(cx).is_ready() {
+                    return Poll::Ready(false);
+                }
+            }
+            if callback.as_mut().poll(cx).is_ready() {
+                return Poll::Ready(true);
+            }
+            Poll::Pending
+        })
+        .await
     }
 
     /// The controller for rooms
@@ -1973,9 +2022,13 @@ where
                 // if teardown is signalled while the CallEnded observation is
                 // pending, abandon it and proceed straight to cleanup.
                 let _ = self
-                    .deliver_room_observation(&end_call, &end_sessions, &operation, async {
-                        self.notify_setup_failure(&error).await;
-                    })
+                    .deliver_callback_against_teardown(
+                        &end_call,
+                        &[&end_sessions, &operation],
+                        async {
+                            self.notify_setup_failure(&error).await;
+                        },
+                    )
                     .await;
                 return self
                     .cleanup_room_controller(
@@ -2043,7 +2096,7 @@ where
             // Frontend callback delivery must not block authoritative teardown;
             // abandon the observation if teardown is signalled first.
             let _ = self
-                .deliver_room_observation(&end_call, &end_sessions, &operation, async {
+                .deliver_callback_against_teardown(&end_call, &[&end_sessions, &operation], async {
                     self.callbacks
                         .call_state(CallState::CallEnded(message, false))
                         .await;
@@ -2122,10 +2175,9 @@ where
         // room_state are released; otherwise the local hangup is consumed
         // here and the controller never exits.
         if !self
-            .deliver_room_observation(
+            .deliver_callback_against_teardown(
                 &end_call,
-                &end_sessions,
-                &operation,
+                &[&end_sessions, &operation],
                 self.callbacks.call_state(CallState::Waiting),
             )
             .await
@@ -2179,10 +2231,9 @@ where
                         // Frontend callback delivery must not block authoritative
                         // teardown; abandon the observation if teardown is signalled.
                         let _ = self
-                            .deliver_room_observation(
+                            .deliver_callback_against_teardown(
                                 &end_call,
-                                &end_sessions,
-                                &operation,
+                                &[&end_sessions, &operation],
                                 async {
                                     self.callbacks
                                         .call_state(CallState::CallEnded(message, false))
@@ -2304,10 +2355,9 @@ where
                                     // Frontend callback delivery must not block authoritative
                                     // teardown; abandon the observation if teardown is signalled.
                                     let _ = self
-                                        .deliver_room_observation(
+                                        .deliver_callback_against_teardown(
                                             &end_call,
-                                            &end_sessions,
-                                            &operation,
+                                            &[&end_sessions, &operation],
                                             async {
                                                 self.notify_setup_failure(&error).await;
                                             },
@@ -2322,10 +2372,9 @@ where
                                 // Frontend callback delivery must not block authoritative
                                 // teardown; abandon Connected and break to cleanup.
                                 if !self
-                                    .deliver_room_observation(
+                                    .deliver_callback_against_teardown(
                                         &end_call,
-                                        &end_sessions,
-                                        &operation,
+                                        &[&end_sessions, &operation],
                                         self.callbacks.call_state(CallState::Connected),
                                     )
                                     .await
@@ -2372,10 +2421,9 @@ where
                             // Frontend callback delivery must not block authoritative
                             // teardown; abandon RoomJoin and break to cleanup.
                             if !self
-                                .deliver_room_observation(
+                                .deliver_callback_against_teardown(
                                     &end_call,
-                                    &end_sessions,
-                                    &operation,
+                                    &[&end_sessions, &operation],
                                     self.callbacks
                                         .call_state(CallState::RoomJoin(state.peer.to_string())),
                                 )
@@ -2395,10 +2443,9 @@ where
                                     // Frontend callback delivery must not block authoritative
                                     // teardown; abandon RoomLeave and break to cleanup.
                                     if !self
-                                        .deliver_room_observation(
+                                        .deliver_callback_against_teardown(
                                             &end_call,
-                                            &end_sessions,
-                                            &operation,
+                                            &[&end_sessions, &operation],
                                             self.callbacks
                                                 .call_state(CallState::RoomLeave(peer.to_string())),
                                         )

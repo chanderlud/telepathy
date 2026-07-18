@@ -1,7 +1,8 @@
 use super::common::{
-    DEFAULT_SAMPLE_RATE, ManagerLifecycle, PendingAcceptProbe, TwoClientShutdownGuard,
-    assert_call_slot_idle, assert_no_busy_end, assert_no_call_ended_before_connected, build_client,
-    build_client_with_accept_probe, build_client_with_options, call_state_snapshot,
+    ConnectedCallbackGate, DEFAULT_SAMPLE_RATE, ManagerLifecycle, PendingAcceptProbe,
+    TwoClientShutdownGuard, assert_call_slot_idle, assert_no_busy_end,
+    assert_no_call_ended_before_connected, build_client, build_client_with_accept_probe,
+    build_client_with_connected_gate, build_client_with_options, call_state_snapshot,
     init_test_tracing, shared_relay_map, wait_for_connected, wait_for_sessions, wait_for_slot_idle,
     wait_for_slot_owned_by, wait_for_stable_session_pair,
 };
@@ -951,4 +952,108 @@ async fn cancelled_start_call_releases_only_acquisition_time_ownership_not_repla
 
     call_slot.release().expect("cleanup release should succeed");
     client.telepathy.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn parked_connected_callback_does_not_block_end_call() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+    let codec_config = CodecConfig::new(true, true, 5.0);
+
+    let key_a = SecretKey::generate();
+    let key_b = SecretKey::generate();
+    let contact_a = Contact::new("client-a".to_string(), key_a.public().to_string())
+        .expect("contact a invalid");
+    let contact_b = Contact::new("client-b".to_string(), key_b.public().to_string())
+        .expect("contact b invalid");
+    let peer_id_b = contact_b.get_peer_id();
+
+    let call_states_a = Arc::new(Mutex::new(Vec::new()));
+    let call_states_b = Arc::new(Mutex::new(Vec::new()));
+    let connected_gate_a = ConnectedCallbackGate::new();
+
+    let client_a = build_client_with_connected_gate(
+        relay_map,
+        key_a,
+        vec![contact_b.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_a.clone(),
+        connected_gate_a.clone(),
+    )
+    .await;
+
+    let client_b = build_client(
+        relay_map,
+        key_b,
+        vec![contact_a.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_b.clone(),
+    )
+    .await;
+
+    client_a.telepathy.start_session(&contact_b).await;
+    client_b.telepathy.start_session(&contact_a).await;
+    wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
+
+    client_a
+        .telepathy
+        .start_call(&contact_b)
+        .await
+        .expect("alice should start the outgoing call");
+
+    // Block until the direct-call controller parks on the Connected callback.
+    // The controller is now in `deliver_callback_against_teardown`, holding the
+    // ActiveDirect slot for peer_b without entering its event loop.
+    connected_gate_a.wait_for_connected().await;
+
+    let active_snapshot = client_a
+        .telepathy
+        .inner
+        .core_state
+        .call_slot
+        .snapshot()
+        .expect("active slot snapshot should succeed while Connected is parked");
+    assert_eq!(
+        active_snapshot.state,
+        CallSlotState::ActiveDirect,
+        "slot should be ActiveDirect while Connected is parked; got {active_snapshot:?}"
+    );
+    assert_eq!(active_snapshot.direct_peer, Some(peer_id_b));
+
+    // The deadlock regression: without `deliver_callback_against_teardown`
+    // racing teardown against the parked callback, `end_call` would never
+    // observe its `end_call` notification and `wait_for_release` would hang
+    // forever. Bound the wait to catch the regression deterministically.
+    tokio::time::timeout(Duration::from_secs(15), client_a.telepathy.end_call())
+        .await
+        .expect("end_call must return promptly even when the direct Connected callback is parked");
+
+    // `end_call` returning is not sufficient: it must have returned BECAUSE the
+    // slot was released, not because the bounded fallback fired. The slot must
+    // be Idle here — a regression that returned early without releasing would
+    // leave it ActiveDirect.
+    wait_for_slot_idle(&client_a, &peer_id_b.to_string()).await;
+    assert_call_slot_idle(
+        &client_a,
+        "slot must be Idle once end_call returns; a stuck controller would leave it ActiveDirect",
+    );
+
+    // Release the parked callback so any remaining controller bookkeeping can
+    // drain before shutdown.
+    connected_gate_a.release();
+
+    client_a.telepathy.shutdown().await;
+    client_b.telepathy.shutdown().await;
 }

@@ -35,6 +35,8 @@ use telepathy_audio::devices::AudioHost;
 use tokio::sync::mpsc::channel;
 use tokio::sync::oneshot;
 use tokio::sync::{Mutex, Notify};
+#[cfg(not(target_family = "wasm"))]
+use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 use tracing::{debug, error, info, info_span, warn};
@@ -42,6 +44,12 @@ use tracing::{debug, error, info, info_span, warn};
 use wasmtimer::tokio::timeout;
 
 type Result<T> = std::result::Result<T, Error>;
+
+/// Upper bound on how long `TelepathyHandle::end_call` will wait for the call
+/// slot to be released before returning. Long enough to absorb controller
+/// teardown latency under load, short enough that a controller stuck on a
+/// parked frontend callback cannot hang the public API.
+const END_CALL_SLOT_RELEASE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A timeout used when initializing the call
 const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
@@ -341,14 +349,34 @@ where
             return;
         }
 
-        if let Err(error) = self
-            .inner
-            .core_state
-            .call_slot
-            .wait_for_release(owner)
-            .await
+        // Bounded fallback: a controller parked on a stalled frontend callback
+        // (or any other path that cannot observe `end_call`/`stop_session`)
+        // would otherwise keep the slot non-idle forever. `wait_for_release`
+        // itself is generation-safe — it returns once the slot is Idle OR a
+        // newer generation replaces `owner` — so a timeout elapsed here means
+        // the slot is genuinely stuck on the same owner. Return anyway so the
+        // public API stays responsive; the controller will finish teardown
+        // asynchronously once its callback is abandoned.
+        match timeout(
+            END_CALL_SLOT_RELEASE_TIMEOUT,
+            self.inner.core_state.call_slot.wait_for_release(owner),
+        )
+        .await
         {
-            error!("end_call could not confirm call slot release: {error}");
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                error!("end_call could not confirm call slot release: {error}");
+            }
+            Err(_elapsed) => {
+                let current = self.inner.core_state.call_slot.snapshot();
+                error!(
+                    event = "end_call_slot_release_timeout",
+                    owner = ?owner,
+                    current = ?current,
+                    "end_call timed out waiting for call slot release; \
+                     returning without confirmation",
+                );
+            }
         }
     }
 
