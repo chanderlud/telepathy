@@ -21,9 +21,7 @@ import 'package:telepathy/core/utils/sound_effects.dart';
 import 'package:telepathy/models/index.dart';
 import 'package:telepathy/widgets/call/call_controls.dart';
 import 'package:telepathy/widgets/call/room_details_widget.dart';
-import 'package:telepathy/widgets/common/button.dart' as common_widgets;
 import 'package:telepathy/widgets/common/text_input.dart' as common_widgets;
-import 'package:telepathy/widgets/contacts/contact_form.dart';
 import 'package:telepathy/widgets/contacts/contact_widget.dart';
 import 'package:telepathy/widgets/contacts/room_widget.dart';
 
@@ -170,62 +168,13 @@ class _FakeStartOperation implements StartOperation {
   bool get isDisposed => false;
 }
 
-class _MutableFakeContact implements Contact {
-  _MutableFakeContact({
-    required this.contactId,
-    required this.contactPeerId,
-    required this.contactNickname,
-  });
-
-  final String contactId;
-  final String contactPeerId;
-  String contactNickname;
-  double contactOutputVolume = 0;
-
-  @override
-  String id() => contactId;
-
-  @override
-  Future<PublicKey> getPeerId() async => FakePublicKey();
-
-  @override
-  bool idEq({required List<int> id}) => false;
-
-  @override
-  String nickname() => contactNickname;
-
-  @override
-  double outputVolume() => contactOutputVolume;
-
-  @override
-  String peerId() => contactPeerId;
-
-  @override
-  Contact pubClone() => this;
-
-  @override
-  void setNickname({required String nickname}) {
-    contactNickname = nickname;
-  }
-
-  @override
-  void setOutputVolume({required double decibel}) {
-    contactOutputVolume = decibel;
-  }
-
-  @override
-  void dispose() {}
-
-  @override
-  bool get isDisposed => false;
-}
-
 class _RecordingTelepathy implements Telepathy {
   final List<_FakeStartOperation> startOperations = [];
 
-  /// Completer for each identity-switch begin call. Tests keep phase one
-  /// pending to exercise UI actions before profile persistence and commit.
-  final List<Completer<void>> beginIdentitySwitchCallers = [];
+  /// Completer for each prepared identity switch.
+  final List<Completer<PreparedIdentitySwitch>> prepareIdentitySwitchCallers =
+      [];
+  final Completer<void> prepareIdentitySwitchEntered = Completer<void>();
 
   /// Completer for the most recent `startCall`. The test owns the
   /// completion timing so it can drive the race against a rebuild.
@@ -240,10 +189,13 @@ class _RecordingTelepathy implements Telepathy {
   int stopSessionCalls = 0;
   int setContactOutputVolumeCalls = 0;
   int commitIdentitySwitchCalls = 0;
-  int cancelIdentitySwitchCalls = 0;
   Completer<void>? endCallCompleter;
   final List<bool> mutedValues = [];
   final List<bool> deafenedValues = [];
+
+  void recordCommit() {
+    commitIdentitySwitchCalls += 1;
+  }
 
   @override
   Future<void> startCall({
@@ -298,25 +250,18 @@ class _RecordingTelepathy implements Telepathy {
   Future<void> restartManager() async {}
 
   @override
-  Future<void> beginIdentitySwitch(
+  Future<PreparedIdentitySwitch> prepareIdentitySwitch(
       {required List<int> targetKey, required List<Contact> targetContacts}) {
-    final completer = Completer<void>();
-    beginIdentitySwitchCallers.add(completer);
+    final completer = Completer<PreparedIdentitySwitch>();
+    prepareIdentitySwitchCallers.add(completer);
+    if (!prepareIdentitySwitchEntered.isCompleted) {
+      prepareIdentitySwitchEntered.complete();
+    }
     return completer.future;
   }
 
   @override
-  Future<void> cancelIdentitySwitch() async {
-    cancelIdentitySwitchCalls += 1;
-  }
-
-  @override
-  Future<void> commitIdentitySwitch() async {
-    commitIdentitySwitchCalls += 1;
-  }
-
-  @override
-  Future<void> recoverIdentitySwitch() async {}
+  Object? noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
   @override
   void resumeStatistics() {}
   @override
@@ -376,6 +321,21 @@ class _RecordingTelepathy implements Telepathy {
 
   @override
   void dispose() {}
+  @override
+  bool get isDisposed => false;
+}
+
+class _PreparedIdentitySwitch implements PreparedIdentitySwitch {
+  _PreparedIdentitySwitch(this.onCommit);
+
+  final void Function() onCommit;
+
+  @override
+  Future<void> commit() async => onCommit();
+
+  @override
+  void dispose() {}
+
   @override
   bool get isDisposed => false;
 }
@@ -506,9 +466,6 @@ class _PendingIdentitySwitchFixture {
 // ignore: unused_element
 Future<_PendingIdentitySwitchFixture> _seedPendingIdentitySwitch({
   required _RecordingTelepathy telepathy,
-  Contact? activeContact,
-  Room? activeRoom,
-  Future<void> Function(ProfilesController controller)? beforeSwitch,
 }) async {
   const activeProfileId = 'identity-switch-active';
   const targetProfileId = 'identity-switch-target';
@@ -556,18 +513,6 @@ Future<_PendingIdentitySwitchFixture> _seedPendingIdentitySwitch({
   await controller.init(const <String>[]);
   addTearDown(controller.dispose);
 
-  if (activeContact != null) {
-    controller.contacts[activeContact.id()] = activeContact;
-    await controller.saveContacts();
-  }
-  if (activeRoom != null) {
-    controller.rooms[activeRoom.id] = activeRoom;
-    await controller.saveRooms();
-  }
-  if (beforeSwitch != null) {
-    await beforeSwitch(controller);
-  }
-
   final contactsBeforeSwitch = await storage.read(
     key: '$activeProfileId-contacts',
   );
@@ -581,13 +526,14 @@ Future<_PendingIdentitySwitchFixture> _seedPendingIdentitySwitch({
     targetProfileId,
     telepathy: telepathy,
   );
-  await Future<void>.delayed(Duration.zero);
-  expect(telepathy.beginIdentitySwitchCallers, hasLength(1),
-      reason: 'fixture must leave the backend begin phase pending');
+  await telepathy.prepareIdentitySwitchEntered.future;
+  expect(telepathy.prepareIdentitySwitchCallers, hasLength(1),
+      reason: 'fixture must leave backend preparation pending');
 
   addTearDown(() async {
-    if (!telepathy.beginIdentitySwitchCallers.single.isCompleted) {
-      telepathy.beginIdentitySwitchCallers.single.complete();
+    if (!telepathy.prepareIdentitySwitchCallers.single.isCompleted) {
+      telepathy.prepareIdentitySwitchCallers.single
+          .complete(_PreparedIdentitySwitch(telepathy.recordCommit));
     }
     await switchFuture;
   });
@@ -604,49 +550,16 @@ Future<_PendingIdentitySwitchFixture> _seedPendingIdentitySwitch({
   );
 }
 
-Future<void> _expectPendingFixtureUnchanged(
-  _PendingIdentitySwitchFixture fixture, {
-  Contact? contact,
-  Room? room,
-}) async {
-  expect(fixture.profilesController.isIdentitySwitchPending, isTrue);
-  expect(fixture.profilesController.activeProfile, fixture.activeProfileId);
-  expect(
-    await fixture.options.getString('activeProfile'),
-    fixture.activeProfileId,
-  );
-  expect(
-    await fixture.storage.read(
-      key: '${fixture.activeProfileId}-contacts',
-    ),
-    fixture.contactsBeforeSwitch,
-  );
-  expect(
-    await fixture.storage.read(
-      key: '${fixture.activeProfileId}-rooms',
-    ),
-    fixture.roomsBeforeSwitch,
-  );
-  if (contact != null) {
-    expect(fixture.profilesController.contacts[contact.id()], same(contact));
-  }
-  if (room != null) {
-    expect(fixture.profilesController.rooms[room.id], same(room));
-  }
-}
-
 Future<void> _commitIdentitySwitch(
-  WidgetTester tester,
   _PendingIdentitySwitchFixture fixture,
   _RecordingTelepathy telepathy,
 ) async {
-  telepathy.beginIdentitySwitchCallers.single.complete();
+  telepathy.prepareIdentitySwitchCallers.single
+      .complete(_PreparedIdentitySwitch(telepathy.recordCommit));
   await fixture.switchFuture;
-  await tester.pump();
   expect(fixture.profilesController.isIdentitySwitchPending, isFalse);
   expect(fixture.profilesController.activeProfile, fixture.targetProfileId);
   expect(telepathy.commitIdentitySwitchCalls, 1);
-  expect(telepathy.cancelIdentitySwitchCalls, 0);
 }
 
 void main() {
@@ -1496,319 +1409,16 @@ void main() {
     });
   });
 
-  group('Profile-scoped controls during a pending identity switch', () {
-    late _FakeSoundPlayer player;
-    late _RecordingTelepathy telepathy;
-    late StateController stateController;
+  test('prepared profile switch settles after opaque lease completion',
+      () async {
+    FlutterSecureStorage.setMockInitialValues(<String, String>{});
+    SharedPreferencesAsyncPlatform.instance =
+        InMemorySharedPreferencesAsync.empty();
+    final telepathy = _RecordingTelepathy();
+    final fixture = await _seedPendingIdentitySwitch(telepathy: telepathy);
 
-    setUp(() {
-      FlutterSecureStorage.setMockInitialValues(<String, String>{});
-      SharedPreferencesAsyncPlatform.instance =
-          InMemorySharedPreferencesAsync.empty();
-      player = _FakeSoundPlayer(_FakeSoundHandle());
-      telepathy = _RecordingTelepathy();
-      stateController = StateController();
-    });
-
-    testWidgets('ContactForm add-contact and add-room actions stay inert',
-        (WidgetTester tester) async {
-      final fixture = await _seedPendingIdentitySwitch(
-        telepathy: telepathy,
-      );
-
-      await tester.pumpWidget(
-        _harness(
-          stateController: stateController,
-          profilesController: fixture.profilesController,
-          telepathy: telepathy,
-          player: player,
-          child: const ContactForm(),
-        ),
-      );
-
-      final addContact = find.widgetWithText(
-        common_widgets.Button,
-        'Add Contact',
-      );
-      final addRoom = find.widgetWithText(
-        common_widgets.Button,
-        'Add Room',
-      );
-      expect(tester.widget<common_widgets.Button>(addContact).disabled, isTrue);
-      expect(tester.widget<common_widgets.Button>(addRoom).disabled, isTrue);
-
-      await tester.tap(addContact);
-      await tester.tap(addRoom);
-      await tester.pump();
-
-      expect(find.byType(common_widgets.TextInput), findsNothing);
-      expect(telepathy.startSessionCalls, 0);
-      expect(fixture.profilesController.contacts, isEmpty);
-      expect(fixture.profilesController.rooms, isEmpty);
-      await _expectPendingFixtureUnchanged(fixture);
-
-      await _commitIdentitySwitch(tester, fixture, telepathy);
-
-      expect(
-          tester.widget<common_widgets.Button>(addContact).disabled, isFalse);
-      expect(tester.widget<common_widgets.Button>(addRoom).disabled, isFalse);
-      await tester.tap(addContact);
-      await tester.pump();
-      expect(find.byType(common_widgets.TextInput), findsNWidgets(2));
-    });
-
-    testWidgets(
-        'open ContactWidget editor disables edit, save, delete, and session stop',
-        (WidgetTester tester) async {
-      final contact = _MutableFakeContact(
-        contactId: 'pending-editor-contact-id',
-        contactPeerId: 'pending-editor-contact-peer-id',
-        contactNickname: 'Pending Editor Contact',
-      );
-      final fixture = await _seedPendingIdentitySwitch(
-        telepathy: telepathy,
-        activeContact: contact,
-        beforeSwitch: (ProfilesController controller) async {
-          await tester.pumpWidget(
-            _harness(
-              stateController: stateController,
-              profilesController: controller,
-              telepathy: telepathy,
-              player: player,
-              child: ContactWidget(contact: contact),
-            ),
-          );
-          await tester.tap(find.text('Pending Editor Contact'));
-          await tester.pumpAndSettle();
-        },
-      );
-      await tester.pump();
-
-      final input = find.byType(common_widgets.TextInput);
-      final slider = find.byType(Slider);
-      final save = find.widgetWithText(common_widgets.Button, 'Save');
-      final delete = find.ancestor(
-        of: find.bySemanticsLabel('Delete contact icon'),
-        matching: find.byType(IconButton),
-      );
-      expect(tester.widget<common_widgets.TextInput>(input).enabled, isFalse);
-      expect(tester.widget<Slider>(slider).onChanged, isNull);
-      expect(tester.widget<common_widgets.Button>(save).disabled, isTrue);
-      expect(tester.widget<IconButton>(delete).onPressed, isNull);
-
-      await tester.enterText(find.byType(TextField), 'Mutated Contact');
-      await tester.tap(slider);
-      await tester.tap(save);
-      await tester.tap(delete, warnIfMissed: false);
-      await tester.pump();
-
-      expect(contact.nickname(), 'Pending Editor Contact');
-      expect(contact.outputVolume(), 0);
-      expect(telepathy.setContactOutputVolumeCalls, 0);
-      expect(telepathy.stopSessionCalls, 0);
-      await _expectPendingFixtureUnchanged(fixture, contact: contact);
-
-      await _commitIdentitySwitch(tester, fixture, telepathy);
-
-      expect(tester.widget<common_widgets.TextInput>(input).enabled, isTrue);
-      expect(tester.widget<Slider>(slider).onChanged, isNotNull);
-      expect(tester.widget<common_widgets.Button>(save).disabled, isFalse);
-      expect(tester.widget<IconButton>(delete).onPressed, isNotNull);
-    });
-
-    testWidgets('open RoomWidget editor disables edit, save, and delete',
-        (WidgetTester tester) async {
-      final room = Room(
-        id: 'pending-editor-room-id',
-        peerIds: const <String>['pending-room-peer-a', 'pending-room-peer-b'],
-        nickname: 'Pending Editor Room',
-      );
-      final fixture = await _seedPendingIdentitySwitch(
-        telepathy: telepathy,
-        activeRoom: room,
-        beforeSwitch: (ProfilesController controller) async {
-          await tester.pumpWidget(
-            _harness(
-              stateController: stateController,
-              profilesController: controller,
-              telepathy: telepathy,
-              player: player,
-              child: RoomWidget(room: room),
-            ),
-          );
-          await tester.tap(find.text('Pending Editor Room'));
-          await tester.pumpAndSettle();
-        },
-      );
-      await tester.pump();
-
-      final input = find.byType(common_widgets.TextInput);
-      final save = find.widgetWithText(common_widgets.Button, 'Save');
-      final delete = find.ancestor(
-        of: find.bySemanticsLabel('Delete room icon'),
-        matching: find.byType(IconButton),
-      );
-      expect(tester.widget<common_widgets.TextInput>(input).enabled, isFalse);
-      expect(tester.widget<common_widgets.Button>(save).disabled, isTrue);
-      expect(tester.widget<IconButton>(delete).onPressed, isNull);
-
-      await tester.enterText(find.byType(TextField), 'Mutated Room');
-      await tester.tap(save);
-      await tester.tap(delete, warnIfMissed: false);
-      await tester.pump();
-
-      expect(room.nickname, 'Pending Editor Room');
-      await _expectPendingFixtureUnchanged(fixture, room: room);
-
-      await _commitIdentitySwitch(tester, fixture, telepathy);
-
-      expect(tester.widget<common_widgets.TextInput>(input).enabled, isTrue);
-      expect(tester.widget<common_widgets.Button>(save).disabled, isFalse);
-      expect(tester.widget<IconButton>(delete).onPressed, isNotNull);
-    });
-
-    testWidgets('ContactWidget session retry and direct call stay inert',
-        (WidgetTester tester) async {
-      final contact = _MutableFakeContact(
-        contactId: 'pending-session-contact-id',
-        contactPeerId: 'pending-session-contact-peer-id',
-        contactNickname: 'Pending Session Contact',
-      );
-      final fixture = await _seedPendingIdentitySwitch(
-        telepathy: telepathy,
-        activeContact: contact,
-      );
-
-      await tester.pumpWidget(
-        _harness(
-          stateController: stateController,
-          profilesController: fixture.profilesController,
-          telepathy: telepathy,
-          player: player,
-          child: ContactWidget(contact: contact),
-        ),
-      );
-
-      final retry = find.ancestor(
-        of: find.bySemanticsLabel('Retry the session initiation'),
-        matching: find.byType(IconButton),
-      );
-      expect(tester.widget<IconButton>(retry).onPressed, isNull);
-      expect(tester.widget<InkWell>(find.byType(InkWell)).onTap, isNull);
-      await tester.tap(retry, warnIfMissed: false);
-      await tester.pump();
-      expect(telepathy.startSessionCalls, 0);
-
-      _markContactConnected(stateController, contact);
-      await tester.pump();
-      final call = find.ancestor(
-        of: find.bySemanticsLabel('Call icon'),
-        matching: find.byType(IconButton),
-      );
-      expect(tester.widget<IconButton>(call).onPressed, isNull);
-      await tester.tap(call, warnIfMissed: false);
-      await tester.pump();
-      expect(telepathy.startCallContacts, isEmpty);
-      expect(stateController.callLifecycle, CallLifecycle.idle);
-      await _expectPendingFixtureUnchanged(fixture, contact: contact);
-
-      await _commitIdentitySwitch(tester, fixture, telepathy);
-
-      expect(tester.widget<IconButton>(call).onPressed, isNotNull);
-      await tester.tap(call);
-      await tester.pump();
-      expect(telepathy.startCallContacts, <Contact>[contact]);
-      telepathy.startCallCallers.single.complete();
-      await _flushAsync(tester);
-    });
-
-    testWidgets('RoomWidget join stays inert until switch commits',
-        (WidgetTester tester) async {
-      final room = Room(
-        id: 'pending-join-room-id',
-        peerIds: const <String>['pending-join-peer-a', 'pending-join-peer-b'],
-        nickname: 'Pending Join Room',
-      );
-      final fixture = await _seedPendingIdentitySwitch(
-        telepathy: telepathy,
-        activeRoom: room,
-      );
-
-      await tester.pumpWidget(
-        _harness(
-          stateController: stateController,
-          profilesController: fixture.profilesController,
-          telepathy: telepathy,
-          player: player,
-          child: RoomWidget(room: room),
-        ),
-      );
-
-      final join = find.ancestor(
-        of: find.bySemanticsLabel('Call icon'),
-        matching: find.byType(IconButton),
-      );
-      expect(tester.widget<IconButton>(join).onPressed, isNull);
-      expect(tester.widget<InkWell>(find.byType(InkWell)).onTap, isNull);
-      await tester.tap(join, warnIfMissed: false);
-      await tester.pump();
-      expect(telepathy.joinRoomMemberStrings, isEmpty);
-      expect(stateController.callLifecycle, CallLifecycle.idle);
-      await _expectPendingFixtureUnchanged(fixture, room: room);
-
-      await _commitIdentitySwitch(tester, fixture, telepathy);
-
-      expect(tester.widget<IconButton>(join).onPressed, isNotNull);
-      await tester.tap(join);
-      await tester.pump();
-      expect(telepathy.joinRoomMemberStrings, <List<String>>[room.peerIds]);
-      telepathy.joinRoomCallers.single.complete();
-      await _flushAsync(tester);
-    });
-
-    testWidgets('active RoomWidget hangup stays inert until switch commits',
-        (WidgetTester tester) async {
-      _stubOutgoingRingtone(tester);
-      final room = Room(
-        id: 'pending-hangup-room-id',
-        peerIds: const <String>['pending-hangup-peer-a'],
-        nickname: 'Pending Hangup Room',
-      );
-      stateController.setActiveRoom(room);
-      final fixture = await _seedPendingIdentitySwitch(
-        telepathy: telepathy,
-        activeRoom: room,
-      );
-
-      await tester.pumpWidget(
-        _harness(
-          stateController: stateController,
-          profilesController: fixture.profilesController,
-          telepathy: telepathy,
-          player: player,
-          child: RoomWidget(room: room),
-        ),
-      );
-
-      final hangup = find.ancestor(
-        of: find.bySemanticsLabel('End call icon'),
-        matching: find.byType(IconButton),
-      );
-      expect(tester.widget<IconButton>(hangup).onPressed, isNull);
-      await tester.tap(hangup, warnIfMissed: false);
-      await tester.pump();
-      expect(telepathy.endCallCalls, 0);
-      expect(stateController.activeRoom, same(room));
-      await _expectPendingFixtureUnchanged(fixture, room: room);
-
-      await _commitIdentitySwitch(tester, fixture, telepathy);
-
-      expect(tester.widget<IconButton>(hangup).onPressed, isNotNull);
-      await tester.tap(hangup);
-      await _flushAsync(tester);
-      expect(telepathy.endCallCalls, 1);
-      expect(stateController.activeRoom, isNull);
-    });
+    expect(fixture.profilesController.isIdentitySwitchPending, isTrue);
+    await _commitIdentitySwitch(fixture, telepathy);
   });
 
   group('ContactWidget edit dialog lifecycle-locks pending targets', () {

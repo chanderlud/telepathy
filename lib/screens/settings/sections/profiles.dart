@@ -1,5 +1,3 @@
-import 'dart:async';
-import 'dart:core';
 import 'package:flutter/services.dart';
 import 'package:flutter/material.dart' hide Overlay;
 import 'package:flutter_svg/flutter_svg.dart';
@@ -21,58 +19,7 @@ class ProfileSettingsState extends State<ProfileSettings> {
   final TextEditingController _profileNameInput = TextEditingController();
   String? _profileNameError;
 
-  /// Latest delete-attempt failure keyed by profile id, surfaced in the
-  /// confirmation dialog so the user can retry. Previously the dialog
-  /// closed silently on failure, hiding storage-cleanup errors that left
-  /// private keys on disk.
-  ///
-  /// The phase drives the user-facing message so each failure mode gets
-  /// an accurate description instead of always claiming the index update
-  /// succeeded.
-  ProfileDeletionException? _deleteProfileError;
-  String? _deleteProfileErrorId;
-
-  /// True while a manual cleanup retry is in flight so the dialog can
-  /// disable its retry button.
-  bool _cleanupRetryInFlight = false;
-
-  String _deleteErrorMessage(BuildContext context) {
-    final failure = _deleteProfileError;
-    if (failure == null) {
-      return '';
-    }
-    final cause = '${failure.cause}';
-    switch (failure.phase) {
-      case ProfileDeletionPhase.tombstoneWrite:
-        return 'Could not record the deletion intent. No data was changed. '
-            'You can retry the delete or close this dialog.\nDetails: $cause';
-      case ProfileDeletionPhase.begin:
-        return 'The backend rejected the identity switch. No data was '
-            'changed. You can retry or close this dialog.\nDetails: $cause';
-      case ProfileDeletionPhase.activeIdPersist:
-        return 'Could not persist the replacement active profile. The '
-            'transaction was cancelled; no data was changed. You can '
-            'retry or close this dialog.\nDetails: $cause';
-      case ProfileDeletionPhase.indexWrite:
-        return 'Could not update the profile index. The transaction was '
-            'rolled back; no data was changed. You can retry or close '
-            'this dialog.\nDetails: $cause';
-      case ProfileDeletionPhase.commit:
-        return 'The backend could not commit the new identity. The '
-            'transaction was rolled back across the frontend, preferences, '
-            'and backend; no data was changed. You can retry or close '
-            'this dialog.\nDetails: $cause';
-      case ProfileDeletionPhase.replacementCreate:
-        return 'Could not create a replacement profile for the deletion. '
-            'The active profile is unchanged; no data was modified. You '
-            'can retry or close this dialog.\nDetails: $cause';
-      case ProfileDeletionPhase.storageCleanup:
-        return 'The profile was removed from the index but its private-key '
-            'records could not be deleted. Cleanup will retry '
-            'automatically on the next startup. You can retry now or '
-            'close this dialog.\nDetails: $cause';
-    }
-  }
+  String? _deleteProfileError;
 
   InputDecoration _profileNameInputDecoration(BuildContext context) {
     if (_profileNameError == null) {
@@ -203,41 +150,14 @@ class ProfileSettingsState extends State<ProfileSettings> {
                               : 'Set Active',
                           width: 65,
                           height: 25,
-                          // `blockAudioChanges` covers the connecting and
-                          // active phases and audio tests, all of which
-                          // occupy the backend call slot and would race
-                          // with the atomic identity swap. Using
-                          // `isCallActive` here is not enough because the
-                          // slot is occupied before promotion.
-                          //
-                          // `isIdentitySwitchPending` covers the in-flight
-                          // two-phase transaction itself so a second switch
-                          // cannot begin while the first is still
-                          // committing/cancelling across both layers.
                           disabled: stateController.blockAudioChanges ||
                               profilesController.isIdentitySwitchPending ||
                               profilesController.activeProfile == profile.id,
                           onPressed: () async {
-                            // Defensive recheck inside the handler so a
-                            // build-cycle race between `disabled` being
-                            // painted and the user tapping cannot reach the
-                            // mutating two-phase transaction.
                             if (stateController.blockAudioChanges ||
                                 profilesController.isIdentitySwitchPending) {
                               return;
                             }
-                            // The controller orchestrates the two-phase
-                            // transaction: acquire the backend gate,
-                            // persist the target active profile, then
-                            // commit the new signing key + contact
-                            // snapshot. On any failure it rolls the
-                            // frontend back to the previous active profile
-                            // and either cancels (pre-commit) or relies on
-                            // Rust's internal rollback (post-commit). The
-                            // error is logged but not rethrown: this
-                            // handler runs inside a tap callback, and
-                            // propagating would surface as an unhandled
-                            // exception with no UI to recover it.
                             try {
                               await profilesController.switchActiveProfile(
                                 profile.id,
@@ -276,20 +196,6 @@ class ProfileSettingsState extends State<ProfileSettings> {
                             )),
                         IconButton(
                           tooltip: 'Delete Profile',
-                          // Deleting the active profile must run the same
-                          // two-phase identity-switch transaction the Set
-                          // Active button uses; both must be gated by
-                          // `blockAudioChanges` so the backend identity
-                          // switch + manager restart cannot race an
-                          // in-flight call. Deleting a non-active profile
-                          // is safe during a call because it touches
-                          // neither the call slot nor the active identity.
-                          //
-                          // `isIdentitySwitchPending` additionally blocks
-                          // every delete while another transaction is in
-                          // flight, including non-active deletes, so the
-                          // transaction's frontend persistence cannot be
-                          // raced by a sibling deletion.
                           onPressed: (stateController.blockAudioChanges &&
                                       profilesController.activeProfile ==
                                           profile.id) ||
@@ -298,8 +204,6 @@ class ProfileSettingsState extends State<ProfileSettings> {
                               : () {
                                   setState(() {
                                     _deleteProfileError = null;
-                                    _deleteProfileErrorId = null;
-                                    _cleanupRetryInFlight = false;
                                   });
                                   showDialog(
                                       context: listContext,
@@ -322,8 +226,7 @@ class ProfileSettingsState extends State<ProfileSettings> {
                                                         const EdgeInsets.only(
                                                             top: 12),
                                                     child: Text(
-                                                      _deleteErrorMessage(
-                                                          dialogContext),
+                                                      _deleteProfileError!,
                                                       style: TextStyle(
                                                         color: Theme.of(
                                                                 dialogContext)
@@ -342,117 +245,56 @@ class ProfileSettingsState extends State<ProfileSettings> {
                                                       .pop();
                                                 },
                                               ),
-                                              // "Retry Cleanup" appears
-                                              // ONLY when the controller
-                                              // surfaced a failure that
-                                              // left a durable tombstone
-                                              // (i.e.
-                                              // `tombstonedForStartupRetry`
-                                              // is true). Routing on the
-                                              // phase alone was unsafe: a
-                                              // generic catch-all used to
-                                              // mis-classify ANY non-typed
-                                              // error as `storageCleanup`,
-                                              // exposing the destructive
-                                              // cleanup retry on failures
-                                              // that never left a
-                                              // tombstone (and could be
-                                              // for the still-live active
-                                              // profile).
-                                              if (_deleteProfileError != null &&
-                                                  _deleteProfileError!
-                                                      .tombstonedForStartupRetry &&
-                                                  _deleteProfileErrorId != null)
-                                                Button(
-                                                  text: _cleanupRetryInFlight
-                                                      ? 'Retrying...'
-                                                      : 'Retry Cleanup',
-                                                  disabled:
-                                                      _cleanupRetryInFlight,
-                                                  onPressed: () {
-                                                    final id =
-                                                        _deleteProfileErrorId!;
-                                                    final navigator =
-                                                        Navigator.of(
-                                                            dialogContext);
-                                                    setDialogState(() {
-                                                      _cleanupRetryInFlight =
-                                                          true;
-                                                    });
-                                                    unawaited(profilesController
-                                                        .retryDeletionCleanup(
-                                                            id)
-                                                        .then((ok) {
-                                                      if (!mounted) {
-                                                        return;
-                                                      }
-                                                      if (ok) {
-                                                        navigator.pop();
-                                                      } else {
-                                                        setDialogState(() {
-                                                          _cleanupRetryInFlight =
-                                                              false;
-                                                        });
-                                                      }
-                                                    }));
-                                                  },
-                                                ),
-                                              // The ordinary
-                                              // "Delete"/"Retry" button
-                                              // drives `removeProfile`. It
-                                              // is hidden once the index
-                                              // deletion completed
-                                              // (`tombstonedForStartupRetry`
-                                              // is true): at that point
-                                              // the id is already gone
-                                              // from the index, so
-                                              // re-issuing `removeProfile`
-                                              // would be a no-op
-                                              // (`!profiles.containsKey(id)`
-                                              // early-returns) and
-                                              // mislead the user. Only
-                                              // the dedicated "Retry
-                                              // Cleanup" above is offered
-                                              // in that state.
-                                              if (_deleteProfileError == null ||
-                                                  !_deleteProfileError!
-                                                      .tombstonedForStartupRetry)
-                                                Button(
-                                                  text: _deleteProfileError ==
-                                                          null
-                                                      ? 'Delete'
-                                                      : 'Retry',
-                                                  onPressed: () async {
-                                                    final navigator =
-                                                        Navigator.of(
-                                                            dialogContext);
-                                                    try {
-                                                      await profilesController
-                                                          .removeProfile(
-                                                        profile.id,
-                                                        telepathy: telepathy,
-                                                      );
-                                                      if (mounted) {
-                                                        navigator.pop();
-                                                      }
-                                                    } on ProfileDeletionException catch (error) {
-                                                      DebugConsole.warn(
-                                                        'delete of profile '
-                                                        '${profile.id} failed '
-                                                        '(${error.phase}): '
-                                                        '${error.cause}',
-                                                      );
-                                                      setDialogState(() {
-                                                        _deleteProfileError =
-                                                            error;
-                                                        _deleteProfileErrorId =
-                                                            profile.id;
-                                                        _cleanupRetryInFlight =
-                                                            false;
-                                                      });
+                                              Button(
+                                                text: 'Delete',
+                                                disabled: profilesController
+                                                    .isIdentitySwitchPending,
+                                                onPressed: () async {
+                                                  final navigator =
+                                                      Navigator.of(
+                                                          dialogContext);
+                                                  final messenger =
+                                                      ScaffoldMessenger.of(
+                                                          context);
+                                                  try {
+                                                    await profilesController
+                                                        .removeProfile(
+                                                      profile.id,
+                                                      telepathy: telepathy,
+                                                    );
+                                                    if (mounted) {
+                                                      navigator.pop();
                                                     }
-                                                  },
-                                                )
+                                                  } catch (error) {
+                                                    DebugConsole.warn(
+                                                      'delete of profile '
+                                                      '${profile.id} failed: '
+                                                      '$error',
+                                                    );
+                                                    if (!mounted) {
+                                                      return;
+                                                    }
+                                                    if (!profilesController
+                                                        .profiles
+                                                        .containsKey(
+                                                            profile.id)) {
+                                                      navigator.pop();
+                                                      messenger.showSnackBar(
+                                                        const SnackBar(
+                                                          content: Text(
+                                                            'Profile deleted. Cleanup will retry at next startup.',
+                                                          ),
+                                                        ),
+                                                      );
+                                                      return;
+                                                    }
+                                                    setDialogState(() {
+                                                      _deleteProfileError =
+                                                          'Could not delete profile. Please try again.';
+                                                    });
+                                                  }
+                                                },
+                                              )
                                             ],
                                           );
                                         });

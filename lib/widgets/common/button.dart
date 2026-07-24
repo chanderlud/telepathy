@@ -35,11 +35,7 @@ class Button extends StatelessWidget {
     }
 
     return ElevatedButton(
-      onPressed: () {
-        if (!disabled) {
-          onPressed();
-        }
-      },
+      onPressed: disabled ? null : onPressed,
       style: ButtonStyle(
         splashFactory: noSplash ? NoSplash.splashFactory : null,
         backgroundColor: disabled
