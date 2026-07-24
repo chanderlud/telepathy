@@ -84,8 +84,11 @@ impl Telepathy {
         }
     }
 
-    pub async fn start_manager(&mut self) {
-        self.handle.start_manager().await;
+    pub async fn start_manager(&mut self) -> Result<(), DartError> {
+        self.handle
+            .start_manager_and_wait()
+            .await
+            .map_err(DartError::from)
     }
 
     /// Tries to start a session for a contact

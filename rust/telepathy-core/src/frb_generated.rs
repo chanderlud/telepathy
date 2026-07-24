@@ -5030,7 +5030,7 @@ fn wire__crate__flutter__Telepathy_start_manager_impl(
             >>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
-                transform_result_sse::<_, ()>(
+                transform_result_sse::<_, crate::types::DartError>(
                     (move || async move {
                         let mut api_that_guard = None;
                         let decode_indices_ =
@@ -5049,9 +5049,8 @@ fn wire__crate__flutter__Telepathy_start_manager_impl(
                             }
                         }
                         let mut api_that_guard = api_that_guard.unwrap();
-                        let output_ok = Result::<_, ()>::Ok({
-                            crate::flutter::Telepathy::start_manager(&mut *api_that_guard).await;
-                        })?;
+                        let output_ok =
+                            crate::flutter::Telepathy::start_manager(&mut *api_that_guard).await?;
                         Ok(output_ok)
                     })()
                     .await,
