@@ -111,3 +111,12 @@ Rationale: mutating public fields lets callers bypass invariants the type's own
 methods enforce. Once a field is `pub`, any future tightening (validation, lazy
 init, change of representation) is a breaking change across every downstream
 including the generated Flutter bindings.
+
+## Deployment Scope
+
+- Ignore migration, backward-compatibility, and legacy persisted-state risks for
+  changes introduced only on the current unmerged branch. Those intermediate
+  shapes have not reached users and are drafts, not deployed contracts.
+- Consider those risks only when the prior shape was deployed, externally
+  consumed, persisted outside this development cycle, or explicitly identified
+  as a compatibility requirement.
