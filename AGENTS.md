@@ -8,6 +8,8 @@
 - Flutter frontend code: ./lib
 - Generated code (do NOT read these files): ./lib/core/rust/* and frb_generated.rs
 - Documentation: ./docs
+- Documented solutions: ./docs/solutions (searchable past solutions organized by category with YAML frontmatter)
+- Shared domain vocabulary: ./docs/CONCEPTS.md
 - System test suite: ./system-tests
 
 ## Formatting and Lint Rules
