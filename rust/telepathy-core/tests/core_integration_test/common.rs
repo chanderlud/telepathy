@@ -615,6 +615,7 @@ pub(super) enum ManagerLifecycle {
     RevisionCycles(usize),
     Restartable,
     StartingGate(ManagerStartingGate),
+    ActiveGate(ManagerActiveGate),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -654,6 +655,47 @@ impl ManagerStartingGate {
         }
         self.started.store(true, Relaxed);
         self.started_notify.notify_waiters();
+        notified.await;
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub(super) struct ManagerActiveGate {
+    active: Arc<AtomicBool>,
+    active_notify: Arc<Notify>,
+    released: Arc<AtomicBool>,
+    released_notify: Arc<Notify>,
+}
+
+impl ManagerActiveGate {
+    pub(super) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(super) async fn wait_active(&self) {
+        let notified = self.active_notify.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        if self.active.load(Relaxed) {
+            return;
+        }
+        notified.await;
+    }
+
+    pub(super) fn release(&self) {
+        self.released.store(true, Relaxed);
+        self.released_notify.notify_waiters();
+    }
+
+    async fn wait_released(&self) {
+        let notified = self.released_notify.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        if self.released.load(Relaxed) {
+            return;
+        }
+        self.active.store(true, Relaxed);
+        self.active_notify.notify_waiters();
         notified.await;
     }
 }
@@ -1046,7 +1088,9 @@ pub(super) fn construct_mock_callbacks(
             let cycles = match lifecycle {
                 ManagerLifecycle::Single => 1,
                 ManagerLifecycle::RevisionCycles(cycles) => cycles,
-                ManagerLifecycle::Restartable | ManagerLifecycle::StartingGate(_) => unreachable!(),
+                ManagerLifecycle::Restartable
+                | ManagerLifecycle::StartingGate(_)
+                | ManagerLifecycle::ActiveGate(_) => unreachable!(),
             };
 
             mock.expect_manager_state()
@@ -1104,6 +1148,26 @@ pub(super) fn construct_mock_callbacks(
 
             mock.expect_manager_state()
                 .withf(|state| matches!(state, ManagerState::Failed))
+                .times(..)
+                .returning(|_| Box::pin(async move {}));
+        }
+        ManagerLifecycle::ActiveGate(gate) => {
+            mock.expect_manager_state()
+                .withf(|state| matches!(state, ManagerState::Starting))
+                .times(..)
+                .returning(|_| Box::pin(async move {}));
+
+            let active_gate = gate.clone();
+            mock.expect_manager_state()
+                .withf(|state| matches!(state, ManagerState::Active))
+                .times(..)
+                .returning(move |_| {
+                    let gate = active_gate.clone();
+                    Box::pin(async move { gate.wait_released().await })
+                });
+
+            mock.expect_manager_state()
+                .withf(|state| matches!(state, ManagerState::Stopped | ManagerState::Failed))
                 .times(..)
                 .returning(|_| Box::pin(async move {}));
         }

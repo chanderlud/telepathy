@@ -1,6 +1,6 @@
 use super::common::{
-    DEFAULT_SAMPLE_RATE, ManagerLifecycle, ManagerStartingGate, construct_mock_callbacks,
-    init_test_tracing, shared_address_lookup, shared_relay_map,
+    DEFAULT_SAMPLE_RATE, ManagerActiveGate, ManagerLifecycle, ManagerStartingGate,
+    construct_mock_callbacks, init_test_tracing, shared_address_lookup, shared_relay_map,
 };
 use iroh::SecretKey;
 use std::future::poll_fn;
@@ -188,6 +188,35 @@ async fn start_manager_and_waits_for_runtime_application() {
         Err(_) => panic!("start manager did not wait for runtime application"),
     }
     handle.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn blocked_active_callback_does_not_block_shutdown_after_runtime_is_ready() {
+    init_test_tracing();
+    let gate = ManagerActiveGate::new();
+    let mut handle = mock_handle(
+        &runtime_config(0),
+        ManagerLifecycle::ActiveGate(gate.clone()),
+    );
+    let identity = SecretKey::generate();
+
+    match handle.set_identity(&identity.to_bytes()).await {
+        Ok(()) => {}
+        Err(error) => panic!("failed to install test identity: {error}"),
+    }
+
+    match timeout(Duration::from_secs(2), handle.start_manager_and_wait()).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => panic!("manager runtime did not apply: {error}"),
+        Err(_) => panic!("manager runtime did not become ready"),
+    }
+    gate.wait_active().await;
+
+    match timeout(Duration::from_secs(2), handle.shutdown()).await {
+        Ok(()) => {}
+        Err(_) => panic!("blocked Active callback prevented manager shutdown"),
+    }
+    gate.release();
 }
 
 #[tokio::test(flavor = "multi_thread")]

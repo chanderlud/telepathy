@@ -299,11 +299,17 @@ where
                 {
                     break ManagerIterationOutcome::Continue;
                 }
-                tokio::select! {
-                    biased;
-                    _ = iteration_cancellation.cancelled() => break ManagerIterationOutcome::Continue,
-                    _ = self.callbacks.manager_state(ManagerState::Active) => (),
-                }
+                let callbacks = Arc::clone(&self.callbacks);
+                let callback_cancellation = iteration_cancellation.clone();
+                let manager_stop = self.core_state.stop_manager.clone();
+                spawn_task(async move {
+                    select! {
+                        biased;
+                        _ = manager_stop.cancelled() => (),
+                        _ = callback_cancellation.cancelled() => (),
+                        _ = callbacks.manager_state(ManagerState::Active) => (),
+                    }
+                });
                 if iteration_cancellation.is_cancelled() || !self.core_state.is_runtime_applied()? {
                     break ManagerIterationOutcome::Continue;
                 }
