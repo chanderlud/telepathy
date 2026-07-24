@@ -56,6 +56,21 @@ where
     pub(super) is_active: Arc<AtomicBool>,
 }
 
+impl<H, I, O> ClientHarness<H, I, O>
+where
+    H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
+    I: Send + Sync + 'static,
+    O: Send + Sync + 'static,
+{
+    pub(super) async fn stop_session_and_wait_for_runtime(&self, contact: &Contact) {
+        let runtime_applied = self.telepathy.inner.core_state.manager_active.notified();
+        tokio::pin!(runtime_applied);
+        runtime_applied.as_mut().enable();
+        self.telepathy.stop_session(contact).await;
+        runtime_applied.await;
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct SequencedInput {
     counter: Arc<AtomicUsize>,
@@ -590,13 +605,57 @@ pub(super) struct PendingAcceptProbe {
 }
 
 /// How many manager lifecycle cycles the mock `manager_state` callback accepts.
-/// `Single` pins to one activation (2 active/starting + 1 stopped);
+/// `Single` pins to one activation; `RevisionCycles` pins manager retries caused
+/// by desired-runtime revision changes;
 /// `Restartable` accepts any number so `restart_manager()` tests don't trip
 /// mockall's strict call-count assertion.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(super) enum ManagerLifecycle {
     Single,
+    RevisionCycles(usize),
     Restartable,
+    StartingGate(ManagerStartingGate),
+}
+
+#[derive(Debug, Clone, Default)]
+pub(super) struct ManagerStartingGate {
+    started: Arc<AtomicBool>,
+    started_notify: Arc<Notify>,
+    released: Arc<AtomicBool>,
+    released_notify: Arc<Notify>,
+}
+
+impl ManagerStartingGate {
+    pub(super) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(super) async fn wait_started(&self) {
+        let notified = self.started_notify.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        if self.started.load(Relaxed) {
+            return;
+        }
+        notified.await;
+    }
+
+    pub(super) fn release(&self) {
+        self.released.store(true, Relaxed);
+        self.released_notify.notify_waiters();
+    }
+
+    async fn wait_released(&self) {
+        let notified = self.released_notify.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        if self.released.load(Relaxed) {
+            return;
+        }
+        self.started.store(true, Relaxed);
+        self.started_notify.notify_waiters();
+        notified.await;
+    }
 }
 
 impl PendingAcceptProbe {
@@ -983,15 +1042,26 @@ pub(super) fn construct_mock_callbacks(
     });
 
     match lifecycle {
-        ManagerLifecycle::Single => {
+        ManagerLifecycle::Single | ManagerLifecycle::RevisionCycles(_) => {
+            let cycles = match lifecycle {
+                ManagerLifecycle::Single => 1,
+                ManagerLifecycle::RevisionCycles(cycles) => cycles,
+                ManagerLifecycle::Restartable | ManagerLifecycle::StartingGate(_) => unreachable!(),
+            };
+
             mock.expect_manager_state()
-                .withf(|a| matches!(a, ManagerState::Active | ManagerState::Starting))
-                .times(2)
+                .withf(|state| matches!(state, ManagerState::Starting))
+                .times(cycles)
                 .returning(|_| Box::pin(async move {}));
 
             mock.expect_manager_state()
-                .withf(|a| matches!(a, ManagerState::Stopped))
-                .once()
+                .withf(|state| matches!(state, ManagerState::Active))
+                .times(cycles)
+                .returning(|_| Box::pin(async move {}));
+
+            mock.expect_manager_state()
+                .withf(|state| matches!(state, ManagerState::Stopped))
+                .times(cycles)
                 .returning(|_| Box::pin(async move {}));
         }
         ManagerLifecycle::Restartable => {
@@ -1014,6 +1084,26 @@ pub(super) fn construct_mock_callbacks(
             // panic that masks the real cause.
             mock.expect_manager_state()
                 .withf(|a| matches!(a, ManagerState::Failed))
+                .times(..)
+                .returning(|_| Box::pin(async move {}));
+        }
+        ManagerLifecycle::StartingGate(gate) => {
+            let starting_gate = gate.clone();
+            mock.expect_manager_state()
+                .withf(|state| matches!(state, ManagerState::Starting))
+                .times(..)
+                .returning(move |_| {
+                    let gate = starting_gate.clone();
+                    Box::pin(async move { gate.wait_released().await })
+                });
+
+            mock.expect_manager_state()
+                .withf(|state| matches!(state, ManagerState::Active | ManagerState::Stopped))
+                .times(..)
+                .returning(|_| Box::pin(async move {}));
+
+            mock.expect_manager_state()
+                .withf(|state| matches!(state, ManagerState::Failed))
                 .times(..)
                 .returning(|_| Box::pin(async move {}));
         }

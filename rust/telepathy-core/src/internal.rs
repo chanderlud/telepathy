@@ -18,17 +18,16 @@ use crate::internal::core::{RoomControllerStart, TelepathyCore};
 use crate::internal::error::{Error, ErrorKind};
 use crate::internal::messages::{Attachment, ProtocolMessage};
 use crate::internal::state::{
-    CallSlotAcquireResult, CallSlotState, EarlyCallState, RestartOutcome, RestartRequest,
-    RoomState, SessionState,
+    CallSlotAcquireResult, CallSlotState, EarlyCallState, PreparedIdentitySwitch,
+    PreparedSwitchLease, RoomState, SessionState,
 };
 pub(crate) use crate::internal::utils::{JoinHandle, spawn_task};
 use crate::overlay::Overlay;
-use crate::types::{
-    ChatMessage, CodecConfig, Contact, IdentitySwitchError, NetworkConfig, ScreenshareConfig,
-};
+use crate::types::{ChatMessage, CodecConfig, Contact, NetworkConfig, ScreenshareConfig};
 use chrono::Local;
 use iroh::SecretKey;
 use speedy::{LittleEndian, Writable, Writer};
+use std::collections::HashSet;
 use std::mem;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
@@ -57,12 +56,6 @@ const END_CALL_SLOT_RELEASE_TIMEOUT: Duration = Duration::from_secs(5);
 /// A timeout used when initializing the call
 const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Upper bound on how long `await_manager_restart` waits for the next
-/// session-manager iteration to publish its outcome. Long enough to absorb
-/// endpoint bring-up + a single retry under load, short enough that a
-/// persistent setup failure surfaces to the identity-switch caller so it
-/// can roll back and release the gate instead of wedging the slot forever.
-const MANAGER_RESTART_TIMEOUT: Duration = Duration::from_secs(45);
 /// How often to keep-alive iroh session streams
 const KEEP_ALIVE: Duration = Duration::from_secs(10);
 /// the protocol identifier for Telepathy sessions
@@ -161,35 +154,6 @@ where
     handles: Arc<Mutex<Vec<JoinHandle<()>>>>,
 }
 
-struct IdentitySwitchRecoveryGuard<'a> {
-    transaction: &'a state::IdentityTransaction,
-    recovery: Option<state::IdentitySwitchRecovery>,
-}
-
-impl<'a> IdentitySwitchRecoveryGuard<'a> {
-    fn new(
-        transaction: &'a state::IdentityTransaction,
-        recovery: state::IdentitySwitchRecovery,
-    ) -> Self {
-        Self {
-            transaction,
-            recovery: Some(recovery),
-        }
-    }
-
-    fn disarm(&mut self) {
-        self.recovery = None;
-    }
-}
-
-impl Drop for IdentitySwitchRecoveryGuard<'_> {
-    fn drop(&mut self) {
-        if let Some(recovery) = &self.recovery {
-            self.transaction.abandon_to_recovery(recovery);
-        }
-    }
-}
-
 /// Tears down one room generation's controller and awaits its completion.
 ///
 /// `cancel` is that generation's `end_sessions` token, so every post-spawn
@@ -236,6 +200,17 @@ where
     }
 
     pub async fn start_manager(&mut self) {
+        if self
+            .inner
+            .core_state
+            .desired_runtime()
+            .is_ok_and(|runtime| runtime.identity.is_none())
+            && let Some(identity) = self.inner.core_state.identity.read().await.clone()
+        {
+            self.inner
+                .core_state
+                .replace_desired_identity_infallible(identity);
+        }
         if let Some(handle) = self.inner.start_manager().await {
             self.handles.lock().await.push(handle);
         }
@@ -250,13 +225,16 @@ where
 
     pub async fn try_start_session(&self, contact: &Contact) -> Result<()> {
         let _session_gate = self.inner.core_state.identity_session_gate.lock().await;
-        self.ensure_identity_switch_recovered()?;
+        self.ensure_runtime_applied()?;
         self.start_session_internal(contact).await;
         Ok(())
     }
 
     async fn start_session_internal(&self, contact: &Contact) {
         debug!("start_session called for {}", contact.peer_id);
+        self.inner
+            .core_state
+            .add_desired_contact_infallible(contact.clone());
 
         if let Some(ref sender) = self.inner.start_session
             && sender.send(contact.peer_id).await.is_err()
@@ -284,7 +262,7 @@ where
         if operation.is_cancelled() {
             return Ok(());
         }
-        self.ensure_identity_switch_recovered()?;
+        self.ensure_runtime_applied()?;
 
         // Acquire the slot and capture its ownership snapshot atomically: both
         // happen under a single mutex hold inside `try_acquire_or_match_with_owner`,
@@ -448,7 +426,7 @@ where
         if operation.is_cancelled() {
             return Ok(());
         }
-        self.ensure_identity_switch_recovered()?;
+        self.ensure_runtime_applied()?;
 
         if !self
             .inner
@@ -599,7 +577,6 @@ where
         };
 
         // Publish this generation before the controller can process stream errors.
-        // A dropped acknowledgement makes the controller tear down this generation.
         let mut room_guard = tokio::select! {
             guard = self.inner.room_state.write() => guard,
             _ = operation.cancelled() => {
@@ -679,379 +656,43 @@ where
         if self.inner.core_state.call_slot.current() != CallSlotState::Idle {
             return Err(ErrorKind::ManagerRestartDuringCall.into());
         }
-        self.restart_manager_inner().await
-    }
-
-    /// Same as [`restart_manager`](Self::restart_manager) but skips the
-    /// idle-slot precondition.
-    ///
-    /// Callers must already hold the call slot in a non-idle gate state
-    /// (e.g. [`CallSlotState::IdentitySwitch`]) so a concurrent `start_call`
-    /// cannot race the restart. Used by
-    /// [`commit_identity_switch`](Self::commit_identity_switch)
-    /// to keep the slot reserved across identity mutation AND restart.
-    async fn restart_manager_inner(&self) -> Result<()> {
-        // reset sessions so manager can clean up before the restart signal.
-        self.inner.reset_sessions().await;
-        // Serialize this restart against all other in-flight restarts and
-        // await the iteration spawned SPECIFICALLY for this request. The
-        // bounded timeout guarantees a persistent setup failure surfaces
-        // instead of wedging the caller forever.
-        self.request_restart().await?;
-        // ensure volume cache resets fully
-        self.inner.core_state.reset_peer_output_volumes()?;
-        // start a session for all contacts
-        for contact in self.inner.callbacks.get_contacts().await {
-            self.start_session_internal(&contact).await;
-        }
+        let revision = self.inner.core_state.restart_desired_runtime_infallible();
+        self.inner
+            .core_state
+            .wait_for_runtime_applied(revision)
+            .await?;
         Ok(())
     }
 
-    /// Same as [`restart_manager_inner`](Self::restart_manager_inner) but
-    /// starts sessions for the supplied `contacts` snapshot instead of pulling
-    /// them through `get_contacts` from the frontend.
-    ///
-    /// This is the path every two-phase identity switch must use: while the
-    /// gate is held the frontend is mid-mutation and may still report the
-    /// previous active profile's contacts through `get_contacts`, so reading
-    /// them back would rehydrate the wrong session set after the identity
-    /// swap. The frontend passes the target profile's contact snapshot
-    /// directly through [`commit_identity_switch`](Self::commit_identity_switch).
-    async fn restart_manager_with_contacts(&self, contacts: &[Contact]) -> Result<()> {
-        self.inner.reset_sessions().await;
-        self.request_restart().await?;
-        self.inner.core_state.reset_peer_output_volumes()?;
-        for contact in contacts {
-            self.start_session_internal(contact).await;
-        }
-        Ok(())
-    }
-
-    /// Enqueue a serialized session-manager restart request and await the
-    /// outcome from the iteration spawned for THIS request, bounded by
-    /// [`MANAGER_RESTART_TIMEOUT`].
-    ///
-    /// Replaces the previous generation-only handshake, which could
-    /// acknowledge the wrong request: two requesters that raced the
-    /// `manager_generation` counter both observed the strictly-newer
-    /// outcome published by the OTHER requester's replacement iteration,
-    /// unblocking on a generation that was not their own. The per-request
-    /// one-shot ack channel makes satisfaction strict — only the iteration
-    /// that this request itself triggered can close the channel — so a
-    /// waiter cannot be released before its own replacement iteration has
-    /// either reached its active milestone or failed setup.
-    ///
-    /// Regular [`restart_manager`] and identity-switch restarts share one
-    /// command channel, so each is satisfied only by its assigned iteration.
-    async fn request_restart(&self) -> Result<()> {
-        if self.inner.core_state.stop_manager.is_cancelled() {
-            return Err(ErrorKind::ManagerSetupFailed("manager is shut down".to_string()).into());
-        }
-
-        let (request, mut acknowledgement, cancellation) = RestartRequest::new();
-        if let Err(send_error) = self.inner.restart_requests.send(request) {
-            send_error.0.complete(RestartOutcome::ManagerStopped);
-        }
-
-        let outcome = match timeout(MANAGER_RESTART_TIMEOUT, &mut acknowledgement).await {
-            Ok(Ok(outcome)) => outcome,
-            Ok(Err(_)) => {
-                return Err(Error::from(ErrorKind::Poison(
-                    "restart_request_ack_dropped",
-                )));
-            }
-            Err(_) => {
-                cancellation.cancel();
-                let _ = acknowledgement.await;
-                return Err(Error::from(ErrorKind::ManagerRestartTimeout));
-            }
-        };
-
-        match outcome {
-            RestartOutcome::SetupSucceeded => Ok(()),
-            RestartOutcome::SetupFailed(msg) => {
-                Err(Error::from(ErrorKind::ManagerSetupFailed(msg)))
-            }
-            RestartOutcome::Cancelled => Err(Error::from(ErrorKind::ManagerSetupFailed(
-                "manager restart cancelled".to_string(),
-            ))),
-            RestartOutcome::ManagerStopped => Err(Error::from(ErrorKind::ManagerSetupFailed(
-                "manager is shut down".to_string(),
-            ))),
-        }
-    }
-
-    /// Phase one of a two-phase identity-switch transaction.
-    ///
-    /// Validates the target payload, acquires [`CallSlotState::IdentitySwitch`]
-    /// so no `start_call`, room, or audio test can begin while the frontend
-    /// mutates its active profile, and stores the validated target plus the
-    /// pre-transaction snapshot so a parameterless
-    /// [`commit_identity_switch`](Self::commit_identity_switch) can apply it.
-    ///
-    /// Validating the target key length HERE — before the slot is reserved —
-    /// guarantees a malformed payload can never wedge the slot: a commit-time
-    /// validation failure on the old API left the call slot permanently
-    /// reserved because the snapshot was already installed.
-    ///
-    /// The frontend MUST follow this with exactly one of
-    /// [`commit_identity_switch`](Self::commit_identity_switch) or
-    /// [`cancel_identity_switch`](Self::cancel_identity_switch). Holding the
-    /// slot indefinitely wedges the backend.
-    ///
-    /// Returns [`ErrorKind::ManagerRestartDuringCall`] if the slot is
-    /// already in a non-idle state.
-    pub async fn begin_identity_switch(
+    pub async fn prepare_identity_switch(
         &self,
         target_key: [u8; 32],
         target_contacts: Vec<Contact>,
-    ) -> Result<()> {
-        let previous_identity = self
+    ) -> Result<PreparedIdentitySwitch> {
+        let target_identity = SecretKey::from_bytes(&target_key);
+        validate_identity_switch_contacts(&target_contacts)?;
+        let session_gate = self
             .inner
             .core_state
-            .identity
-            .read()
-            .await
+            .identity_session_gate
             .clone()
-            .unwrap_or_else(SecretKey::generate);
-        let previous_contacts = self.inner.callbacks.get_contacts().await;
-
-        let _session_gate = self.inner.core_state.identity_session_gate.lock().await;
-        // Atomically acquire the slot AND capture its ownership snapshot so
-        // commit/cancel can release through `release_if_match` keyed on this
-        // exact snapshot — never clobbering an unrelated caller that
-        // re-acquired the slot after a timeout or race.
-        let slot_snapshot = match self
-            .inner
-            .core_state
-            .call_slot
-            .try_acquire_with_snapshot(CallSlotState::IdentitySwitch)?
-        {
-            Some(snapshot) => snapshot,
-            None => return Err(ErrorKind::ManagerRestartDuringCall.into()),
-        };
-
-        if let Err(error) = self.inner.core_state.identity_transaction.install(
-            state::IdentitySwitchSnapshot {
-                previous_identity,
-                previous_contacts,
-            },
-            target_key,
+            .lock_owned()
+            .await;
+        let lease = PreparedSwitchLease::acquire(&self.inner.core_state.call_slot)?;
+        Ok(PreparedIdentitySwitch::new(
+            target_identity,
             target_contacts,
-            slot_snapshot,
-        ) {
-            let _ = self
-                .inner
-                .core_state
-                .call_slot
-                .release_if_match(slot_snapshot)?;
-            return Err(error);
+            self.inner.core_state.clone(),
+            session_gate,
+            lease,
+        ))
+    }
+
+    fn ensure_runtime_applied(&self) -> Result<()> {
+        if !self.inner.core_state.is_runtime_applied()? {
+            return Err(ErrorKind::RuntimeNotReady.into());
         }
         Ok(())
-    }
-
-    /// Phase two commit of a two-phase identity-switch transaction.
-    ///
-    /// Applies the target identity and contact snapshot validated and stored
-    /// at [`begin_identity_switch`](Self::begin_identity_switch), restarts
-    /// the session manager, and rehydrates sessions for that snapshot (NOT
-    /// the `get_contacts` callback, which still reflects the pre-transaction
-    /// state while the frontend is mid-mutation).
-    ///
-    /// On any failure after the identity has been mutated, restores the
-    /// previous identity captured at begin and restarts the manager with
-    /// the previous contact snapshot so the backend returns to its
-    /// pre-transaction state. The gate is ALWAYS released before returning
-    /// through [`CallSlot::release_if_match`] keyed on the snapshot captured
-    /// at begin, so a release cannot invalidate an unrelated active call.
-    ///
-    /// The frontend must roll back any optimistic active-profile change it
-    /// persisted before calling commit when this returns an error.
-    pub async fn commit_identity_switch(&self) -> std::result::Result<(), IdentitySwitchError> {
-        let transaction = &self.inner.core_state.identity_transaction;
-        let pending = transaction
-            .begin_commit()
-            .map_err(|error| IdentitySwitchError::Failed {
-                message: error.to_string(),
-            })?;
-        let mut cancellation_guard =
-            IdentitySwitchRecoveryGuard::new(transaction, pending.clone().into_recovery());
-
-        match self
-            .run_identity_switch(pending.target_key(), pending.target_contacts())
-            .await
-        {
-            Ok(()) => self
-                .finish_identity_switch(pending.slot_snapshot(), |transaction| {
-                    transaction.finish_commit(&pending)
-                })
-                .map_err(|error| IdentitySwitchError::Failed {
-                    message: error.to_string(),
-                })
-                .inspect(|_| cancellation_guard.disarm()),
-            Err(primary_error) => {
-                let primary_message = primary_error.to_string();
-                let rollback_key = pending.previous_identity().to_bytes();
-                let recovery = transaction.begin_rollback(&pending).map_err(|error| {
-                    IdentitySwitchError::Failed {
-                        message: format!("{primary_message}; rollback could not begin: {error}"),
-                    }
-                })?;
-                match self
-                    .run_identity_switch(&rollback_key, recovery.previous_contacts())
-                    .await
-                {
-                    Ok(()) => {
-                        self.finish_identity_switch(recovery.slot_snapshot(), |transaction| {
-                            transaction.finish_rollback(&recovery)
-                        })
-                        .map_err(|error| IdentitySwitchError::Failed {
-                            message: format!(
-                                "{primary_message}; rollback completion failed: {error}"
-                            ),
-                        })?;
-                        cancellation_guard.disarm();
-                        Err(IdentitySwitchError::Failed {
-                            message: primary_message,
-                        })
-                    }
-                    Err(rollback_error) => {
-                        let rollback_message = rollback_error.to_string();
-                        transaction.rollback_failed(&recovery).map_err(|error| {
-                            IdentitySwitchError::RollbackFailed {
-                                primary_message: primary_message.clone(),
-                                rollback_message: format!(
-                                    "{rollback_message}; recovery state failed: {error}"
-                                ),
-                            }
-                        })?;
-                        cancellation_guard.disarm();
-                        Err(IdentitySwitchError::RollbackFailed {
-                            primary_message,
-                            rollback_message,
-                        })
-                    }
-                }
-            }
-        }
-    }
-
-    pub async fn recover_identity_switch(&self) -> std::result::Result<(), IdentitySwitchError> {
-        let transaction = &self.inner.core_state.identity_transaction;
-        let Some(recovery) =
-            transaction
-                .begin_recovery()
-                .map_err(|error| IdentitySwitchError::RecoveryFailed {
-                    message: error.to_string(),
-                })?
-        else {
-            return Err(IdentitySwitchError::RecoveryNotRequired);
-        };
-        let mut cancellation_guard =
-            IdentitySwitchRecoveryGuard::new(transaction, recovery.clone());
-
-        let recovery_key = recovery.previous_identity().to_bytes();
-        match self
-            .run_identity_switch(&recovery_key, recovery.previous_contacts())
-            .await
-        {
-            Ok(()) => {
-                let result = self
-                    .finish_identity_switch(recovery.slot_snapshot(), |transaction| {
-                        transaction.finish_recovery(&recovery)
-                    })
-                    .map_err(|error| IdentitySwitchError::RecoveryFailed {
-                        message: error.to_string(),
-                    });
-                if result.is_ok() {
-                    cancellation_guard.disarm();
-                }
-                result
-            }
-            Err(error) => {
-                let recovery_message = match transaction.restore_recovery_required(recovery) {
-                    Ok(()) => error.to_string(),
-                    Err(transition_error) => {
-                        format!("{error}; recovery state transition failed: {transition_error}")
-                    }
-                };
-                Err(IdentitySwitchError::RecoveryFailed {
-                    message: recovery_message,
-                })
-                .inspect_err(|_| cancellation_guard.disarm())
-            }
-        }
-    }
-
-    /// Phase two cancel of a two-phase identity-switch transaction.
-    ///
-    /// Consumes the pending transaction captured at
-    /// [`begin_identity_switch`](Self::begin_identity_switch) and releases
-    /// the slot through [`CallSlot::release_if_match`] keyed on the
-    /// snapshot captured at begin. No identity mutation happens; the
-    /// frontend must use this path when its own persistence failed between
-    /// `begin` and `commit`.
-    ///
-    /// Calling without a pending transaction is a safe no-op: it returns
-    /// immediately without touching the call slot, so a stray or racing
-    /// cancel cannot invalidate an unrelated active call. This is the
-    /// invariant the previous `release()` implementation violated.
-    pub async fn cancel_identity_switch(&self) {
-        let pending = self.inner.core_state.identity_transaction.take_for_cancel();
-        let pending = match pending {
-            Ok(Some(pending)) => pending,
-            Ok(None) => return,
-            Err(error) => {
-                warn!(event = "identity_switch_cancel_state_failed", error = %error);
-                return;
-            }
-        };
-        if let Err(error) = self
-            .inner
-            .core_state
-            .call_slot
-            .release_if_match(pending.slot_snapshot())
-        {
-            warn!(
-                event = "identity_switch_slot_release_failed",
-                error = %error,
-                "cancel_identity_switch could not release the slot; \
-                 the backend may be unable to start new calls until recovery",
-            );
-        }
-    }
-
-    async fn run_identity_switch(&self, key: &[u8; 32], contacts: &[Contact]) -> Result<()> {
-        *self.inner.core_state.identity.write().await = Some(SecretKey::from_bytes(key));
-        self.restart_manager_with_contacts(contacts).await
-    }
-
-    fn ensure_identity_switch_recovered(&self) -> Result<()> {
-        if self
-            .inner
-            .core_state
-            .identity_transaction
-            .switch_in_progress()?
-        {
-            return Err(ErrorKind::IdentitySwitchRecoveryRequired.into());
-        }
-        Ok(())
-    }
-
-    fn finish_identity_switch(
-        &self,
-        slot_snapshot: state::CallSlotSnapshot,
-        finish: impl FnOnce(&state::IdentityTransaction) -> Result<()>,
-    ) -> Result<()> {
-        match self
-            .inner
-            .core_state
-            .call_slot
-            .release_if_match(slot_snapshot)?
-        {
-            true => finish(&self.inner.core_state.identity_transaction),
-            false => Err(ErrorKind::Poison("identity switch gate ownership changed").into()),
-        }
     }
 
     /// shuts down the entire rust backend
@@ -1070,12 +711,19 @@ where
 
     /// Sets the signing key (called when the profile changes)
     pub async fn set_identity(&self, key: &[u8; 32]) -> Result<()> {
-        *self.inner.core_state.identity.write().await = Some(SecretKey::from_bytes(key));
+        let identity = SecretKey::from_bytes(key);
+        *self.inner.core_state.identity.write().await = Some(identity.clone());
+        self.inner
+            .core_state
+            .replace_desired_identity_infallible(identity);
         Ok(())
     }
 
     /// Stops a specific session (called when a contact is deleted)
     pub async fn stop_session(&self, contact: &Contact) {
+        self.inner
+            .core_state
+            .remove_desired_contact_infallible(contact.peer_id);
         // clear volume cache entry for contact
         if let Err(error) = self
             .inner
@@ -1108,7 +756,7 @@ where
 
     /// Blocks while an audio test is running
     pub async fn audio_test(&self) -> Result<()> {
-        self.ensure_identity_switch_recovered()?;
+        self.ensure_runtime_applied()?;
         if !self
             .inner
             .core_state
@@ -1323,6 +971,17 @@ where
         *self.inner.core_state.denoise_model.write().await = model;
         Ok(())
     }
+}
+
+fn validate_identity_switch_contacts(contacts: &[Contact]) -> Result<()> {
+    let mut peers = HashSet::with_capacity(contacts.len());
+    if contacts
+        .iter()
+        .any(|contact| contact.is_room_only || !peers.insert(contact.peer_id))
+    {
+        return Err(ErrorKind::InvalidContactFormat.into());
+    }
+    Ok(())
 }
 
 #[cfg(test)]

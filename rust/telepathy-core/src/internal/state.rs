@@ -1,6 +1,6 @@
 use crate::internal::Result;
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
-use crate::internal::error::{Error, ErrorKind};
+use crate::internal::error::ErrorKind;
 use crate::internal::messages::{AudioHeader, ProtocolMessage, RoomMessage};
 use crate::types::{CodecConfig, Contact, NetworkConfig, ScreenshareConfig, SessionStatus};
 use atomic_float::AtomicF32;
@@ -10,13 +10,13 @@ use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize};
-use std::sync::{Arc, Mutex as StdMutex, MutexGuard};
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 use telepathy_audio::RnnModel;
 use telepathy_audio::internal::utils::db_to_multiplier;
 use tokio::select;
 use tokio::sync::mpsc::Sender;
-use tokio::sync::{Mutex, Notify, RwLock, oneshot};
+use tokio::sync::{Mutex, Notify, RwLock};
 #[cfg(not(target_family = "wasm"))]
 use tokio::time::interval;
 use tokio_util::sync::CancellationToken;
@@ -36,14 +36,7 @@ pub enum CallSlotState {
     ActiveDirect,
     RoomCall,
     AudioTest,
-    /// Held while the signing identity is being swapped and the session
-    /// manager restarted.
-    /// [`crate::internal::TelepathyHandle::begin_identity_switch`] acquires
-    /// this state atomically with its idle check so a call cannot start
-    /// before [`crate::internal::TelepathyHandle::commit_identity_switch`]
-    /// (or
-    /// [`crate::internal::TelepathyHandle::cancel_identity_switch`]) releases
-    /// the gate.
+    /// Held while prepared identity switching owns the call slot.
     IdentitySwitch,
 }
 
@@ -498,11 +491,15 @@ pub struct CoreState {
     /// notifies when a manager starts
     pub manager_active: Arc<Notify>,
 
-    /// Serialized state for the two-phase identity-switch transaction.
-    /// Replaces the bare `identity_switch_snapshot` Mutex: the transaction
-    /// object enforces begin/commit/cancel mutual exclusion so a stray
-    /// cancel can no longer invalidate an unrelated active call.
-    pub(crate) identity_transaction: Arc<IdentityTransaction>,
+    /// Runtime configuration the manager is converging toward.
+    pub(crate) desired_runtime: Arc<StdMutex<DesiredRuntime>>,
+
+    /// Revision last published by an active manager using the matching desired runtime.
+    pub(crate) applied_runtime_revision: Arc<AtomicU64>,
+
+    pub(crate) failed_runtime_revision: Arc<AtomicU64>,
+
+    pub(crate) runtime_applied: Arc<Notify>,
 
     /// Serializes public session starts with identity-switch installation.
     pub(crate) identity_session_gate: Arc<Mutex<()>>,
@@ -536,361 +533,280 @@ pub struct CoreState {
     pub(crate) audio_sequence: Arc<AtomicU32>,
 }
 
-/// Pre-mutation state captured at [`crate::internal::TelepathyHandle::begin_identity_switch`]
-/// so the transaction can roll back the signing identity and the session set if
-/// [`crate::internal::TelepathyHandle::commit_identity_switch`] fails after the
-/// identity has already been mutated.
+/// Immutable runtime target captured by one manager generation.
 #[derive(Clone)]
-pub(crate) struct IdentitySwitchSnapshot {
-    /// Identity in effect before the transaction mutated it.
-    pub previous_identity: SecretKey,
-    /// Contact snapshot in effect before the transaction mutated the session set.
-    /// Used to rehydrate the previous sessions on rollback so the backend does
-    /// not advertise sessions for the rejected profile's contacts.
-    pub previous_contacts: Vec<Contact>,
+pub(crate) struct RuntimeSnapshot {
+    pub(crate) identity: Option<SecretKey>,
+    pub(crate) contacts: Vec<Contact>,
+    pub(crate) revision: u64,
+    pub(crate) cancellation: CancellationToken,
 }
 
-/// Serialized pending state for the two-phase identity-switch transaction.
-///
-/// Held under the inner Mutex so begin, commit, and cancel are mutually
-/// exclusive: only one terminal action can consume a pending transaction.
-/// Cancel without begin is a no-op (returns `None`) and never touches the
-/// call slot — this is the invariant that lets a stray or racing cancel
-/// invalidate an unrelated active call.
-pub(crate) struct IdentityTransaction {
-    state: StdMutex<Option<IdentityTransactionState>>,
+/// Latest requested runtime. Replacing it cancels obsolete manager setup.
+pub(crate) struct DesiredRuntime {
+    snapshot: RuntimeSnapshot,
 }
 
-enum IdentityTransactionState {
-    Pending(IdentityTransactionPending),
-    Committing(IdentityTransactionPending),
-    RollingBack(IdentitySwitchRecovery),
-    RecoveryRequired(IdentitySwitchRecovery),
-    Recovering(IdentitySwitchRecovery),
-}
-
-impl IdentityTransactionState {
-    fn slot_snapshot(&self) -> CallSlotSnapshot {
-        match self {
-            Self::Pending(pending) | Self::Committing(pending) => pending.slot_snapshot(),
-            Self::RollingBack(recovery)
-            | Self::RecoveryRequired(recovery)
-            | Self::Recovering(recovery) => recovery.slot_snapshot(),
-        }
-    }
-}
-
-#[derive(Clone)]
-pub(crate) struct IdentityTransactionPending {
-    /// Snapshot the backend captured at begin so commit can roll back to it
-    /// if the target identity or its contacts fail to apply.
-    previous: IdentitySwitchSnapshot,
-    /// Target payload validated and stored at begin. Stashing it here means
-    /// a malformed target key (wrong length, etc.) fails BEFORE the slot is
-    /// reserved — so a commit-time validation failure can never wedge the
-    /// slot, and a parameterless commit cannot fail validation at all.
-    target_key: [u8; 32],
-    target_contacts: Vec<Contact>,
-    /// Exact slot ownership captured by begin. Commit/cancel release through
-    /// [`CallSlot::release_if_match`] keyed on this snapshot so a stray
-    /// cancel cannot invalidate an unrelated active call that re-acquired
-    /// the slot after a timeout or race.
-    slot_snapshot: CallSlotSnapshot,
-}
-
-/// Previous identity snapshot retained after rollback setup failed.
-///
-/// The `IdentitySwitch` slot remains held until an explicit recovery request
-/// receives a successful manager setup acknowledgement for this snapshot.
-#[derive(Clone)]
-pub(crate) struct IdentitySwitchRecovery {
-    previous: IdentitySwitchSnapshot,
-    slot_snapshot: CallSlotSnapshot,
-}
-
-impl IdentityTransaction {
-    pub(crate) fn new() -> Self {
-        Self {
-            state: StdMutex::new(None),
-        }
-    }
-
-    fn lock_state(&self) -> Result<MutexGuard<'_, Option<IdentityTransactionState>>> {
-        self.state
-            .lock()
-            .map_err(|_| Error::from(ErrorKind::Poison("identity transaction mutex poisoned")))
-    }
-
-    /// Install a pending transaction. The caller MUST have already acquired
-    /// the slot atomically (capturing `slot_snapshot`) and validated the
-    /// target payload BEFORE calling this; otherwise the install would race
-    /// a concurrent begin or commit a slot we do not own.
-    ///
-    /// Returns `Poison` if a transaction is already pending: a well-behaved
-    /// caller never reaches this branch because the slot gate serializes
-    /// begins, but the check defends against a bug elsewhere producing two
-    /// consecutive installs without an intervening terminal action.
-    pub(crate) fn install(
-        &self,
-        previous: IdentitySwitchSnapshot,
-        target_key: [u8; 32],
-        target_contacts: Vec<Contact>,
-        slot_snapshot: CallSlotSnapshot,
-    ) -> Result<()> {
-        let mut guard = self.lock_state()?;
-        if guard.is_some() {
-            return Err(Error::from(ErrorKind::Poison(
-                "identity_switch_begin_overwrote_pending_transaction",
-            )));
-        }
-        *guard = Some(IdentityTransactionState::Pending(
-            IdentityTransactionPending {
-                previous,
-                target_key,
-                target_contacts,
-                slot_snapshot,
-            },
-        ));
-        Ok(())
-    }
-
-    pub(crate) fn begin_commit(&self) -> Result<IdentityTransactionPending> {
-        let mut guard = self.lock_state()?;
-        match guard.as_ref() {
-            Some(IdentityTransactionState::Pending(pending)) => {
-                let pending = pending.clone();
-                *guard = Some(IdentityTransactionState::Committing(pending.clone()));
-                Ok(pending)
-            }
-            _ => Err(Error::from(ErrorKind::Poison(
-                "commit_identity_switch called without a pending transaction",
-            ))),
-        }
-    }
-
-    /// Consume the pending transaction for cancel. Returns `None` when no
-    /// transaction is pending so cancel without begin is a safe no-op that
-    /// never touches the call slot.
-    pub(crate) fn take_for_cancel(&self) -> Result<Option<IdentityTransactionPending>> {
-        let mut guard = self.lock_state()?;
-        match guard.take() {
-            Some(IdentityTransactionState::Pending(pending)) => Ok(Some(pending)),
-            state => {
-                *guard = state;
-                Ok(None)
-            }
-        }
-    }
-
-    pub(crate) fn begin_rollback(
-        &self,
-        pending: &IdentityTransactionPending,
-    ) -> Result<IdentitySwitchRecovery> {
-        let mut guard = self.lock_state()?;
-        match guard.as_ref() {
-            Some(IdentityTransactionState::Committing(current))
-                if current.slot_snapshot() == pending.slot_snapshot() =>
-            {
-                let recovery = pending.clone().into_recovery();
-                *guard = Some(IdentityTransactionState::RollingBack(recovery.clone()));
-                Ok(recovery)
-            }
-            _ => Err(Error::from(ErrorKind::Poison(
-                "identity switch commit state changed before rollback",
-            ))),
-        }
-    }
-
-    pub(crate) fn rollback_failed(&self, recovery: &IdentitySwitchRecovery) -> Result<()> {
-        let mut guard = self.lock_state()?;
-        match guard.as_ref() {
-            Some(IdentityTransactionState::RollingBack(current))
-                if current.slot_snapshot() == recovery.slot_snapshot() =>
-            {
-                *guard = Some(IdentityTransactionState::RecoveryRequired(recovery.clone()));
-                Ok(())
-            }
-            _ => Err(Error::from(ErrorKind::Poison(
-                "identity switch rollback state changed before recovery",
-            ))),
-        }
-    }
-
-    pub(crate) fn finish_commit(&self, pending: &IdentityTransactionPending) -> Result<()> {
-        self.finish_matching(pending.slot_snapshot(), |state| {
-            matches!(state, IdentityTransactionState::Committing(_))
-        })
-    }
-
-    pub(crate) fn finish_rollback(&self, recovery: &IdentitySwitchRecovery) -> Result<()> {
-        self.finish_matching(recovery.slot_snapshot(), |state| {
-            matches!(state, IdentityTransactionState::RollingBack(_))
-        })
-    }
-
-    fn finish_matching(
-        &self,
-        slot_snapshot: CallSlotSnapshot,
-        expected: impl FnOnce(&IdentityTransactionState) -> bool,
-    ) -> Result<()> {
-        let mut guard = self.lock_state()?;
-        match guard.as_ref() {
-            Some(state) if expected(state) && state.slot_snapshot() == slot_snapshot => {
-                *guard = None;
-                Ok(())
-            }
-            _ => Err(Error::from(ErrorKind::Poison(
-                "identity switch state changed before completion",
-            ))),
-        }
-    }
-
-    pub(crate) fn begin_recovery(&self) -> Result<Option<IdentitySwitchRecovery>> {
-        let mut guard = self.lock_state()?;
-        match guard.as_ref() {
-            Some(IdentityTransactionState::RecoveryRequired(recovery)) => {
-                let recovery = recovery.clone();
-                *guard = Some(IdentityTransactionState::Recovering(recovery.clone()));
-                Ok(Some(recovery))
-            }
-            Some(IdentityTransactionState::Pending(_))
-            | Some(IdentityTransactionState::Committing(_))
-            | Some(IdentityTransactionState::RollingBack(_))
-            | Some(IdentityTransactionState::Recovering(_))
-            | None => Ok(None),
-        }
-    }
-
-    pub(crate) fn restore_recovery_required(&self, recovery: IdentitySwitchRecovery) -> Result<()> {
-        let mut guard = self.lock_state()?;
-        match guard.as_ref() {
-            Some(IdentityTransactionState::Recovering(current))
-                if current.slot_snapshot() == recovery.slot_snapshot() =>
-            {
-                *guard = Some(IdentityTransactionState::RecoveryRequired(recovery));
-                Ok(())
-            }
-            _ => Err(Error::from(ErrorKind::Poison(
-                "identity switch recovery state changed before retry",
-            ))),
-        }
-    }
-
-    pub(crate) fn finish_recovery(&self, recovery: &IdentitySwitchRecovery) -> Result<()> {
-        self.finish_matching(recovery.slot_snapshot(), |state| {
-            matches!(state, IdentityTransactionState::Recovering(_))
-        })
-    }
-
-    pub(crate) fn abandon_to_recovery(&self, recovery: &IdentitySwitchRecovery) {
-        let Ok(mut guard) = self.state.lock() else {
-            return;
-        };
-        let matches_recovery = guard.as_ref().is_some_and(|state| {
-            matches!(
-                state,
-                IdentityTransactionState::Committing(_)
-                    | IdentityTransactionState::RollingBack(_)
-                    | IdentityTransactionState::Recovering(_)
-            ) && state.slot_snapshot() == recovery.slot_snapshot()
-        });
-        if matches_recovery {
-            *guard = Some(IdentityTransactionState::RecoveryRequired(recovery.clone()));
-        }
-    }
-
-    pub(crate) fn switch_in_progress(&self) -> Result<bool> {
-        Ok(self.lock_state()?.is_some())
-    }
-}
-
-impl Default for IdentityTransaction {
+impl Default for DesiredRuntime {
     fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl IdentityTransactionPending {
-    pub(crate) fn previous_identity(&self) -> &SecretKey {
-        &self.previous.previous_identity
-    }
-
-    pub(crate) fn target_key(&self) -> &[u8; 32] {
-        &self.target_key
-    }
-
-    pub(crate) fn target_contacts(&self) -> &[Contact] {
-        &self.target_contacts
-    }
-
-    pub(crate) fn slot_snapshot(&self) -> CallSlotSnapshot {
-        self.slot_snapshot
-    }
-
-    pub(crate) fn into_recovery(self) -> IdentitySwitchRecovery {
-        IdentitySwitchRecovery {
-            previous: self.previous,
-            slot_snapshot: self.slot_snapshot,
+        Self {
+            snapshot: RuntimeSnapshot {
+                identity: None,
+                contacts: Vec::new(),
+                revision: 0,
+                cancellation: CancellationToken::new(),
+            },
         }
     }
 }
 
-impl IdentitySwitchRecovery {
-    pub(crate) fn previous_identity(&self) -> &SecretKey {
-        &self.previous.previous_identity
+impl CoreState {
+    pub(crate) fn desired_runtime(&self) -> Result<RuntimeSnapshot> {
+        self.desired_runtime
+            .lock()
+            .map(|runtime| runtime.snapshot.clone())
+            .map_err(|_| ErrorKind::Poison("desired runtime mutex poisoned").into())
     }
 
-    pub(crate) fn previous_contacts(&self) -> &[Contact] {
-        &self.previous.previous_contacts
+    pub(crate) fn replace_desired_runtime_infallible(
+        &self,
+        identity: SecretKey,
+        contacts: Vec<Contact>,
+    ) -> u64 {
+        let mut runtime = match self.desired_runtime.lock() {
+            Ok(runtime) => runtime,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        runtime.snapshot.cancellation.cancel();
+        let revision = runtime.snapshot.revision.wrapping_add(1);
+        runtime.snapshot = RuntimeSnapshot {
+            identity: Some(identity),
+            contacts,
+            revision,
+            cancellation: CancellationToken::new(),
+        };
+        self.failed_runtime_revision.store(u64::MAX, Relaxed);
+        self.runtime_applied.notify_waiters();
+        revision
     }
 
-    pub(crate) fn slot_snapshot(&self) -> CallSlotSnapshot {
-        self.slot_snapshot
+    pub(crate) fn replace_desired_identity_infallible(&self, identity: SecretKey) -> u64 {
+        let contacts = match self.desired_runtime.lock() {
+            Ok(runtime) => runtime.snapshot.contacts.clone(),
+            Err(poisoned) => poisoned.into_inner().snapshot.contacts.clone(),
+        };
+        self.replace_desired_runtime_infallible(identity, contacts)
+    }
+
+    pub(crate) fn restart_desired_runtime_infallible(&self) -> u64 {
+        let runtime = match self.desired_runtime.lock() {
+            Ok(runtime) => runtime.snapshot.clone(),
+            Err(poisoned) => poisoned.into_inner().snapshot.clone(),
+        };
+        match runtime.identity {
+            Some(identity) => self.replace_desired_runtime_infallible(identity, runtime.contacts),
+            None => runtime.revision,
+        }
+    }
+
+    pub(crate) fn remove_desired_contact_infallible(&self, peer: PublicKey) {
+        let runtime = match self.desired_runtime.lock() {
+            Ok(runtime) => runtime.snapshot.clone(),
+            Err(poisoned) => poisoned.into_inner().snapshot.clone(),
+        };
+        let contacts: Vec<_> = runtime
+            .contacts
+            .iter()
+            .filter(|contact| contact.peer_id != peer)
+            .cloned()
+            .collect();
+        if contacts.len() != runtime.contacts.len()
+            && let Some(identity) = runtime.identity
+        {
+            self.replace_desired_runtime_infallible(identity, contacts);
+        }
+    }
+
+    pub(crate) fn add_desired_contact_infallible(&self, contact: Contact) {
+        let mut runtime = match self.desired_runtime.lock() {
+            Ok(runtime) => runtime,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if runtime
+            .snapshot
+            .contacts
+            .iter()
+            .all(|existing| existing.peer_id != contact.peer_id)
+        {
+            runtime.snapshot.contacts.push(contact);
+        }
+    }
+
+    pub(crate) fn is_runtime_applied(&self) -> Result<bool> {
+        Ok(self.desired_runtime()?.revision == self.applied_runtime_revision.load(Relaxed))
+    }
+
+    pub(crate) fn mark_runtime_applied(&self, revision: u64) -> Result<bool> {
+        if self.desired_runtime()?.revision == revision {
+            self.applied_runtime_revision.store(revision, Relaxed);
+            self.runtime_applied.notify_waiters();
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    pub(crate) fn mark_runtime_setup_failed(&self, revision: u64) -> Result<bool> {
+        if self.desired_runtime()?.revision == revision {
+            self.failed_runtime_revision.store(revision, Relaxed);
+            self.runtime_applied.notify_waiters();
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    pub(crate) async fn wait_for_runtime_applied(&self, revision: u64) -> Result<()> {
+        loop {
+            let notified = self.runtime_applied.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.desired_runtime()?.revision != revision {
+                return Err(ErrorKind::RuntimeSuperseded.into());
+            }
+            if self.applied_runtime_revision.load(Relaxed) == revision {
+                return Ok(());
+            }
+            if self.failed_runtime_revision.load(Relaxed) == revision {
+                return Err(ErrorKind::RuntimeSetupFailed.into());
+            }
+            if self.stop_manager.is_cancelled() {
+                return Err(ErrorKind::RuntimeManagerStopped.into());
+            }
+            select! {
+                biased;
+                _ = self.stop_manager.cancelled() => return Err(ErrorKind::RuntimeManagerStopped.into()),
+                _ = notified => (),
+            }
+        }
     }
 }
 
-pub(crate) struct RestartRequest {
-    ack: oneshot::Sender<RestartOutcome>,
-    cancellation: CancellationToken,
+/// Exact call-slot ownership held between prepare and commit.
+pub(crate) struct PreparedSwitchLease {
+    slot: CallSlot,
+    snapshot: CallSlotSnapshot,
 }
 
-impl RestartRequest {
-    pub(crate) fn new() -> (Self, oneshot::Receiver<RestartOutcome>, CancellationToken) {
-        let (ack, receiver) = oneshot::channel();
-        let cancellation = CancellationToken::new();
-        (
-            Self {
-                ack,
-                cancellation: cancellation.clone(),
-            },
-            receiver,
-            cancellation,
-        )
-    }
-
-    pub(crate) fn cancellation(&self) -> &CancellationToken {
-        &self.cancellation
-    }
-
-    pub(crate) fn is_cancelled(&self) -> bool {
-        self.cancellation.is_cancelled()
-    }
-
-    pub(crate) fn complete(self, outcome: RestartOutcome) {
-        let _ = self.ack.send(outcome);
+impl PreparedSwitchLease {
+    pub(crate) fn acquire(slot: &CallSlot) -> Result<Self> {
+        let snapshot = slot
+            .try_acquire_with_snapshot(CallSlotState::IdentitySwitch)?
+            .ok_or(ErrorKind::ManagerRestartDuringCall)?;
+        Ok(Self {
+            slot: slot.clone(),
+            snapshot,
+        })
     }
 }
 
-/// Outcome published by the iteration that owns a given [`RestartRequest`].
-pub(crate) enum RestartOutcome {
-    /// The replacement iteration reached its active milestone.
-    SetupSucceeded,
-    /// `setup_endpoint` failed before the replacement iteration came
-    /// online. Carries a human-readable diagnostic so the requester can
-    /// surface a useful error.
-    SetupFailed(String),
-    Cancelled,
-    ManagerStopped,
+impl Drop for PreparedSwitchLease {
+    fn drop(&mut self) {
+        if let Err(error) = self.slot.release_if_match(self.snapshot) {
+            warn!(event = "prepared_identity_switch_lease_release_failed", error = %error);
+        }
+    }
+}
+
+/// Validated target plus its exact prepared-switch lease.
+pub struct PreparedIdentitySwitch {
+    identity: SecretKey,
+    contacts: Vec<Contact>,
+    core_state: CoreState,
+    _session_gate: tokio::sync::OwnedMutexGuard<()>,
+    _lease: PreparedSwitchLease,
+}
+
+impl PreparedIdentitySwitch {
+    pub(crate) fn new(
+        identity: SecretKey,
+        contacts: Vec<Contact>,
+        core_state: CoreState,
+        session_gate: tokio::sync::OwnedMutexGuard<()>,
+        lease: PreparedSwitchLease,
+    ) -> Self {
+        Self {
+            identity,
+            contacts,
+            core_state,
+            _session_gate: session_gate,
+            _lease: lease,
+        }
+    }
+
+    pub async fn commit(self) -> Result<()> {
+        let revision = self
+            .core_state
+            .replace_desired_runtime_infallible(self.identity, self.contacts);
+        self.core_state.wait_for_runtime_applied(revision).await
+    }
+}
+
+#[cfg(test)]
+mod prepared_switch_tests {
+    use super::{CallSlot, CallSlotState, CoreState, PreparedSwitchLease};
+    use iroh::SecretKey;
+
+    #[test]
+    fn dropped_lease_releases_only_its_exact_slot_generation() {
+        let slot = CallSlot::default();
+        match PreparedSwitchLease::acquire(&slot) {
+            Ok(lease) => {
+                let stale_snapshot = lease.snapshot;
+                drop(lease);
+                match slot.try_acquire_with_snapshot(CallSlotState::AudioTest) {
+                    Ok(Some(_)) => {}
+                    Ok(None) => panic!("new owner could not acquire released slot"),
+                    Err(error) => panic!("new slot acquisition failed: {error}"),
+                }
+                match slot.release_if_match(stale_snapshot) {
+                    Ok(released) => assert!(!released),
+                    Err(error) => panic!("stale lease release failed: {error}"),
+                }
+            }
+            Err(error) => panic!("lease acquisition failed: {error}"),
+        }
+        assert_eq!(slot.current(), CallSlotState::AudioTest);
+    }
+
+    #[test]
+    fn only_matching_desired_revision_becomes_applied() {
+        let state = CoreState::default();
+        let first_revision =
+            state.replace_desired_runtime_infallible(SecretKey::generate(), Vec::new());
+        assert!(state.is_runtime_applied().is_ok_and(|applied| !applied));
+        assert!(
+            state
+                .mark_runtime_applied(first_revision)
+                .is_ok_and(|published| published)
+        );
+
+        let second_revision =
+            state.replace_desired_runtime_infallible(SecretKey::generate(), Vec::new());
+        assert_ne!(first_revision, second_revision);
+        assert!(
+            state
+                .mark_runtime_applied(first_revision)
+                .is_ok_and(|published| !published)
+        );
+        assert!(state.is_runtime_applied().is_ok_and(|applied| !applied));
+        assert!(
+            state
+                .mark_runtime_applied(second_revision)
+                .is_ok_and(|published| published)
+        );
+        assert!(state.is_runtime_applied().is_ok_and(|applied| applied));
+    }
 }
 
 impl CoreState {
@@ -903,6 +819,8 @@ impl CoreState {
             network_config: network_config.clone(),
             screenshare_config: screenshare_config.clone(),
             codec_config: codec_config.clone(),
+            applied_runtime_revision: Arc::new(AtomicU64::new(u64::MAX)),
+            failed_runtime_revision: Arc::new(AtomicU64::new(u64::MAX)),
             ..Self::default()
         }
     }

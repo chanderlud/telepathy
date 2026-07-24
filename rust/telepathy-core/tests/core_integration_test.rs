@@ -14,5 +14,7 @@ mod device_failures;
 mod identity_switch;
 #[path = "core_integration_test/room_lifecycle.rs"]
 mod room_lifecycle;
+#[path = "core_integration_test/runtime_readiness.rs"]
+mod runtime_readiness;
 #[path = "core_integration_test/session_lifecycle.rs"]
 mod session_lifecycle;

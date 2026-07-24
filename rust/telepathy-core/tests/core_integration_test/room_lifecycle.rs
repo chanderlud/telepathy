@@ -1,13 +1,14 @@
 use super::common::{
     CallEndedPark, CallbackCapturingAudioHost, DEFAULT_SAMPLE_RATE, DeviceSelectionOperation,
-    DeviceSelectionProbe, InputSampleRateGate, MOCK_DEVICE_ID, OutputOpenGate, RoomEventKind,
-    StreamErrorProbe, TwoClientShutdownGuard, WaitingCallbackGate, assert_call_slot_idle,
-    assert_room_event_sequence, assert_slot_remains_outside_direct_call_states, build_client,
-    build_client_with_call_ended_park, build_client_with_waiting_gate, call_state_snapshot,
-    init_test_tracing, room_join_count, room_leave_count, shared_relay_map, sorted_room_members,
-    wait_for_call_ended_contains, wait_for_connected, wait_for_no_extra_room_leave,
-    wait_for_room_join_count, wait_for_room_leave_count, wait_for_sessions, wait_for_slot_idle,
-    wait_for_slot_room_call,
+    DeviceSelectionProbe, InputSampleRateGate, MOCK_DEVICE_ID, ManagerLifecycle, OutputOpenGate,
+    RoomEventKind, StreamErrorProbe, TwoClientShutdownGuard, WaitingCallbackGate,
+    assert_call_slot_idle, assert_room_event_sequence,
+    assert_slot_remains_outside_direct_call_states, build_client,
+    build_client_with_call_ended_park, build_client_with_options, build_client_with_waiting_gate,
+    call_state_snapshot, init_test_tracing, room_join_count, room_leave_count, shared_relay_map,
+    sorted_room_members, wait_for_call_ended_contains, wait_for_connected,
+    wait_for_no_extra_room_leave, wait_for_room_join_count, wait_for_room_leave_count,
+    wait_for_sessions, wait_for_slot_idle, wait_for_slot_room_call,
 };
 
 use iroh::SecretKey;
@@ -744,7 +745,7 @@ async fn room_peer_disconnect_then_rejoin_emits_leave_then_join() {
     )
     .await;
 
-    let client_b = build_client(
+    let client_b = build_client_with_options(
         relay_map,
         key_b,
         vec![contact_a.clone()],
@@ -756,6 +757,8 @@ async fn room_peer_disconnect_then_rejoin_emits_leave_then_join() {
             DEFAULT_SAMPLE_RATE,
         ),
         Arc::new(Mutex::new(Vec::new())),
+        None,
+        ManagerLifecycle::RevisionCycles(2),
     )
     .await;
 
@@ -771,18 +774,23 @@ async fn room_peer_disconnect_then_rejoin_emits_leave_then_join() {
         .expect("client a should join room");
     client_b
         .telepathy
-        .join_room(room_members)
+        .join_room(room_members.clone())
         .await
         .expect("client b should join room");
 
     wait_for_room_join_count(&call_states_a, &peer_b, 1).await;
 
     client_b.is_active.store(false, Relaxed);
-    client_b.telepathy.stop_session(&contact_a).await;
+    client_b.stop_session_and_wait_for_runtime(&contact_a).await;
     wait_for_room_leave_count(&call_states_a, &peer_b, 1).await;
     client_b.telepathy.start_session(&contact_a).await;
 
     wait_for_sessions(&client_b, &contact_a, &client_a, &contact_b).await;
+    client_b
+        .telepathy
+        .join_room(room_members)
+        .await
+        .expect("client b should rejoin room");
     wait_for_room_join_count(&call_states_a, &peer_b, 2).await;
     wait_for_no_extra_room_leave(&call_states_a, &peer_b, 1, Duration::from_secs(1)).await;
 
@@ -839,7 +847,7 @@ async fn room_multiple_quick_reconnects_do_not_emit_stale_room_leave() {
     )
     .await;
 
-    let client_b = build_client(
+    let client_b = build_client_with_options(
         relay_map,
         key_b,
         vec![contact_a.clone()],
@@ -851,6 +859,8 @@ async fn room_multiple_quick_reconnects_do_not_emit_stale_room_leave() {
             DEFAULT_SAMPLE_RATE,
         ),
         Arc::new(Mutex::new(Vec::new())),
+        None,
+        ManagerLifecycle::RevisionCycles(3),
     )
     .await;
 
@@ -866,24 +876,32 @@ async fn room_multiple_quick_reconnects_do_not_emit_stale_room_leave() {
         .expect("client a should join room");
     client_b
         .telepathy
-        .join_room(room_members)
+        .join_room(room_members.clone())
         .await
         .expect("client b should join room");
 
     wait_for_room_join_count(&call_states_a, &peer_b, 1).await;
 
     client_b.is_active.store(false, Relaxed);
-    client_b.telepathy.stop_session(&contact_a).await;
-    sleep(Duration::from_millis(500)).await;
+    client_b.stop_session_and_wait_for_runtime(&contact_a).await;
     client_b.telepathy.start_session(&contact_a).await;
     wait_for_sessions(&client_b, &contact_a, &client_a, &contact_b).await;
+    client_b
+        .telepathy
+        .join_room(room_members.clone())
+        .await
+        .expect("client b should rejoin room");
     wait_for_room_join_count(&call_states_a, &peer_b, 2).await;
 
     client_b.is_active.store(false, Relaxed);
-    client_b.telepathy.stop_session(&contact_a).await;
-    sleep(Duration::from_millis(500)).await;
+    client_b.stop_session_and_wait_for_runtime(&contact_a).await;
     client_b.telepathy.start_session(&contact_a).await;
     wait_for_sessions(&client_b, &contact_a, &client_a, &contact_b).await;
+    client_b
+        .telepathy
+        .join_room(room_members)
+        .await
+        .expect("client b should rejoin room");
     wait_for_room_join_count(&call_states_a, &peer_b, 3).await;
 
     wait_for_no_extra_room_leave(&call_states_a, &peer_b, 2, Duration::from_secs(2)).await;
@@ -947,7 +965,7 @@ async fn room_reconnect_does_not_emit_stale_room_leave() {
     )
     .await;
 
-    let client_b = build_client(
+    let client_b = build_client_with_options(
         relay_map,
         key_b,
         vec![contact_a.clone()],
@@ -959,6 +977,8 @@ async fn room_reconnect_does_not_emit_stale_room_leave() {
             DEFAULT_SAMPLE_RATE,
         ),
         Arc::new(Mutex::new(Vec::new())),
+        None,
+        ManagerLifecycle::RevisionCycles(2),
     )
     .await;
 
@@ -976,7 +996,11 @@ async fn room_reconnect_does_not_emit_stale_room_leave() {
         "client a should join room"
     );
     assert!(
-        client_b.telepathy.join_room(room_members).await.is_ok(),
+        client_b
+            .telepathy
+            .join_room(room_members.clone())
+            .await
+            .is_ok(),
         "client b should join room"
     );
 
@@ -984,10 +1008,14 @@ async fn room_reconnect_does_not_emit_stale_room_leave() {
 
     // Simulate a transport drop and reconnect while the room call stays active.
     client_b.is_active.store(false, Relaxed);
-    client_b.telepathy.stop_session(&contact_a).await;
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    client_b.stop_session_and_wait_for_runtime(&contact_a).await;
     client_b.telepathy.start_session(&contact_a).await;
     wait_for_sessions(&client_b, &contact_a, &client_a, &contact_b).await;
+    client_b
+        .telepathy
+        .join_room(room_members)
+        .await
+        .expect("client b should rejoin room");
 
     wait_for_room_join_count(&call_states_a, &peer_b, 2).await;
     wait_for_no_extra_room_leave(&call_states_a, &peer_b, 1, Duration::from_secs(2)).await;
@@ -1523,9 +1551,6 @@ async fn room_peer_leave_and_rejoin_reestablishes_mesh() {
     let mut room_members = vec![peer_a.clone(), peer_b.clone(), peer_c.clone()];
     room_members.sort();
 
-    // `ManagerLifecycle::Single` is safe here: `stop_session`/`start_session`
-    // don't plumb `manager_state` events, so the strict single-lifecycle mock
-    // holds (2 starting/active + 1 stopped per client).
     let client_a = build_client(
         relay_map,
         key_a,
@@ -1556,7 +1581,7 @@ async fn room_peer_leave_and_rejoin_reestablishes_mesh() {
     )
     .await;
 
-    let client_c = build_client(
+    let client_c = build_client_with_options(
         relay_map,
         key_c,
         vec![contact_a.clone(), contact_b.clone()],
@@ -1568,6 +1593,8 @@ async fn room_peer_leave_and_rejoin_reestablishes_mesh() {
             DEFAULT_SAMPLE_RATE,
         ),
         call_states_c.clone(),
+        None,
+        ManagerLifecycle::RevisionCycles(2),
     )
     .await;
 
@@ -1637,14 +1664,11 @@ async fn room_peer_leave_and_rejoin_reestablishes_mesh() {
         "client b should observe exactly one RoomLeave(C) after C's end_call; got states={after_leave_b:?}"
     );
 
-    // Fresh `connection_id` on both sides: the new `Join` is keyed by a different
-    // `connection_id` than the old `Leave`, which is the condition
-    // `room_leave_stale_connection` detects.
+    // The manager revision refreshes every transport, giving the new `Join` a
+    // different `connection_id` from the old `Leave` on both sides.
     client_c.is_active.store(false, Relaxed);
-    client_c.telepathy.stop_session(&contact_a).await;
-    client_c.telepathy.stop_session(&contact_b).await;
+    client_c.stop_session_and_wait_for_runtime(&contact_a).await;
     client_c.telepathy.start_session(&contact_a).await;
-    client_c.telepathy.start_session(&contact_b).await;
     wait_for_sessions(&client_c, &contact_a, &client_a, &contact_c).await;
     wait_for_sessions(&client_c, &contact_b, &client_b, &contact_c).await;
     client_c

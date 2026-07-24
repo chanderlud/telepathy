@@ -61,9 +61,10 @@ pub enum ErrorKind {
     SessionStopped,
     NoSessionForContact,
     ManagerRestartDuringCall,
-    ManagerSetupFailed(String),
-    ManagerRestartTimeout,
-    IdentitySwitchRecoveryRequired,
+    RuntimeNotReady,
+    RuntimeSuperseded,
+    RuntimeSetupFailed,
+    RuntimeManagerStopped,
     AttachmentsTooLarge,
     MpscSend,
     InvalidModel,
@@ -247,12 +248,17 @@ impl Display for Error {
                 ErrorKind::NoSessionForContact => "No session found for contact".to_string(),
                 ErrorKind::ManagerRestartDuringCall =>
                     "Cannot restart manager while a call is active".to_string(),
-                ErrorKind::ManagerSetupFailed(ref msg) =>
-                    format!("Session manager failed to come online: {msg}"),
-                ErrorKind::ManagerRestartTimeout =>
-                    "Timed out waiting for the session manager to restart".to_string(),
-                ErrorKind::IdentitySwitchRecoveryRequired =>
-                    "Identity switch recovery is required before starting new activity".to_string(),
+                ErrorKind::RuntimeNotReady =>
+                    "Runtime configuration has not been applied by the session manager".to_string(),
+                ErrorKind::RuntimeSuperseded =>
+                    "Runtime configuration was superseded before the session manager applied it"
+                        .to_string(),
+                ErrorKind::RuntimeSetupFailed =>
+                    "Session manager setup failed before the runtime configuration was applied"
+                        .to_string(),
+                ErrorKind::RuntimeManagerStopped =>
+                    "Session manager stopped before the runtime configuration was applied"
+                        .to_string(),
                 ErrorKind::AttachmentsTooLarge => "Attachments too large".to_string(),
                 ErrorKind::MpscSend => "Channel closed (mpsc send failed)".to_string(),
                 ErrorKind::InvalidModel => "Invalid RNN model".to_string(),

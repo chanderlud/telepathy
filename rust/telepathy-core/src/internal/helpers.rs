@@ -59,14 +59,9 @@ where
     #[instrument(name = "manager.setup_endpoint", skip_all)]
     pub(crate) async fn setup_endpoint(
         &self,
+        identity: &iroh::SecretKey,
         iteration_cancellation: &CancellationToken,
     ) -> Result<Option<Endpoint>> {
-        let identity = if let Some(keypair) = self.core_state.identity.read().await.as_ref() {
-            keypair.clone()
-        } else {
-            return Err(ErrorKind::NoIdentityAvailable.into());
-        };
-
         trace!(event = "endpoint_launch", config = ?self.core_state.network_config);
         tokio::select! {
             biased;
@@ -76,7 +71,7 @@ where
         }
 
         let mut endpoint_builder = Endpoint::builder(presets::Empty)
-            .secret_key(identity)
+            .secret_key(identity.clone())
             .alpns(vec![ALPN.to_vec()])
             .relay_mode(default_relay_mode());
 
@@ -237,18 +232,7 @@ where
             _ = endpoint.online() => (),
         }
 
-        tokio::select! {
-            biased;
-            _ = self.core_state.stop_manager.cancelled() => {
-                endpoint.close().await;
-                Ok(None)
-            },
-            _ = iteration_cancellation.cancelled() => {
-                endpoint.close().await;
-                Ok(None)
-            },
-            _ = self.callbacks.manager_state(ManagerState::Active) => Ok(Some(endpoint)),
-        }
+        Ok(Some(endpoint))
     }
 
     #[cfg(not(target_family = "wasm"))]
@@ -583,7 +567,6 @@ where
 
     pub async fn shutdown(&self) {
         self.core_state.stop_manager.cancel();
-        self.close_unstarted_restart_receiver();
         self.reset_sessions().await;
     }
 
