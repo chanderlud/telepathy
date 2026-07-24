@@ -1,8 +1,8 @@
 name: Release
 
 # Fires when the CI workflow completes, then downloads CI's build_flutter
-# artifacts instead of rebuilding them. The per-job `is_tag_release` gate
-# ensures we only run when CI was triggered by a `v*` tag push.
+# artifacts instead of rebuilding them. The gate validates CI provenance before
+# any privileged job consumes its artifacts.
 on:
   workflow_run:
     workflows: [CI]
@@ -20,14 +20,43 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Gate: skip release when the triggering CI run did not succeed or was not
-  # triggered by a `v*` tag push.
+  # Gate: only a successful CI run from a `v*` tag push may release. Resolve
+  # the tag remotely and require its target to match CI's immutable head SHA.
   checks_passed:
-    if: ${{ github.event.workflow_run.conclusion == 'success' && startsWith(github.event.workflow_run.head_branch, 'v') }}
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && startsWith(github.event.workflow_run.head_branch, 'v') }}
     runs-on: ubuntu-latest
     name: CI status gate
+    outputs:
+      tag: ${{ steps.validate.outputs.tag }}
+      sha: ${{ steps.validate.outputs.sha }}
+      run_id: ${{ steps.validate.outputs.run_id }}
     steps:
-      - run: echo "CI run ${{ github.event.workflow_run.id }} on ${{ github.event.workflow_run.head_branch }} succeeded; proceeding with release."
+      - id: validate
+        env:
+          EVENT: ${{ github.event.workflow_run.event }}
+          TAG: ${{ github.event.workflow_run.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          [[ "$EVENT" == 'push' ]]
+          [[ "$TAG" == v* ]]
+
+          resolved_sha=''
+          while IFS=$'\t' read -r tag_sha tag_ref; do
+            case "$tag_ref" in
+              "refs/tags/$TAG^{}") resolved_sha="$tag_sha" ;;
+              "refs/tags/$TAG") [[ -z "$resolved_sha" ]] && resolved_sha="$tag_sha" ;;
+            esac
+          done < <(git ls-remote "https://github.com/${GITHUB_REPOSITORY}.git" "refs/tags/$TAG" "refs/tags/$TAG^{}")
+
+          [[ -n "$resolved_sha" ]]
+          [[ "$resolved_sha" == "$HEAD_SHA" ]]
+          {
+            echo "tag=$TAG"
+            echo "sha=$HEAD_SHA"
+            echo "run_id=$RUN_ID"
+          } >> "$GITHUB_OUTPUT"
 
   build_cross:
     needs: checks_passed
@@ -54,7 +83,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.workflow_run.head_branch }}
+          ref: ${{ needs.checks_passed.outputs.sha }}
 
       - name: Cache Cargo registry for cross build
         uses: actions/cache@v5
@@ -173,21 +202,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.workflow_run.head_branch }}
+          ref: ${{ needs.checks_passed.outputs.sha }}
 
       - name: Download all artifacts from CI run
         uses: actions/download-artifact@v8
         with:
           path: artifacts
-          run-id: ${{ github.event.workflow_run.id }}
+          run-id: ${{ needs.checks_passed.outputs.run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Compute version from tag
         id: version
         run: |
-          ref="${{ github.event.workflow_run.head_branch }}"
-          ref="${ref##*/}"
-          ver="${ref#v}"
+          tag="${{ needs.checks_passed.outputs.tag }}"
+          ver="${tag#v}"
           echo "version=$ver" >> "$GITHUB_OUTPUT"
 
       - name: Prepare dist directory
@@ -307,6 +335,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
+          tag_name: ${{ needs.checks_passed.outputs.tag }}
+          target_commitish: ${{ needs.checks_passed.outputs.sha }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -321,14 +351,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.workflow_run.head_branch }}
+          ref: ${{ needs.checks_passed.outputs.sha }}
 
       - name: Download web artifact from CI run
         uses: actions/download-artifact@v8
         with:
           name: telepathy_ubuntu-24.04_web
           path: web-artifact
-          run-id: ${{ github.event.workflow_run.id }}
+          run-id: ${{ needs.checks_passed.outputs.run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Deploy to Cloudflare Pages
