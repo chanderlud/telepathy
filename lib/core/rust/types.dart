@@ -10,7 +10,7 @@ import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'types.freezed.dart';
 
 // These functions are ignored because they are not marked as `pub`: `clamp_contact_output_volume`, `contact_output_volume_from_parts`, `contact_output_volume_in_range`, `field_error`, `new`, `parse_bind_addresses`, `poison_field_error`, `relay_map_from_urls`, `serialize_timestamp_rfc3339_utc`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `minimum_bytes_needed`, `read_from`, `write_to`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `minimum_bytes_needed`, `read_from`, `write_to`
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Capabilities>>
 abstract class Capabilities implements RustOpaqueInterface {
@@ -234,26 +234,6 @@ class DartError implements FrbException {
       other is DartError &&
           runtimeType == other.runtimeType &&
           message == other.message;
-}
-
-@freezed
-sealed class IdentitySwitchError
-    with _$IdentitySwitchError
-    implements FrbException {
-  const IdentitySwitchError._();
-
-  const factory IdentitySwitchError.failed({
-    required String message,
-  }) = IdentitySwitchError_Failed;
-  const factory IdentitySwitchError.rollbackFailed({
-    required String primaryMessage,
-    required String rollbackMessage,
-  }) = IdentitySwitchError_RollbackFailed;
-  const factory IdentitySwitchError.recoveryFailed({
-    required String message,
-  }) = IdentitySwitchError_RecoveryFailed;
-  const factory IdentitySwitchError.recoveryNotRequired() =
-      IdentitySwitchError_RecoveryNotRequired;
 }
 
 enum ManagerState {
