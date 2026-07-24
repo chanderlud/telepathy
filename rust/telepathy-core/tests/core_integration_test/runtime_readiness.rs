@@ -155,6 +155,42 @@ async fn restart_manager_returns_setup_failure_when_endpoint_cannot_bind() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn start_manager_and_waits_for_runtime_application() {
+    init_test_tracing();
+    let gate = ManagerStartingGate::new();
+    let mut handle = mock_handle(
+        &runtime_config(0),
+        ManagerLifecycle::StartingGate(gate.clone()),
+    );
+    let identity = SecretKey::generate();
+
+    match handle.set_identity(&identity.to_bytes()).await {
+        Ok(()) => {}
+        Err(error) => panic!("failed to install test identity: {error}"),
+    }
+
+    let mut start = Box::pin(handle.start_manager_and_wait());
+    let start_is_pending = poll_fn(|context| match start.as_mut().poll(context) {
+        Poll::Pending => Poll::Ready(true),
+        Poll::Ready(_) => Poll::Ready(false),
+    })
+    .await;
+    assert!(
+        start_is_pending,
+        "start manager completed before manager setup was released"
+    );
+
+    gate.wait_started().await;
+    gate.release();
+    match timeout(Duration::from_secs(2), start).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => panic!("manager runtime did not apply: {error}"),
+        Err(_) => panic!("start manager did not wait for runtime application"),
+    }
+    handle.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn restart_manager_returns_superseded_when_identity_changes_before_setup() {
     init_test_tracing();
     let gate = ManagerStartingGate::new();

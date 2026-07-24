@@ -216,6 +216,15 @@ where
         }
     }
 
+    pub async fn start_manager_and_wait(&mut self) -> Result<()> {
+        self.start_manager().await;
+        let revision = self.inner.core_state.desired_runtime()?.revision;
+        self.inner
+            .core_state
+            .wait_for_runtime_applied(revision)
+            .await
+    }
+
     /// Tries to start a session for a contact
     pub async fn start_session(&self, contact: &Contact) {
         if let Err(error) = self.try_start_session(contact).await {

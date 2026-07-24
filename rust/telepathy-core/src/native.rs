@@ -67,8 +67,11 @@ impl NativeTelepathy {
         }
     }
 
-    pub async fn start_manager(&mut self) {
-        self.handle.start_manager().await;
+    pub async fn start_manager(&mut self) -> Result<(), String> {
+        self.handle
+            .start_manager_and_wait()
+            .await
+            .map_err(|error| error.to_string())
     }
 
     pub async fn start_session(&self, contact: &Contact) -> Result<(), String> {
