@@ -10,6 +10,8 @@ mod call_lifecycle;
 mod common;
 #[path = "core_integration_test/device_failures.rs"]
 mod device_failures;
+#[path = "core_integration_test/identity_switch.rs"]
+mod identity_switch;
 #[path = "core_integration_test/room_lifecycle.rs"]
 mod room_lifecycle;
 #[path = "core_integration_test/session_lifecycle.rs"]

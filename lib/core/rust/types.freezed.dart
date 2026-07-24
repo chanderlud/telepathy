@@ -499,6 +499,480 @@ class _$CallState_CallEndedCopyWithImpl<$Res>
 }
 
 /// @nodoc
+mixin _$IdentitySwitchError {
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType && other is IdentitySwitchError);
+  }
+
+  @override
+  int get hashCode => runtimeType.hashCode;
+
+  @override
+  String toString() {
+    return 'IdentitySwitchError()';
+  }
+}
+
+/// @nodoc
+class $IdentitySwitchErrorCopyWith<$Res> {
+  $IdentitySwitchErrorCopyWith(
+      IdentitySwitchError _, $Res Function(IdentitySwitchError) __);
+}
+
+/// Adds pattern-matching-related methods to [IdentitySwitchError].
+extension IdentitySwitchErrorPatterns on IdentitySwitchError {
+  /// A variant of `map` that fallback to returning `orElse`.
+  ///
+  /// It is equivalent to doing:
+  /// ```dart
+  /// switch (sealedClass) {
+  ///   case final Subclass value:
+  ///     return ...;
+  ///   case _:
+  ///     return orElse();
+  /// }
+  /// ```
+
+  @optionalTypeArgs
+  TResult maybeMap<TResult extends Object?>({
+    TResult Function(IdentitySwitchError_Failed value)? failed,
+    TResult Function(IdentitySwitchError_RollbackFailed value)? rollbackFailed,
+    TResult Function(IdentitySwitchError_RecoveryFailed value)? recoveryFailed,
+    TResult Function(IdentitySwitchError_RecoveryNotRequired value)?
+        recoveryNotRequired,
+    required TResult orElse(),
+  }) {
+    final _that = this;
+    switch (_that) {
+      case IdentitySwitchError_Failed() when failed != null:
+        return failed(_that);
+      case IdentitySwitchError_RollbackFailed() when rollbackFailed != null:
+        return rollbackFailed(_that);
+      case IdentitySwitchError_RecoveryFailed() when recoveryFailed != null:
+        return recoveryFailed(_that);
+      case IdentitySwitchError_RecoveryNotRequired()
+          when recoveryNotRequired != null:
+        return recoveryNotRequired(_that);
+      case _:
+        return orElse();
+    }
+  }
+
+  /// A `switch`-like method, using callbacks.
+  ///
+  /// Callbacks receives the raw object, upcasted.
+  /// It is equivalent to doing:
+  /// ```dart
+  /// switch (sealedClass) {
+  ///   case final Subclass value:
+  ///     return ...;
+  ///   case final Subclass2 value:
+  ///     return ...;
+  /// }
+  /// ```
+
+  @optionalTypeArgs
+  TResult map<TResult extends Object?>({
+    required TResult Function(IdentitySwitchError_Failed value) failed,
+    required TResult Function(IdentitySwitchError_RollbackFailed value)
+        rollbackFailed,
+    required TResult Function(IdentitySwitchError_RecoveryFailed value)
+        recoveryFailed,
+    required TResult Function(IdentitySwitchError_RecoveryNotRequired value)
+        recoveryNotRequired,
+  }) {
+    final _that = this;
+    switch (_that) {
+      case IdentitySwitchError_Failed():
+        return failed(_that);
+      case IdentitySwitchError_RollbackFailed():
+        return rollbackFailed(_that);
+      case IdentitySwitchError_RecoveryFailed():
+        return recoveryFailed(_that);
+      case IdentitySwitchError_RecoveryNotRequired():
+        return recoveryNotRequired(_that);
+    }
+  }
+
+  /// A variant of `map` that fallback to returning `null`.
+  ///
+  /// It is equivalent to doing:
+  /// ```dart
+  /// switch (sealedClass) {
+  ///   case final Subclass value:
+  ///     return ...;
+  ///   case _:
+  ///     return null;
+  /// }
+  /// ```
+
+  @optionalTypeArgs
+  TResult? mapOrNull<TResult extends Object?>({
+    TResult? Function(IdentitySwitchError_Failed value)? failed,
+    TResult? Function(IdentitySwitchError_RollbackFailed value)? rollbackFailed,
+    TResult? Function(IdentitySwitchError_RecoveryFailed value)? recoveryFailed,
+    TResult? Function(IdentitySwitchError_RecoveryNotRequired value)?
+        recoveryNotRequired,
+  }) {
+    final _that = this;
+    switch (_that) {
+      case IdentitySwitchError_Failed() when failed != null:
+        return failed(_that);
+      case IdentitySwitchError_RollbackFailed() when rollbackFailed != null:
+        return rollbackFailed(_that);
+      case IdentitySwitchError_RecoveryFailed() when recoveryFailed != null:
+        return recoveryFailed(_that);
+      case IdentitySwitchError_RecoveryNotRequired()
+          when recoveryNotRequired != null:
+        return recoveryNotRequired(_that);
+      case _:
+        return null;
+    }
+  }
+
+  /// A variant of `when` that fallback to an `orElse` callback.
+  ///
+  /// It is equivalent to doing:
+  /// ```dart
+  /// switch (sealedClass) {
+  ///   case Subclass(:final field):
+  ///     return ...;
+  ///   case _:
+  ///     return orElse();
+  /// }
+  /// ```
+
+  @optionalTypeArgs
+  TResult maybeWhen<TResult extends Object?>({
+    TResult Function(String message)? failed,
+    TResult Function(String primaryMessage, String rollbackMessage)?
+        rollbackFailed,
+    TResult Function(String message)? recoveryFailed,
+    TResult Function()? recoveryNotRequired,
+    required TResult orElse(),
+  }) {
+    final _that = this;
+    switch (_that) {
+      case IdentitySwitchError_Failed() when failed != null:
+        return failed(_that.message);
+      case IdentitySwitchError_RollbackFailed() when rollbackFailed != null:
+        return rollbackFailed(_that.primaryMessage, _that.rollbackMessage);
+      case IdentitySwitchError_RecoveryFailed() when recoveryFailed != null:
+        return recoveryFailed(_that.message);
+      case IdentitySwitchError_RecoveryNotRequired()
+          when recoveryNotRequired != null:
+        return recoveryNotRequired();
+      case _:
+        return orElse();
+    }
+  }
+
+  /// A `switch`-like method, using callbacks.
+  ///
+  /// As opposed to `map`, this offers destructuring.
+  /// It is equivalent to doing:
+  /// ```dart
+  /// switch (sealedClass) {
+  ///   case Subclass(:final field):
+  ///     return ...;
+  ///   case Subclass2(:final field2):
+  ///     return ...;
+  /// }
+  /// ```
+
+  @optionalTypeArgs
+  TResult when<TResult extends Object?>({
+    required TResult Function(String message) failed,
+    required TResult Function(String primaryMessage, String rollbackMessage)
+        rollbackFailed,
+    required TResult Function(String message) recoveryFailed,
+    required TResult Function() recoveryNotRequired,
+  }) {
+    final _that = this;
+    switch (_that) {
+      case IdentitySwitchError_Failed():
+        return failed(_that.message);
+      case IdentitySwitchError_RollbackFailed():
+        return rollbackFailed(_that.primaryMessage, _that.rollbackMessage);
+      case IdentitySwitchError_RecoveryFailed():
+        return recoveryFailed(_that.message);
+      case IdentitySwitchError_RecoveryNotRequired():
+        return recoveryNotRequired();
+    }
+  }
+
+  /// A variant of `when` that fallback to returning `null`
+  ///
+  /// It is equivalent to doing:
+  /// ```dart
+  /// switch (sealedClass) {
+  ///   case Subclass(:final field):
+  ///     return ...;
+  ///   case _:
+  ///     return null;
+  /// }
+  /// ```
+
+  @optionalTypeArgs
+  TResult? whenOrNull<TResult extends Object?>({
+    TResult? Function(String message)? failed,
+    TResult? Function(String primaryMessage, String rollbackMessage)?
+        rollbackFailed,
+    TResult? Function(String message)? recoveryFailed,
+    TResult? Function()? recoveryNotRequired,
+  }) {
+    final _that = this;
+    switch (_that) {
+      case IdentitySwitchError_Failed() when failed != null:
+        return failed(_that.message);
+      case IdentitySwitchError_RollbackFailed() when rollbackFailed != null:
+        return rollbackFailed(_that.primaryMessage, _that.rollbackMessage);
+      case IdentitySwitchError_RecoveryFailed() when recoveryFailed != null:
+        return recoveryFailed(_that.message);
+      case IdentitySwitchError_RecoveryNotRequired()
+          when recoveryNotRequired != null:
+        return recoveryNotRequired();
+      case _:
+        return null;
+    }
+  }
+}
+
+/// @nodoc
+
+class IdentitySwitchError_Failed extends IdentitySwitchError {
+  const IdentitySwitchError_Failed({required this.message}) : super._();
+
+  final String message;
+
+  /// Create a copy of IdentitySwitchError
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @pragma('vm:prefer-inline')
+  $IdentitySwitchError_FailedCopyWith<IdentitySwitchError_Failed>
+      get copyWith =>
+          _$IdentitySwitchError_FailedCopyWithImpl<IdentitySwitchError_Failed>(
+              this, _$identity);
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is IdentitySwitchError_Failed &&
+            (identical(other.message, message) || other.message == message));
+  }
+
+  @override
+  int get hashCode => Object.hash(runtimeType, message);
+
+  @override
+  String toString() {
+    return 'IdentitySwitchError.failed(message: $message)';
+  }
+}
+
+/// @nodoc
+abstract mixin class $IdentitySwitchError_FailedCopyWith<$Res>
+    implements $IdentitySwitchErrorCopyWith<$Res> {
+  factory $IdentitySwitchError_FailedCopyWith(IdentitySwitchError_Failed value,
+          $Res Function(IdentitySwitchError_Failed) _then) =
+      _$IdentitySwitchError_FailedCopyWithImpl;
+  @useResult
+  $Res call({String message});
+}
+
+/// @nodoc
+class _$IdentitySwitchError_FailedCopyWithImpl<$Res>
+    implements $IdentitySwitchError_FailedCopyWith<$Res> {
+  _$IdentitySwitchError_FailedCopyWithImpl(this._self, this._then);
+
+  final IdentitySwitchError_Failed _self;
+  final $Res Function(IdentitySwitchError_Failed) _then;
+
+  /// Create a copy of IdentitySwitchError
+  /// with the given fields replaced by the non-null parameter values.
+  @pragma('vm:prefer-inline')
+  $Res call({
+    Object? message = null,
+  }) {
+    return _then(IdentitySwitchError_Failed(
+      message: null == message
+          ? _self.message
+          : message // ignore: cast_nullable_to_non_nullable
+              as String,
+    ));
+  }
+}
+
+/// @nodoc
+
+class IdentitySwitchError_RollbackFailed extends IdentitySwitchError {
+  const IdentitySwitchError_RollbackFailed(
+      {required this.primaryMessage, required this.rollbackMessage})
+      : super._();
+
+  final String primaryMessage;
+  final String rollbackMessage;
+
+  /// Create a copy of IdentitySwitchError
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @pragma('vm:prefer-inline')
+  $IdentitySwitchError_RollbackFailedCopyWith<
+          IdentitySwitchError_RollbackFailed>
+      get copyWith => _$IdentitySwitchError_RollbackFailedCopyWithImpl<
+          IdentitySwitchError_RollbackFailed>(this, _$identity);
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is IdentitySwitchError_RollbackFailed &&
+            (identical(other.primaryMessage, primaryMessage) ||
+                other.primaryMessage == primaryMessage) &&
+            (identical(other.rollbackMessage, rollbackMessage) ||
+                other.rollbackMessage == rollbackMessage));
+  }
+
+  @override
+  int get hashCode => Object.hash(runtimeType, primaryMessage, rollbackMessage);
+
+  @override
+  String toString() {
+    return 'IdentitySwitchError.rollbackFailed(primaryMessage: $primaryMessage, rollbackMessage: $rollbackMessage)';
+  }
+}
+
+/// @nodoc
+abstract mixin class $IdentitySwitchError_RollbackFailedCopyWith<$Res>
+    implements $IdentitySwitchErrorCopyWith<$Res> {
+  factory $IdentitySwitchError_RollbackFailedCopyWith(
+          IdentitySwitchError_RollbackFailed value,
+          $Res Function(IdentitySwitchError_RollbackFailed) _then) =
+      _$IdentitySwitchError_RollbackFailedCopyWithImpl;
+  @useResult
+  $Res call({String primaryMessage, String rollbackMessage});
+}
+
+/// @nodoc
+class _$IdentitySwitchError_RollbackFailedCopyWithImpl<$Res>
+    implements $IdentitySwitchError_RollbackFailedCopyWith<$Res> {
+  _$IdentitySwitchError_RollbackFailedCopyWithImpl(this._self, this._then);
+
+  final IdentitySwitchError_RollbackFailed _self;
+  final $Res Function(IdentitySwitchError_RollbackFailed) _then;
+
+  /// Create a copy of IdentitySwitchError
+  /// with the given fields replaced by the non-null parameter values.
+  @pragma('vm:prefer-inline')
+  $Res call({
+    Object? primaryMessage = null,
+    Object? rollbackMessage = null,
+  }) {
+    return _then(IdentitySwitchError_RollbackFailed(
+      primaryMessage: null == primaryMessage
+          ? _self.primaryMessage
+          : primaryMessage // ignore: cast_nullable_to_non_nullable
+              as String,
+      rollbackMessage: null == rollbackMessage
+          ? _self.rollbackMessage
+          : rollbackMessage // ignore: cast_nullable_to_non_nullable
+              as String,
+    ));
+  }
+}
+
+/// @nodoc
+
+class IdentitySwitchError_RecoveryFailed extends IdentitySwitchError {
+  const IdentitySwitchError_RecoveryFailed({required this.message}) : super._();
+
+  final String message;
+
+  /// Create a copy of IdentitySwitchError
+  /// with the given fields replaced by the non-null parameter values.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @pragma('vm:prefer-inline')
+  $IdentitySwitchError_RecoveryFailedCopyWith<
+          IdentitySwitchError_RecoveryFailed>
+      get copyWith => _$IdentitySwitchError_RecoveryFailedCopyWithImpl<
+          IdentitySwitchError_RecoveryFailed>(this, _$identity);
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is IdentitySwitchError_RecoveryFailed &&
+            (identical(other.message, message) || other.message == message));
+  }
+
+  @override
+  int get hashCode => Object.hash(runtimeType, message);
+
+  @override
+  String toString() {
+    return 'IdentitySwitchError.recoveryFailed(message: $message)';
+  }
+}
+
+/// @nodoc
+abstract mixin class $IdentitySwitchError_RecoveryFailedCopyWith<$Res>
+    implements $IdentitySwitchErrorCopyWith<$Res> {
+  factory $IdentitySwitchError_RecoveryFailedCopyWith(
+          IdentitySwitchError_RecoveryFailed value,
+          $Res Function(IdentitySwitchError_RecoveryFailed) _then) =
+      _$IdentitySwitchError_RecoveryFailedCopyWithImpl;
+  @useResult
+  $Res call({String message});
+}
+
+/// @nodoc
+class _$IdentitySwitchError_RecoveryFailedCopyWithImpl<$Res>
+    implements $IdentitySwitchError_RecoveryFailedCopyWith<$Res> {
+  _$IdentitySwitchError_RecoveryFailedCopyWithImpl(this._self, this._then);
+
+  final IdentitySwitchError_RecoveryFailed _self;
+  final $Res Function(IdentitySwitchError_RecoveryFailed) _then;
+
+  /// Create a copy of IdentitySwitchError
+  /// with the given fields replaced by the non-null parameter values.
+  @pragma('vm:prefer-inline')
+  $Res call({
+    Object? message = null,
+  }) {
+    return _then(IdentitySwitchError_RecoveryFailed(
+      message: null == message
+          ? _self.message
+          : message // ignore: cast_nullable_to_non_nullable
+              as String,
+    ));
+  }
+}
+
+/// @nodoc
+
+class IdentitySwitchError_RecoveryNotRequired extends IdentitySwitchError {
+  const IdentitySwitchError_RecoveryNotRequired() : super._();
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        (other.runtimeType == runtimeType &&
+            other is IdentitySwitchError_RecoveryNotRequired);
+  }
+
+  @override
+  int get hashCode => runtimeType.hashCode;
+
+  @override
+  String toString() {
+    return 'IdentitySwitchError.recoveryNotRequired()';
+  }
+}
+
+/// @nodoc
 mixin _$SessionStatus {
   @override
   bool operator ==(Object other) {

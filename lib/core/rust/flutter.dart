@@ -51,10 +51,47 @@ abstract class Telepathy implements RustOpaqueInterface {
   /// Blocks while an audio test is running
   Future<void> audioTest();
 
+  /// Phase one of the two-phase identity-switch transaction.
+  ///
+  /// Validates the target payload, acquires the backend call slot in the
+  /// `IdentitySwitch` gate so no call/room/audio-test can begin while the
+  /// frontend mutates its active profile, and stashes the validated
+  /// target so the parameterless [`commit_identity_switch`](Self::commit_identity_switch)
+  /// can apply it. The frontend MUST follow this with exactly one of
+  /// `commit_identity_switch` or [`cancel_identity_switch`](Self::cancel_identity_switch).
+  ///
+  /// Validating the target key length HERE — before the slot is reserved —
+  /// guarantees a malformed payload returns an error without wedging the
+  /// slot. The frontend must call `cancel_identity_switch` BEFORE mutating
+  /// Rust when its own persistence between this call and `commit` fails.
+  Future<void> beginIdentitySwitch(
+      {required List<int> targetKey, required List<Contact> targetContacts});
+
   ChatMessage buildChat(
       {required Contact contact,
       required String text,
       required List<(String, Uint8List)> attachments});
+
+  /// Phase two cancel of the two-phase identity-switch transaction.
+  ///
+  /// Releases the `IdentitySwitch` gate without mutating the signing
+  /// identity. The frontend must call this when its own persistence failed
+  /// between [`begin_identity_switch`](Self::begin_identity_switch) and
+  /// [`commit_identity_switch`](Self::commit_identity_switch).
+  Future<void> cancelIdentitySwitch();
+
+  /// Phase two commit of the two-phase identity-switch transaction.
+  ///
+  /// Applies the target identity + contact snapshot validated and stashed
+  /// by [`begin_identity_switch`](Self::begin_identity_switch), restarts
+  /// the session manager, and rehydrates sessions for that snapshot.
+  ///
+  /// On any failure after the identity has been mutated, the backend
+  /// restores the previous identity and session set captured at
+  /// `begin_identity_switch` before releasing the gate. The frontend must
+  /// roll back its own active-profile persistence when this returns an
+  /// error.
+  Future<void> commitIdentitySwitch();
 
   /// Ends the current audio test, room, or call in that order
   Future<void> endCall();
@@ -86,13 +123,10 @@ abstract class Telepathy implements RustOpaqueInterface {
 
   void pauseStatistics();
 
-  /// Restarts the session manager without changing the signing identity.
-  ///
-  /// Use this when only the manager needs recycling (e.g. network-config
-  /// save, manual recovery button). For profile switches use
-  /// [switchIdentityAndRestartManager] instead — the separate
-  /// `set_identity` + `restart_manager` sequence races `start_call`
-  /// between validation and identity mutation.
+  /// Retries restoring the identity and contacts retained after a failed rollback.
+  Future<void> recoverIdentitySwitch();
+
+  /// Restarts the session manager
   Future<void> restartManager();
 
   void resumeStatistics();
@@ -109,12 +143,7 @@ abstract class Telepathy implements RustOpaqueInterface {
 
   void setEfficiencyMode({required bool enabled});
 
-  /// Sets the signing key without restarting the manager.
-  ///
-  /// Intended for the bootstrap path before the manager is running. For
-  /// any post-startup identity change use [switchIdentityAndRestartManager]
-  /// instead — the atomic op holds the call slot across mutation and
-  /// restart, which the separate calls cannot do.
+  /// Sets the signing key (called when the profile changes)
   Future<void> setIdentity({required List<int> key});
 
   Future<void> setInputDevice({String? deviceId});
@@ -151,11 +180,4 @@ abstract class Telepathy implements RustOpaqueInterface {
 
   /// Stops a specific session (called when a contact is deleted)
   Future<void> stopSession({required Contact contact});
-
-  /// Atomically swaps the signing identity and restarts the session manager
-  /// while reserving the call slot, so a call cannot start between
-  /// validation, identity mutation, and manager restart. This is the
-  /// transactional path frontend profile switches must use instead of
-  /// separate `set_identity` + `restart_manager` calls.
-  Future<void> switchIdentityAndRestartManager({required List<int> key});
 }

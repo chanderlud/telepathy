@@ -378,8 +378,18 @@ class _FakeTelepathy implements Telepathy {
   Future<void> restartManager() async {}
 
   @override
-  Future<void> switchIdentityAndRestartManager(
-      {required List<int> key}) async {}
+  Future<void> beginIdentitySwitch(
+      {required List<int> targetKey,
+      required List<Contact> targetContacts}) async {}
+
+  @override
+  Future<void> cancelIdentitySwitch() async {}
+
+  @override
+  Future<void> commitIdentitySwitch() async {}
+
+  @override
+  Future<void> recoverIdentitySwitch() async {}
 
   @override
   void resumeStatistics() {}

@@ -75,8 +75,11 @@ impl Telepathy {
     }
 
     /// Tries to start a session for a contact
-    pub async fn start_session(&self, contact: &Contact) {
-        self.handle.start_session(contact).await;
+    pub async fn start_session(&self, contact: &Contact) -> Result<(), DartError> {
+        self.handle
+            .try_start_session(contact)
+            .await
+            .map_err(DartError::from)
     }
 
     /// Creates an operation token that can cancel one pending call or room start.
@@ -121,20 +124,61 @@ impl Telepathy {
         self.handle.restart_manager().await.map_err(DartError::from)
     }
 
-    /// Atomically swaps the signing identity and restarts the session manager
-    /// while reserving the call slot, so a call cannot start between
-    /// validation, identity mutation, and manager restart. This is the
-    /// transactional path frontend profile switches must use instead of
-    /// separate `set_identity` + `restart_manager` calls.
-    pub async fn switch_identity_and_restart_manager(&self, key: Vec<u8>) -> Result<(), DartError> {
+    /// Phase one of the two-phase identity-switch transaction.
+    ///
+    /// Validates the target payload, acquires the backend call slot in the
+    /// `IdentitySwitch` gate so no call/room/audio-test can begin while the
+    /// frontend mutates its active profile, and stashes the validated
+    /// target so the parameterless [`commit_identity_switch`](Self::commit_identity_switch)
+    /// can apply it. The frontend MUST follow this with exactly one of
+    /// `commit_identity_switch` or [`cancel_identity_switch`](Self::cancel_identity_switch).
+    ///
+    /// Validating the target key length HERE — before the slot is reserved —
+    /// guarantees a malformed payload returns an error without wedging the
+    /// slot. The frontend must call `cancel_identity_switch` BEFORE mutating
+    /// Rust when its own persistence between this call and `commit` fails.
+    pub async fn begin_identity_switch(
+        &self,
+        target_key: Vec<u8>,
+        target_contacts: Vec<Contact>,
+    ) -> Result<(), DartError> {
+        let target_key: [u8; 32] = target_key
+            .try_into()
+            .map_err(|_| DartError::from(IDENTITY_KEY_LENGTH_MESSAGE.to_string()))?;
         self.handle
-            .switch_identity_and_restart_manager(
-                &(key
-                    .try_into()
-                    .map_err(|_| DartError::from(IDENTITY_KEY_LENGTH_MESSAGE.to_string()))?),
-            )
+            .begin_identity_switch(target_key, target_contacts)
             .await
             .map_err(DartError::from)
+    }
+
+    /// Phase two commit of the two-phase identity-switch transaction.
+    ///
+    /// Applies the target identity + contact snapshot validated and stashed
+    /// by [`begin_identity_switch`](Self::begin_identity_switch), restarts
+    /// the session manager, and rehydrates sessions for that snapshot.
+    ///
+    /// On any failure after the identity has been mutated, the backend
+    /// restores the previous identity and session set captured at
+    /// `begin_identity_switch` before releasing the gate. The frontend must
+    /// roll back its own active-profile persistence when this returns an
+    /// error.
+    pub async fn commit_identity_switch(&self) -> Result<(), IdentitySwitchError> {
+        self.handle.commit_identity_switch().await
+    }
+
+    /// Retries restoring the identity and contacts retained after a failed rollback.
+    pub async fn recover_identity_switch(&self) -> Result<(), IdentitySwitchError> {
+        self.handle.recover_identity_switch().await
+    }
+
+    /// Phase two cancel of the two-phase identity-switch transaction.
+    ///
+    /// Releases the `IdentitySwitch` gate without mutating the signing
+    /// identity. The frontend must call this when its own persistence failed
+    /// between [`begin_identity_switch`](Self::begin_identity_switch) and
+    /// [`commit_identity_switch`](Self::commit_identity_switch).
+    pub async fn cancel_identity_switch(&self) {
+        self.handle.cancel_identity_switch().await;
     }
 
     /// shuts down the entire rust backend

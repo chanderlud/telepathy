@@ -61,6 +61,9 @@ pub enum ErrorKind {
     SessionStopped,
     NoSessionForContact,
     ManagerRestartDuringCall,
+    ManagerSetupFailed(String),
+    ManagerRestartTimeout,
+    IdentitySwitchRecoveryRequired,
     AttachmentsTooLarge,
     MpscSend,
     InvalidModel,
@@ -244,6 +247,12 @@ impl Display for Error {
                 ErrorKind::NoSessionForContact => "No session found for contact".to_string(),
                 ErrorKind::ManagerRestartDuringCall =>
                     "Cannot restart manager while a call is active".to_string(),
+                ErrorKind::ManagerSetupFailed(ref msg) =>
+                    format!("Session manager failed to come online: {msg}"),
+                ErrorKind::ManagerRestartTimeout =>
+                    "Timed out waiting for the session manager to restart".to_string(),
+                ErrorKind::IdentitySwitchRecoveryRequired =>
+                    "Identity switch recovery is required before starting new activity".to_string(),
                 ErrorKind::AttachmentsTooLarge => "Attachments too large".to_string(),
                 ErrorKind::MpscSend => "Channel closed (mpsc send failed)".to_string(),
                 ErrorKind::InvalidModel => "Invalid RNN model".to_string(),

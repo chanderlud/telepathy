@@ -412,6 +412,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   int dco_decode_i_32(dynamic raw);
 
   @protected
+  IdentitySwitchError dco_decode_identity_switch_error(dynamic raw);
+
+  @protected
   PlatformInt64 dco_decode_isize(dynamic raw);
 
   @protected
@@ -802,6 +805,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   int sse_decode_i_32(SseDeserializer deserializer);
+
+  @protected
+  IdentitySwitchError sse_decode_identity_switch_error(
+      SseDeserializer deserializer);
 
   @protected
   PlatformInt64 sse_decode_isize(SseDeserializer deserializer);
@@ -1247,6 +1254,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_i_32(int self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_identity_switch_error(
+      IdentitySwitchError self, SseSerializer serializer);
 
   @protected
   void sse_encode_isize(PlatformInt64 self, SseSerializer serializer);

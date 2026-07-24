@@ -747,6 +747,43 @@ pub struct DartError {
     pub message: String,
 }
 
+/// Typed outcome for an identity-switch commit or explicit recovery.
+#[derive(Debug, Clone, Serialize)]
+pub enum IdentitySwitchError {
+    Failed {
+        message: String,
+    },
+    RollbackFailed {
+        primary_message: String,
+        rollback_message: String,
+    },
+    RecoveryFailed {
+        message: String,
+    },
+    RecoveryNotRequired,
+}
+
+impl std::fmt::Display for IdentitySwitchError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Failed { message } => write!(formatter, "{message}"),
+            Self::RollbackFailed {
+                primary_message,
+                rollback_message,
+            } => write!(
+                formatter,
+                "{primary_message}; rollback failed: {rollback_message}"
+            ),
+            Self::RecoveryFailed { message } => write!(formatter, "{message}"),
+            Self::RecoveryNotRequired => {
+                write!(formatter, "identity switch recovery is not required")
+            }
+        }
+    }
+}
+
+impl std::error::Error for IdentitySwitchError {}
+
 /// Identifies which field of a [`NetworkConfig`] update failed validation,
 /// or that the failure was not tied to a specific user-supplied field.
 ///

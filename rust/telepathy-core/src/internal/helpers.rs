@@ -36,7 +36,6 @@ use telepathy_audio::io::{
 use tokio::fs::File;
 #[cfg(not(target_family = "wasm"))]
 use tokio::io::AsyncReadExt;
-use tokio::select;
 use tokio::sync::Notify;
 use tokio::sync::mpsc::{Sender, UnboundedSender};
 #[cfg(not(target_family = "wasm"))]
@@ -57,9 +56,11 @@ where
     I: Send + Sync + 'static,
     O: Send + Sync + 'static,
 {
-    /// builds an iroh endpoint and waits for it to come online
     #[instrument(name = "manager.setup_endpoint", skip_all)]
-    pub(crate) async fn setup_endpoint(&self) -> Result<Option<Endpoint>> {
+    pub(crate) async fn setup_endpoint(
+        &self,
+        iteration_cancellation: &CancellationToken,
+    ) -> Result<Option<Endpoint>> {
         let identity = if let Some(keypair) = self.core_state.identity.read().await.as_ref() {
             keypair.clone()
         } else {
@@ -67,7 +68,12 @@ where
         };
 
         trace!(event = "endpoint_launch", config = ?self.core_state.network_config);
-        self.callbacks.manager_state(ManagerState::Starting).await;
+        tokio::select! {
+            biased;
+            _ = self.core_state.stop_manager.cancelled() => return Ok(None),
+            _ = iteration_cancellation.cancelled() => return Ok(None),
+            _ = self.callbacks.manager_state(ManagerState::Starting) => (),
+        }
 
         let mut endpoint_builder = Endpoint::builder(presets::Empty)
             .secret_key(identity)
@@ -195,7 +201,12 @@ where
                 endpoint_builder.ca_tls_config(iroh::tls::CaTlsConfig::insecure_skip_verify());
         }
 
-        let endpoint = endpoint_builder.bind().await?;
+        let endpoint = tokio::select! {
+            biased;
+            _ = self.core_state.stop_manager.cancelled() => return Ok(None),
+            _ = iteration_cancellation.cancelled() => return Ok(None),
+            endpoint = endpoint_builder.bind() => endpoint?,
+        };
 
         // Register this endpoint's own `addr()` (relay URL + direct addrs) into
         // the shared `MemoryLookup` so other in-process peers can resolve it.
@@ -213,15 +224,30 @@ where
             }
         }
 
-        select! {
-            _ = self.restart_manager.notified() => {
-                self.callbacks.manager_state(ManagerState::Stopped).await;
+        tokio::select! {
+            biased;
+            _ = self.core_state.stop_manager.cancelled() => {
+                endpoint.close().await;
+                return Ok(None);
+            },
+            _ = iteration_cancellation.cancelled() => {
+                endpoint.close().await;
+                return Ok(None);
+            },
+            _ = endpoint.online() => (),
+        }
+
+        tokio::select! {
+            biased;
+            _ = self.core_state.stop_manager.cancelled() => {
+                endpoint.close().await;
                 Ok(None)
             },
-            _ = endpoint.online() => {
-                self.callbacks.manager_state(ManagerState::Active).await;
-                Ok(Some(endpoint))
-            }
+            _ = iteration_cancellation.cancelled() => {
+                endpoint.close().await;
+                Ok(None)
+            },
+            _ = self.callbacks.manager_state(ManagerState::Active) => Ok(Some(endpoint)),
         }
     }
 
@@ -556,9 +582,9 @@ where
     }
 
     pub async fn shutdown(&self) {
+        self.core_state.stop_manager.cancel();
+        self.close_unstarted_restart_receiver();
         self.reset_sessions().await;
-        self.core_state.stop_manager.store(true, Relaxed);
-        self.restart_manager.notify_one();
     }
 
     /// Inserts a new outbound attempt

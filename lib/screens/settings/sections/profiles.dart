@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:core';
 import 'package:flutter/services.dart';
 import 'package:flutter/material.dart' hide Overlay;
@@ -19,6 +20,59 @@ class ProfileSettings extends StatefulWidget {
 class ProfileSettingsState extends State<ProfileSettings> {
   final TextEditingController _profileNameInput = TextEditingController();
   String? _profileNameError;
+
+  /// Latest delete-attempt failure keyed by profile id, surfaced in the
+  /// confirmation dialog so the user can retry. Previously the dialog
+  /// closed silently on failure, hiding storage-cleanup errors that left
+  /// private keys on disk.
+  ///
+  /// The phase drives the user-facing message so each failure mode gets
+  /// an accurate description instead of always claiming the index update
+  /// succeeded.
+  ProfileDeletionException? _deleteProfileError;
+  String? _deleteProfileErrorId;
+
+  /// True while a manual cleanup retry is in flight so the dialog can
+  /// disable its retry button.
+  bool _cleanupRetryInFlight = false;
+
+  String _deleteErrorMessage(BuildContext context) {
+    final failure = _deleteProfileError;
+    if (failure == null) {
+      return '';
+    }
+    final cause = '${failure.cause}';
+    switch (failure.phase) {
+      case ProfileDeletionPhase.tombstoneWrite:
+        return 'Could not record the deletion intent. No data was changed. '
+            'You can retry the delete or close this dialog.\nDetails: $cause';
+      case ProfileDeletionPhase.begin:
+        return 'The backend rejected the identity switch. No data was '
+            'changed. You can retry or close this dialog.\nDetails: $cause';
+      case ProfileDeletionPhase.activeIdPersist:
+        return 'Could not persist the replacement active profile. The '
+            'transaction was cancelled; no data was changed. You can '
+            'retry or close this dialog.\nDetails: $cause';
+      case ProfileDeletionPhase.indexWrite:
+        return 'Could not update the profile index. The transaction was '
+            'rolled back; no data was changed. You can retry or close '
+            'this dialog.\nDetails: $cause';
+      case ProfileDeletionPhase.commit:
+        return 'The backend could not commit the new identity. The '
+            'transaction was rolled back across the frontend, preferences, '
+            'and backend; no data was changed. You can retry or close '
+            'this dialog.\nDetails: $cause';
+      case ProfileDeletionPhase.replacementCreate:
+        return 'Could not create a replacement profile for the deletion. '
+            'The active profile is unchanged; no data was modified. You '
+            'can retry or close this dialog.\nDetails: $cause';
+      case ProfileDeletionPhase.storageCleanup:
+        return 'The profile was removed from the index but its private-key '
+            'records could not be deleted. Cleanup will retry '
+            'automatically on the next startup. You can retry now or '
+            'close this dialog.\nDetails: $cause';
+    }
+  }
 
   InputDecoration _profileNameInputDecoration(BuildContext context) {
     if (_profileNameError == null) {
@@ -155,32 +209,43 @@ class ProfileSettingsState extends State<ProfileSettings> {
                           // with the atomic identity swap. Using
                           // `isCallActive` here is not enough because the
                           // slot is occupied before promotion.
+                          //
+                          // `isIdentitySwitchPending` covers the in-flight
+                          // two-phase transaction itself so a second switch
+                          // cannot begin while the first is still
+                          // committing/cancelling across both layers.
                           disabled: stateController.blockAudioChanges ||
+                              profilesController.isIdentitySwitchPending ||
                               profilesController.activeProfile == profile.id,
                           onPressed: () async {
                             // Defensive recheck inside the handler so a
                             // build-cycle race between `disabled` being
                             // painted and the user tapping cannot reach the
-                            // mutating atomic identity swap.
-                            if (stateController.blockAudioChanges) {
+                            // mutating two-phase transaction.
+                            if (stateController.blockAudioChanges ||
+                                profilesController.isIdentitySwitchPending) {
                               return;
                             }
-                            // Commit the frontend active-profile change only
-                            // after the atomic backend op succeeds. If the
-                            // backend rejects the swap the frontend stays on
-                            // the current profile. The error is logged but
-                            // not rethrown: this handler runs inside a tap
-                            // callback, and propagating would surface as an
-                            // unhandled exception with no UI to recover it.
+                            // The controller orchestrates the two-phase
+                            // transaction: acquire the backend gate,
+                            // persist the target active profile, then
+                            // commit the new signing key + contact
+                            // snapshot. On any failure it rolls the
+                            // frontend back to the previous active profile
+                            // and either cancels (pre-commit) or relies on
+                            // Rust's internal rollback (post-commit). The
+                            // error is logged but not rethrown: this
+                            // handler runs inside a tap callback, and
+                            // propagating would surface as an unhandled
+                            // exception with no UI to recover it.
                             try {
-                              await telepathy.switchIdentityAndRestartManager(
-                                key: profile.keypair,
+                              await profilesController.switchActiveProfile(
+                                profile.id,
+                                telepathy: telepathy,
                               );
-                              await profilesController
-                                  .setActiveProfile(profile.id);
                             } catch (error) {
                               DebugConsole.warn(
-                                'switchIdentityAndRestartManager failed for '
+                                'switchActiveProfile failed for '
                                 '${profile.id}: $error; '
                                 'frontend active profile left unchanged',
                               );
@@ -189,7 +254,9 @@ class ProfileSettingsState extends State<ProfileSettings> {
                           noSplash: true,
                           disabledColor:
                               profilesController.activeProfile == profile.id &&
-                                      stateController.blockAudioChanges
+                                      (stateController.blockAudioChanges ||
+                                          profilesController
+                                              .isIdentitySwitchPending)
                                   ? Theme.of(listContext)
                                       .colorScheme
                                       .tertiaryContainer
@@ -210,107 +277,185 @@ class ProfileSettingsState extends State<ProfileSettings> {
                         IconButton(
                           tooltip: 'Delete Profile',
                           // Deleting the active profile must run the same
-                          // atomic identity swap the Set Active button uses;
-                          // both must be gated by `blockAudioChanges` so the
-                          // backend identity switch + manager restart cannot
-                          // race an in-flight call. Deleting a non-active
-                          // profile is safe during a call because it touches
+                          // two-phase identity-switch transaction the Set
+                          // Active button uses; both must be gated by
+                          // `blockAudioChanges` so the backend identity
+                          // switch + manager restart cannot race an
+                          // in-flight call. Deleting a non-active profile
+                          // is safe during a call because it touches
                           // neither the call slot nor the active identity.
-                          onPressed: stateController.blockAudioChanges &&
-                                  profilesController.activeProfile == profile.id
+                          //
+                          // `isIdentitySwitchPending` additionally blocks
+                          // every delete while another transaction is in
+                          // flight, including non-active deletes, so the
+                          // transaction's frontend persistence cannot be
+                          // raced by a sibling deletion.
+                          onPressed: (stateController.blockAudioChanges &&
+                                      profilesController.activeProfile ==
+                                          profile.id) ||
+                                  profilesController.isIdentitySwitchPending
                               ? null
                               : () {
+                                  setState(() {
+                                    _deleteProfileError = null;
+                                    _deleteProfileErrorId = null;
+                                    _cleanupRetryInFlight = false;
+                                  });
                                   showDialog(
                                       context: listContext,
                                       builder: (BuildContext dialogContext) {
-                                        return AlertDialog(
-                                          title: const Text('Delete Profile'),
-                                          content: const Text(
-                                              'Are you sure you want to delete this profile?'),
-                                          actions: [
-                                            Button(
-                                              text: 'Cancel',
-                                              onPressed: () {
-                                                Navigator.of(dialogContext)
-                                                    .pop();
-                                              },
+                                        return StatefulBuilder(builder:
+                                            (BuildContext dialogContext,
+                                                StateSetter setDialogState) {
+                                          return AlertDialog(
+                                            title: const Text('Delete Profile'),
+                                            content: Column(
+                                              mainAxisSize: MainAxisSize.min,
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                const Text(
+                                                    'Are you sure you want to delete this profile?'),
+                                                if (_deleteProfileError != null)
+                                                  Padding(
+                                                    padding:
+                                                        const EdgeInsets.only(
+                                                            top: 12),
+                                                    child: Text(
+                                                      _deleteErrorMessage(
+                                                          dialogContext),
+                                                      style: TextStyle(
+                                                        color: Theme.of(
+                                                                dialogContext)
+                                                            .colorScheme
+                                                            .error,
+                                                      ),
+                                                    ),
+                                                  ),
+                                              ],
                                             ),
-                                            Button(
-                                              text: 'Delete',
-                                              onPressed: () async {
-                                                final navigator =
-                                                    Navigator.of(dialogContext);
-                                                final previousActive =
-                                                    profilesController
-                                                        .activeProfile;
-                                                final wasActive =
-                                                    previousActive ==
-                                                        profile.id;
-                                                Profile? replacement;
-                                                if (wasActive) {
-                                                  replacement =
-                                                      _replacementProfileAfter(
-                                                    profilesController,
-                                                    excludeId: profile.id,
-                                                  );
-                                                }
-                                                try {
-                                                  // Sync the replacement
-                                                  // identity first (atomic
-                                                  // backend op). Only after
-                                                  // it succeeds do we commit
-                                                  // the frontend deletion,
-                                                  // which switches the
-                                                  // active profile to the
-                                                  // same replacement.
-                                                  if (wasActive &&
-                                                      replacement != null) {
-                                                    await telepathy
-                                                        .switchIdentityAndRestartManager(
-                                                      key: replacement.keypair,
-                                                    );
-                                                  }
-                                                  await profilesController
-                                                      .removeProfile(
-                                                          profile.id);
-                                                  if (mounted) {
-                                                    navigator.pop();
-                                                  }
-                                                } catch (error) {
-                                                  // Backend rejected or
-                                                  // removeProfile failed.
-                                                  // Restore the frontend to
-                                                  // the prior active profile
-                                                  // so the UI stays
-                                                  // consistent with whatever
-                                                  // identity the backend is
-                                                  // actually running.
-                                                  DebugConsole.warn(
-                                                    'delete of profile '
-                                                    '${profile.id} failed: '
-                                                    '$error; restoring active '
-                                                    'profile to $previousActive',
-                                                  );
-                                                  if (wasActive &&
-                                                      profilesController
-                                                              .activeProfile !=
-                                                          previousActive &&
-                                                      profilesController
-                                                          .profiles
-                                                          .containsKey(
-                                                              previousActive)) {
-                                                    await profilesController
-                                                        .setActiveProfile(
-                                                            previousActive);
-                                                  }
-                                                  if (mounted) {
-                                                    navigator.pop();
-                                                  }
-                                                }
-                                              },
-                                            )
-                                          ],
-                                        );
+                                            actions: [
+                                              Button(
+                                                text: 'Cancel',
+                                                onPressed: () {
+                                                  Navigator.of(dialogContext)
+                                                      .pop();
+                                                },
+                                              ),
+                                              // "Retry Cleanup" appears
+                                              // ONLY when the controller
+                                              // surfaced a failure that
+                                              // left a durable tombstone
+                                              // (i.e.
+                                              // `tombstonedForStartupRetry`
+                                              // is true). Routing on the
+                                              // phase alone was unsafe: a
+                                              // generic catch-all used to
+                                              // mis-classify ANY non-typed
+                                              // error as `storageCleanup`,
+                                              // exposing the destructive
+                                              // cleanup retry on failures
+                                              // that never left a
+                                              // tombstone (and could be
+                                              // for the still-live active
+                                              // profile).
+                                              if (_deleteProfileError != null &&
+                                                  _deleteProfileError!
+                                                      .tombstonedForStartupRetry &&
+                                                  _deleteProfileErrorId != null)
+                                                Button(
+                                                  text: _cleanupRetryInFlight
+                                                      ? 'Retrying...'
+                                                      : 'Retry Cleanup',
+                                                  disabled:
+                                                      _cleanupRetryInFlight,
+                                                  onPressed: () {
+                                                    final id =
+                                                        _deleteProfileErrorId!;
+                                                    final navigator =
+                                                        Navigator.of(
+                                                            dialogContext);
+                                                    setDialogState(() {
+                                                      _cleanupRetryInFlight =
+                                                          true;
+                                                    });
+                                                    unawaited(profilesController
+                                                        .retryDeletionCleanup(
+                                                            id)
+                                                        .then((ok) {
+                                                      if (!mounted) {
+                                                        return;
+                                                      }
+                                                      if (ok) {
+                                                        navigator.pop();
+                                                      } else {
+                                                        setDialogState(() {
+                                                          _cleanupRetryInFlight =
+                                                              false;
+                                                        });
+                                                      }
+                                                    }));
+                                                  },
+                                                ),
+                                              // The ordinary
+                                              // "Delete"/"Retry" button
+                                              // drives `removeProfile`. It
+                                              // is hidden once the index
+                                              // deletion completed
+                                              // (`tombstonedForStartupRetry`
+                                              // is true): at that point
+                                              // the id is already gone
+                                              // from the index, so
+                                              // re-issuing `removeProfile`
+                                              // would be a no-op
+                                              // (`!profiles.containsKey(id)`
+                                              // early-returns) and
+                                              // mislead the user. Only
+                                              // the dedicated "Retry
+                                              // Cleanup" above is offered
+                                              // in that state.
+                                              if (_deleteProfileError == null ||
+                                                  !_deleteProfileError!
+                                                      .tombstonedForStartupRetry)
+                                                Button(
+                                                  text: _deleteProfileError ==
+                                                          null
+                                                      ? 'Delete'
+                                                      : 'Retry',
+                                                  onPressed: () async {
+                                                    final navigator =
+                                                        Navigator.of(
+                                                            dialogContext);
+                                                    try {
+                                                      await profilesController
+                                                          .removeProfile(
+                                                        profile.id,
+                                                        telepathy: telepathy,
+                                                      );
+                                                      if (mounted) {
+                                                        navigator.pop();
+                                                      }
+                                                    } on ProfileDeletionException catch (error) {
+                                                      DebugConsole.warn(
+                                                        'delete of profile '
+                                                        '${profile.id} failed '
+                                                        '(${error.phase}): '
+                                                        '${error.cause}',
+                                                      );
+                                                      setDialogState(() {
+                                                        _deleteProfileError =
+                                                            error;
+                                                        _deleteProfileErrorId =
+                                                            profile.id;
+                                                        _cleanupRetryInFlight =
+                                                            false;
+                                                      });
+                                                    }
+                                                  },
+                                                )
+                                            ],
+                                          );
+                                        });
                                       });
                                 },
                           icon: SvgPicture.asset(
@@ -327,54 +472,62 @@ class ProfileSettingsState extends State<ProfileSettings> {
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 5, horizontal: 20),
             child: IconButton(
-              onPressed: () {
-                _profileNameError = null;
-                showDialog(
-                    context: context,
-                    builder: (BuildContext context) {
-                      return StatefulBuilder(
-                        builder:
-                            (BuildContext context, StateSetter setDialogState) {
-                          return CallbackShortcuts(
-                            bindings: <ShortcutActivator, VoidCallback>{
-                              const SingleActivator(LogicalKeyboardKey.enter):
-                                  () => _createProfile(context,
-                                      profilesController, setDialogState),
-                            },
-                            child: SimpleDialog(
-                              title: const Text('Create Profile'),
-                              contentPadding: const EdgeInsets.only(
-                                  bottom: 25, left: 25, right: 25),
-                              titlePadding: const EdgeInsets.only(
-                                  top: 25, left: 25, right: 25, bottom: 15),
-                              children: [
-                                TextField(
-                                  decoration:
-                                      _profileNameInputDecoration(context),
-                                  controller: _profileNameInput,
-                                  onChanged: (_) {
-                                    if (_profileNameError == null) return;
-
-                                    setDialogState(() {
-                                      _profileNameError = null;
-                                    });
+              onPressed: profilesController.isIdentitySwitchPending
+                  ? null
+                  : () {
+                      _profileNameError = null;
+                      showDialog(
+                          context: context,
+                          builder: (BuildContext context) {
+                            return StatefulBuilder(
+                              builder: (BuildContext context,
+                                  StateSetter setDialogState) {
+                                return CallbackShortcuts(
+                                  bindings: <ShortcutActivator, VoidCallback>{
+                                    const SingleActivator(
+                                            LogicalKeyboardKey.enter):
+                                        () => _createProfile(context,
+                                            profilesController, setDialogState),
                                   },
-                                  onSubmitted: (_) => _createProfile(context,
-                                      profilesController, setDialogState),
-                                ),
-                                const SizedBox(height: 20),
-                                Button(
-                                  text: 'Create',
-                                  onPressed: () => _createProfile(context,
-                                      profilesController, setDialogState),
-                                )
-                              ],
-                            ),
-                          );
-                        },
-                      );
-                    });
-              },
+                                  child: SimpleDialog(
+                                    title: const Text('Create Profile'),
+                                    contentPadding: const EdgeInsets.only(
+                                        bottom: 25, left: 25, right: 25),
+                                    titlePadding: const EdgeInsets.only(
+                                        top: 25,
+                                        left: 25,
+                                        right: 25,
+                                        bottom: 15),
+                                    children: [
+                                      TextField(
+                                        decoration: _profileNameInputDecoration(
+                                            context),
+                                        controller: _profileNameInput,
+                                        onChanged: (_) {
+                                          if (_profileNameError == null) return;
+
+                                          setDialogState(() {
+                                            _profileNameError = null;
+                                          });
+                                        },
+                                        onSubmitted: (_) => _createProfile(
+                                            context,
+                                            profilesController,
+                                            setDialogState),
+                                      ),
+                                      const SizedBox(height: 20),
+                                      Button(
+                                        text: 'Create',
+                                        onPressed: () => _createProfile(context,
+                                            profilesController, setDialogState),
+                                      )
+                                    ],
+                                  ),
+                                );
+                              },
+                            );
+                          });
+                    },
               visualDensity: VisualDensity.comfortable,
               icon: SvgPicture.asset(
                 'assets/icons/Plus.svg',
@@ -388,23 +541,4 @@ class ProfileSettingsState extends State<ProfileSettings> {
       ),
     );
   }
-}
-
-/// Returns the [Profile] that would become active if [excludeId] were removed
-/// from [controller], mirroring the fallback [_removeProfile] applies inside
-/// [ProfilesController]: the first remaining profile by insertion order.
-///
-/// Returns `null` when [controller] has no other profile to promote; in that
-/// case [_removeProfile] itself creates a fresh default profile and the
-/// frontend has no pre-existing identity to swap into the backend.
-Profile? _replacementProfileAfter(
-  ProfilesController controller, {
-  required String excludeId,
-}) {
-  for (final MapEntry<String, Profile> entry in controller.profiles.entries) {
-    if (entry.key != excludeId) {
-      return entry.value;
-    }
-  }
-  return null;
 }

@@ -17,8 +17,8 @@ use crate::internal::messages::{
     AudioHeader, GoodbyeReason, ProtocolMessage, RoomControl, RoomMessage, StartScreenshare,
 };
 use crate::internal::state::{
-    CallSlot, CallSlotAcquireResult, CallSlotSnapshot, CallSlotState, CoreState,
-    StatisticsCollectorState,
+    CallSlot, CallSlotAcquireResult, CallSlotSnapshot, CallSlotState, CoreState, RestartOutcome,
+    RestartRequest, StatisticsCollectorState,
 };
 use crate::internal::utils::{JoinHandle, spawn_task};
 #[cfg(target_os = "ios")]
@@ -41,8 +41,8 @@ use iroh::endpoint::{
 use iroh::{Endpoint, PublicKey};
 use std::collections::HashMap;
 use std::marker::PhantomData;
-use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 #[cfg(target_family = "wasm")]
 use telepathy_audio::WebAudioWrapper;
@@ -68,6 +68,18 @@ use wasmtimer::tokio::{Interval, interval, sleep_until, timeout};
 const MANAGER_RETRY_BASE_MS: u64 = 500;
 const MANAGER_RETRY_MAX_MS: u64 = 30_000;
 
+enum ManagerIterationOutcome {
+    Restart(RestartRequest),
+    Continue,
+    Shutdown,
+}
+
+enum ManagerSetupInterruption {
+    Completed,
+    Restart(RestartRequest),
+    Shutdown,
+}
+
 pub struct TelepathyCore<C, S, H, I, O>
 where
     S: CoreStatisticsCallback + Send + Sync + 'static,
@@ -89,8 +101,9 @@ where
     /// Signals the session manager to start a new session
     pub start_session: Option<Sender<PublicKey>>,
 
-    /// Restarts the session manager when needed
-    pub(crate) restart_manager: Arc<Notify>,
+    pub(crate) restart_requests: UnboundedSender<RestartRequest>,
+
+    restart_requests_receiver: Arc<StdMutex<Option<UnboundedReceiver<RestartRequest>>>>,
 
     pub(crate) cancel_outbound_connections: Arc<Notify>,
 
@@ -128,13 +141,15 @@ where
         codec_config: &CodecConfig,
         callbacks: C,
     ) -> TelepathyCore<C, S, H, I, O> {
+        let (restart_requests, restart_requests_receiver) = unbounded_channel();
         Self {
             host,
             core_state: CoreState::new(network_config, screenshare_config, codec_config),
             room_state: Default::default(),
             session_states: Default::default(),
             start_session: None,
-            restart_manager: Default::default(),
+            restart_requests,
+            restart_requests_receiver: Arc::new(StdMutex::new(Some(restart_requests_receiver))),
             cancel_outbound_connections: Default::default(),
             outbound_attempts: Default::default(),
             overlay: overlay.clone(),
@@ -155,6 +170,13 @@ where
             return None;
         }
 
+        let mut restart_requests = {
+            let mut receiver = match self.restart_requests_receiver.lock() {
+                Ok(receiver) => receiver,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            receiver.take()?
+        };
         let (start_session, mut receive_session) = channel(8);
 
         self.start_session = Some(start_session);
@@ -164,56 +186,182 @@ where
         Some(spawn_task(
             async move {
                 let mut retries = 0;
-                // break when stop_manager==true
-                while !manager_clone.core_state.stop_manager.load(Relaxed) {
-                    let last_launch = Instant::now();
-                    // run the session manager to completion
-                    let result = manager_clone.session_manager(&mut receive_session).await;
+                let mut next_assigned: Option<RestartRequest> = None;
+                loop {
+                    if manager_clone.core_state.stop_manager.is_cancelled() {
+                        break;
+                    }
+                    if next_assigned.is_none()
+                        && let Ok(request) = restart_requests.try_recv()
+                    {
+                        next_assigned = Some(request);
+                    }
+                    if next_assigned
+                        .as_ref()
+                        .is_some_and(RestartRequest::is_cancelled)
+                    {
+                        if let Some(request) = next_assigned.take() {
+                            request.complete(RestartOutcome::Cancelled);
+                        }
+                        continue;
+                    }
 
-                    if let Err(error) = result {
-                        manager_clone
-                            .callbacks
-                            .manager_state(ManagerState::Failed)
-                            .await;
-                        Span::current().record("restart_count", retries);
-                        error!(
-                            event = "session_manager_failed",
-                            retries,
-                            error = %error
-                        );
-                        retries += 1;
-                        let next_launch =
-                            last_launch + Duration::from_millis(manager_retry_delay_ms(retries));
-                        if next_launch > Instant::now() {
-                            // wait for the next launch or restart
-                            select! {
-                                _ = manager_clone.restart_manager.notified() => (),
-                                _ = sleep_until(next_launch) => (),
+                    let last_launch = Instant::now();
+                    let assigned = next_assigned.take();
+                    let result = manager_clone
+                        .session_manager(&mut receive_session, &mut restart_requests, assigned)
+                        .await;
+
+                    match result {
+                        Ok(ManagerIterationOutcome::Restart(request)) => {
+                            next_assigned = Some(request);
+                            Span::current().record("restart_count", retries);
+                            info!(event = "session_manager_exited");
+                            retries = 0;
+                        }
+                        Ok(ManagerIterationOutcome::Continue) => {
+                            Span::current().record("restart_count", retries);
+                            info!(event = "session_manager_exited");
+                            retries = 0;
+                        }
+                        Ok(ManagerIterationOutcome::Shutdown) => break,
+                        Err(error) => {
+                            manager_clone
+                                .callbacks
+                                .manager_state(ManagerState::Failed)
+                                .await;
+                            Span::current().record("restart_count", retries);
+                            error!(
+                                event = "session_manager_failed",
+                                retries,
+                                error = %error
+                            );
+                            retries += 1;
+                            let next_launch = last_launch
+                                + Duration::from_millis(manager_retry_delay_ms(retries));
+                            if next_launch > Instant::now() {
+                                select! {
+                                    biased;
+                                    _ = manager_clone.core_state.stop_manager.cancelled() => break,
+                                    request = restart_requests.recv() => {
+                                        match request {
+                                            Some(request) => next_assigned = Some(request),
+                                            None => break,
+                                        }
+                                    },
+                                    _ = sleep_until(next_launch) => (),
+                                }
+                            }
+                            if next_assigned.is_none()
+                                && let Ok(request) = restart_requests.try_recv()
+                            {
+                                next_assigned = Some(request);
                             }
                         }
-                    } else {
-                        Span::current().record("restart_count", retries);
-                        info!(event = "session_manager_exited");
-                        retries = 0;
                     }
                 }
+
+                if let Some(request) = next_assigned {
+                    request.complete(RestartOutcome::ManagerStopped);
+                }
+                Self::close_restart_receiver(&mut restart_requests);
             }
             .in_current_span(),
         ))
     }
 
-    /// Builds the iroh endpoint, handles session start requests and incoming connections
+    fn close_restart_receiver(receiver: &mut UnboundedReceiver<RestartRequest>) {
+        receiver.close();
+        while let Ok(request) = receiver.try_recv() {
+            request.complete(RestartOutcome::ManagerStopped);
+        }
+    }
+
+    pub(crate) fn close_unstarted_restart_receiver(&self) {
+        let receiver = match self.restart_requests_receiver.lock() {
+            Ok(mut receiver) => receiver.take(),
+            Err(poisoned) => poisoned.into_inner().take(),
+        };
+        if let Some(mut receiver) = receiver {
+            Self::close_restart_receiver(&mut receiver);
+        }
+    }
+
+    /// Builds the iroh endpoint, handles session start requests and incoming connections.
+    ///
+    /// `assigned` owns this iteration's acknowledgement and cancellation.
+    /// Later commands remain buffered until this iteration completes setup.
     #[instrument(
         name = "manager.run",
         skip_all,
         fields(manager.id = %Uuid::new_v4(), restart_count = field::Empty)
     )]
-    async fn session_manager(&self, start: &mut Receiver<PublicKey>) -> Result<()> {
+    async fn session_manager(
+        &self,
+        start: &mut Receiver<PublicKey>,
+        restart_requests: &mut UnboundedReceiver<RestartRequest>,
+        mut assigned: Option<RestartRequest>,
+    ) -> Result<ManagerIterationOutcome> {
         let setup_started = Instant::now();
-        // build the endpoint & bring online
-        let Some(endpoint) = self.setup_endpoint().await? else {
-            info!(event = "mananger_restart_setup_endpoint");
-            return Ok(());
+        let iteration_cancellation = assigned
+            .as_ref()
+            .map(|request| request.cancellation().clone())
+            .unwrap_or_default();
+
+        let endpoint_setup = self.setup_endpoint(&iteration_cancellation);
+        tokio::pin!(endpoint_setup);
+        let (setup_result, setup_interruption) = if assigned.is_none() {
+            select! {
+                biased;
+                request = restart_requests.recv() => {
+                    iteration_cancellation.cancel();
+                    let setup_result = endpoint_setup.await;
+                    let interruption = match request {
+                        Some(request) => ManagerSetupInterruption::Restart(request),
+                        None => ManagerSetupInterruption::Shutdown,
+                    };
+                    (setup_result, interruption)
+                },
+                setup_result = &mut endpoint_setup => {
+                    (setup_result, ManagerSetupInterruption::Completed)
+                },
+            }
+        } else {
+            (endpoint_setup.await, ManagerSetupInterruption::Completed)
+        };
+
+        let endpoint = match setup_result {
+            Ok(Some(endpoint)) => endpoint,
+            Ok(None) => {
+                self.callbacks.manager_state(ManagerState::Stopped).await;
+                let manager_stopped = self.core_state.stop_manager.is_cancelled()
+                    || matches!(&setup_interruption, ManagerSetupInterruption::Shutdown);
+                let outcome = if manager_stopped {
+                    RestartOutcome::ManagerStopped
+                } else {
+                    RestartOutcome::Cancelled
+                };
+                if let Some(request) = assigned.take() {
+                    request.complete(outcome);
+                }
+                return Ok(match setup_interruption {
+                    ManagerSetupInterruption::Completed if manager_stopped => {
+                        ManagerIterationOutcome::Shutdown
+                    }
+                    ManagerSetupInterruption::Completed => ManagerIterationOutcome::Continue,
+                    ManagerSetupInterruption::Restart(request) => {
+                        ManagerIterationOutcome::Restart(request)
+                    }
+                    ManagerSetupInterruption::Shutdown => ManagerIterationOutcome::Shutdown,
+                });
+            }
+            Err(error) => {
+                let message = error.to_string();
+                if let Some(request) = assigned.take() {
+                    request.complete(RestartOutcome::SetupFailed(message));
+                }
+                return Err(error);
+            }
         };
         info!(
             event = "manager_endpoint_setup",
@@ -225,15 +373,35 @@ where
         // preload public identity
         let public_identity = self.peer_id().await;
 
-        // the manager is about to start processing events
+        // The manager is about to start processing events. Publish both the
+        // legacy global notification (consumed by tests that drove the
+        // previous handshake directly) and the per-request acknowledgement
+        // (consumed by the single requester whose replacement iteration
+        // THIS is). The ack fires BEFORE entering the main loop so a
+        // queued request that arrived during setup cannot race the ack —
+        // the requester unblocks the moment ITS iteration reaches the
+        // active milestone, and the next queued request gets a fresh
+        // iteration of its own.
         self.core_state.manager_active.notify_waiters();
+        if let Some(request) = assigned.take() {
+            request.complete(RestartOutcome::SetupSucceeded);
+        }
 
-        loop {
+        let outcome = loop {
             select! {
-                // restart the manager
-                _ = self.restart_manager.notified() => {
-                    break;
-                }
+                biased;
+                _ = self.core_state.stop_manager.cancelled() => {
+                    break ManagerIterationOutcome::Shutdown;
+                },
+                _ = iteration_cancellation.cancelled() => {
+                    break ManagerIterationOutcome::Continue;
+                },
+                request = restart_requests.recv() => {
+                    break match request {
+                        Some(request) => ManagerIterationOutcome::Restart(request),
+                        None => ManagerIterationOutcome::Shutdown,
+                    };
+                },
                 Some(incoming) = endpoint.accept() => {
                     info!(event = "incoming_connection", remote_addr = ?incoming.remote_addr());
 
@@ -292,10 +460,10 @@ where
                 }
                 else => {
                     warn!(event = "edge_case", case = "session_manager_else_branch");
-                    break;
+                    break ManagerIterationOutcome::Continue;
                 },
             }
-        }
+        };
 
         debug!(event = "manager_teardown_start");
         self.callbacks.manager_state(ManagerState::Stopped).await;
@@ -314,7 +482,7 @@ where
         // TODO this currently takes 3 seconds when there are outgoing connections, i think we need to decouple the UI disappearing from the shutdown
         endpoint.close().await;
         debug!(event = "endpoint_closed");
-        Ok(())
+        Ok(outcome)
     }
 
     /// Called by the dialer to open a connection and initialize a session
@@ -2572,7 +2740,8 @@ where
             room_state: Arc::clone(&self.room_state),
             session_states: Arc::clone(&self.session_states),
             start_session: self.start_session.clone(),
-            restart_manager: Arc::clone(&self.restart_manager),
+            restart_requests: self.restart_requests.clone(),
+            restart_requests_receiver: Arc::clone(&self.restart_requests_receiver),
             cancel_outbound_connections: Arc::clone(&self.cancel_outbound_connections),
             outbound_attempts: Arc::clone(&self.outbound_attempts),
             overlay: self.overlay.clone(),
