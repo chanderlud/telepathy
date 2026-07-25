@@ -6,7 +6,6 @@ on:
     tags:
       - 'v*'
   pull_request:
-    branches: [ master ]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
