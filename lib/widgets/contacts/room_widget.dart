@@ -6,9 +6,10 @@ import 'package:telepathy/controllers/index.dart';
 import 'package:telepathy/core/utils/index.dart';
 import 'package:telepathy/models/index.dart';
 import 'package:telepathy/core/rust/player.dart';
-import 'package:telepathy/core/rust/types.dart';
 import 'package:telepathy/core/rust/flutter.dart';
 import 'package:telepathy/widgets/common/index.dart';
+
+import 'call_start_lifecycle.dart';
 
 class RoomWidget extends StatefulWidget {
   final Room room;
@@ -168,50 +169,17 @@ class RoomWidgetState extends State<RoomWidget> {
                   final attempt =
                       stateController.setPendingRoom(target, operation);
 
-                  try {
-                    await telepathy.joinRoom(
+                  await runOutgoingCallStartLifecycle(
+                    context: context,
+                    stateController: stateController,
+                    player: player,
+                    attempt: attempt,
+                    startRequest: () => telepathy.joinRoom(
                       memberStrings: target.peerIds,
                       operation: operation,
-                    );
-                    if (!stateController.isCurrentCallAttempt(attempt) ||
-                        stateController.callLifecycle !=
-                            CallLifecycle.connecting) {
-                      return;
-                    }
-                    target.online.clear();
-                    // `CallState.connected` owns promotion. This continuation
-                    // only confirms backend request acceptance.
-                    List<int> bytes = await readSeaBytes('outgoing');
-                    if (!stateController.isCurrentCallAttempt(attempt) ||
-                        stateController.callLifecycle !=
-                            CallLifecycle.connecting) {
-                      return;
-                    }
-                    final soundHandle = await playSoundEffect(
-                      player: player,
-                      bytes: bytes,
-                      sound: 'outgoing',
-                    );
-                    if (!stateController.isCurrentCallAttempt(attempt) ||
-                        stateController.callLifecycle !=
-                            CallLifecycle.connecting) {
-                      soundHandle?.cancel();
-                      return;
-                    }
-                    outgoingSoundHandle = soundHandle;
-                  } on DartError catch (e) {
-                    if (!stateController.isCurrentCallAttempt(attempt) ||
-                        stateController.callLifecycle !=
-                            CallLifecycle.connecting) {
-                      return;
-                    }
-                    stateController.endOfCall();
-                    outgoingSoundHandle?.cancel();
-                    if (!context.mounted) return;
-                    showErrorDialog(context, 'Call failed', e.message);
-                  } finally {
-                    stateController.settleStartAttempt(attempt);
-                  }
+                    ),
+                    onStartAccepted: target.online.clear,
+                  );
                 },
               )
           ],

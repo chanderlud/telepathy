@@ -8,6 +8,8 @@ import 'package:telepathy/core/rust/flutter.dart';
 import 'package:telepathy/widgets/common/index.dart';
 import 'package:telepathy/core/rust/types.dart';
 
+import 'call_start_lifecycle.dart';
+
 /// A widget which displays a single contact.
 class ContactWidget extends StatefulWidget {
   final Contact contact;
@@ -310,50 +312,16 @@ class ContactWidgetState extends State<ContactWidget> {
                   final attempt =
                       stateController.setPendingContact(target, operation);
 
-                  try {
-                    await telepathy.startCall(
+                  await runOutgoingCallStartLifecycle(
+                    context: context,
+                    stateController: stateController,
+                    player: player,
+                    attempt: attempt,
+                    startRequest: () => telepathy.startCall(
                       contact: target,
                       operation: operation,
-                    );
-                    // `CallState.connected` owns promotion. This continuation
-                    // only confirms backend request acceptance.
-                    if (!stateController.isCurrentCallAttempt(attempt) ||
-                        stateController.callLifecycle !=
-                            CallLifecycle.connecting) {
-                      return;
-                    }
-
-                    List<int> bytes = await readSeaBytes('outgoing');
-                    if (!stateController.isCurrentCallAttempt(attempt) ||
-                        stateController.callLifecycle !=
-                            CallLifecycle.connecting) {
-                      return;
-                    }
-                    final soundHandle = await playSoundEffect(
-                      player: player,
-                      bytes: bytes,
-                      sound: 'outgoing',
-                    );
-                    if (!stateController.isCurrentCallAttempt(attempt) ||
-                        stateController.callLifecycle !=
-                            CallLifecycle.connecting) {
-                      soundHandle?.cancel();
-                      return;
-                    }
-                    outgoingSoundHandle = soundHandle;
-                  } on DartError catch (e) {
-                    if (!stateController.isCurrentCallAttempt(attempt) ||
-                        stateController.callLifecycle !=
-                            CallLifecycle.connecting) {
-                      return;
-                    }
-                    stateController.endOfCall();
-                    outgoingSoundHandle?.cancel();
-                    if (!context.mounted) return;
-                    showErrorDialog(context, 'Call failed', e.message);
-                  } finally {
-                    stateController.settleStartAttempt(attempt);
-                  }
+                    ),
+                  );
                 },
               )
           ],
