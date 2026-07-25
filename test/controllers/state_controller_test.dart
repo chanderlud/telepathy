@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:telepathy/controllers/state_controller.dart';
+import 'package:telepathy/core/rust/lib.dart';
 import 'package:telepathy/core/rust/types.dart';
 import 'package:telepathy/models/room.dart';
 import '../support/fake_contact.dart';
@@ -11,6 +13,32 @@ Room _roomFixture(String id) => Room(
       peerIds: <String>[],
       nickname: 'Room $id',
     );
+
+VideoSessionIdentity _videoIdentity(String peerId, int value) =>
+    VideoSessionIdentity(
+      peerId: peerId,
+      sessionId: VideoSessionId(
+        field0: U8Array16(Uint8List.fromList(List<int>.filled(16, value))),
+      ),
+    );
+
+VideoLifecycleEvent _videoEvent({
+  required VideoSessionIdentity identity,
+  required VideoRole role,
+  required VideoPhase phase,
+}) =>
+    VideoLifecycleEvent(
+      identity: identity,
+      role: role,
+      source: VideoSource.display,
+      phase: phase,
+    );
+
+void _activateVideoCall(StateController controller) {
+  controller.promotePendingCallAttempt(
+    controller.setPendingRoom(_roomFixture('video-call')),
+  );
+}
 
 void main() {
   group('StateController.runAudioTest', () {
@@ -392,6 +420,98 @@ void main() {
 
       controller.endOfCall();
       expect(controller.blockAudioChanges, isFalse);
+    });
+  });
+
+  group('StateController video lifecycle', () {
+    test('active and terminal events only affect their owned identity', () {
+      final controller = StateController();
+      _activateVideoCall(controller);
+      final first = _videoIdentity('peer-a', 1);
+      final second = _videoIdentity('peer-a', 2);
+
+      controller.handleVideoLifecycle(_videoEvent(
+        identity: first,
+        role: VideoRole.sender,
+        phase: VideoPhase.active,
+      ));
+      controller.handleVideoLifecycle(_videoEvent(
+        identity: second,
+        role: VideoRole.sender,
+        phase: VideoPhase.active,
+      ));
+      controller.handleVideoLifecycle(_videoEvent(
+        identity: first,
+        role: VideoRole.sender,
+        phase: VideoPhase.terminal,
+      ));
+
+      expect(controller.isSendingScreenshare, isTrue,
+          reason: 'a stale terminal must not clear a newer active identity');
+
+      controller.handleVideoLifecycle(_videoEvent(
+        identity: second,
+        role: VideoRole.sender,
+        phase: VideoPhase.terminal,
+      ));
+      expect(controller.isSendingScreenshare, isFalse);
+    });
+
+    test('terminal before active and stale active events leave state unchanged',
+        () {
+      final controller = StateController();
+      _activateVideoCall(controller);
+      final identity = _videoIdentity('peer-a', 3);
+
+      controller.handleVideoLifecycle(_videoEvent(
+        identity: identity,
+        role: VideoRole.receiver,
+        phase: VideoPhase.terminal,
+      ));
+      expect(controller.isReceivingScreenshare, isFalse);
+
+      controller.handleVideoLifecycle(_videoEvent(
+        identity: identity,
+        role: VideoRole.sender,
+        phase: VideoPhase.active,
+      ));
+      final stopped = controller.stopSendingScreenshare();
+      expect(stopped, identity);
+      expect(controller.isSendingScreenshare, isFalse);
+
+      controller.handleVideoLifecycle(_videoEvent(
+        identity: identity,
+        role: VideoRole.sender,
+        phase: VideoPhase.active,
+      ));
+      expect(controller.isSendingScreenshare, isFalse,
+          reason: 'a local stop must not be undone by a delayed active event');
+    });
+
+    test('call teardown clears active video state and ignores late terminals',
+        () {
+      final controller = StateController();
+      _activateVideoCall(controller);
+      final identity = _videoIdentity('peer-a', 4);
+      controller.handleVideoLifecycle(_videoEvent(
+        identity: identity,
+        role: VideoRole.receiver,
+        phase: VideoPhase.active,
+      ));
+
+      controller.endOfCall();
+      controller.handleVideoLifecycle(_videoEvent(
+        identity: identity,
+        role: VideoRole.receiver,
+        phase: VideoPhase.terminal,
+      ));
+      controller.handleVideoLifecycle(_videoEvent(
+        identity: identity,
+        role: VideoRole.receiver,
+        phase: VideoPhase.active,
+      ));
+
+      expect(controller.isReceivingScreenshare, isFalse);
     });
   });
 }

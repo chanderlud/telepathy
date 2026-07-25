@@ -445,7 +445,26 @@ class _FakeTelepathy implements Telepathy {
   Future<void> startManager() async {}
 
   @override
-  Future<void> startScreenshare({required Contact contact}) async {}
+  Future<VideoStartOutcome> requestVideoSource({
+    required Contact contact,
+    required VideoSourceRequest request,
+  }) async =>
+      const VideoStartOutcome.noSession();
+
+  @override
+  Future<VideoStopOutcome> stopVideoSource({
+    required VideoSessionIdentity identity,
+  }) async =>
+      VideoStopOutcome.notFound;
+
+  @override
+  Future<VideoCapabilities> videoCapabilities() async =>
+      const VideoCapabilities(
+        send: VideoCapabilityAvailability.available(),
+        receive: VideoCapabilityAvailability.available(),
+        sendSources: [],
+        receiveFormats: [],
+      );
 
   @override
   Future<void> startSession({required Contact contact}) async {}
