@@ -1,71 +1,93 @@
-# Agent Instructions
+# AGENTS.md
 
-## Project Layout
+## Paths
 
-- Rust backend code: ./rust/telepathy-core
-- Audio crate: ./rust/telepathy-audio
-- CLI for system tests: ./rust/telepathy-cli
-- Flutter frontend code: ./lib
-- Generated code (do NOT read these files): ./lib/core/rust/* and frb_generated.rs
-- Documentation: ./docs
-- Documented solutions: ./docs/solutions (searchable past solutions organized by category with YAML frontmatter)
-- Shared domain vocabulary: ./docs/CONCEPTS.md
-- System test suite: ./system-tests
+* Rust workspace: `rust/`
+* Core: `rust/telepathy-core`
+* Audio: `rust/telepathy-audio`
+* System-test CLI: `rust/telepathy-cli`
+* Flutter: `lib/`
+* Docs: `docs/`
+* System tests: `system-tests/`
+* Generated, never read/edit: `lib/core/rust/*`, `frb_generated.rs`
 
-## Formatting and Lint Rules
+Run all commands from the repository root.
 
-- Run `cargo fmt --manifest-path ./rust/Cargo.toml --all` in the project root directory after editing Rust files.
-- After editing Rust files in a specific package, run `cargo clippy --manifest-path ./rust/Cargo.toml -p <package_name>` from the project root directory.
-- For example, after editing files in telepathy-core, you should run `cargo clippy --manifest-path ./rust/Cargo.toml -p telepathy_core`.
-- After editing Dart files, run `flutter analyze` in the project root directory, then run `dart format .` when all cleanup if finished.
+## Checks
+
+After Rust edits:
+
+```sh
+cargo fmt --manifest-path rust/Cargo.toml --all
+cargo clippy --manifest-path rust/Cargo.toml -p <package>
+```
+
+Use package names such as `telepathy_core`.
+
+After Dart edits:
+
+```sh
+flutter analyze
+dart format .
+```
+
+Format only after cleanup is complete.
 
 ## Rust Tests
 
-* Prefer `cargo nextest run`; use `cargo test` only when nextest cannot support the required mode, and note why.
-* Run from the project root with `--manifest-path ./rust/Cargo.toml` for Bash and PowerShell compatibility.
+Prefer nextest. Use `cargo test` only when required, and state why.
 
-Main Rust pass:
+Main suite:
 
 ```sh
-cargo nextest run --manifest-path ./rust/Cargo.toml --all-targets -E 'not kind(=bench) and not binary(=core_integration_test)'
+cargo nextest run --manifest-path rust/Cargo.toml --all-targets -E 'not kind(=bench) and not binary(=core_integration_test)'
 ```
 
 Core integration suite:
 
 ```sh
-cargo nextest run --manifest-path ./rust/Cargo.toml -p telepathy_core --test core_integration_test --features integration-testing
+cargo nextest run --manifest-path rust/Cargo.toml -p telepathy_core --test core_integration_test --features integration-testing
 ```
 
-Focused integration module or test:
+Focused integration module/test:
 
 ```sh
-cargo nextest run --manifest-path ./rust/Cargo.toml -p telepathy_core --test core_integration_test --features integration-testing <module>::
-cargo nextest run --manifest-path ./rust/Cargo.toml -p telepathy_core --test core_integration_test --features integration-testing <module>::<test>
+cargo nextest run --manifest-path rust/Cargo.toml -p telepathy_core --test core_integration_test --features integration-testing <module>::
+cargo nextest run --manifest-path rust/Cargo.toml -p telepathy_core --test core_integration_test --features integration-testing <module>::<test>
 ```
 
 Modules: `session_lifecycle`, `call_lifecycle`, `audio_streams`, `device_failures`, `room_lifecycle`, `call_end_copy`.
 
-Package or single-test validation:
+Package/test:
 
 ```sh
-cargo nextest run --manifest-path ./rust/Cargo.toml -p <package> -E 'not kind(=bench)'
-cargo nextest run --manifest-path ./rust/Cargo.toml -p <package> <test>
+cargo nextest run --manifest-path rust/Cargo.toml -p <package> -E 'not kind(=bench)'
+cargo nextest run --manifest-path rust/Cargo.toml -p <package> <test>
 ```
 
-After changes affecting core sessions, calls, rooms, networking, or teardown, run:
+For session, call, room, network, or teardown changes:
 
 ```sh
-cargo nextest run --manifest-path ./rust/Cargo.toml -p telepathy_core --test core_integration_test --features integration-testing --stress-count 10
+cargo nextest run --manifest-path rust/Cargo.toml -p telepathy_core --test core_integration_test --features integration-testing --stress-count 10
 ```
 
-Before handing off substantial Rust changes, run the main pass, then the stress pass.
+Before handing off substantial Rust work, run the main and stress suites.
 
-System tests must be run manually by the developer in WSL; prompt them when applicable.
+System tests must be run manually by the developer in WSL. Prompt them when relevant.
 
-## Flutter Rust Bridge Rules
+## Flutter Rust Bridge
 
-- After editing pub members of telepathy-core, you must run EXACTLY `flutter_rust_bridge_codegen generate` to regenerate the bindings.
-- If the codegen command is unavailable, try running `cargo install flutter_rust_bridge_codegen`.
+After changing public `telepathy-core` members, run exactly:
+
+```sh
+flutter_rust_bridge_codegen generate
+```
+
+If missing:
+
+```sh
+cargo install flutter_rust_bridge_codegen
+```
 
 ## Test Quality Policy
 
@@ -90,35 +112,14 @@ System tests must be run manually by the developer in WSL; prompt them when appl
 - Create fixtures with placeholder data like 'name="test"' or value=123
 - Write tests that only verify "no exception was raised"
 
-## API Surface Rules
+## API Design
 
-When extending the public or crate-level API, prefer behavior over raw state.
+Expose behavior, not mutable state.
 
-- Do NOT expose new `pub` fields that callers can read or mutate freely. Fields
-  that are part of the construction-time contract should be `pub(crate)` and
-  reached through methods, constructors, or `Deref`-style accessors.
-- Prefer adding new public structs, enums, methods, traits, or functions over
-  widening an existing struct's visibility. Constructors (`Self::new(...)`,
-  builders) and focused methods (`fn X(&self) -> &T`, `fn set_X(&mut self, ...)`)
-  are the preferred shape — they keep invariants inside the type and let it
-  evolve without a breaking change.
-- The same rule applies to test harnesses and fixtures in `tests/`/
-  `system-tests/`: expose builder methods and accessors rather than `pub` fields
-  that future tests can poke into an invalid state.
-- If a value genuinely must be transparent to callers (e.g. plain DTOs crossing
-  the FFI boundary, newtype wrappers with `#[transparent]`), keep the type
-  trivial and document why free field access is safe.
+* Avoid new `pub` fields.
+* Use `pub(crate)` for construction-only state.
+* Prefer constructors, builders, methods, traits, enums, and focused accessors.
+* Apply the same rules to test harnesses and fixtures.
+* Public fields are acceptable only for intentionally transparent, trivial DTOs, FFI types, or newtypes; document why.
 
-Rationale: mutating public fields lets callers bypass invariants the type's own
-methods enforce. Once a field is `pub`, any future tightening (validation, lazy
-init, change of representation) is a breaking change across every downstream
-including the generated Flutter bindings.
-
-## Deployment Scope
-
-- Ignore migration, backward-compatibility, and legacy persisted-state risks for
-  changes introduced only on the current unmerged branch. Those intermediate
-  shapes have not reached users and are drafts, not deployed contracts.
-- Consider those risks only when the prior shape was deployed, externally
-  consumed, persisted outside this development cycle, or explicitly identified
-  as a compatibility requirement.
+Public fields bypass invariants and make later validation, lazy initialization, or representation changes breaking changes, including for generated Flutter bindings.
