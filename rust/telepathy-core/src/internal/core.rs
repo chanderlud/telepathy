@@ -709,16 +709,31 @@ where
                     let snapshot = call_slot.snapshot()?;
                     if !room_only
                         && !self.is_in_room(&peer).await
-                        && snapshot.state == CallSlotState::ActiveDirect
                         && snapshot.direct_peer == Some(peer)
-                    {
-                        warn!(event = "session_error_while_call_active", ?error);
-                        if call_slot.release_if_match(snapshot)? {
-                            let message = CallEndMessage::from_error(&error);
-                            self.callbacks
-                                .call_state(CallState::CallEnded(message.into_string(), false))
-                                .await;
+                        && let Some((message, remote, event)) = match snapshot.state {
+                            CallSlotState::ActiveDirect => Some((
+                                CallEndMessage::from_error(&error),
+                                false,
+                                "session_error_while_call_active",
+                            )),
+                            CallSlotState::PendingOutgoing if error.is_session_critical() => {
+                                Some((
+                                    CallEndMessage::from_text(peer_goodbye_reason_message(
+                                        &contact.nickname,
+                                        GoodbyeReason::SessionStopped,
+                                    )),
+                                    true,
+                                    "session_error_while_call_pending",
+                                ))
+                            }
+                            _ => None,
                         }
+                        && call_slot.release_if_match(snapshot)?
+                    {
+                        warn!(event, ?error);
+                        self.callbacks
+                            .call_state(CallState::CallEnded(message.into_string(), remote))
+                            .await;
                     }
 
                     if room_only || error.is_session_critical() {
