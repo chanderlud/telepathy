@@ -2,6 +2,7 @@ use crate::internal::Result;
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::error::ErrorKind;
 use crate::internal::messages::{AudioHeader, ProtocolMessage, RoomMessage};
+use crate::internal::video::VideoSlot;
 use crate::types::{CodecConfig, Contact, NetworkConfig, ScreenshareConfig, SessionStatus};
 use atomic_float::AtomicF32;
 use iroh::endpoint::{Connection, Path};
@@ -1011,9 +1012,7 @@ pub struct SessionState {
 
     pub(crate) end_call: Arc<Notify>,
 
-    pub(crate) start_screenshare: Notify,
-
-    pub(crate) stop_screenshare: Arc<Mutex<Option<Arc<Notify>>>>,
+    pub(crate) video_slot: Arc<VideoSlot>,
 }
 
 impl SessionState {
@@ -1027,8 +1026,7 @@ impl SessionState {
             upload_bandwidth: Default::default(),
             download_bandwidth: Default::default(),
             end_call: Default::default(),
-            start_screenshare: Default::default(),
-            stop_screenshare: Default::default(),
+            video_slot: Arc::new(VideoSlot::default()),
         }
     }
 
@@ -1054,10 +1052,9 @@ impl SessionState {
         self.end_call.notify_one();
         // stops the session loop
         self.stop_session.cancel();
-        // stops any active screenshare threads
-        if let Some(notify) = self.stop_screenshare.lock().await.take() {
-            notify.notify_waiters();
-        }
+        self.video_slot
+            .cancel_current_and_join(crate::types::VideoTerminalReason::Teardown)
+            .await;
     }
 
     /// monitors the session connection to update bandwidth, latency, and push session statuses

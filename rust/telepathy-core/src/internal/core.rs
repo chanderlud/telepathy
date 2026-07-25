@@ -14,7 +14,7 @@ use crate::internal::error::{
 use crate::internal::helpers::OutputHelper;
 use crate::internal::helpers::{RoomTaskOutcome, join_room_task_bounded};
 use crate::internal::messages::{
-    AudioHeader, GoodbyeReason, ProtocolMessage, RoomControl, RoomMessage, StartScreenshare,
+    AudioHeader, GoodbyeReason, ProtocolMessage, RoomControl, RoomMessage,
 };
 use crate::internal::state::{
     CallSlot, CallSlotAcquireResult, CallSlotSnapshot, CallSlotState, CoreState, RuntimeSnapshot,
@@ -1599,6 +1599,7 @@ where
                 call_state.remote_configuration.sample_rate,
             ));
 
+            let video_state = Arc::clone(o.state);
             let controller_future =
                 self.call_controller(o, call_state.peer, end_call, &mut stream_error_receiver);
 
@@ -1616,6 +1617,13 @@ where
                 }
                 _ => None,
             };
+
+            self.finish_current_video(
+                &video_state,
+                call_state.peer,
+                crate::internal::video::VideoTerminalReason::Teardown,
+            )
+            .await;
 
             info!(event = "call_controller_done_notifying_stop_io");
             stop_io.cancel();
@@ -1729,19 +1737,14 @@ where
                     write_message(o.control_send, &ProtocolMessage::goodbye()).await?;
                     break Ok(CallControllerOutcome::Silent);
                 },
-                _ = o.state.start_screenshare.notified() => {
-                    info!(event = "starting_screenshare", peer.id = ?peer);
-
-                    #[cfg(not(target_family = "wasm"))]
-                    {
-                        let message = StartScreenshare::new_sender(peer, o.connection.clone());
-                        let self_clone = self.clone();
-                        spawn_task(async move {
-                            let result = self_clone.start_screenshare(message).await;
-                            if let Err(error) = result {
-                                error!(event = "screenshare_start_failed", error = ?error);
-                            }
-                        }.in_current_span());
+                _ = sleep_until(Instant::now() + crate::internal::video::VIDEO_NEGOTIATION_TIMEOUT) => {
+                    if let Some((attempt, reason)) = o.state.video_slot.expire_waiting_ready().await {
+                        self.finish_video_attempt(o.state, peer, attempt, reason).await;
+                    }
+                }
+                _ = o.state.video_slot.terminal_notified() => {
+                    if let Some((attempt, reason)) = o.state.video_slot.take_terminal().await {
+                        self.finish_video_attempt(o.state, peer, attempt, reason).await;
                     }
                 }
                 // receives and handles messages from the callee
@@ -1765,21 +1768,8 @@ where
                                 attachments,
                             }).await;
                         }
-                        ProtocolMessage::ScreenshareHeader { .. } => {
-                            info!(event = "screenshare_header_received", ?message, peer.id = ?peer);
-
-                            #[cfg(not(target_family = "wasm"))]
-                            {
-                                let message = StartScreenshare::new_receiver(peer, message, o.connection.clone());
-                                let self_clone = self.clone();
-                                spawn_task(async move {
-                                    let result = self_clone.start_screenshare(message).await;
-                                    if let Err(error) = result {
-                                        error!(event = "screenshare_start_failed", error = ?error);
-                                    }
-                                }.in_current_span());
-                            }
-
+                        ProtocolMessage::Video { control } => {
+                            self.handle_video_control(peer, o.connection, control).await?;
                         }
                         _ => error!(event = "call_controller_unexpected_message", ?message),
                     }
