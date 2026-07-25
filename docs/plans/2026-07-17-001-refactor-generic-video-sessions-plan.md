@@ -95,23 +95,23 @@ The current flow also has no direct screenshare tests and represents ownership w
 
 | Decision | Choice and rationale |
 |---|---|
-| Ownership boundary | A generic per-peer video coordinator owns lifecycle, signaling, Iroh stream setup, framing, cancellation, and task joining. Platform adapters own preparation, capture/playback, and process/resource cleanup only. |
+| Ownership boundary | A generic per-peer video coordinator owns lifecycle, signaling, Iroh stream setup, framing, cancellation, task joining, and the active resource bundle. Platform adapters own preparation, capture/playback, and exclusively clean up their child processes and pipes through their adapter session. |
 | Adapter granularity | Use a session adapter rather than raw source/sink callbacks. FFmpeg preparation determines negotiated format and owns a child process, pipes, and cleanup as one unit. |
 | Platform selection | Compile exactly one private adapter type with target `cfg`; probe binaries, devices, encoders, decoders, and permissions at runtime. Avoid dynamic registries and boxed async backends. |
 | Extensibility model | Use closed, typed source/configuration and lifecycle variants. Future additions become compiler-visible and cannot silently fall through string matching. |
-| Active-session cardinality | Keep one video slot per peer for this scope. The slot contains identity, generation, role, phase, cancellation, and owned task/session handles. |
+| Active-session cardinality | Keep one video slot per peer for this scope. Its active resource bundle contains the matching identity and generation, role, phase, cancellation, adapter session, and every transport-worker handle, including `open_uni` and `accept_uni`; neither worker may be detached. Resources install only while the slot still matches that identity and generation. A stale installer immediately cancels and joins its uninstalled bundle. |
 | Negotiation | Use typed offer, ready, reject, and stop controls. Existing screenshare remains automatically accepted when locally supported; readiness is protocol-internal and creates no new UX. |
 | Correlation and crossed starts | Each offer carries an initiator-created wire session identity echoed by ready/reject/stop/preamble. Local generation is only a stale-completion guard. Simultaneous offers resolve deterministically from peer identity; the loser cancels local preparation, emits one local terminal observation, then processes the winning remote identity. |
 | Wire migration | Replace `ScreenshareHeader` in one coordinated cutover. Do not retain parallel legacy signaling or coordinator paths. |
 | Media descriptor | Send stable source kind, codec/format metadata, dimensions, framing revision, and session identity. Never send local device IDs, FFmpeg options, or platform objects. |
 | Stream association | Write a bounded video preamble immediately after opening the uni-stream; validate protocol revision and session identity before adapter startup or payload delivery. |
 | Stream acceptance | Only an accepted matching remote offer may arm one slot-owned `accept_uni`. That wait races cancellation, negotiation timeout, and teardown; no concurrent uni-stream acceptor exists for that connection in this scope. |
-| Cancellation and cleanup | Replace `Arc<Notify>` ownership with durable cancellation. Coordinator owns transport and adapter-session handles; adapter session exclusively owns child/pipes. Cleanup cancels, unblocks/closes I/O, awaits adapter cleanup and transport workers, then emits terminal state and releases the matching slot. |
+| Cancellation and cleanup | Replace `Arc<Notify>` ownership with durable cancellation. `cancel_and_join` claims only the matching reservation into `Stopping` without clearing it, cancels, closes or resets I/O, then joins the adapter session and every transport worker outside the slot lock. It emits exactly one terminal observation, then clears the matching slot only after joins. `call()`, `call_controller`, and all session teardown paths await this operation before returning. |
 | Stream termination | One transport I/O owner resolves cancellation. Clean EOF intentionally finishes; stop, protocol failure, or interrupted framing resets/abandons the stream. A partially written preamble/frame is never resumed or reused. |
 | Backpressure | Preserve the current direct read-then-send pressure chain with bounded in-flight media memory. No unbounded media channel, per-frame task spawning, or ignored partial child-stdin write is permitted. |
 | Frontend contract | Core owns stopping and cleanup. Flutter receives typed lifecycle observations and issues identity-aware stop requests; callbacks never own correctness. |
 | Public parity | Native and Flutter surfaces share lifecycle request/stop/events and generic capabilities. Platform configuration ownership may differ internally, but cannot change those public session semantics. |
-| Terminal observations | Each peer emits exactly one terminal observation for each resolved wire session identity, only after its own cleanup. Explicit control is best-effort; absent peer control maps to a local transport-ended reason with deterministic precedence and identity-based deduplication. |
+| Terminal observations | Each peer emits exactly one terminal observation for each resolved wire session identity, only after `cancel_and_join` finishes its matching resources. Explicit control is best-effort; absent peer control maps to a local transport-ended reason with deterministic precedence and identity-based deduplication. Stale completion or installation cleans up its own resources without observing or clearing a newer slot. |
 | Failure scope | Video failures end only the affected video session unless the underlying peer/call transport itself has ended. |
 | Configuration | Coordinator accepts only a source request and generic capability result. Selected adapter reads validated source-scoped local settings through the facade; unavailable, receive-only, and send-capable states remain generic, and FFmpeg data never enters coordinator or wire types. |
 
@@ -184,12 +184,12 @@ stateDiagram-v2
     WaitingReady --> Starting: ready and stream association
     PreparingRemote --> Starting: adapter prepared and preamble validated
     Starting --> Active: transport and adapter live
-    Offering --> Stopping: reject, timeout, stop, or teardown
-    WaitingReady --> Stopping: reject, timeout, stop, or teardown
-    PreparingRemote --> Stopping: invalid, unsupported, stop, or teardown
-    Starting --> Stopping: failure, stop, or teardown
-    Active --> Stopping: local stop, remote stop, EOF, failure, or teardown
-    Stopping --> Idle: resources joined and generation still matches
+    Offering --> Stopping: matching reservation claimed
+    WaitingReady --> Stopping: matching reservation claimed
+    PreparingRemote --> Stopping: matching reservation claimed
+    Starting --> Stopping: matching reservation claimed
+    Active --> Stopping: matching reservation claimed
+    Stopping --> Idle: cancel, close/reset I/O, join, observe once, then clear matching slot
 ```
 
 Control and transport sequencing:
@@ -199,8 +199,9 @@ Control and transport sequencing:
 3. Offer is validated and auto-accepted by the receiver only when its selected adapter reports support; ready or typed rejection returns over control signaling.
 4. Receiver arms one cancellation-aware `accept_uni` only for the accepted offer. Sender opens one uni-stream and immediately writes the versioned identity preamble before media bytes.
 5. Receiver validates the wire session identity before adapter startup. Local generation never crosses the wire.
-6. Coordinator starts adapter I/O, preserves bounded backpressure, publishes active observations, and supervises all terminal causes through one cleanup path.
-7. Stop is explicit over control signaling and reinforced by stream closure; either signal is identity-deduplicated and idempotent.
+6. Coordinator installs the adapter session and every `open_uni` or `accept_uni` worker only if the slot still matches its identity and generation; stale completions cancel and join their own resources without touching a newer slot.
+7. Coordinator starts adapter I/O, preserves bounded backpressure, publishes active observations, and supervises all terminal causes through one cleanup path.
+8. Stop is explicit over control signaling and reinforced by stream closure; either signal claims the matching reservation into `Stopping`, cancels, closes or resets I/O, joins all resources outside the lock, emits one terminal observation, and only then clears the matching slot.
 
 ---
 
@@ -225,9 +226,7 @@ flowchart TB
     U4 --> U3
     U3 --> U9
     U4 --> U9
-    U4 --> U5
-    U3 --> U6
-    U9 --> U6
+    U9 --> U5
     U5 --> U6
     U6 --> U10
     U10 --> U7
@@ -352,7 +351,7 @@ flowchart TB
 
 ### U3. Build the Video Slot and Control Lifecycle
 
-**Goal:** Establish one lifecycle owner for per-peer video state and control-message transitions before attaching media transport.
+**Goal:** Establish one lifecycle owner for per-peer video state, matching resource reservations, and control-message transitions before attaching media transport.
 
 **Requirements:** R3, R7, R9
 
@@ -369,11 +368,13 @@ flowchart TB
 - Test support: `rust/telepathy-core/tests/core_integration_test/common.rs`
 
 **Approach:**
-- Replace `stop_screenshare` with a typed video slot whose non-idle states carry identity, generation, role, durable cancellation, and owned task/session handles.
+- Replace `stop_screenshare` with a typed video slot whose non-idle reservation carries identity, generation, role, durable cancellation, and an optional active resource bundle.
+- Define the bundle boundary now: only a matching identity and generation may install an adapter session or worker handle; a stale installation or completion must cancel and join its own resources without clearing, observing, or replacing the current slot.
+- Define `cancel_and_join` as the coordinator-facing terminal operation. It claims the matching reservation into `Stopping` without clearing it, so U9 can add joined adapter and transport cleanup without a teardown race.
 - Route local starts and incoming video controls through one coordinator. Remove `OutputHelper::start_screenshare` branching after equivalent behavior is covered.
 - Implement legal offer/ready/reject/stop transitions, auto-accept policy, crossed-offer resolution, and identity/generation deduplication without yet moving framed media.
 - Define terminal-reason precedence and the invariant of one post-cleanup terminal observation per local peer and wire session identity.
-- Converge local stop, remote stop, reject, negotiation timeout, session removal, manager restart, call end, and shutdown on one idempotent slot transition.
+- Converge local stop, remote stop, reject, negotiation timeout, session removal, manager restart, call end, and shutdown on one identity- and generation-matched idempotent slot transition; `call()`, `call_controller`, and session teardown await `cancel_and_join`.
 
 **Patterns to follow:**
 - Existing cancellation and task helpers in `rust/telepathy-core/src/internal/utils.rs`.
@@ -385,10 +386,11 @@ flowchart TB
 - Error path: reject, readiness timeout, callback failure, and peer control closure emit deterministic local terminal outcomes and release ownership.
 - Concurrency: duplicate start, duplicate ready, duplicate stop, crossed start, and simultaneous local/remote stop remain idempotent.
 - Edge case: stop during preparation and readiness wait cannot hang or emit duplicate terminal observations.
-- Integration: call end, session replacement, manager restart, and shutdown cancel the current generation while late completion cannot clear a newer session.
+- Integration: call end, `call_controller`, session replacement, manager restart, and shutdown await cancellation of the current generation while late installation or completion cannot clear a newer session.
 
 **Verification:**
 - Coordinator state/control layer contains no platform or FFmpeg branch.
+- A resource bundle can be claimed only by matching identity and generation, and a claimed reservation remains visible as `Stopping` until U9 joins its resources.
 - Every resolved wire session identity has at most one local terminal observation.
 - Existing audio call/session state behavior remains unchanged.
 
@@ -410,11 +412,13 @@ flowchart TB
 - Test support: `rust/telepathy-core/tests/core_integration_test/common.rs`
 
 **Approach:**
-- Permit one slot-owned `accept_uni` only after a matching accepted offer; race it against cancellation, negotiation timeout, peer/session teardown, and manager shutdown.
+- Permit one slot-owned `accept_uni` only after a matching accepted offer; race it against cancellation, negotiation timeout, peer/session teardown, and manager shutdown. Store its handle in the matching active resource bundle and never detach it.
 - Keep immediate preamble, distinct control/preamble/media limits, bounded frame decoding, EOF/reset mapping, and stream finish/reset policy inside the transport module.
 - Validate each outbound control, preamble, and media payload against its class-specific limit before allocation/encode/write; report deterministic local typed failure on excess.
 - Preserve one direct backpressure chain from adapter capture through framed Iroh write and from framed read through complete adapter stdin delivery. Avoid unbounded media queues and per-frame tasks.
-- Coordinator owns transport workers and the adapter-session handle; adapter session owns child and pipes. Cleanup order is cancel, unblock/close I/O, await adapter cleanup and transport workers, emit one terminal observation, then clear the matching slot.
+- Install the adapter session plus every transport worker, including `open_uni` and `accept_uni`, only while the reservation still matches identity and generation. If installation loses that match, cancel and join the uninstalled resources immediately without changing the current slot.
+- Make `cancel_and_join` claim the matching active reservation into `Stopping` without clearing it. Under the lock, take no joined resources beyond the matching bundle; outside the lock, cancel, close or reset stream and adapter I/O, join adapter cleanup and every worker, emit exactly one terminal observation, then reacquire the lock and clear only the still-matching slot.
+- Require `call()`, `call_controller`, session removal, manager restart, call end, and shutdown to await `cancel_and_join`; no caller may observe idle before the adapter session and all transport workers have joined.
 - If framing is interrupted, reset/abandon that stream and never resume partial bytes for the same or next generation.
 
 **Patterns to follow:**
@@ -427,11 +431,13 @@ flowchart TB
 - Error path: `open_uni`/`accept_uni` failure, reset, EOF, partial preamble/frame, and interrupted writes produce one defined terminal result and release ownership.
 - Backpressure: slow transport or slow child stdin keeps in-flight memory bounded and preserves every byte, including controlled partial stdin writes.
 - Cancellation: stop during preamble, frame read/write, child stdin write, and blocked send unblocks cleanup; trailing bytes cannot contaminate the next generation.
-- Integration: call/session teardown and immediate restart leave no accept wait, stream, adapter session, or worker from the previous identity.
+- Ownership: stale adapter or worker installation/completion cancels and joins only its own resources, leaves the newer slot intact, and emits no terminal observation for that newer identity.
+- Integration: `call()`, `call_controller`, call/session teardown, and immediate restart await `cancel_and_join` and leave no `accept_uni` wait, `open_uni` worker, stream, adapter session, or worker from the previous identity.
 
 **Verification:**
 - No concurrent `accept_uni` consumer exists for the connection in this scope.
-- No detached video worker, stream, adapter session, or unbounded media queue remains after idle is observed.
+- No detached `open_uni` or `accept_uni` worker, stream, adapter session, or unbounded media queue remains after idle is observed.
+- Idle is observable only after matching cancellation, I/O closure or reset, joins, and the sole terminal observation complete.
 
 ### U4. Extract Statically Selected Platform Session Adapters
 
@@ -484,7 +490,7 @@ flowchart TB
 
 **Requirements:** R1, R4, R5, R6, R10
 
-**Dependencies:** U4
+**Dependencies:** U4, U9
 
 **Files:**
 - Modify: `rust/telepathy-core/src/types.rs`
@@ -523,7 +529,7 @@ flowchart TB
 
 **Requirements:** R2, R7, R10, R11, R12
 
-**Dependencies:** U3, U5, U9
+**Dependencies:** U5, U9
 
 **Files:**
 - Modify: `rust/telepathy-core/src/internal/callbacks.rs`
@@ -616,7 +622,7 @@ Lifecycle mapping preserves current interaction:
 
 **Requirements:** R1-R13
 
-**Dependencies:** U4, U9, U10
+**Dependencies:** U9, U10
 
 **Files:**
 - Modify: `rust/telepathy-core/tests/core_integration_test.rs`
@@ -677,10 +683,10 @@ flowchart TB
 
 - **Interaction graph:** Start/stop moves from call controls through the bridge to coordinator; peer controls and media stream are coordinated centrally; typed events return to Flutter state; desktop process lifecycle stays behind adapter.
 - **Error propagation:** Adapter, stream, protocol, timeout, and teardown outcomes become typed video terminal reasons with deterministic precedence. Best-effort peer control failure maps to a local transport-ended result; video-local failures do not end audio calls unless shared peer transport has already failed.
-- **State lifecycle risks:** Crossed starts, duplicate control messages, cancellation before stream visibility, stale callbacks, and late task completion are guarded by wire identity plus local generation checks and one slot-owned accept wait.
+- **State lifecycle risks:** Crossed starts, duplicate control messages, cancellation before stream visibility, stale callbacks, and late task completion are guarded by wire identity plus local generation checks. The matching slot owns its adapter session and every worker, including `open_uni` and `accept_uni`, until `cancel_and_join` closes or resets I/O and joins them.
 - **API surface parity:** `TelepathyHandle`, `NativeTelepathy`, Flutter exports, callbacks, config/capability types, handwritten Dart consumers, and generated bindings change together.
 - **Integration coverage:** Unit tests cannot prove Iroh stream visibility/order, peer agreement, callback propagation, or teardown joining; real two-client integration and stress scenarios cover those paths.
-- **Resource behavior:** One I/O owner per direction preserves bounded backpressure and complete pipe writes; cleanup closes/unblocks I/O before awaiting adapter and transport workers.
+- **Resource behavior:** One I/O owner per direction preserves bounded backpressure and complete pipe writes. A matching terminal claim moves the slot to `Stopping`, cancels and closes or resets I/O, joins the adapter session and every worker outside the lock, emits one terminal observation, then clears the slot; stale resources clean up without affecting a newer generation.
 - **Unchanged invariants:** One-to-one audio call and session ownership, room behavior, chat, audio transport, current desktop screenshare UX, and existing FFmpeg media choices remain unchanged.
 
 ---
@@ -703,6 +709,8 @@ flowchart TB
 |---|---|---|---|
 | FFmpeg command or byte behavior drifts during extraction | Medium | High | Characterize first; keep adapter extraction separate; preserve command/payload tests through all later units. |
 | A cancelled task leaks FFmpeg | Medium | High | Adapter owns child and pipes; all exits converge on terminate/kill/wait; coordinator joins before idle; stress with process probes. |
+| A stale resource installation or completion clears a newer session | Medium | High | Install and claim only matching identity/generation bundles; stale resources cancel and join themselves without observing or clearing the current slot. |
+| A terminal path returns while transport work still runs | Medium | High | Store adapter, `open_uni`, and `accept_uni` handles in the slot; `cancel_and_join` cancels, closes or resets I/O, joins outside the lock, emits once, and is awaited by call and session teardown. |
 | Two peers disagree during crossed starts | Medium | High | Canonical identity tie-break, explicit generation, symmetric protocol tests, and idempotent loser cleanup. |
 | Wrong uni-stream is accepted | Low | High | Single authoritative video acceptor, immediate identity preamble, strict validation before adapter start; defer general dispatcher until competing stream types exist. |
 | Oversized peer input allocates unbounded memory | Medium | High | Bound control, preamble, and payload decoders; reject before adapter delivery; boundary tests. |
@@ -730,14 +738,14 @@ flowchart TB
 
 - U4 establishes the static adapter and extracts FFmpeg after U2.
 - U3 then replaces the old helper branch with generic slot and control ownership against that adapter contract.
-- U9 joins coordinator, bounded transport, adapter sessions, and terminal cleanup.
-- U5 moves capability/configuration concerns behind the new boundary.
+- U9 completes the coordinator-owned resource bundle, bounded transport, and joined terminal cleanup.
+- U5 moves capability/configuration concerns behind the completed cleanup boundary.
 
 ### Phase 3: Migrate Consumers and Prove the System
 
-- U6 changes Rust-native/Flutter-Rust APIs and regenerates bridge output.
-- U10 migrates Dart persistence, state, and existing controls.
-- U7 completes two-peer, failure, teardown, and stress coverage plus tracing documentation.
+- U6 changes Rust-native/Flutter-Rust APIs and regenerates bridge output after U9 and U5.
+- U10 migrates Dart persistence, state, and existing controls after U6.
+- U7 completes two-peer, failure, teardown, and stress coverage plus tracing documentation after U9 and U10.
 
 ---
 
@@ -747,7 +755,8 @@ flowchart TB
 - Generic coordinator, transport, domain, and public API contain no FFmpeg-specific or screenshare-specific lifecycle assumptions.
 - Unsupported targets compile the same public video API and return typed unavailability.
 - Every accepted or rejected start reaches one identity-matched terminal outcome on both peers; stop and teardown are idempotent.
-- Repeated start/stop, call end, session replacement, restart, and shutdown leave no stale slot, worker, stream, or child process.
+- Repeated start/stop, call end, session replacement, restart, and shutdown await joined cleanup and leave no stale slot, worker, stream, or child process.
+- An adapter session and every `open_uni` or `accept_uni` worker install only into their matching identity/generation bundle; stale resources clean up without clearing or observing a newer session.
 - Slow or blocked media paths retain bounded in-flight memory, preserve complete bytes, and stop without frame-rate task/log growth.
 - A future platform adapter can be added without coordinator, transport, protocol lifecycle, or Flutter event redesign.
 - A future source can be added without a parallel session lifecycle or media transport path.
