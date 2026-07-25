@@ -7,9 +7,9 @@ use crate::internal::connections::{
     ConstConnection, DynamicConnection, SharedConnections, audio_input, audio_output,
 };
 use crate::internal::error::{
-    AudioStreamError, CallEndMessage, Error, ErrorKind, peer_busy_message,
-    peer_goodbye_reason_message, peer_no_response_message, peer_not_accepted_message,
-    peer_unexpected_message,
+    AudioStreamError, CALL_END_ALREADY_ACTIVE, CALL_END_GENERIC, CallEndMessage, Error, ErrorKind,
+    peer_busy_message, peer_goodbye_reason_message, peer_no_response_message,
+    peer_not_accepted_message, peer_unexpected_message,
 };
 use crate::internal::helpers::OutputHelper;
 use crate::internal::helpers::{RoomTaskOutcome, join_room_task_bounded};
@@ -67,11 +67,6 @@ use wasmtimer::tokio::{Interval, interval, sleep_until, timeout};
 
 const MANAGER_RETRY_BASE_MS: u64 = 500;
 const MANAGER_RETRY_MAX_MS: u64 = 30_000;
-
-enum ManagerIterationOutcome {
-    Continue,
-    Shutdown,
-}
 
 pub struct TelepathyCore<C, S, H, I, O>
 where
@@ -251,11 +246,11 @@ where
             Ok(Some(endpoint)) => endpoint,
             Ok(None) => {
                 self.callbacks.manager_state(ManagerState::Stopped).await;
-                if self.core_state.stop_manager.is_cancelled() {
-                    return Ok(ManagerIterationOutcome::Shutdown);
+                return if self.core_state.stop_manager.is_cancelled() {
+                    Ok(ManagerIterationOutcome::Shutdown)
                 } else {
-                    return Ok(ManagerIterationOutcome::Continue);
-                }
+                    Ok(ManagerIterationOutcome::Continue)
+                };
             }
             Err(error) => return Err(error),
         };
@@ -827,32 +822,6 @@ where
         }
     }
 
-    /// Atomically validates a direct-call session and acquires its outgoing slot.
-    async fn acquire_outgoing_call_slot<'a>(
-        &self,
-        call_slot: &'a CallSlot,
-        peer: PublicKey,
-        session_id: Uuid,
-        stop_session: &CancellationToken,
-    ) -> Result<OutgoingSlotDecision<'a>> {
-        // Keep session-map read lock through synchronous slot acquisition.
-        // `reset_sessions` needs map write lock before terminal slot clearing, so
-        // it drains this session before validation or clears after acquisition.
-        // No await occurs while either lock is held.
-        let states = self.session_states.read().await;
-        if stop_session.is_cancelled() {
-            return Ok(OutgoingSlotDecision::SessionStopped);
-        }
-        if states.get(&peer).is_none_or(|state| state.id != session_id) {
-            return Ok(OutgoingSlotDecision::StaleSession);
-        }
-
-        match PendingDirectCallSlot::try_acquire_outgoing(call_slot, peer)? {
-            Some(slot) => Ok(OutgoingSlotDecision::Acquired(slot)),
-            None => Ok(OutgoingSlotDecision::Busy),
-        }
-    }
-
     /// Handles one protocol message received while awaiting `HelloAck` on an outgoing call.
     async fn handle_outgoing_hello_response(
         &self,
@@ -1144,14 +1113,13 @@ where
                             &mut pending_slot,
                         )
                         .await?;
-                        write_message(
+                        _ = write_message(
                             io.send,
                             &ProtocolMessage::Goodbye {
                                 reason: GoodbyeReason::AudioDeviceError,
                             },
                         )
-                        .await
-                        .ok();
+                        .await;
                         Err(error)
                     }
                 }
@@ -1210,8 +1178,7 @@ where
                 }
                 OutgoingSlotDecision::StaleSession => {
                     info!(event = "outgoing_call_skipped_stale_session", peer.id = %peer);
-                    let message =
-                        CallEndMessage::from_text(crate::internal::error::CALL_END_ALREADY_ACTIVE);
+                    let message = CallEndMessage::from_text(CALL_END_ALREADY_ACTIVE);
                     self.callbacks
                         .call_state(CallState::CallEnded(message.into_string(), true))
                         .await;
@@ -1220,8 +1187,7 @@ where
                 OutgoingSlotDecision::Acquired(slot) => pending_slot = Some(slot),
                 OutgoingSlotDecision::Busy => {
                     warn!(event = "call_slot_busy_outgoing", peer.id = %peer);
-                    let message =
-                        CallEndMessage::from_text(crate::internal::error::CALL_END_ALREADY_ACTIVE);
+                    let message = CallEndMessage::from_text(CALL_END_ALREADY_ACTIVE);
                     self.callbacks
                         .call_state(CallState::CallEnded(message.into_string(), true))
                         .await;
@@ -1920,7 +1886,7 @@ where
         // releasing the room slot, so it cannot start a direct call against the
         // former room peer. `timeout(Duration::ZERO, ...)` drains a pending permit
         // (the `Notified` future resolves immediately) and is a no-op otherwise.
-        if tokio::time::timeout(Duration::ZERO, session.start_call.notified())
+        if timeout(Duration::ZERO, session.start_call.notified())
             .await
             .is_ok()
         {
@@ -1938,65 +1904,6 @@ where
             })
             .await;
         Ok(())
-    }
-
-    /// Races delivery of a frontend observation callback against any teardown
-    /// signal so a stalled frontend delivery cannot block teardown paths that
-    /// depend on the controller exiting.
-    ///
-    /// `stop_signals` carries every cancellation token the controller must
-    /// honor in addition to `end_call`: direct calls pass `[&state.stop_session]`,
-    /// room calls pass `[&end_sessions, &operation]`.
-    ///
-    /// Returns `true` when the callback completed normally. Returns `false`
-    /// when any teardown signal won; callers must then skip further observation
-    /// work and proceed straight to authoritative teardown.
-    async fn deliver_callback_against_teardown<F>(
-        &self,
-        end_call: &Notify,
-        stop_signals: &[&CancellationToken],
-        callback: F,
-    ) -> bool
-    where
-        F: std::future::Future<Output = ()> + Send,
-    {
-        use std::future::Future;
-        use std::pin::Pin;
-        use std::task::{Context, Poll};
-
-        // Box so a runtime-sized slice can be raced uniformly. The boxed future
-        // borrows each token for the lifetime of this call.
-        let mut cancelled_futures: Vec<Pin<Box<dyn Future<Output = ()> + Send + '_>>> =
-            stop_signals
-                .iter()
-                .map(|signal| {
-                    Box::pin(signal.cancelled()) as Pin<Box<dyn Future<Output = ()> + Send + '_>>
-                })
-                .collect();
-
-        // Do not switch back to `std::pin::pin!`: under edition 2024 it
-        // expands to `super let`, which `flutter_rust_bridge_codegen`'s
-        // bundled `syn` cannot parse, blocking all pub-API codegen cycles.
-        let mut end_call_future = Box::pin(end_call.notified());
-        let mut callback = Box::pin(callback);
-
-        // Biased: end_call -> each token -> callback. Teardown always wins over
-        // a stalled callback; wakers from any branch re-arm this poll_fn.
-        std::future::poll_fn(move |cx: &mut Context<'_>| -> Poll<bool> {
-            if end_call_future.as_mut().poll(cx).is_ready() {
-                return Poll::Ready(false);
-            }
-            for cancelled in &mut cancelled_futures {
-                if cancelled.as_mut().poll(cx).is_ready() {
-                    return Poll::Ready(false);
-                }
-            }
-            if callback.as_mut().poll(cx).is_ready() {
-                return Poll::Ready(true);
-            }
-            Poll::Pending
-        })
-        .await
     }
 
     /// The controller for rooms
@@ -2020,32 +1927,7 @@ where
             ready_sender,
             publication_receiver,
         } = start;
-        let room_hash = tokio::select! {
-            _ = async {
-                tokio::select! {
-                    _ = end_sessions.cancelled() => {}
-                    _ = operation.cancelled() => {}
-                }
-            } => {
-                drop(ready_sender);
-                return self
-                    .cleanup_room_controller(
-                        stop_io,
-                        RoomControllerCleanup {
-                            end_sessions,
-                            room_owner,
-                            room_generation,
-                            input_handle: None,
-                            connections: HashMap::new(),
-                            statistics_handle: None,
-                            terminal_error: None,
-                            outcome: RoomControllerOutcome::Silent,
-                        },
-                    )
-                    .await;
-            }
-            room_hash = self.room_hash() => room_hash,
-        };
+        let room_hash = self.room_hash().await;
         Span::current().record("room.hash", field::debug(room_hash));
         if end_sessions.is_cancelled() || operation.is_cancelled() {
             drop(ready_sender);
@@ -2091,7 +1973,7 @@ where
         // returns without polling the `JoinHandle` directly.
         let (input_done_tx, mut input_done_rx) = oneshot::channel::<Result<()>>();
 
-        let mut input_helper = match tokio::select! {
+        let mut input_helper = match select! {
             _ = end_sessions.cancelled() => {
                 drop(ready_sender);
                 return self
@@ -2180,7 +2062,7 @@ where
                 )
                 .await;
         }
-        let publication_received = tokio::select! {
+        let publication_received = select! {
             _ = end_sessions.cancelled() => false,
             _ = operation.cancelled() => false,
             result = publication_receiver => result.is_ok(),
@@ -2396,7 +2278,7 @@ where
                                         RoomTaskOutcome::Terminal(error) => {
                                             terminal_error = Some(error);
                                             outcome = RoomControllerOutcome::Notify {
-                                                message: crate::internal::error::CALL_END_GENERIC
+                                                message: CALL_END_GENERIC
                                                     .to_string(),
                                             };
                                             break;
@@ -2406,7 +2288,7 @@ where
                                 peer_connections.remove(&state.peer);
                             }
 
-                            let setup_output_result = tokio::select! {
+                            let setup_output_result = select! {
                                 result = self.setup_output(
                                     state.peer,
                                     state.remote_configuration.sample_rate as f64,
@@ -2553,7 +2435,7 @@ where
                                             RoomTaskOutcome::Terminal(error) => {
                                                 terminal_error = Some(error);
                                                 outcome = RoomControllerOutcome::Notify {
-                                                    message: crate::internal::error::CALL_END_GENERIC
+                                                    message: CALL_END_GENERIC
                                                         .to_string(),
                                                 };
                                                 break;
@@ -2586,7 +2468,7 @@ where
                         None => {
                             warn!(event = "room_controller_channel_closed_unexpectedly");
                             outcome = RoomControllerOutcome::Notify {
-                                message: crate::internal::error::CALL_END_GENERIC.to_string(),
+                                message: CALL_END_GENERIC.to_string(),
                             };
                             break;
                         }
@@ -2623,7 +2505,7 @@ where
                             RoomTaskOutcome::Terminal(error) => {
                                 terminal_error = Some(error);
                                 outcome = RoomControllerOutcome::Notify {
-                                    message: crate::internal::error::CALL_END_GENERIC.to_string(),
+                                    message: CALL_END_GENERIC.to_string(),
                                 };
                                 break;
                             }
@@ -2643,7 +2525,7 @@ where
                         Err(_) => warn!(event = "room_input_join_failed_unexpectedly"),
                     }
                     outcome = RoomControllerOutcome::Notify {
-                        message: crate::internal::error::CALL_END_GENERIC.to_string(),
+                        message: CALL_END_GENERIC.to_string(),
                     };
                     break;
                 }
@@ -2820,7 +2702,7 @@ enum IncomingSlotDecision<'a> {
     Acquired(PendingDirectCallSlot<'a>),
 }
 
-enum OutgoingSlotDecision<'a> {
+pub(crate) enum OutgoingSlotDecision<'a> {
     Acquired(PendingDirectCallSlot<'a>),
     Busy,
     StaleSession,
@@ -2844,7 +2726,7 @@ enum HelloResponse {
 /// the matching pending slot (outgoing in the simultaneous-dial case) and is responsible
 /// for its lifecycle. Outgoing acquisition sets it for both `Acquired` and `Matched*`.
 /// The handshake path does not release the slot; it transitions the slot to active.
-struct PendingDirectCallSlot<'a> {
+pub(crate) struct PendingDirectCallSlot<'a> {
     call_slot: &'a CallSlot,
     peer: PublicKey,
     release_on_failure: bool,
@@ -2871,7 +2753,10 @@ impl<'a> PendingDirectCallSlot<'a> {
     }
 
     /// Acquires or matches an outgoing direct-call pending slot for `peer`.
-    fn try_acquire_outgoing(call_slot: &'a CallSlot, peer: PublicKey) -> Result<Option<Self>> {
+    pub(crate) fn try_acquire_outgoing(
+        call_slot: &'a CallSlot,
+        peer: PublicKey,
+    ) -> Result<Option<Self>> {
         match call_slot.try_acquire_or_match(CallSlotState::PendingOutgoing, peer)? {
             CallSlotAcquireResult::Acquired
             | CallSlotAcquireResult::MatchedPendingIncoming
@@ -2924,6 +2809,11 @@ impl OutgoingNegotiationOutcome {
     fn to_outcome(&self) -> bool {
         !matches!(self, Self::SessionStopped)
     }
+}
+
+enum ManagerIterationOutcome {
+    Continue,
+    Shutdown,
 }
 
 /// Bounded exponential backoff before restarting the session manager.

@@ -1,12 +1,15 @@
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
-use crate::internal::core::{RoomControllerCleanup, RoomControllerOutcome, TelepathyCore};
+use crate::internal::core::{
+    OutgoingSlotDecision, PendingDirectCallSlot, RoomControllerCleanup, RoomControllerOutcome,
+    TelepathyCore,
+};
 use crate::internal::error::{AudioStreamError, Error, ErrorKind};
 use crate::internal::messages::{AudioHeader, RoomMessage};
 #[cfg(not(target_family = "wasm"))]
 use crate::internal::messages::{ProtocolMessage, StartScreenshare};
 #[cfg(not(target_family = "wasm"))]
 use crate::internal::screenshare;
-use crate::internal::state::{EarlyCallState, StatisticsCollectorState};
+use crate::internal::state::{CallSlot, EarlyCallState, StatisticsCollectorState};
 #[cfg(target_os = "ios")]
 use crate::internal::utils::deactivate_audio_session;
 use crate::internal::utils::{KanalSink, KanalSource};
@@ -15,6 +18,7 @@ use crate::internal::{ALPN, MAX_RINGTONE_LENGTH, Result};
 use crate::types::FrontendNotify;
 use crate::types::{ManagerState, SessionStatus};
 use bytes::Bytes;
+use flutter_rust_bridge::JoinHandle;
 use iroh::address_lookup::PkarrPublisher;
 use iroh::endpoint::{default_relay_mode, presets};
 use iroh::{Endpoint, PublicKey, RelayMode, SecretKey};
@@ -36,6 +40,7 @@ use telepathy_audio::io::{
 use tokio::fs::File;
 #[cfg(not(target_family = "wasm"))]
 use tokio::io::AsyncReadExt;
+use tokio::select;
 use tokio::sync::Notify;
 use tokio::sync::mpsc::{Sender, UnboundedSender};
 #[cfg(not(target_family = "wasm"))]
@@ -43,6 +48,7 @@ use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, instrument, trace, warn};
 use url::Url;
+use uuid::Uuid;
 #[cfg(target_family = "wasm")]
 use wasmtimer::tokio::timeout;
 
@@ -59,11 +65,11 @@ where
     #[instrument(name = "manager.setup_endpoint", skip_all)]
     pub(crate) async fn setup_endpoint(
         &self,
-        identity: &iroh::SecretKey,
+        identity: &SecretKey,
         iteration_cancellation: &CancellationToken,
     ) -> Result<Option<Endpoint>> {
         trace!(event = "endpoint_launch", config = ?self.core_state.network_config);
-        tokio::select! {
+        select! {
             biased;
             _ = self.core_state.stop_manager.cancelled() => return Ok(None),
             _ = iteration_cancellation.cancelled() => return Ok(None),
@@ -196,7 +202,7 @@ where
                 endpoint_builder.ca_tls_config(iroh::tls::CaTlsConfig::insecure_skip_verify());
         }
 
-        let endpoint = tokio::select! {
+        let endpoint = select! {
             biased;
             _ = self.core_state.stop_manager.cancelled() => return Ok(None),
             _ = iteration_cancellation.cancelled() => return Ok(None),
@@ -219,7 +225,7 @@ where
             }
         }
 
-        tokio::select! {
+        select! {
             biased;
             _ = self.core_state.stop_manager.cancelled() => {
                 endpoint.close().await;
@@ -438,7 +444,7 @@ where
                         .expect("web audio wrapper was not initialized")
                         .sample_rate as u32
                 } else {
-                    let device_id = self.core_state.input_device.lock().await.clone();
+                    let device_id = self.core_state.input_device.lock().await;
                     self.host.input_sample_rate(device_id.as_deref())?
                 }
             }
@@ -783,6 +789,91 @@ where
         }
         outcome
     }
+
+    /// Races delivery of a frontend observation callback against any teardown
+    /// signal so a stalled frontend delivery cannot block teardown paths that
+    /// depend on the controller exiting.
+    ///
+    /// `stop_signals` carries every cancellation token the controller must
+    /// honor in addition to `end_call`: direct calls pass `[&state.stop_session]`,
+    /// room calls pass `[&end_sessions, &operation]`.
+    ///
+    /// Returns `true` when the callback completed normally. Returns `false`
+    /// when any teardown signal won; callers must then skip further observation
+    /// work and proceed straight to authoritative teardown.
+    pub(crate) async fn deliver_callback_against_teardown<F>(
+        &self,
+        end_call: &Notify,
+        stop_signals: &[&CancellationToken],
+        callback: F,
+    ) -> bool
+    where
+        F: Future<Output = ()> + Send,
+    {
+        use std::future::Future;
+        use std::pin::Pin;
+        use std::task::{Context, Poll};
+
+        // Box so a runtime-sized slice can be raced uniformly. The boxed future
+        // borrows each token for the lifetime of this call.
+        let mut cancelled_futures: Vec<Pin<Box<dyn Future<Output = ()> + Send + '_>>> =
+            stop_signals
+                .iter()
+                .map(|signal| {
+                    Box::pin(signal.cancelled()) as Pin<Box<dyn Future<Output = ()> + Send + '_>>
+                })
+                .collect();
+
+        // Do not switch back to `std::pin::pin!`: under edition 2024 it
+        // expands to `super let`, which `flutter_rust_bridge_codegen`'s
+        // bundled `syn` cannot parse, blocking all pub-API codegen cycles.
+        let mut end_call_future = Box::pin(end_call.notified());
+        let mut callback = Box::pin(callback);
+
+        // Biased: end_call -> each token -> callback. Teardown always wins over
+        // a stalled callback; wakers from any branch re-arm this poll_fn.
+        std::future::poll_fn(move |cx: &mut Context<'_>| -> Poll<bool> {
+            if end_call_future.as_mut().poll(cx).is_ready() {
+                return Poll::Ready(false);
+            }
+            for cancelled in &mut cancelled_futures {
+                if cancelled.as_mut().poll(cx).is_ready() {
+                    return Poll::Ready(false);
+                }
+            }
+            if callback.as_mut().poll(cx).is_ready() {
+                return Poll::Ready(true);
+            }
+            Poll::Pending
+        })
+        .await
+    }
+
+    /// Atomically validates a direct-call session and acquires its outgoing slot.
+    pub(crate) async fn acquire_outgoing_call_slot<'a>(
+        &self,
+        call_slot: &'a CallSlot,
+        peer: PublicKey,
+        session_id: Uuid,
+        stop_session: &CancellationToken,
+    ) -> Result<OutgoingSlotDecision<'a>> {
+        // Keep session-map read lock through synchronous slot acquisition.
+        // `reset_sessions` needs map write lock before terminal slot clearing, so
+        // it drains this session before validation or clears after acquisition.
+        // No await occurs while either lock is held.
+        let states = self.session_states.read().await;
+        if stop_session.is_cancelled() {
+            return Ok(OutgoingSlotDecision::SessionStopped);
+        }
+        if states.get(&peer).is_none_or(|state| state.id != session_id) {
+            return Ok(OutgoingSlotDecision::StaleSession);
+        }
+
+        match PendingDirectCallSlot::try_acquire_outgoing(call_slot, peer)? {
+            Some(slot) => Ok(OutgoingSlotDecision::Acquired(slot)),
+            None => Ok(OutgoingSlotDecision::Busy),
+        }
+    }
 }
 
 /// Bounded join classification for room tasks.
@@ -805,7 +896,7 @@ fn record_room_terminal_error(slot: &mut Option<Error>, error: Error) {
     }
 }
 
-fn abort_room_task<T>(handle: &crate::internal::utils::JoinHandle<T>) {
+fn abort_room_task<T>(handle: &JoinHandle<T>) {
     #[cfg(all(feature = "native", not(feature = "flutter")))]
     handle.abort();
 
@@ -814,13 +905,8 @@ fn abort_room_task<T>(handle: &crate::internal::utils::JoinHandle<T>) {
 }
 
 /// Joins a room task with a bounded timeout and classifies the outcome.
-///
-/// `task_kind` (e.g. `"input"`, `"output"`, `"statistics"`) and `event_kind`
-/// (e.g. `"teardown"`, `"replacement"`, `"leave"`) are composed into tracing
-/// event names that match the legacy cleanup identifiers, so existing log
-/// dashboards keep working.
 pub(crate) async fn join_room_task_bounded(
-    handle: &mut crate::internal::utils::JoinHandle<Result<()>>,
+    handle: &mut JoinHandle<Result<()>>,
     task_kind: &'static str,
     event_kind: &'static str,
 ) -> RoomTaskOutcome {
