@@ -8,9 +8,12 @@ pub mod error;
 /// helper methods used by telepathy core
 mod helpers;
 pub(crate) mod messages;
-pub(crate) mod screenshare;
 pub mod state;
 mod utils;
+#[cfg(feature = "integration-testing")]
+pub mod video;
+#[cfg(not(feature = "integration-testing"))]
+pub(crate) mod video;
 
 use crate::AudioDevice;
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
@@ -25,7 +28,7 @@ pub(crate) use crate::internal::utils::{JoinHandle, spawn_task};
 use crate::overlay::Overlay;
 use crate::types::{ChatMessage, CodecConfig, Contact, NetworkConfig, ScreenshareConfig};
 use chrono::Local;
-use iroh::SecretKey;
+use iroh::{PublicKey, SecretKey};
 use speedy::{LittleEndian, Writable, Writer};
 use std::collections::HashSet;
 use std::mem;
@@ -759,7 +762,7 @@ where
             error!("release_if_pending_for_peer failed: {}", error);
         }
         if let Some(state) = removed_state {
-            state.stop_session.cancel();
+            state.teardown().await;
         }
     }
 
@@ -878,10 +881,58 @@ where
         Ok(())
     }
 
-    pub async fn start_screenshare(&self, contact: &Contact) {
-        if let Some(state) = self.inner.session_states.read().await.get(&contact.peer_id) {
-            state.start_screenshare.notify_one();
+    pub async fn request_video_source(
+        &self,
+        contact: &Contact,
+        source: crate::types::VideoSource,
+    ) -> crate::types::VideoStartOutcome {
+        self.inner
+            .request_video_source(contact.peer_id, source)
+            .await
+    }
+
+    pub async fn stop_video_source(
+        &self,
+        identity: crate::types::VideoSessionIdentity,
+    ) -> crate::types::VideoStopOutcome {
+        let Ok(peer) = identity.peer_id.parse::<PublicKey>() else {
+            return crate::types::VideoStopOutcome::NotFound;
+        };
+        let Some(state) = self.inner.session_states.read().await.get(&peer).cloned() else {
+            return crate::types::VideoStopOutcome::NotFound;
+        };
+        let Some(event) = state
+            .video_slot
+            .current_event(peer.to_string(), crate::types::VideoPhase::Stopping, None)
+            .await
+        else {
+            return crate::types::VideoStopOutcome::NotFound;
+        };
+        if event.identity.session_id != identity.session_id {
+            return crate::types::VideoStopOutcome::NotFound;
         }
+        self.inner.observe_video_lifecycle(event);
+        let _ = state
+            .message_sender
+            .send(ProtocolMessage::Video {
+                control: crate::internal::video::VideoControl::stop(
+                    identity.session_id,
+                    crate::types::VideoTerminalReason::Stopped,
+                ),
+            })
+            .await;
+        self.inner
+            .finish_current_video(&state, peer, crate::types::VideoTerminalReason::Stopped)
+            .await;
+        crate::types::VideoStopOutcome::Stopped
+    }
+
+    pub async fn video_capabilities(&self) -> crate::types::VideoCapabilities {
+        self.inner
+            .core_state
+            .screenshare_config
+            .video_capabilities()
+            .await
     }
 
     pub fn set_rms_threshold(&self, decimal: f32) {
