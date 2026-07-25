@@ -133,7 +133,7 @@ class ProfilesController with ChangeNotifier {
         _defaultProfileNickname,
         notify: false,
       );
-      await _initActiveProfile(defaultId);
+      await _setActiveProfile(defaultId, notify: false);
     } else {
       String selectedId = await _getStringOption(_activeProfileKey) ?? '';
       if (!profiles.containsKey(selectedId)) {
@@ -156,7 +156,7 @@ class ProfilesController with ChangeNotifier {
         }
       }
 
-      await _initActiveProfile(selectedId);
+      await _setActiveProfile(selectedId, notify: false);
     }
 
     _initialized = true;
@@ -195,24 +195,6 @@ class ProfilesController with ChangeNotifier {
 
   Contact? getContact(String id) {
     return contacts[id];
-  }
-
-  void updateContact(
-    Contact contact, {
-    String? nickname,
-    double? outputVolume,
-  }) {
-    final Profile profile = _currentProfile();
-
-    if (nickname != null) {
-      contact.setNickname(nickname: nickname);
-    }
-    if (outputVolume != null) {
-      contact.setOutputVolume(decibel: outputVolume);
-    }
-
-    _safeNotifyListeners();
-    unawaited(_enqueue(() => _saveContactsFor(profile.id, notify: false)));
   }
 
   void removeContact(Contact contact) {
@@ -269,14 +251,6 @@ class ProfilesController with ChangeNotifier {
       DebugConsole.warn('room was not added: $error');
       return null;
     }
-  }
-
-  void updateRoom(Room room, {required String nickname}) {
-    final Profile profile = _currentProfile();
-
-    room.nickname = nickname;
-    _safeNotifyListeners();
-    unawaited(_enqueue(() => _saveRoomsFor(profile.id, notify: false)));
   }
 
   void removeRoom(Room room) {
@@ -408,7 +382,7 @@ class ProfilesController with ChangeNotifier {
   /// the previous `setActiveProfile` setter bypassed the backend entirely,
   /// so the frontend could end up pointing at a profile whose signing key
   /// the backend had never installed. Startup selection uses the private
-  /// [`_setActiveProfile`] / [`_initActiveProfile`] helpers instead.
+  /// [_setActiveProfile] helper instead.
   Future<void> switchActiveProfile(
     String id, {
     required Telepathy telepathy,
@@ -454,17 +428,6 @@ class ProfilesController with ChangeNotifier {
       _isIdentitySwitchPending = false;
       _safeNotifyListeners();
     }
-  }
-
-  /// Initialization-only helper: selects the active profile from persisted
-  /// state without touching the Rust backend. The backend's identity is
-  /// installed separately at startup (see `main.dart`'s `setIdentity` call),
-  /// so this helper only needs to align the frontend's `activeProfile`
-  /// field with what was persisted. Runtime changes MUST NOT use this path
-  /// — they would desynchronize the frontend from the backend's signing
-  /// key. Use [switchActiveProfile] for runtime mutations.
-  Future<void> _initActiveProfile(String id, {bool notify = false}) async {
-    return _setActiveProfile(id, notify: notify);
   }
 
   Future<void> _setActiveProfile(String id, {bool notify = true}) async {
@@ -613,7 +576,7 @@ class ProfilesController with ChangeNotifier {
       id: id,
       nickname: nickname.trim().isEmpty ? _unnamedProfileNickname : nickname,
       peerId: peerId,
-      keypair: keyBytes is Uint8List ? keyBytes : Uint8List.fromList(keyBytes),
+      keypair: keyBytes,
       contacts: await loadContacts(id),
       rooms: await loadRooms(id),
     );

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -7,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shared_preferences_platform_interface/in_memory_shared_preferences_async.dart';
 import 'package:shared_preferences_platform_interface/shared_preferences_async_platform_interface.dart';
 import 'package:telepathy/controllers/profiles_controller.dart';
+import 'package:telepathy/core/rust/frb_generated.dart';
 import 'package:telepathy/core/rust/flutter.dart';
 import 'package:telepathy/core/rust/types.dart';
 
@@ -34,8 +36,35 @@ void main() {
     );
 
     expect(fixture.controller.activeProfile, 'alpha');
+    expect(fixture.controller.isIdentitySwitchPending, isFalse);
     expect(await fixture.options.getString('activeProfile'), 'alpha');
     expect(fixture.telepathy.commits, 0);
+  });
+
+  test('invalid persisted keypairs are excluded and index is repaired',
+      () async {
+    final fixture = await _fixture();
+    await fixture.storage.write(key: 'alpha-keypair', value: 'not-base64');
+    await fixture.storage.write(
+      key: 'beta-keypair',
+      value: base64Encode(List<int>.filled(31, 2)),
+    );
+    final restarted = ProfilesController(
+      storage: fixture.storage,
+      options: fixture.options,
+      roomHasher: _roomHash,
+    );
+
+    await restarted.init(const <String>[]);
+
+    expect(restarted.profiles.keys, const <String>['gamma']);
+    expect(restarted.activeProfile, 'gamma');
+    expect(
+      await fixture.options.getStringList('profilesV2'),
+      const <String>['gamma'],
+    );
+    expect(await fixture.storage.read(key: 'alpha-keypair'), 'not-base64');
+    expect(await fixture.storage.read(key: 'beta-keypair'), isNotNull);
   });
 
   test('persistence failure disposes prepared token and keeps active profile',
@@ -192,6 +221,48 @@ void main() {
         await preferences.getStringList('profileDeletionTombstones'), isEmpty);
   });
 
+  test('cleanup failure attempts later keys and tombstone retry clears it',
+      () async {
+    final storage = _ThrowingStorage();
+    final fixture = await _fixture(storage: storage);
+    storage.failDeleteKeys.add('gamma-keypair');
+
+    await expectLater(
+      fixture.controller.removeProfile('gamma', telepathy: fixture.telepathy),
+      throwsStateError,
+    );
+
+    expect(
+      storage.deletedKeys,
+      const <String>[
+        'gamma-keypair',
+        'gamma-peerId',
+        'gamma-contacts',
+        'gamma-rooms',
+        'gamma-nickname',
+      ],
+    );
+    expect(fixture.controller.profiles, isNot(contains('gamma')));
+    expect(
+      await fixture.options.getStringList('profileDeletionTombstones'),
+      const <String>['gamma'],
+    );
+
+    storage.failDeleteKeys.clear();
+    final restarted = ProfilesController(
+      storage: storage,
+      options: fixture.options,
+      roomHasher: _roomHash,
+    );
+    await restarted.init(const <String>[]);
+
+    expect(
+      await fixture.options.getStringList('profileDeletionTombstones'),
+      isEmpty,
+    );
+    expect(await storage.read(key: 'gamma-keypair'), isNull);
+  });
+
   test('startup uses index as tombstone authority', () async {
     final fixture = await _fixture();
     await fixture.options.setStringList(
@@ -212,6 +283,31 @@ void main() {
     expect(await fixture.storage.read(key: 'orphan-keypair'), isNull);
     expect(await fixture.options.getStringList('profileDeletionTombstones'),
         isEmpty);
+  });
+
+  test('sole active deletion commits replacement before old profile removal',
+      () async {
+    RustLib.initMock(api: _RustApi());
+    addTearDown(RustLib.dispose);
+    final fixture = await _fixture();
+    await fixture.controller
+        .removeProfile('beta', telepathy: fixture.telepathy);
+    await fixture.controller
+        .removeProfile('gamma', telepathy: fixture.telepathy);
+    late String replacementId;
+    fixture.telepathy.onCommit = () {
+      replacementId = fixture.controller.activeProfile;
+      expect(replacementId, isNot('alpha'));
+      expect(fixture.controller.profiles, contains('alpha'));
+      expect(fixture.controller.profiles, contains(replacementId));
+    };
+
+    await fixture.controller
+        .removeProfile('alpha', telepathy: fixture.telepathy);
+
+    expect(fixture.telepathy.commits, 1);
+    expect(fixture.controller.activeProfile, replacementId);
+    expect(fixture.controller.profiles.keys, <String>[replacementId]);
   });
 }
 
@@ -271,6 +367,15 @@ class _Prepared implements PreparedIdentitySwitch {
 
   @override
   bool get isDisposed => false;
+}
+
+class _RustApi implements RustLibApi {
+  @override
+  (String, Uint8List) crateFlutterUtilsGenerateKeys() =>
+      ('replacement-peer', Uint8List.fromList(List<int>.filled(32, 4)));
+
+  @override
+  Object? noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
 class _Telepathy implements Telepathy {
@@ -348,6 +453,8 @@ class _ThrowingPreferencesFailures {
 class _ThrowingStorage extends FlutterSecureStorage {
   bool failDeletes = false;
   int deleteCalls = 0;
+  final Set<String> failDeleteKeys = <String>{};
+  final List<String> deletedKeys = <String>[];
 
   @override
   Future<void> delete({
@@ -360,7 +467,8 @@ class _ThrowingStorage extends FlutterSecureStorage {
     WindowsOptions? wOptions,
   }) {
     deleteCalls += 1;
-    if (failDeletes) {
+    deletedKeys.add(key);
+    if (failDeletes || failDeleteKeys.contains(key)) {
       throw StateError('secure storage delete failed');
     }
     return super.delete(
