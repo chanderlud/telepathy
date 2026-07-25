@@ -724,6 +724,69 @@ void main() {
     });
 
     testWidgets(
+        'a remote CallEnded during an outgoing call settles idle and shows the contact offline',
+        (WidgetTester tester) async {
+      _stubOutgoingRingtone(tester);
+
+      await tester.pumpWidget(
+        _harness(
+          stateController: stateController,
+          profilesController: profilesController,
+          telepathy: telepathy,
+          player: player,
+          child: ContactWidget(contact: alice),
+        ),
+      );
+
+      await tester.tap(
+        find.bySemanticsLabel('Call icon'),
+        warnIfMissed: false,
+      );
+      await tester.pump();
+
+      expect(stateController.callLifecycle, CallLifecycle.connecting,
+          reason: 'outgoing call must remain connecting while startCall waits');
+      expect(stateController.hasLiveCall, isTrue,
+          reason: 'connecting call must be observed by the callback gate');
+      expect(find.bySemanticsLabel('End call icon'), findsOneWidget);
+
+      // main.dart invokes this existing controller cleanup for remote CallEnded.
+      stateController.endOfCall();
+      expect(stateController.callLifecycle, CallLifecycle.ending,
+          reason: 'pending start request owns cleanup until it settles');
+
+      telepathy.startCallCallers.single.complete();
+      await _flushAsync(tester);
+
+      expect(stateController.callLifecycle, CallLifecycle.idle,
+          reason: 'settled outgoing request must finish CallEnded cleanup');
+      expect(stateController.hasLiveCall, isFalse,
+          reason: 'idle state must release the live-call callback gate');
+      expect(stateController.blockAudioChanges, isFalse,
+          reason: 'idle state must release call-gated controls');
+
+      stateController.updateSession(
+        (alice.peerId(), const SessionStatus.inactive()),
+      );
+      await tester.pump();
+
+      expect(find.bySemanticsLabel('End call icon'), findsNothing,
+          reason: 'offline steady state must not retain the stale hangup action');
+      expect(find.bySemanticsLabel('Offline icon'), findsOneWidget,
+          reason: 'inactive session status must replace the contact call UI');
+      expect(find.bySemanticsLabel('Retry the session initiation'), findsOneWidget,
+          reason: 'offline contact must expose its available session action');
+
+      await tester.pump(const Duration(seconds: 1));
+      await tester.tap(
+        find.bySemanticsLabel('Retry the session initiation'),
+        warnIfMissed: false,
+      );
+      expect(telepathy.startSessionCalls, 1,
+          reason: 'offline recovery action must no longer be blocked by the call');
+    });
+
+    testWidgets(
         'a mid-flight target swap does not redirect the captured startCall '
         'continuation onto the new contact', (WidgetTester tester) async {
       _stubOutgoingRingtone(tester);
