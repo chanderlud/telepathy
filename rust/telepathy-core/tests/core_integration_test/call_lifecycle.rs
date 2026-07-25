@@ -3,8 +3,9 @@ use super::common::{
     PendingAcceptProbe, TwoClientShutdownGuard, assert_call_slot_idle, assert_no_busy_end,
     assert_no_call_ended_before_connected, build_client, build_client_with_accept_probe,
     build_client_with_call_ended_park, build_client_with_connected_gate, build_client_with_options,
-    call_state_snapshot, init_test_tracing, shared_relay_map, wait_for_connected,
-    wait_for_sessions, wait_for_slot_idle, wait_for_slot_owned_by, wait_for_stable_session_pair,
+    call_state_snapshot, init_test_tracing, shared_relay_map, wait_for_active_transport,
+    wait_for_connected, wait_for_sessions, wait_for_slot_idle, wait_for_slot_owned_by,
+    wait_for_stable_session_pair,
 };
 
 use iroh::SecretKey;
@@ -588,6 +589,146 @@ async fn reset_sessions_clears_pending_incoming_slot() {
         after.direct_peer, None,
         "no peer should own the slot after reset_sessions; got {after:?}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn remote_shutdown_during_pending_acceptance_ends_call_and_clears_caller_state() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+    let codec_config = CodecConfig::new(true, true, 5.0);
+    let key_a = SecretKey::generate();
+    let key_b = SecretKey::generate();
+    let contact_a = Contact::new("Alice Caller".to_string(), key_a.public().to_string())
+        .expect("contact a invalid");
+    let contact_b = Contact::new("Bob Callee".to_string(), key_b.public().to_string())
+        .expect("contact b invalid");
+    let peer_a = contact_a.get_peer_id();
+    let peer_b = contact_b.get_peer_id();
+    let call_states_a = Arc::new(Mutex::new(Vec::new()));
+    let call_states_b = Arc::new(Mutex::new(Vec::new()));
+    let accept_probe_b = PendingAcceptProbe::default();
+
+    let client_a = build_client(
+        relay_map,
+        key_a,
+        vec![contact_b.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_a.clone(),
+    )
+    .await;
+    let client_b = build_client_with_accept_probe(
+        relay_map,
+        key_b,
+        vec![contact_a.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_b,
+        accept_probe_b.clone(),
+    )
+    .await;
+
+    client_a.telepathy.start_session(&contact_b).await;
+    client_b.telepathy.start_session(&contact_a).await;
+    wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
+    wait_for_active_transport(&client_a, "caller before remote shutdown").await;
+
+    client_a
+        .telepathy
+        .start_call(&contact_b)
+        .await
+        .expect("caller should start the outgoing call");
+    accept_probe_b.wait_opened().await;
+    let caller_pending = client_a
+        .telepathy
+        .inner
+        .core_state
+        .call_slot
+        .snapshot()
+        .expect("caller slot snapshot should succeed");
+    assert_eq!(caller_pending.state, CallSlotState::PendingOutgoing);
+    assert_eq!(caller_pending.direct_peer, Some(peer_b));
+    let callee_pending = client_b
+        .telepathy
+        .inner
+        .core_state
+        .call_slot
+        .snapshot()
+        .expect("callee slot snapshot should succeed");
+    assert_eq!(callee_pending.state, CallSlotState::PendingIncoming);
+    assert_eq!(callee_pending.direct_peer, Some(peer_a));
+
+    client_b.telepathy.shutdown().await;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let caller_states = call_state_snapshot(&call_states_a);
+        let terminal_observed = caller_states
+            .iter()
+            .any(|state| matches!(state, CallState::CallEnded(_, true)));
+        let slot_idle =
+            client_a.telepathy.inner.core_state.call_slot.current() == CallSlotState::Idle;
+        let session_inactive = !client_a.is_active.load(Relaxed)
+            && !client_a
+                .telepathy
+                .inner
+                .session_states
+                .read()
+                .await
+                .contains_key(&peer_b);
+        if terminal_observed && slot_idle && session_inactive
+            || tokio::time::Instant::now() >= deadline
+        {
+            break;
+        }
+        sleep(Duration::from_millis(50)).await;
+    }
+
+    let caller_states = call_state_snapshot(&call_states_a);
+    let caller_slot = client_a
+        .telepathy
+        .inner
+        .core_state
+        .call_slot
+        .snapshot()
+        .expect("final caller slot snapshot should succeed");
+    let caller_session_present = client_a
+        .telepathy
+        .inner
+        .session_states
+        .read()
+        .await
+        .contains_key(&peer_b);
+    let caller_session_active = client_a.is_active.load(Relaxed);
+    client_a.telepathy.shutdown().await;
+
+    let expected_message = "Bob Callee did not accept the call because the session was stopped";
+    let matching_terminal_count = caller_states
+        .iter()
+        .filter(|state| {
+            matches!(state, CallState::CallEnded(message, true) if message == expected_message)
+        })
+        .count();
+    assert_eq!(
+        matching_terminal_count, 1,
+        "remote graceful shutdown must emit exactly one session-stopped CallEnded; \
+         states={caller_states:?}, slot={caller_slot:?}, \
+         session_present={caller_session_present}, session_active={caller_session_active}"
+    );
+    assert_eq!(caller_slot.state, CallSlotState::Idle);
+    assert_eq!(caller_slot.direct_peer, None);
+    assert!(!caller_session_present);
+    assert!(!caller_session_active);
 }
 
 #[tokio::test(flavor = "multi_thread")]

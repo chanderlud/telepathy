@@ -1079,6 +1079,8 @@ pub(super) fn construct_mock_callbacks(
             if let SessionStatus::Connected { relayed, .. } = status {
                 is_active_clone.store(true, Relaxed);
                 is_relayed_clone.store(relayed, Relaxed);
+            } else if matches!(status, SessionStatus::Inactive) {
+                is_active_clone.store(false, Relaxed);
             }
         })
     });
