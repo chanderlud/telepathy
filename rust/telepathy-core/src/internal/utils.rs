@@ -2,6 +2,7 @@ use crate::internal::callbacks::CoreStatisticsCallback;
 use crate::internal::error::{AudioStreamError, Error, ErrorKind};
 use crate::internal::messages::ProtocolMessage;
 use crate::internal::state::StatisticsCollectorState;
+use crate::internal::video::VIDEO_CONTROL_MAX_FRAME_LENGTH;
 use crate::overlay::{CONNECTED, LATENCY, LOSS};
 use crate::types::Statistics;
 use bytes::Bytes;
@@ -101,8 +102,18 @@ pub(crate) async fn read_message(
     transport: &mut FramedRead<RecvStream, LengthDelimitedCodec>,
 ) -> Result<ProtocolMessage> {
     if let Some(Ok(buffer)) = transport.next().await {
+        if buffer.len() > VIDEO_CONTROL_MAX_FRAME_LENGTH {
+            return Err(speedy::Error::custom("control frame exceeds maximum size").into());
+        }
         let message = ProtocolMessage::read_from_buffer(&buffer[..])?;
-        Ok(message)
+        if let ProtocolMessage::Video { control } = message {
+            control
+                .validate()
+                .map_err(|_| speedy::Error::custom("invalid video control"))?;
+            Ok(ProtocolMessage::Video { control })
+        } else {
+            Ok(message)
+        }
     } else {
         Err(ErrorKind::TransportRecv.into())
     }
