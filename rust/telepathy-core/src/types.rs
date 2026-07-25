@@ -229,6 +229,7 @@ pub struct FrontendNotify {
 }
 
 impl FrontendNotify {
+    #[cfg(feature = "flutter")]
     pub(crate) fn new(inner: &Arc<Notify>) -> Self {
         Self {
             inner: inner.clone(),
