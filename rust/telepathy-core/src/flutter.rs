@@ -20,7 +20,6 @@ type DartVoid<A> = Arc<Mutex<dyn Fn(A) -> DartFnFuture<()> + Send>>;
 type DartMethod<A, R> = Arc<Mutex<dyn Fn(A) -> DartFnFuture<R> + Send>>;
 type AcceptCallArgs = (String, Option<Vec<u8>>, FrontendNotify);
 type SessionStatusArgs = (String, SessionStatus);
-type ScreenshareStartedArgs = (FrontendNotify, bool);
 type ManagerActiveArgs = ManagerState;
 
 #[frb(opaque)]
@@ -203,8 +202,22 @@ impl Telepathy {
             .map_err(DartError::from)
     }
 
-    pub async fn start_screenshare(&self, contact: &Contact) {
-        self.handle.start_screenshare(contact).await
+    pub async fn request_video_source(
+        &self,
+        contact: &Contact,
+        request: VideoSourceRequest,
+    ) -> VideoStartOutcome {
+        self.handle
+            .request_video_source(contact, request.source)
+            .await
+    }
+
+    pub async fn stop_video_source(&self, identity: VideoSessionIdentity) -> VideoStopOutcome {
+        self.handle.stop_video_source(identity).await
+    }
+
+    pub async fn video_capabilities(&self) -> VideoCapabilities {
+        self.handle.video_capabilities().await
     }
 
     #[frb(sync)]
@@ -316,9 +329,8 @@ pub struct FlutterCallbacks {
     /// Alerts the UI when the manager is active and restartable
     manager_active: DartVoid<ManagerActiveArgs>,
 
-    /// Called when a screenshare starts
     #[allow(dead_code)]
-    screenshare_started: DartVoid<ScreenshareStartedArgs>,
+    video_lifecycle: DartVoid<VideoLifecycleEvent>,
 }
 
 impl FlutterCallbacks {
@@ -333,7 +345,7 @@ impl FlutterCallbacks {
         statistics: impl Fn(Statistics) -> DartFnFuture<()> + Send + 'static,
         message_received: impl Fn(ChatMessage) -> DartFnFuture<()> + Send + 'static,
         manager_active: impl Fn(ManagerActiveArgs) -> DartFnFuture<()> + Send + 'static,
-        screenshare_started: impl Fn(ScreenshareStartedArgs) -> DartFnFuture<()> + Send + 'static,
+        video_lifecycle: impl Fn(VideoLifecycleEvent) -> DartFnFuture<()> + Send + 'static,
     ) -> Self {
         Self {
             accept_call: Arc::new(Mutex::new(accept_call)),
@@ -344,7 +356,7 @@ impl FlutterCallbacks {
             statistics: Arc::new(Mutex::new(statistics)),
             message_received: Arc::new(Mutex::new(message_received)),
             manager_active: Arc::new(Mutex::new(manager_active)),
-            screenshare_started: Arc::new(Mutex::new(screenshare_started)),
+            video_lifecycle: Arc::new(Mutex::new(video_lifecycle)),
         }
     }
 }

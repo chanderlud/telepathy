@@ -3,7 +3,9 @@ use crate::internal::TelepathyHandle;
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::{JoinHandle, spawn_task};
 use crate::types::{
-    CallState, ChatMessage, Contact, FrontendNotify, ManagerState, SessionStatus, Statistics,
+    CallState, ChatMessage, Contact, ManagerState, ScreenshareConfig, SessionStatus, Statistics,
+    VideoCapabilities, VideoLifecycleEvent, VideoSessionIdentity, VideoSourceRequest,
+    VideoStartOutcome, VideoStopOutcome,
 };
 use iroh::PublicKey;
 use std::future::Future;
@@ -52,6 +54,7 @@ pub struct NativeTelepathy {
 impl NativeTelepathy {
     pub fn new(
         network_config: &crate::types::NetworkConfig,
+        video_config: &ScreenshareConfig,
         codec_config: &crate::types::CodecConfig,
         callbacks: NativeCallbacks,
     ) -> Self {
@@ -59,7 +62,7 @@ impl NativeTelepathy {
             handle: TelepathyHandle::new(
                 Default::default(),
                 network_config,
-                &Default::default(),
+                video_config,
                 &Default::default(),
                 codec_config,
                 callbacks,
@@ -145,8 +148,22 @@ impl NativeTelepathy {
             .map_err(|e| e.to_string())
     }
 
-    pub async fn start_screenshare(&self, contact: &Contact) {
-        self.handle.start_screenshare(contact).await;
+    pub async fn request_video_source(
+        &self,
+        contact: &Contact,
+        request: VideoSourceRequest,
+    ) -> VideoStartOutcome {
+        self.handle
+            .request_video_source(contact, request.source)
+            .await
+    }
+
+    pub async fn stop_video_source(&self, identity: VideoSessionIdentity) -> VideoStopOutcome {
+        self.handle.stop_video_source(identity).await
+    }
+
+    pub async fn video_capabilities(&self) -> VideoCapabilities {
+        self.handle.video_capabilities().await
     }
 
     pub fn set_rms_threshold(&self, decimal: f32) {
@@ -251,7 +268,7 @@ pub struct NativeCallbacks {
     statistics: NativeVoid<Statistics>,
     message_received: NativeVoid<ChatMessage>,
     manager_active: NativeVoid<ManagerState>,
-    screenshare_started: NativeVoid<(FrontendNotify, bool)>,
+    video_lifecycle: NativeVoid<VideoLifecycleEvent>,
 }
 
 impl NativeCallbacks {
@@ -268,7 +285,7 @@ impl NativeCallbacks {
         statistics: impl Fn(Statistics) -> NativeFuture<()> + Send + Sync + 'static,
         message_received: impl Fn(ChatMessage) -> NativeFuture<()> + Send + Sync + 'static,
         manager_active: impl Fn(ManagerState) -> NativeFuture<()> + Send + Sync + 'static,
-        screenshare_started: impl Fn((FrontendNotify, bool)) -> NativeFuture<()> + Send + Sync + 'static,
+        video_lifecycle: impl Fn(VideoLifecycleEvent) -> NativeFuture<()> + Send + Sync + 'static,
     ) -> Self {
         Self {
             accept_call: Arc::new(accept_call),
@@ -279,7 +296,7 @@ impl NativeCallbacks {
             statistics: Arc::new(statistics),
             message_received: Arc::new(message_received),
             manager_active: Arc::new(manager_active),
-            screenshare_started: Arc::new(screenshare_started),
+            video_lifecycle: Arc::new(video_lifecycle),
         }
     }
 }
@@ -301,8 +318,8 @@ impl CoreCallbacks<NativeStatisticsCallback> for NativeCallbacks {
         (self.manager_active)(state).await
     }
 
-    async fn screenshare_started(&self, stop: FrontendNotify, sender: bool) {
-        (self.screenshare_started)((stop, sender)).await
+    async fn video_lifecycle(&self, event: VideoLifecycleEvent) {
+        (self.video_lifecycle)(event).await
     }
 
     async fn get_contact(&self, peer_id: Vec<u8>) -> Option<Contact> {
