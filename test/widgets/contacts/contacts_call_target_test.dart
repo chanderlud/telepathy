@@ -771,10 +771,12 @@ void main() {
       await tester.pump();
 
       expect(find.bySemanticsLabel('End call icon'), findsNothing,
-          reason: 'offline steady state must not retain the stale hangup action');
+          reason:
+              'offline steady state must not retain the stale hangup action');
       expect(find.bySemanticsLabel('Offline icon'), findsOneWidget,
           reason: 'inactive session status must replace the contact call UI');
-      expect(find.bySemanticsLabel('Retry the session initiation'), findsOneWidget,
+      expect(
+          find.bySemanticsLabel('Retry the session initiation'), findsOneWidget,
           reason: 'offline contact must expose its available session action');
 
       await tester.pump(const Duration(seconds: 1));
@@ -783,7 +785,8 @@ void main() {
         warnIfMissed: false,
       );
       expect(telepathy.startSessionCalls, 1,
-          reason: 'offline recovery action must no longer be blocked by the call');
+          reason:
+              'offline recovery action must no longer be blocked by the call');
     });
 
     testWidgets(
