@@ -1,5 +1,7 @@
 use serde::Serialize;
-use telepathy_core::types::{CallState, ChatMessage, ManagerState, SessionStatus, Statistics};
+use telepathy_core::types::{
+    CallState, ChatMessage, ManagerState, SessionStatus, Statistics, VideoLifecycleEvent,
+};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -27,8 +29,8 @@ pub enum Event {
         #[serde(flatten)]
         message: ChatMessage,
     },
-    ScreenshareStarted {
-        sender: bool,
+    VideoLifecycle {
+        event: VideoLifecycleEvent,
     },
     AcceptCallPrompt {
         request_id: String,

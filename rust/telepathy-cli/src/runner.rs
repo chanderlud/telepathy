@@ -53,7 +53,9 @@ pub async fn run(opts: RunOptions) -> Result<()> {
         }
     };
     let codec_config = CodecConfig::new(true, true, 5.0);
-    let mut telepathy = NativeTelepathy::new(&network_config, &codec_config, callbacks);
+    let video_config = telepathy_core::types::ScreenshareConfig::default();
+    let mut telepathy =
+        NativeTelepathy::new(&network_config, &video_config, &codec_config, callbacks);
 
     send_event(
         &output_tx,
