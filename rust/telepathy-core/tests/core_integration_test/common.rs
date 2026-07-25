@@ -38,6 +38,52 @@ pub(super) const MOCK_DEVICE_ID: &str = "mock";
 pub(super) const STALE_INPUT_DEVICE_ID: &str = "stale-input";
 pub(super) const STALE_OUTPUT_DEVICE_ID: &str = "stale-output";
 
+#[derive(Clone, Default)]
+pub(super) struct ProcessBoundaryProbe {
+    started: Arc<AtomicUsize>,
+    reaped: Arc<AtomicUsize>,
+}
+
+pub(super) struct ProcessBoundaryObservation {
+    pub(super) stdout: Vec<u8>,
+    pub(super) status: std::process::ExitStatus,
+}
+
+impl ProcessBoundaryProbe {
+    pub(super) async fn spawn_pipe_exit_and_reap(
+        &self,
+    ) -> std::io::Result<ProcessBoundaryObservation> {
+        use tokio::io::AsyncReadExt;
+
+        let executable = std::env::current_exe()?;
+        let mut child = tokio::process::Command::new(executable)
+            .arg("--help")
+            .stdout(std::process::Stdio::piped())
+            .spawn()?;
+        self.started.fetch_add(1, Relaxed);
+
+        let mut stdout = Vec::new();
+        child
+            .stdout
+            .take()
+            .ok_or_else(|| std::io::Error::other("test process stdout was not piped"))?
+            .read_to_end(&mut stdout)
+            .await?;
+        let status = child.wait().await?;
+        self.reaped.fetch_add(1, Relaxed);
+
+        Ok(ProcessBoundaryObservation { stdout, status })
+    }
+
+    pub(super) fn started(&self) -> usize {
+        self.started.load(Relaxed)
+    }
+
+    pub(super) fn reaped(&self) -> usize {
+        self.reaped.load(Relaxed)
+    }
+}
+
 pub(super) type MockTelepathyHandle<H, I, O> = TelepathyHandle<
     MockCoreCallbacks<MockCoreStatisticsCallback>,
     MockCoreStatisticsCallback,
@@ -1193,6 +1239,10 @@ pub(super) fn construct_mock_callbacks(
             None
         })
     });
+
+    mock.expect_video_lifecycle()
+        .times(..)
+        .returning(|_| Box::pin(async move {}));
 
     if let Some(probe) = accept_probe {
         mock.expect_get_accept_handle()

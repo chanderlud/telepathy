@@ -18,3 +18,5 @@ mod room_lifecycle;
 mod runtime_readiness;
 #[path = "core_integration_test/session_lifecycle.rs"]
 mod session_lifecycle;
+#[path = "core_integration_test/video_sessions.rs"]
+mod video_sessions;
