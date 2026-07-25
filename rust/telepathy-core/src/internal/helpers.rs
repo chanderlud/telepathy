@@ -12,13 +12,12 @@ use crate::internal::screenshare;
 use crate::internal::state::{CallSlot, EarlyCallState, StatisticsCollectorState};
 #[cfg(target_os = "ios")]
 use crate::internal::utils::deactivate_audio_session;
-use crate::internal::utils::{KanalSink, KanalSource};
+use crate::internal::utils::{JoinHandle, KanalSink, KanalSource};
 use crate::internal::{ALPN, MAX_RINGTONE_LENGTH, Result};
 #[cfg(not(target_family = "wasm"))]
 use crate::types::FrontendNotify;
 use crate::types::{ManagerState, SessionStatus};
 use bytes::Bytes;
-use flutter_rust_bridge::JoinHandle;
 use iroh::address_lookup::PkarrPublisher;
 use iroh::endpoint::{default_relay_mode, presets};
 use iroh::{Endpoint, PublicKey, RelayMode, SecretKey};
