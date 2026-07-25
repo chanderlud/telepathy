@@ -35,6 +35,34 @@ Tracing outputs include:
 | `device.id` | `&str` | `telepathy-audio` device fallback warnings |
 | `address` | `Multiaddr` Display | relay-server listen events |
 | `elapsed_ms` | `u64` | capabilities load timing |
+| `video.peer_id` | `PeerId` Display | remote owner of a video session |
+| `video.session_id` | `VideoSessionId` Display | initiator-created wire identity, echoed by both peers |
+| `video.source` | snake_case source id | generic source such as `display` |
+| `video.role` | `"sender" \| "receiver"` | local role for this session identity |
+| `video.phase` | `"offering" \| "starting" \| "active" \| "stopping" \| "terminal"` | bounded lifecycle transition |
+| `video.reason` | snake_case terminal reason | `stopped`, `rejected`, `failed`, `transport_ended`, or `teardown` |
+| `video.adapter` | stable adapter id | selected platform adapter, for example `desktop_ffmpeg` or `unsupported` |
+| `video.frames` | `u64` | cleanup-summary aggregate frame count |
+| `video.bytes` | `u64` | cleanup-summary aggregate payload bytes |
+| `video.cleanup_elapsed_ms` | `u64` | elapsed cancellation, process reap, and worker join time |
+
+## Generic Video Lifecycle
+
+Video tracing is lifecycle-only and correlated by `video.peer_id` plus
+`video.session_id`. Emit one start transition and one terminal cleanup summary
+per local generation. Intermediate phase transitions and failures may be
+emitted once when they change the lifecycle outcome.
+
+Do not log payloads, encoded frames, chunks, frame contents, or one event per
+frame. Media measurements belong only in bounded, sampled aggregates. A cleanup
+summary may include `video.frames`, `video.bytes`, and
+`video.cleanup_elapsed_ms`; counters are scoped to one local generation and are
+discarded after its joined cleanup.
+
+Use `video.reason` only on terminal/failure events. Use `video.adapter` for the
+selected platform boundary, never executable arguments or unbounded process
+output. The terminal summary is emitted after adapter termination, child reap,
+and worker join, before the video slot is observable as idle.
 
 ## Agent Query Examples
 
