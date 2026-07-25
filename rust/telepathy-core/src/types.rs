@@ -1,10 +1,9 @@
 use crate::internal::error::{Error, ErrorKind};
 use crate::internal::messages::Attachment;
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-use crate::internal::screenshare::encoder_from_str;
-use crate::internal::screenshare::{Decoder, Device, Encoder, ScreenshareConfigDisk};
-#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 use crate::internal::spawn_task;
+use crate::internal::video::VideoMediaDescriptor;
+use crate::internal::video::platform::{self, Decoder, Device, Encoder};
 use atomic_float::AtomicF32;
 use chrono::{DateTime, Local, SecondsFormat, Utc};
 use iroh::RelayMap;
@@ -233,6 +232,156 @@ impl FrontendNotify {
     pub(crate) fn new(inner: &Arc<Notify>) -> Self {
         Self {
             inner: inner.clone(),
+        }
+    }
+}
+
+#[derive(Readable, Writable, Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+pub struct VideoSessionId(pub [u8; 16]);
+
+impl VideoSessionId {
+    pub(crate) fn new() -> Self {
+        Self(Uuid::new_v4().into_bytes())
+    }
+}
+
+#[derive(Readable, Writable, Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum VideoSource {
+    Display,
+}
+
+#[derive(Readable, Writable, Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum VideoRole {
+    Sender,
+    Receiver,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum VideoPhase {
+    Offering,
+    WaitingReady,
+    Starting,
+    Active,
+    Stopping,
+    Terminal,
+}
+
+#[derive(Readable, Writable, Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum VideoTerminalReason {
+    Stopped,
+    Rejected,
+    Failed,
+    TransportEnded,
+    Teardown,
+}
+
+#[derive(Readable, Writable, Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum VideoCodec {
+    H264,
+    Hevc,
+    Av1,
+}
+
+#[derive(Readable, Writable, Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum VideoMediaFormat {
+    MpegTs(VideoCodec),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum VideoUnavailable {
+    PlatformUnsupported,
+    RuntimeUnavailable,
+    SourceUnavailable(VideoSource),
+    FormatUnavailable(VideoMediaFormat),
+    ConfigurationUnavailable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct VideoSourceRequest {
+    pub source: VideoSource,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct VideoSessionIdentity {
+    pub peer_id: String,
+    pub session_id: VideoSessionId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub enum VideoStartOutcome {
+    Requested(VideoSessionIdentity),
+    Unavailable(VideoUnavailable),
+    NoSession,
+    AlreadyActive,
+    Failed(VideoTerminalReason),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum VideoStopOutcome {
+    Stopped,
+    NotFound,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct VideoLifecycleEvent {
+    pub identity: VideoSessionIdentity,
+    pub role: VideoRole,
+    pub source: VideoSource,
+    pub phase: VideoPhase,
+    pub terminal_reason: Option<VideoTerminalReason>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum VideoCapabilityAvailability {
+    Available,
+    Unavailable(VideoUnavailable),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct VideoSourceCapability {
+    pub source: VideoSource,
+    pub formats: Vec<VideoMediaFormat>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct VideoCapabilities {
+    pub send: VideoCapabilityAvailability,
+    pub receive: VideoCapabilityAvailability,
+    pub send_sources: Vec<VideoSourceCapability>,
+    pub receive_formats: Vec<VideoMediaFormat>,
+}
+
+impl From<platform::VideoCapabilities> for VideoCapabilities {
+    fn from(value: platform::VideoCapabilities) -> Self {
+        let (send, receive) = value.into_availability();
+        let (send, send_sources) = match send {
+            platform::VideoAvailability::Available(sources) => (
+                VideoCapabilityAvailability::Available,
+                sources
+                    .into_iter()
+                    .map(|source| {
+                        let (source, formats) = source.into_parts();
+                        VideoSourceCapability { source, formats }
+                    })
+                    .collect(),
+            ),
+            platform::VideoAvailability::Unavailable(reason) => {
+                (VideoCapabilityAvailability::Unavailable(reason), Vec::new())
+            }
+        };
+        let (receive, receive_formats) = match receive {
+            platform::VideoAvailability::Available(formats) => {
+                (VideoCapabilityAvailability::Available, formats)
+            }
+            platform::VideoAvailability::Unavailable(reason) => {
+                (VideoCapabilityAvailability::Unavailable(reason), Vec::new())
+            }
+        };
+        Self {
+            send,
+            receive,
+            send_sources,
+            receive_formats,
         }
     }
 }
@@ -515,6 +664,8 @@ pub struct ScreenshareConfig {
     /// the screenshare capabilities. default until loaded
     capabilities: Arc<RwLock<Capabilities>>,
 
+    video_capabilities: Arc<RwLock<platform::VideoCapabilities>>,
+
     /// a validated recording configuration
     pub(crate) recording_config: Arc<RwLock<Option<RecordingConfig>>>,
 
@@ -525,10 +676,28 @@ pub struct ScreenshareConfig {
     pub(crate) height: Arc<AtomicU32>,
 }
 
+#[derive(Readable, Writable)]
+pub(crate) struct ScreenshareConfigDisk {
+    pub(crate) recording_config: Option<RecordingConfig>,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+}
+
+impl From<&ScreenshareConfig> for ScreenshareConfigDisk {
+    fn from(config: &ScreenshareConfig) -> Self {
+        Self {
+            recording_config: config.recording_config.blocking_read().clone(),
+            width: config.width.load(Relaxed),
+            height: config.height.load(Relaxed),
+        }
+    }
+}
+
 impl Default for ScreenshareConfig {
     fn default() -> Self {
         Self {
             capabilities: Default::default(),
+            video_capabilities: Arc::new(RwLock::new(platform::initial_video_capabilities())),
             recording_config: Default::default(),
             width: Arc::new(AtomicU32::new(1280)),
             height: Arc::new(AtomicU32::new(720)),
@@ -544,21 +713,62 @@ impl ScreenshareConfig {
         let config = disk_config.map(ScreenshareConfig::from).unwrap_or_default();
 
         let capabilities_clone = Arc::clone(&config.capabilities);
+        let video_capabilities_clone = Arc::clone(&config.video_capabilities);
         spawn_task(async move {
-            let c = Capabilities::new().await;
-            *capabilities_clone.write().await = c;
+            let (compatibility, video) = platform::probe_capabilities().await.into_parts();
+            *video_capabilities_clone.write().await = video;
+            *capabilities_clone.write().await = compatibility;
         });
 
         config
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-    pub async fn new(_buffer: Vec<u8>) -> Self {
-        Self::default()
+    pub async fn new(buffer: Vec<u8>) -> Self {
+        ScreenshareConfigDisk::read_from_buffer(&buffer)
+            .map(ScreenshareConfig::from)
+            .unwrap_or_default()
     }
 
     pub async fn capabilities(&self) -> Capabilities {
         self.capabilities.read().await.clone()
+    }
+
+    pub async fn video_capabilities(&self) -> VideoCapabilities {
+        self.probe_video_capabilities().await.into()
+    }
+
+    async fn probe_video_capabilities(&self) -> platform::VideoCapabilities {
+        let (compatibility, capabilities) = platform::probe_capabilities().await.into_parts();
+        *self.capabilities.write().await = compatibility;
+        *self.video_capabilities.write().await = capabilities.clone();
+        capabilities
+    }
+
+    pub(crate) async fn prepare_video_sender(
+        &self,
+        source: VideoSource,
+    ) -> std::result::Result<(RecordingConfig, VideoMediaDescriptor), VideoUnavailable> {
+        let config = self
+            .recording_config
+            .read()
+            .await
+            .clone()
+            .ok_or(VideoUnavailable::ConfigurationUnavailable)?;
+        match source {
+            VideoSource::Display => {
+                let capabilities = self.probe_video_capabilities().await;
+                let compatibility = self.capabilities.read().await;
+                let descriptor = platform::prepare_sender(
+                    &config,
+                    self.width.load(Relaxed),
+                    self.height.load(Relaxed),
+                    &compatibility,
+                    &capabilities,
+                )?;
+                Ok((config, descriptor))
+            }
+        }
     }
 
     pub async fn recording_config(&self) -> Option<RecordingConfig> {
@@ -574,7 +784,8 @@ impl ScreenshareConfig {
         framerate: u32,
         height: Option<u32>,
     ) -> Result<(), DartError> {
-        let encoder = encoder_from_str(&encoder).map_err(|_| ErrorKind::InvalidEncoder)?;
+        let encoder =
+            platform::encoder_from_str(&encoder).map_err(|_| ErrorKind::InvalidEncoder)?;
 
         let recording_config = RecordingConfig {
             encoder,
@@ -603,7 +814,7 @@ impl ScreenshareConfig {
         _framerate: u32,
         _height: Option<u32>,
     ) -> Result<(), DartError> {
-        Ok(())
+        Err(ErrorKind::PlatformUnavailable.into())
     }
 
     #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
@@ -618,6 +829,7 @@ impl From<ScreenshareConfigDisk> for ScreenshareConfig {
     fn from(d: ScreenshareConfigDisk) -> Self {
         Self {
             capabilities: Arc::new(RwLock::new(Capabilities::default())),
+            video_capabilities: Arc::new(RwLock::new(platform::initial_video_capabilities())),
             recording_config: Arc::new(RwLock::new(d.recording_config)),
             width: Arc::new(AtomicU32::new(d.width)),
             height: Arc::new(AtomicU32::new(d.height)),
@@ -893,13 +1105,71 @@ fn poison_field_error(
 
 #[cfg(test)]
 mod tests {
-    use super::{NetworkConfig, NetworkConfigField};
+    use super::{
+        Device, Encoder, NetworkConfig, NetworkConfigField, RecordingConfig, Relaxed,
+        ScreenshareConfig, ScreenshareConfigDisk,
+    };
+    use speedy::{Readable, Writable};
 
     const VALID_RELAY_A: &str = "https://relay-us.iroh.example/";
     const VALID_RELAY_B: &str = "https://relay-eu.iroh.example/";
     const VALID_PKARR: &str = "https://pkarr.iroh.example/";
     const VALID_DNS_ENDPOINT: &str = "1.1.1.1:53";
     const VALID_ORIGIN_DOMAIN: &str = "dns.iroh.example";
+
+    #[test]
+    fn screenshare_disk_bytes_preserve_desktop_recording_values() {
+        let disk = ScreenshareConfigDisk {
+            recording_config: Some(RecordingConfig {
+                encoder: Encoder::H264Nvenc,
+                device: Device::X11Grab,
+                bitrate: 4_000_000,
+                framerate: 60,
+                height: Some(720),
+            }),
+            width: 1_280,
+            height: 720,
+        };
+
+        let bytes = disk.write_to_vec().expect("serialize legacy settings");
+
+        assert_eq!(
+            bytes,
+            [
+                1, 1, 0, 0, 0, 4, 0, 0, 0, 0, 9, 61, 0, 60, 0, 0, 0, 1, 208, 2, 0, 0, 0, 5, 0, 0,
+                208, 2, 0, 0,
+            ]
+        );
+    }
+
+    #[test]
+    fn old_screenshare_bytes_load_and_roundtrip_exactly() {
+        let old_bytes = [
+            1, 1, 0, 0, 0, 4, 0, 0, 0, 0, 9, 61, 0, 60, 0, 0, 0, 1, 208, 2, 0, 0, 0, 5, 0, 0, 208,
+            2, 0, 0,
+        ];
+
+        let disk = ScreenshareConfigDisk::read_from_buffer(&old_bytes)
+            .expect("load persisted screenshare settings");
+        let config = ScreenshareConfig::from(disk);
+
+        assert_eq!(
+            config.to_bytes().expect("roundtrip screenshare settings"),
+            old_bytes
+        );
+        let recording = config
+            .recording_config
+            .blocking_read()
+            .clone()
+            .expect("persisted recording config");
+        assert_eq!(recording.encoder(), "h264_nvenc");
+        assert_eq!(recording.device(), "X11 Grab");
+        assert_eq!(recording.bitrate(), 4_000_000);
+        assert_eq!(recording.framerate(), 60);
+        assert_eq!(recording.height(), Some(720));
+        assert_eq!(config.width.load(Relaxed), 1_280);
+        assert_eq!(config.height.load(Relaxed), 720);
+    }
 
     fn vec_of(items: &[&str]) -> Vec<String> {
         items.iter().map(|s| s.to_string()).collect()
