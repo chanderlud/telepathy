@@ -74,7 +74,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => 226036739;
+  int get rustContentHash => -1306791125;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -169,8 +169,7 @@ abstract class RustLibApi extends BaseApi {
       required FutureOr<void> Function(Statistics) statistics,
       required FutureOr<void> Function(ChatMessage) messageReceived,
       required FutureOr<void> Function(ManagerState) managerActive,
-      required FutureOr<void> Function((FrontendNotify, bool))
-          screenshareStarted});
+      required FutureOr<void> Function(VideoLifecycleEvent) videoLifecycle});
 
   void cratePlayerFlutterSoundHandleCancel({required FlutterSoundHandle that});
 
@@ -284,6 +283,9 @@ abstract class RustLibApi extends BaseApi {
       required int framerate,
       int? height});
 
+  Future<VideoCapabilities> crateTypesScreenshareConfigVideoCapabilities(
+      {required ScreenshareConfig that});
+
   ArcHost cratePlayerSoundPlayerHost({required SoundPlayer that});
 
   SoundPlayer cratePlayerSoundPlayerNew({required double outputVolume});
@@ -334,6 +336,11 @@ abstract class RustLibApi extends BaseApi {
       {required Telepathy that,
       required List<int> targetKey,
       required List<Contact> targetContacts});
+
+  Future<VideoStartOutcome> crateFlutterTelepathyRequestVideoSource(
+      {required Telepathy that,
+      required Contact contact,
+      required VideoSourceRequest request});
 
   Future<void> crateFlutterTelepathyRestartManager({required Telepathy that});
 
@@ -393,14 +400,17 @@ abstract class RustLibApi extends BaseApi {
 
   Future<void> crateFlutterTelepathyStartManager({required Telepathy that});
 
-  Future<void> crateFlutterTelepathyStartScreenshare(
-      {required Telepathy that, required Contact contact});
-
   Future<void> crateFlutterTelepathyStartSession(
       {required Telepathy that, required Contact contact});
 
   Future<void> crateFlutterTelepathyStopSession(
       {required Telepathy that, required Contact contact});
+
+  Future<VideoStopOutcome> crateFlutterTelepathyStopVideoSource(
+      {required Telepathy that, required VideoSessionIdentity identity});
+
+  Future<VideoCapabilities> crateFlutterTelepathyVideoCapabilities(
+      {required Telepathy that});
 
   Stream<String> crateFlutterLoggingCreateLogStream();
 
@@ -1305,8 +1315,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       required FutureOr<void> Function(Statistics) statistics,
       required FutureOr<void> Function(ChatMessage) messageReceived,
       required FutureOr<void> Function(ManagerState) managerActive,
-      required FutureOr<void> Function((FrontendNotify, bool))
-          screenshareStarted}) {
+      required FutureOr<void> Function(VideoLifecycleEvent) videoLifecycle}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -1326,8 +1335,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             messageReceived, serializer);
         sse_encode_DartFn_Inputs_manager_state_Output_unit_AnyhowException(
             managerActive, serializer);
-        sse_encode_DartFn_Inputs_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_bool_Output_unit_AnyhowException(
-            screenshareStarted, serializer);
+        sse_encode_DartFn_Inputs_video_lifecycle_event_Output_unit_AnyhowException(
+            videoLifecycle, serializer);
         return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 29)!;
       },
       codec: SseCodec(
@@ -1345,7 +1354,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         statistics,
         messageReceived,
         managerActive,
-        screenshareStarted
+        videoLifecycle
       ],
       apiImpl: this,
     ));
@@ -1363,7 +1372,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           'statistics',
           'messageReceived',
           'managerActive',
-          'screenshareStarted'
+          'videoLifecycle'
         ],
       );
 
@@ -2383,13 +2392,40 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           );
 
   @override
+  Future<VideoCapabilities> crateTypesScreenshareConfigVideoCapabilities(
+      {required ScreenshareConfig that}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerScreenshareConfig(
+            that, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 65, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_video_capabilities,
+        decodeErrorData: null,
+      ),
+      constMeta: kCrateTypesScreenshareConfigVideoCapabilitiesConstMeta,
+      argValues: [that],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateTypesScreenshareConfigVideoCapabilitiesConstMeta =>
+      const TaskConstMeta(
+        debugName: 'ScreenshareConfig_video_capabilities',
+        argNames: ['that'],
+      );
+
+  @override
   ArcHost cratePlayerSoundPlayerHost({required SoundPlayer that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSoundPlayer(
             that, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 65)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 66)!;
       },
       codec: SseCodec(
         decodeSuccessData:
@@ -2413,7 +2449,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_f_32(outputVolume, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 66)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 67)!;
       },
       codec: SseCodec(
         decodeSuccessData:
@@ -2441,7 +2477,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that, serializer);
         sse_encode_list_prim_u_8_loose(bytes, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 67, port: port_);
+            funcId: 68, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData:
@@ -2469,7 +2505,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that, serializer);
         sse_encode_opt_String(deviceId, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 68, port: port_);
+            funcId: 69, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -2496,7 +2532,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSoundPlayer(
             that, serializer);
         sse_encode_f_32(volume, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 69)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 70)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -2521,7 +2557,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerStartOperation(
             that, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 70)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 71)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -2547,7 +2583,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
             that, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 71, port: port_);
+            funcId: 72, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -2581,7 +2617,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_String(text, serializer);
         sse_encode_list_record_string_list_prim_u_8_strict(
             attachments, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 72)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 73)!;
       },
       codec: SseCodec(
         decodeSuccessData:
@@ -2608,7 +2644,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
             that, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 73, port: port_);
+            funcId: 74, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -2640,7 +2676,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerStartOperation(
             operation, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 74, port: port_);
+            funcId: 75, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -2667,7 +2703,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
             that, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 75, port: port_);
+            funcId: 76, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData:
@@ -2709,7 +2745,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             codecConfig, serializer);
         sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFlutterCallbacks(
             callbacks, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 76)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 77)!;
       },
       codec: SseCodec(
         decodeSuccessData:
@@ -2749,7 +2785,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
             that, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 77)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 78)!;
       },
       codec: SseCodec(
         decodeSuccessData:
@@ -2775,7 +2811,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
             that, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 78)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 79)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -2807,7 +2843,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_list_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerContact(
             targetContacts, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 79, port: port_);
+            funcId: 80, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData:
@@ -2827,6 +2863,38 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<VideoStartOutcome> crateFlutterTelepathyRequestVideoSource(
+      {required Telepathy that,
+      required Contact contact,
+      required VideoSourceRequest request}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
+            that, serializer);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerContact(
+            contact, serializer);
+        sse_encode_box_autoadd_video_source_request(request, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 81, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_video_start_outcome,
+        decodeErrorData: null,
+      ),
+      constMeta: kCrateFlutterTelepathyRequestVideoSourceConstMeta,
+      argValues: [that, contact, request],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateFlutterTelepathyRequestVideoSourceConstMeta =>
+      const TaskConstMeta(
+        debugName: 'Telepathy_request_video_source',
+        argNames: ['that', 'contact', 'request'],
+      );
+
+  @override
   Future<void> crateFlutterTelepathyRestartManager({required Telepathy that}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
@@ -2834,7 +2902,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
             that, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 80, port: port_);
+            funcId: 82, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -2859,7 +2927,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
             that, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 81)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 83)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -2888,7 +2956,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerChatMessage(
             message, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 82, port: port_);
+            funcId: 84, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -2916,7 +2984,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that, serializer);
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerContact(
             contact, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 83)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 85)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -2943,7 +3011,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
             that, serializer);
         sse_encode_bool(deafened, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 84)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 86)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -2970,7 +3038,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
             that, serializer);
         sse_encode_bool(denoise, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 85)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 87)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -2997,7 +3065,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
             that, serializer);
         sse_encode_bool(enabled, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 86)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 88)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -3025,7 +3093,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that, serializer);
         sse_encode_list_prim_u_8_loose(key, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 87, port: port_);
+            funcId: 89, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -3053,7 +3121,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that, serializer);
         sse_encode_opt_String(deviceId, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 88, port: port_);
+            funcId: 90, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -3080,7 +3148,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
             that, serializer);
         sse_encode_f_32(decibel, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 89)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 91)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -3108,7 +3176,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that, serializer);
         sse_encode_opt_list_prim_u_8_strict(model, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 90, port: port_);
+            funcId: 92, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -3135,7 +3203,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
             that, serializer);
         sse_encode_bool(muted, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 91)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 93)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -3163,7 +3231,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that, serializer);
         sse_encode_opt_String(deviceId, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 92, port: port_);
+            funcId: 94, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -3190,7 +3258,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
             that, serializer);
         sse_encode_f_32(decibel, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 93)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 95)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -3217,7 +3285,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
             that, serializer);
         sse_encode_bool(play, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 94)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 96)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -3244,7 +3312,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
             that, serializer);
         sse_encode_f_32(decimal, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 95)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 97)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -3271,7 +3339,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
             that, serializer);
         sse_encode_bool(send, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 96)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 98)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -3297,7 +3365,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
             that, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 97, port: port_);
+            funcId: 99, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -3330,7 +3398,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerStartOperation(
             operation, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 98, port: port_);
+            funcId: 100, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -3356,7 +3424,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
             that, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 99, port: port_);
+            funcId: 101, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -3375,35 +3443,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<void> crateFlutterTelepathyStartScreenshare(
-      {required Telepathy that, required Contact contact}) {
-    return handler.executeNormal(NormalTask(
-      callFfi: (port_) {
-        final serializer = SseSerializer(generalizedFrbRustBinding);
-        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
-            that, serializer);
-        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerContact(
-            contact, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 100, port: port_);
-      },
-      codec: SseCodec(
-        decodeSuccessData: sse_decode_unit,
-        decodeErrorData: null,
-      ),
-      constMeta: kCrateFlutterTelepathyStartScreenshareConstMeta,
-      argValues: [that, contact],
-      apiImpl: this,
-    ));
-  }
-
-  TaskConstMeta get kCrateFlutterTelepathyStartScreenshareConstMeta =>
-      const TaskConstMeta(
-        debugName: 'Telepathy_start_screenshare',
-        argNames: ['that', 'contact'],
-      );
-
-  @override
   Future<void> crateFlutterTelepathyStartSession(
       {required Telepathy that, required Contact contact}) {
     return handler.executeNormal(NormalTask(
@@ -3414,7 +3453,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerContact(
             contact, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 101, port: port_);
+            funcId: 102, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -3443,7 +3482,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerContact(
             contact, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 102, port: port_);
+            funcId: 103, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -3462,13 +3501,68 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<VideoStopOutcome> crateFlutterTelepathyStopVideoSource(
+      {required Telepathy that, required VideoSessionIdentity identity}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
+            that, serializer);
+        sse_encode_box_autoadd_video_session_identity(identity, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 104, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_video_stop_outcome,
+        decodeErrorData: null,
+      ),
+      constMeta: kCrateFlutterTelepathyStopVideoSourceConstMeta,
+      argValues: [that, identity],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateFlutterTelepathyStopVideoSourceConstMeta =>
+      const TaskConstMeta(
+        debugName: 'Telepathy_stop_video_source',
+        argNames: ['that', 'identity'],
+      );
+
+  @override
+  Future<VideoCapabilities> crateFlutterTelepathyVideoCapabilities(
+      {required Telepathy that}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTelepathy(
+            that, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 105, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_video_capabilities,
+        decodeErrorData: null,
+      ),
+      constMeta: kCrateFlutterTelepathyVideoCapabilitiesConstMeta,
+      argValues: [that],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateFlutterTelepathyVideoCapabilitiesConstMeta =>
+      const TaskConstMeta(
+        debugName: 'Telepathy_video_capabilities',
+        argNames: ['that'],
+      );
+
+  @override
   Stream<String> crateFlutterLoggingCreateLogStream() {
     final s = RustStreamSink<String>();
     handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_StreamSink_String_Sse(s, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 103)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 106)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -3492,7 +3586,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 104)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 107)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_record_string_list_prim_u_8_strict,
@@ -3517,7 +3611,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_String(path, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 105, port: port_);
+            funcId: 108, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -3540,7 +3634,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_list_String(peers, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 106)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 109)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_String,
@@ -3562,7 +3656,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 107)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 110)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -3586,7 +3680,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 108, port: port_);
+            funcId: 111, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_bool,
@@ -3610,7 +3704,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 109, port: port_);
+            funcId: 112, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_statistics,
@@ -3634,7 +3728,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_String(peerId, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 110)!;
+        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 113)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_bool,
@@ -3788,41 +3882,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   Future<void> Function(int, dynamic)
-      encode_DartFn_Inputs_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_bool_Output_unit_AnyhowException(
-          FutureOr<void> Function((FrontendNotify, bool)) raw) {
-    return (callId, rawArg0) async {
-      final arg0 =
-          dco_decode_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_bool(
-              rawArg0);
-
-      Box<void>? rawOutput;
-      Box<AnyhowException>? rawError;
-      try {
-        rawOutput = Box(await raw(arg0));
-      } catch (e, s) {
-        rawError = Box(AnyhowException('$e\n\n$s'));
-      }
-
-      final serializer = SseSerializer(generalizedFrbRustBinding);
-      assert((rawOutput != null) ^ (rawError != null));
-      if (rawOutput != null) {
-        serializer.buffer.putUint8(0);
-        sse_encode_unit(rawOutput.value, serializer);
-      } else {
-        serializer.buffer.putUint8(1);
-        sse_encode_AnyhowException(rawError!.value, serializer);
-      }
-      final output = serializer.intoRaw();
-
-      generalizedFrbRustBinding.dartFnDeliverOutput(
-          callId: callId,
-          ptr: output.ptr,
-          rustVecLen: output.rustVecLen,
-          dataLen: output.dataLen);
-    };
-  }
-
-  Future<void> Function(int, dynamic)
       encode_DartFn_Inputs_record_string_opt_list_prim_u_8_strict_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_Output_bool_AnyhowException(
           FutureOr<bool> Function((String, Uint8List?, FrontendNotify)) raw) {
     return (callId, rawArg0) async {
@@ -3943,6 +4002,39 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         serializer.buffer.putUint8(0);
         sse_encode_list_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerContact(
             rawOutput.value, serializer);
+      } else {
+        serializer.buffer.putUint8(1);
+        sse_encode_AnyhowException(rawError!.value, serializer);
+      }
+      final output = serializer.intoRaw();
+
+      generalizedFrbRustBinding.dartFnDeliverOutput(
+          callId: callId,
+          ptr: output.ptr,
+          rustVecLen: output.rustVecLen,
+          dataLen: output.dataLen);
+    };
+  }
+
+  Future<void> Function(int, dynamic)
+      encode_DartFn_Inputs_video_lifecycle_event_Output_unit_AnyhowException(
+          FutureOr<void> Function(VideoLifecycleEvent) raw) {
+    return (callId, rawArg0) async {
+      final arg0 = dco_decode_video_lifecycle_event(rawArg0);
+
+      Box<void>? rawOutput;
+      Box<AnyhowException>? rawError;
+      try {
+        rawOutput = Box(await raw(arg0));
+      } catch (e, s) {
+        rawError = Box(AnyhowException('$e\n\n$s'));
+      }
+
+      final serializer = SseSerializer(generalizedFrbRustBinding);
+      assert((rawOutput != null) ^ (rawError != null));
+      if (rawOutput != null) {
+        serializer.buffer.putUint8(0);
+        sse_encode_unit(rawOutput.value, serializer);
       } else {
         serializer.buffer.putUint8(1);
         sse_encode_AnyhowException(rawError!.value, serializer);
@@ -4406,14 +4498,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  FutureOr<void> Function((FrontendNotify, bool))
-      dco_decode_DartFn_Inputs_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_bool_Output_unit_AnyhowException(
-          dynamic raw) {
-    // Codec=Dco (DartCObject based), see doc to use other codecs
-    throw UnimplementedError('');
-  }
-
-  @protected
   FutureOr<bool> Function((String, Uint8List?, FrontendNotify))
       dco_decode_DartFn_Inputs_record_string_opt_list_prim_u_8_strict_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_Output_bool_AnyhowException(
           dynamic raw) {
@@ -4440,6 +4524,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @protected
   FutureOr<List<Contact>> Function(void)
       dco_decode_DartFn_Inputs_unit_Output_list_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerContact_AnyhowException(
+          dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    throw UnimplementedError('');
+  }
+
+  @protected
+  FutureOr<void> Function(VideoLifecycleEvent)
+      dco_decode_DartFn_Inputs_video_lifecycle_event_Output_unit_AnyhowException(
           dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     throw UnimplementedError('');
@@ -4643,6 +4735,38 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  VideoMediaFormat dco_decode_box_autoadd_video_media_format(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_video_media_format(raw);
+  }
+
+  @protected
+  VideoSessionIdentity dco_decode_box_autoadd_video_session_identity(
+      dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_video_session_identity(raw);
+  }
+
+  @protected
+  VideoSourceRequest dco_decode_box_autoadd_video_source_request(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_video_source_request(raw);
+  }
+
+  @protected
+  VideoTerminalReason dco_decode_box_autoadd_video_terminal_reason(
+      dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_video_terminal_reason(raw);
+  }
+
+  @protected
+  VideoUnavailable dco_decode_box_autoadd_video_unavailable(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_video_unavailable(raw);
+  }
+
+  @protected
   CallState dco_decode_call_state(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     switch (raw[0]) {
@@ -4742,6 +4866,21 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<VideoMediaFormat> dco_decode_list_video_media_format(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_video_media_format).toList();
+  }
+
+  @protected
+  List<VideoSourceCapability> dco_decode_list_video_source_capability(
+      dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>)
+        .map(dco_decode_video_source_capability)
+        .toList();
+  }
+
+  @protected
   ManagerState dco_decode_manager_state(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return ManagerState.values[raw as int];
@@ -4800,6 +4939,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  VideoTerminalReason? dco_decode_opt_box_autoadd_video_terminal_reason(
+      dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null
+        ? null
+        : dco_decode_box_autoadd_video_terminal_reason(raw);
+  }
+
+  @protected
   List<String>? dco_decode_opt_list_String(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_list_String(raw);
@@ -4809,24 +4957,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   Uint8List? dco_decode_opt_list_prim_u_8_strict(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_list_prim_u_8_strict(raw);
-  }
-
-  @protected
-  (
-    FrontendNotify,
-    bool
-  ) dco_decode_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_bool(
-      dynamic raw) {
-    // Codec=Dco (DartCObject based), see doc to use other codecs
-    final arr = raw as List<dynamic>;
-    if (arr.length != 2) {
-      throw Exception('Expected 2 elements, got ${arr.length}');
-    }
-    return (
-      dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFrontendNotify(
-          arr[0]),
-      dco_decode_bool(arr[1]),
-    );
   }
 
   @protected
@@ -4972,6 +5102,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  U8Array16 dco_decode_u_8_array_16(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return U8Array16(dco_decode_list_prim_u_8_strict(raw));
+  }
+
+  @protected
   void dco_decode_unit(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return;
@@ -4981,6 +5117,194 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   BigInt dco_decode_usize(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dcoDecodeU64(raw);
+  }
+
+  @protected
+  VideoCapabilities dco_decode_video_capabilities(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 4)
+      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    return VideoCapabilities(
+      send: dco_decode_video_capability_availability(arr[0]),
+      receive: dco_decode_video_capability_availability(arr[1]),
+      sendSources: dco_decode_list_video_source_capability(arr[2]),
+      receiveFormats: dco_decode_list_video_media_format(arr[3]),
+    );
+  }
+
+  @protected
+  VideoCapabilityAvailability dco_decode_video_capability_availability(
+      dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    switch (raw[0]) {
+      case 0:
+        return const VideoCapabilityAvailability_Available();
+      case 1:
+        return VideoCapabilityAvailability_Unavailable(
+          dco_decode_box_autoadd_video_unavailable(raw[1]),
+        );
+      default:
+        throw Exception('unreachable');
+    }
+  }
+
+  @protected
+  VideoCodec dco_decode_video_codec(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return VideoCodec.values[raw as int];
+  }
+
+  @protected
+  VideoLifecycleEvent dco_decode_video_lifecycle_event(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 5)
+      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
+    return VideoLifecycleEvent(
+      identity: dco_decode_video_session_identity(arr[0]),
+      role: dco_decode_video_role(arr[1]),
+      source: dco_decode_video_source(arr[2]),
+      phase: dco_decode_video_phase(arr[3]),
+      terminalReason: dco_decode_opt_box_autoadd_video_terminal_reason(arr[4]),
+    );
+  }
+
+  @protected
+  VideoMediaFormat dco_decode_video_media_format(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    switch (raw[0]) {
+      case 0:
+        return VideoMediaFormat_MpegTs(
+          dco_decode_video_codec(raw[1]),
+        );
+      default:
+        throw Exception('unreachable');
+    }
+  }
+
+  @protected
+  VideoPhase dco_decode_video_phase(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return VideoPhase.values[raw as int];
+  }
+
+  @protected
+  VideoRole dco_decode_video_role(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return VideoRole.values[raw as int];
+  }
+
+  @protected
+  VideoSessionId dco_decode_video_session_id(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 1)
+      throw Exception('unexpected arr length: expect 1 but see ${arr.length}');
+    return VideoSessionId(
+      field0: dco_decode_u_8_array_16(arr[0]),
+    );
+  }
+
+  @protected
+  VideoSessionIdentity dco_decode_video_session_identity(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 2)
+      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    return VideoSessionIdentity(
+      peerId: dco_decode_String(arr[0]),
+      sessionId: dco_decode_video_session_id(arr[1]),
+    );
+  }
+
+  @protected
+  VideoSource dco_decode_video_source(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return VideoSource.values[raw as int];
+  }
+
+  @protected
+  VideoSourceCapability dco_decode_video_source_capability(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 2)
+      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    return VideoSourceCapability(
+      source: dco_decode_video_source(arr[0]),
+      formats: dco_decode_list_video_media_format(arr[1]),
+    );
+  }
+
+  @protected
+  VideoSourceRequest dco_decode_video_source_request(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 1)
+      throw Exception('unexpected arr length: expect 1 but see ${arr.length}');
+    return VideoSourceRequest(
+      source: dco_decode_video_source(arr[0]),
+    );
+  }
+
+  @protected
+  VideoStartOutcome dco_decode_video_start_outcome(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    switch (raw[0]) {
+      case 0:
+        return VideoStartOutcome_Requested(
+          dco_decode_box_autoadd_video_session_identity(raw[1]),
+        );
+      case 1:
+        return VideoStartOutcome_Unavailable(
+          dco_decode_box_autoadd_video_unavailable(raw[1]),
+        );
+      case 2:
+        return const VideoStartOutcome_NoSession();
+      case 3:
+        return const VideoStartOutcome_AlreadyActive();
+      case 4:
+        return VideoStartOutcome_Failed(
+          dco_decode_video_terminal_reason(raw[1]),
+        );
+      default:
+        throw Exception('unreachable');
+    }
+  }
+
+  @protected
+  VideoStopOutcome dco_decode_video_stop_outcome(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return VideoStopOutcome.values[raw as int];
+  }
+
+  @protected
+  VideoTerminalReason dco_decode_video_terminal_reason(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return VideoTerminalReason.values[raw as int];
+  }
+
+  @protected
+  VideoUnavailable dco_decode_video_unavailable(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    switch (raw[0]) {
+      case 0:
+        return const VideoUnavailable_PlatformUnsupported();
+      case 1:
+        return const VideoUnavailable_RuntimeUnavailable();
+      case 2:
+        return VideoUnavailable_SourceUnavailable(
+          dco_decode_video_source(raw[1]),
+        );
+      case 3:
+        return VideoUnavailable_FormatUnavailable(
+          dco_decode_box_autoadd_video_media_format(raw[1]),
+        );
+      case 4:
+        return const VideoUnavailable_ConfigurationUnavailable();
+      default:
+        throw Exception('unreachable');
+    }
   }
 
   @protected
@@ -5509,6 +5833,41 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  VideoMediaFormat sse_decode_box_autoadd_video_media_format(
+      SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_video_media_format(deserializer));
+  }
+
+  @protected
+  VideoSessionIdentity sse_decode_box_autoadd_video_session_identity(
+      SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_video_session_identity(deserializer));
+  }
+
+  @protected
+  VideoSourceRequest sse_decode_box_autoadd_video_source_request(
+      SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_video_source_request(deserializer));
+  }
+
+  @protected
+  VideoTerminalReason sse_decode_box_autoadd_video_terminal_reason(
+      SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_video_terminal_reason(deserializer));
+  }
+
+  @protected
+  VideoUnavailable sse_decode_box_autoadd_video_unavailable(
+      SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_video_unavailable(deserializer));
+  }
+
+  @protected
   CallState sse_decode_call_state(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
@@ -5626,6 +5985,32 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<VideoMediaFormat> sse_decode_list_video_media_format(
+      SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <VideoMediaFormat>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_video_media_format(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
+  List<VideoSourceCapability> sse_decode_list_video_source_capability(
+      SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <VideoSourceCapability>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_video_source_capability(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
   ManagerState sse_decode_manager_state(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var inner = sse_decode_i_32(deserializer);
@@ -5700,6 +6085,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  VideoTerminalReason? sse_decode_opt_box_autoadd_video_terminal_reason(
+      SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    if (sse_decode_bool(deserializer)) {
+      return (sse_decode_box_autoadd_video_terminal_reason(deserializer));
+    } else {
+      return null;
+    }
+  }
+
+  @protected
   List<String>? sse_decode_opt_list_String(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
@@ -5719,20 +6116,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     } else {
       return null;
     }
-  }
-
-  @protected
-  (
-    FrontendNotify,
-    bool
-  ) sse_decode_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_bool(
-      SseDeserializer deserializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    var var_field0 =
-        sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFrontendNotify(
-            deserializer);
-    var var_field1 = sse_decode_bool(deserializer);
-    return (var_field0, var_field1);
   }
 
   @protected
@@ -5856,6 +6239,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  U8Array16 sse_decode_u_8_array_16(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var inner = sse_decode_list_prim_u_8_strict(deserializer);
+    return U8Array16(inner);
+  }
+
+  @protected
   void sse_decode_unit(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
   }
@@ -5864,6 +6254,196 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   BigInt sse_decode_usize(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return deserializer.buffer.getBigUint64();
+  }
+
+  @protected
+  VideoCapabilities sse_decode_video_capabilities(
+      SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_send = sse_decode_video_capability_availability(deserializer);
+    var var_receive = sse_decode_video_capability_availability(deserializer);
+    var var_sendSources = sse_decode_list_video_source_capability(deserializer);
+    var var_receiveFormats = sse_decode_list_video_media_format(deserializer);
+    return VideoCapabilities(
+        send: var_send,
+        receive: var_receive,
+        sendSources: var_sendSources,
+        receiveFormats: var_receiveFormats);
+  }
+
+  @protected
+  VideoCapabilityAvailability sse_decode_video_capability_availability(
+      SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var tag_ = sse_decode_i_32(deserializer);
+    switch (tag_) {
+      case 0:
+        return const VideoCapabilityAvailability_Available();
+      case 1:
+        var var_field0 = sse_decode_box_autoadd_video_unavailable(deserializer);
+        return VideoCapabilityAvailability_Unavailable(var_field0);
+      default:
+        throw UnimplementedError('');
+    }
+  }
+
+  @protected
+  VideoCodec sse_decode_video_codec(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var inner = sse_decode_i_32(deserializer);
+    return VideoCodec.values[inner];
+  }
+
+  @protected
+  VideoLifecycleEvent sse_decode_video_lifecycle_event(
+      SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_identity = sse_decode_video_session_identity(deserializer);
+    var var_role = sse_decode_video_role(deserializer);
+    var var_source = sse_decode_video_source(deserializer);
+    var var_phase = sse_decode_video_phase(deserializer);
+    var var_terminalReason =
+        sse_decode_opt_box_autoadd_video_terminal_reason(deserializer);
+    return VideoLifecycleEvent(
+        identity: var_identity,
+        role: var_role,
+        source: var_source,
+        phase: var_phase,
+        terminalReason: var_terminalReason);
+  }
+
+  @protected
+  VideoMediaFormat sse_decode_video_media_format(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var tag_ = sse_decode_i_32(deserializer);
+    switch (tag_) {
+      case 0:
+        var var_field0 = sse_decode_video_codec(deserializer);
+        return VideoMediaFormat_MpegTs(var_field0);
+      default:
+        throw UnimplementedError('');
+    }
+  }
+
+  @protected
+  VideoPhase sse_decode_video_phase(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var inner = sse_decode_i_32(deserializer);
+    return VideoPhase.values[inner];
+  }
+
+  @protected
+  VideoRole sse_decode_video_role(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var inner = sse_decode_i_32(deserializer);
+    return VideoRole.values[inner];
+  }
+
+  @protected
+  VideoSessionId sse_decode_video_session_id(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_field0 = sse_decode_u_8_array_16(deserializer);
+    return VideoSessionId(field0: var_field0);
+  }
+
+  @protected
+  VideoSessionIdentity sse_decode_video_session_identity(
+      SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_peerId = sse_decode_String(deserializer);
+    var var_sessionId = sse_decode_video_session_id(deserializer);
+    return VideoSessionIdentity(peerId: var_peerId, sessionId: var_sessionId);
+  }
+
+  @protected
+  VideoSource sse_decode_video_source(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var inner = sse_decode_i_32(deserializer);
+    return VideoSource.values[inner];
+  }
+
+  @protected
+  VideoSourceCapability sse_decode_video_source_capability(
+      SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_source = sse_decode_video_source(deserializer);
+    var var_formats = sse_decode_list_video_media_format(deserializer);
+    return VideoSourceCapability(source: var_source, formats: var_formats);
+  }
+
+  @protected
+  VideoSourceRequest sse_decode_video_source_request(
+      SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_source = sse_decode_video_source(deserializer);
+    return VideoSourceRequest(source: var_source);
+  }
+
+  @protected
+  VideoStartOutcome sse_decode_video_start_outcome(
+      SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var tag_ = sse_decode_i_32(deserializer);
+    switch (tag_) {
+      case 0:
+        var var_field0 =
+            sse_decode_box_autoadd_video_session_identity(deserializer);
+        return VideoStartOutcome_Requested(var_field0);
+      case 1:
+        var var_field0 = sse_decode_box_autoadd_video_unavailable(deserializer);
+        return VideoStartOutcome_Unavailable(var_field0);
+      case 2:
+        return const VideoStartOutcome_NoSession();
+      case 3:
+        return const VideoStartOutcome_AlreadyActive();
+      case 4:
+        var var_field0 = sse_decode_video_terminal_reason(deserializer);
+        return VideoStartOutcome_Failed(var_field0);
+      default:
+        throw UnimplementedError('');
+    }
+  }
+
+  @protected
+  VideoStopOutcome sse_decode_video_stop_outcome(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var inner = sse_decode_i_32(deserializer);
+    return VideoStopOutcome.values[inner];
+  }
+
+  @protected
+  VideoTerminalReason sse_decode_video_terminal_reason(
+      SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var inner = sse_decode_i_32(deserializer);
+    return VideoTerminalReason.values[inner];
+  }
+
+  @protected
+  VideoUnavailable sse_decode_video_unavailable(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var tag_ = sse_decode_i_32(deserializer);
+    switch (tag_) {
+      case 0:
+        return const VideoUnavailable_PlatformUnsupported();
+      case 1:
+        return const VideoUnavailable_RuntimeUnavailable();
+      case 2:
+        var var_field0 = sse_decode_video_source(deserializer);
+        return VideoUnavailable_SourceUnavailable(var_field0);
+      case 3:
+        var var_field0 =
+            sse_decode_box_autoadd_video_media_format(deserializer);
+        return VideoUnavailable_FormatUnavailable(var_field0);
+      case 4:
+        return const VideoUnavailable_ConfigurationUnavailable();
+      default:
+        throw UnimplementedError('');
+    }
   }
 
   @protected
@@ -6243,18 +6823,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void
-      sse_encode_DartFn_Inputs_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_bool_Output_unit_AnyhowException(
-          FutureOr<void> Function((FrontendNotify, bool)) self,
-          SseSerializer serializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_DartOpaque(
-        encode_DartFn_Inputs_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_bool_Output_unit_AnyhowException(
-            self),
-        serializer);
-  }
-
-  @protected
-  void
       sse_encode_DartFn_Inputs_record_string_opt_list_prim_u_8_strict_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_Output_bool_AnyhowException(
           FutureOr<bool> Function((String, Uint8List?, FrontendNotify)) self,
           SseSerializer serializer) {
@@ -6294,6 +6862,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_DartOpaque(
         encode_DartFn_Inputs_unit_Output_list_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerContact_AnyhowException(
+            self),
+        serializer);
+  }
+
+  @protected
+  void
+      sse_encode_DartFn_Inputs_video_lifecycle_event_Output_unit_AnyhowException(
+          FutureOr<void> Function(VideoLifecycleEvent) self,
+          SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_DartOpaque(
+        encode_DartFn_Inputs_video_lifecycle_event_Output_unit_AnyhowException(
             self),
         serializer);
   }
@@ -6526,6 +7106,41 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_box_autoadd_video_media_format(
+      VideoMediaFormat self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_video_media_format(self, serializer);
+  }
+
+  @protected
+  void sse_encode_box_autoadd_video_session_identity(
+      VideoSessionIdentity self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_video_session_identity(self, serializer);
+  }
+
+  @protected
+  void sse_encode_box_autoadd_video_source_request(
+      VideoSourceRequest self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_video_source_request(self, serializer);
+  }
+
+  @protected
+  void sse_encode_box_autoadd_video_terminal_reason(
+      VideoTerminalReason self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_video_terminal_reason(self, serializer);
+  }
+
+  @protected
+  void sse_encode_box_autoadd_video_unavailable(
+      VideoUnavailable self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_video_unavailable(self, serializer);
+  }
+
+  @protected
   void sse_encode_call_state(CallState self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     switch (self) {
@@ -6629,6 +7244,26 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_list_video_media_format(
+      List<VideoMediaFormat> self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_video_media_format(item, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_list_video_source_capability(
+      List<VideoSourceCapability> self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_video_source_capability(item, serializer);
+    }
+  }
+
+  @protected
   void sse_encode_manager_state(ManagerState self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.index, serializer);
@@ -6696,6 +7331,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_opt_box_autoadd_video_terminal_reason(
+      VideoTerminalReason? self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    sse_encode_bool(self != null, serializer);
+    if (self != null) {
+      sse_encode_box_autoadd_video_terminal_reason(self, serializer);
+    }
+  }
+
+  @protected
   void sse_encode_opt_list_String(
       List<String>? self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
@@ -6715,16 +7361,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     if (self != null) {
       sse_encode_list_prim_u_8_strict(self, serializer);
     }
-  }
-
-  @protected
-  void
-      sse_encode_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_bool(
-          (FrontendNotify, bool) self, SseSerializer serializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFrontendNotify(
-        self.$1, serializer);
-    sse_encode_bool(self.$2, serializer);
   }
 
   @protected
@@ -6828,6 +7464,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_u_8_array_16(U8Array16 self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_list_prim_u_8_strict(self.inner, serializer);
+  }
+
+  @protected
   void sse_encode_unit(void self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
   }
@@ -6836,6 +7478,161 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   void sse_encode_usize(BigInt self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     serializer.buffer.putBigUint64(self);
+  }
+
+  @protected
+  void sse_encode_video_capabilities(
+      VideoCapabilities self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_video_capability_availability(self.send, serializer);
+    sse_encode_video_capability_availability(self.receive, serializer);
+    sse_encode_list_video_source_capability(self.sendSources, serializer);
+    sse_encode_list_video_media_format(self.receiveFormats, serializer);
+  }
+
+  @protected
+  void sse_encode_video_capability_availability(
+      VideoCapabilityAvailability self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    switch (self) {
+      case VideoCapabilityAvailability_Available():
+        sse_encode_i_32(0, serializer);
+      case VideoCapabilityAvailability_Unavailable(field0: final field0):
+        sse_encode_i_32(1, serializer);
+        sse_encode_box_autoadd_video_unavailable(field0, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_video_codec(VideoCodec self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.index, serializer);
+  }
+
+  @protected
+  void sse_encode_video_lifecycle_event(
+      VideoLifecycleEvent self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_video_session_identity(self.identity, serializer);
+    sse_encode_video_role(self.role, serializer);
+    sse_encode_video_source(self.source, serializer);
+    sse_encode_video_phase(self.phase, serializer);
+    sse_encode_opt_box_autoadd_video_terminal_reason(
+        self.terminalReason, serializer);
+  }
+
+  @protected
+  void sse_encode_video_media_format(
+      VideoMediaFormat self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    switch (self) {
+      case VideoMediaFormat_MpegTs(field0: final field0):
+        sse_encode_i_32(0, serializer);
+        sse_encode_video_codec(field0, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_video_phase(VideoPhase self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.index, serializer);
+  }
+
+  @protected
+  void sse_encode_video_role(VideoRole self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.index, serializer);
+  }
+
+  @protected
+  void sse_encode_video_session_id(
+      VideoSessionId self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_u_8_array_16(self.field0, serializer);
+  }
+
+  @protected
+  void sse_encode_video_session_identity(
+      VideoSessionIdentity self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.peerId, serializer);
+    sse_encode_video_session_id(self.sessionId, serializer);
+  }
+
+  @protected
+  void sse_encode_video_source(VideoSource self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.index, serializer);
+  }
+
+  @protected
+  void sse_encode_video_source_capability(
+      VideoSourceCapability self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_video_source(self.source, serializer);
+    sse_encode_list_video_media_format(self.formats, serializer);
+  }
+
+  @protected
+  void sse_encode_video_source_request(
+      VideoSourceRequest self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_video_source(self.source, serializer);
+  }
+
+  @protected
+  void sse_encode_video_start_outcome(
+      VideoStartOutcome self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    switch (self) {
+      case VideoStartOutcome_Requested(field0: final field0):
+        sse_encode_i_32(0, serializer);
+        sse_encode_box_autoadd_video_session_identity(field0, serializer);
+      case VideoStartOutcome_Unavailable(field0: final field0):
+        sse_encode_i_32(1, serializer);
+        sse_encode_box_autoadd_video_unavailable(field0, serializer);
+      case VideoStartOutcome_NoSession():
+        sse_encode_i_32(2, serializer);
+      case VideoStartOutcome_AlreadyActive():
+        sse_encode_i_32(3, serializer);
+      case VideoStartOutcome_Failed(field0: final field0):
+        sse_encode_i_32(4, serializer);
+        sse_encode_video_terminal_reason(field0, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_video_stop_outcome(
+      VideoStopOutcome self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.index, serializer);
+  }
+
+  @protected
+  void sse_encode_video_terminal_reason(
+      VideoTerminalReason self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.index, serializer);
+  }
+
+  @protected
+  void sse_encode_video_unavailable(
+      VideoUnavailable self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    switch (self) {
+      case VideoUnavailable_PlatformUnsupported():
+        sse_encode_i_32(0, serializer);
+      case VideoUnavailable_RuntimeUnavailable():
+        sse_encode_i_32(1, serializer);
+      case VideoUnavailable_SourceUnavailable(field0: final field0):
+        sse_encode_i_32(2, serializer);
+        sse_encode_video_source(field0, serializer);
+      case VideoUnavailable_FormatUnavailable(field0: final field0):
+        sse_encode_i_32(3, serializer);
+        sse_encode_box_autoadd_video_media_format(field0, serializer);
+      case VideoUnavailable_ConfigurationUnavailable():
+        sse_encode_i_32(4, serializer);
+    }
   }
 }
 
@@ -7396,6 +8193,11 @@ class ScreenshareConfigImpl extends RustOpaque implements ScreenshareConfig {
           bitrate: bitrate,
           framerate: framerate,
           height: height);
+
+  Future<VideoCapabilities> videoCapabilities() =>
+      RustLib.instance.api.crateTypesScreenshareConfigVideoCapabilities(
+        that: this,
+      );
 }
 
 @sealed
@@ -7555,6 +8357,11 @@ class TelepathyImpl extends RustOpaque implements Telepathy {
       RustLib.instance.api.crateFlutterTelepathyPrepareIdentitySwitch(
           that: this, targetKey: targetKey, targetContacts: targetContacts);
 
+  Future<VideoStartOutcome> requestVideoSource(
+          {required Contact contact, required VideoSourceRequest request}) =>
+      RustLib.instance.api.crateFlutterTelepathyRequestVideoSource(
+          that: this, contact: contact, request: request);
+
   /// Restarts the session manager
   Future<void> restartManager() =>
       RustLib.instance.api.crateFlutterTelepathyRestartManager(
@@ -7631,10 +8438,6 @@ class TelepathyImpl extends RustOpaque implements Telepathy {
         that: this,
       );
 
-  Future<void> startScreenshare({required Contact contact}) =>
-      RustLib.instance.api
-          .crateFlutterTelepathyStartScreenshare(that: this, contact: contact);
-
   /// Tries to start a session for a contact
   Future<void> startSession({required Contact contact}) => RustLib.instance.api
       .crateFlutterTelepathyStartSession(that: this, contact: contact);
@@ -7642,4 +8445,14 @@ class TelepathyImpl extends RustOpaque implements Telepathy {
   /// Stops a specific session (called when a contact is deleted)
   Future<void> stopSession({required Contact contact}) => RustLib.instance.api
       .crateFlutterTelepathyStopSession(that: this, contact: contact);
+
+  Future<VideoStopOutcome> stopVideoSource(
+          {required VideoSessionIdentity identity}) =>
+      RustLib.instance.api
+          .crateFlutterTelepathyStopVideoSource(that: this, identity: identity);
+
+  Future<VideoCapabilities> videoCapabilities() =>
+      RustLib.instance.api.crateFlutterTelepathyVideoCapabilities(
+        that: this,
+      );
 }

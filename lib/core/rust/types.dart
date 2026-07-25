@@ -9,8 +9,9 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'types.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `clamp_contact_output_volume`, `contact_output_volume_from_parts`, `contact_output_volume_in_range`, `field_error`, `new`, `parse_bind_addresses`, `poison_field_error`, `relay_map_from_urls`, `serialize_timestamp_rfc3339_utc`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `minimum_bytes_needed`, `read_from`, `write_to`
+// These functions are ignored because they are not marked as `pub`: `clamp_contact_output_volume`, `contact_output_volume_from_parts`, `contact_output_volume_in_range`, `field_error`, `new`, `new`, `parse_bind_addresses`, `poison_field_error`, `prepare_video_sender`, `probe_video_capabilities`, `relay_map_from_urls`, `serialize_timestamp_rfc3339_utc`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `ScreenshareConfigDisk`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `hash`, `minimum_bytes_needed`, `minimum_bytes_needed`, `minimum_bytes_needed`, `minimum_bytes_needed`, `minimum_bytes_needed`, `minimum_bytes_needed`, `minimum_bytes_needed`, `minimum_bytes_needed`, `read_from`, `read_from`, `read_from`, `read_from`, `read_from`, `read_from`, `read_from`, `read_from`, `speedy_convert_slice_endianness`, `speedy_convert_slice_endianness`, `speedy_flip_endianness`, `speedy_flip_endianness`, `speedy_is_primitive`, `speedy_is_primitive`, `speedy_is_primitive`, `speedy_is_primitive`, `speedy_slice_as_bytes`, `speedy_slice_as_bytes`, `speedy_slice_from_bytes`, `speedy_slice_from_bytes`, `write_to`, `write_to`, `write_to`, `write_to`, `write_to`, `write_to`, `write_to`, `write_to`
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Capabilities>>
 abstract class Capabilities implements RustOpaqueInterface {
@@ -198,6 +199,8 @@ abstract class ScreenshareConfig implements RustOpaqueInterface {
       required int bitrate,
       required int framerate,
       int? height});
+
+  Future<VideoCapabilities> videoCapabilities();
 }
 
 @freezed
@@ -378,4 +381,247 @@ class Statistics {
           uploadBandwidth == other.uploadBandwidth &&
           downloadBandwidth == other.downloadBandwidth &&
           loss == other.loss;
+}
+
+class VideoCapabilities {
+  final VideoCapabilityAvailability send;
+  final VideoCapabilityAvailability receive;
+  final List<VideoSourceCapability> sendSources;
+  final List<VideoMediaFormat> receiveFormats;
+
+  const VideoCapabilities({
+    required this.send,
+    required this.receive,
+    required this.sendSources,
+    required this.receiveFormats,
+  });
+
+  @override
+  int get hashCode =>
+      send.hashCode ^
+      receive.hashCode ^
+      sendSources.hashCode ^
+      receiveFormats.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is VideoCapabilities &&
+          runtimeType == other.runtimeType &&
+          send == other.send &&
+          receive == other.receive &&
+          sendSources == other.sendSources &&
+          receiveFormats == other.receiveFormats;
+}
+
+@freezed
+sealed class VideoCapabilityAvailability with _$VideoCapabilityAvailability {
+  const VideoCapabilityAvailability._();
+
+  const factory VideoCapabilityAvailability.available() =
+      VideoCapabilityAvailability_Available;
+  const factory VideoCapabilityAvailability.unavailable(
+    VideoUnavailable field0,
+  ) = VideoCapabilityAvailability_Unavailable;
+}
+
+enum VideoCodec {
+  h264,
+  hevc,
+  av1,
+  ;
+}
+
+class VideoLifecycleEvent {
+  final VideoSessionIdentity identity;
+  final VideoRole role;
+  final VideoSource source;
+  final VideoPhase phase;
+  final VideoTerminalReason? terminalReason;
+
+  const VideoLifecycleEvent({
+    required this.identity,
+    required this.role,
+    required this.source,
+    required this.phase,
+    this.terminalReason,
+  });
+
+  @override
+  int get hashCode =>
+      identity.hashCode ^
+      role.hashCode ^
+      source.hashCode ^
+      phase.hashCode ^
+      terminalReason.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is VideoLifecycleEvent &&
+          runtimeType == other.runtimeType &&
+          identity == other.identity &&
+          role == other.role &&
+          source == other.source &&
+          phase == other.phase &&
+          terminalReason == other.terminalReason;
+}
+
+@freezed
+sealed class VideoMediaFormat with _$VideoMediaFormat {
+  const VideoMediaFormat._();
+
+  const factory VideoMediaFormat.mpegTs(
+    VideoCodec field0,
+  ) = VideoMediaFormat_MpegTs;
+}
+
+enum VideoPhase {
+  offering,
+  waitingReady,
+  starting,
+  active,
+  stopping,
+  terminal,
+  ;
+}
+
+enum VideoRole {
+  sender,
+  receiver,
+  ;
+}
+
+class VideoSessionId {
+  final U8Array16 field0;
+
+  const VideoSessionId({
+    required this.field0,
+  });
+
+  @override
+  int get hashCode => field0.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is VideoSessionId &&
+          runtimeType == other.runtimeType &&
+          field0 == other.field0;
+}
+
+class VideoSessionIdentity {
+  final String peerId;
+  final VideoSessionId sessionId;
+
+  const VideoSessionIdentity({
+    required this.peerId,
+    required this.sessionId,
+  });
+
+  @override
+  int get hashCode => peerId.hashCode ^ sessionId.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is VideoSessionIdentity &&
+          runtimeType == other.runtimeType &&
+          peerId == other.peerId &&
+          sessionId == other.sessionId;
+}
+
+enum VideoSource {
+  display,
+  ;
+}
+
+class VideoSourceCapability {
+  final VideoSource source;
+  final List<VideoMediaFormat> formats;
+
+  const VideoSourceCapability({
+    required this.source,
+    required this.formats,
+  });
+
+  @override
+  int get hashCode => source.hashCode ^ formats.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is VideoSourceCapability &&
+          runtimeType == other.runtimeType &&
+          source == other.source &&
+          formats == other.formats;
+}
+
+class VideoSourceRequest {
+  final VideoSource source;
+
+  const VideoSourceRequest({
+    required this.source,
+  });
+
+  @override
+  int get hashCode => source.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is VideoSourceRequest &&
+          runtimeType == other.runtimeType &&
+          source == other.source;
+}
+
+@freezed
+sealed class VideoStartOutcome with _$VideoStartOutcome {
+  const VideoStartOutcome._();
+
+  const factory VideoStartOutcome.requested(
+    VideoSessionIdentity field0,
+  ) = VideoStartOutcome_Requested;
+  const factory VideoStartOutcome.unavailable(
+    VideoUnavailable field0,
+  ) = VideoStartOutcome_Unavailable;
+  const factory VideoStartOutcome.noSession() = VideoStartOutcome_NoSession;
+  const factory VideoStartOutcome.alreadyActive() =
+      VideoStartOutcome_AlreadyActive;
+  const factory VideoStartOutcome.failed(
+    VideoTerminalReason field0,
+  ) = VideoStartOutcome_Failed;
+}
+
+enum VideoStopOutcome {
+  stopped,
+  notFound,
+  ;
+}
+
+enum VideoTerminalReason {
+  stopped,
+  rejected,
+  failed,
+  transportEnded,
+  teardown,
+  ;
+}
+
+@freezed
+sealed class VideoUnavailable with _$VideoUnavailable {
+  const VideoUnavailable._();
+
+  const factory VideoUnavailable.platformUnsupported() =
+      VideoUnavailable_PlatformUnsupported;
+  const factory VideoUnavailable.runtimeUnavailable() =
+      VideoUnavailable_RuntimeUnavailable;
+  const factory VideoUnavailable.sourceUnavailable(
+    VideoSource field0,
+  ) = VideoUnavailable_SourceUnavailable;
+  const factory VideoUnavailable.formatUnavailable(
+    VideoMediaFormat field0,
+  ) = VideoUnavailable_FormatUnavailable;
+  const factory VideoUnavailable.configurationUnavailable() =
+      VideoUnavailable_ConfigurationUnavailable;
 }

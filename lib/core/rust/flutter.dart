@@ -27,8 +27,8 @@ abstract class FlutterCallbacks implements RustOpaqueInterface {
           required FutureOr<void> Function(Statistics) statistics,
           required FutureOr<void> Function(ChatMessage) messageReceived,
           required FutureOr<void> Function(ManagerState) managerActive,
-          required FutureOr<void> Function((FrontendNotify, bool))
-              screenshareStarted}) =>
+          required FutureOr<void> Function(VideoLifecycleEvent)
+              videoLifecycle}) =>
       RustLib.instance.api.crateFlutterFlutterCallbacksNew(
           acceptCall: acceptCall,
           getContact: getContact,
@@ -38,7 +38,7 @@ abstract class FlutterCallbacks implements RustOpaqueInterface {
           statistics: statistics,
           messageReceived: messageReceived,
           managerActive: managerActive,
-          screenshareStarted: screenshareStarted);
+          videoLifecycle: videoLifecycle);
 }
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<PreparedIdentitySwitch>>
@@ -94,6 +94,9 @@ abstract class Telepathy implements RustOpaqueInterface {
   Future<PreparedIdentitySwitch> prepareIdentitySwitch(
       {required List<int> targetKey, required List<Contact> targetContacts});
 
+  Future<VideoStartOutcome> requestVideoSource(
+      {required Contact contact, required VideoSourceRequest request});
+
   /// Restarts the session manager
   Future<void> restartManager();
 
@@ -141,11 +144,14 @@ abstract class Telepathy implements RustOpaqueInterface {
 
   Future<void> startManager();
 
-  Future<void> startScreenshare({required Contact contact});
-
   /// Tries to start a session for a contact
   Future<void> startSession({required Contact contact});
 
   /// Stops a specific session (called when a contact is deleted)
   Future<void> stopSession({required Contact contact});
+
+  Future<VideoStopOutcome> stopVideoSource(
+      {required VideoSessionIdentity identity});
+
+  Future<VideoCapabilities> videoCapabilities();
 }
