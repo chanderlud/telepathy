@@ -8,6 +8,7 @@
 * System-test CLI: `rust/telepathy-cli`
 * Flutter: `lib/`
 * Docs: `docs/`
+* Documented solutions: `docs/solutions/` stores searchable architecture and troubleshooting learnings with YAML metadata; `docs/CONCEPTS.md` defines shared project vocabulary. Both are relevant when implementing or debugging in documented areas.
 * System tests: `system-tests/`
 * Generated, never read/edit: `lib/core/rust/*`, `frb_generated.rs`
 
