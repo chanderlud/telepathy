@@ -2277,10 +2277,7 @@ where
                                         RoomTaskOutcome::PeerLocal => {}
                                         RoomTaskOutcome::Terminal(error) => {
                                             terminal_error = Some(error);
-                                            outcome = RoomControllerOutcome::Notify {
-                                                message: CALL_END_GENERIC
-                                                    .to_string(),
-                                            };
+                                            outcome = RoomControllerOutcome::generic_terminal();
                                             break;
                                         }
                                     }
@@ -2434,10 +2431,7 @@ where
                                             RoomTaskOutcome::PeerLocal => {}
                                             RoomTaskOutcome::Terminal(error) => {
                                                 terminal_error = Some(error);
-                                                outcome = RoomControllerOutcome::Notify {
-                                                    message: CALL_END_GENERIC
-                                                        .to_string(),
-                                                };
+                                                outcome = RoomControllerOutcome::generic_terminal();
                                                 break;
                                             }
                                         }
@@ -2467,9 +2461,7 @@ where
                         }
                         None => {
                             warn!(event = "room_controller_channel_closed_unexpectedly");
-                            outcome = RoomControllerOutcome::Notify {
-                                message: CALL_END_GENERIC.to_string(),
-                            };
+                            outcome = RoomControllerOutcome::generic_terminal();
                             break;
                         }
                     }
@@ -2504,9 +2496,7 @@ where
                             }
                             RoomTaskOutcome::Terminal(error) => {
                                 terminal_error = Some(error);
-                                outcome = RoomControllerOutcome::Notify {
-                                    message: CALL_END_GENERIC.to_string(),
-                                };
+                                outcome = RoomControllerOutcome::generic_terminal();
                                 break;
                             }
                         }
@@ -2524,9 +2514,7 @@ where
                         }
                         Err(_) => warn!(event = "room_input_join_failed_unexpectedly"),
                     }
-                    outcome = RoomControllerOutcome::Notify {
-                        message: CALL_END_GENERIC.to_string(),
-                    };
+                    outcome = RoomControllerOutcome::generic_terminal();
                     break;
                 }
             }
@@ -2616,6 +2604,12 @@ pub(crate) enum RoomControllerOutcome {
 }
 
 impl RoomControllerOutcome {
+    fn generic_terminal() -> Self {
+        Self::Notify {
+            message: CALL_END_GENERIC.to_string(),
+        }
+    }
+
     pub(crate) fn into_message(self) -> Option<String> {
         match self {
             RoomControllerOutcome::Silent => None,

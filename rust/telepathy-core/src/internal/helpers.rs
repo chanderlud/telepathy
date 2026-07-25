@@ -730,22 +730,21 @@ where
         }
         stop_io.cancel();
         let mut terminal_error = terminal_error;
-        if let Some(mut input_handle) = input_handle {
-            match join_room_task_bounded(&mut input_handle, "room_input", "teardown").await {
-                RoomTaskOutcome::PeerLocal => {}
-                RoomTaskOutcome::Terminal(error) => {
-                    record_room_terminal_error(&mut terminal_error, error);
-                }
-            }
+        if let Some(error) =
+            join_room_io_tasks_bounded(input_handle, "room_input", "teardown").await
+        {
+            record_room_terminal_error(&mut terminal_error, error);
         }
-        for connection in connections.into_values() {
-            let mut handle = connection.handle;
-            match join_room_task_bounded(&mut handle, "room_output", "teardown").await {
-                RoomTaskOutcome::PeerLocal => {}
-                RoomTaskOutcome::Terminal(error) => {
-                    record_room_terminal_error(&mut terminal_error, error);
-                }
-            }
+        if let Some(error) = join_room_io_tasks_bounded(
+            connections
+                .into_values()
+                .map(|connection| connection.handle),
+            "room_output",
+            "teardown",
+        )
+        .await
+        {
+            record_room_terminal_error(&mut terminal_error, error);
         }
         debug!(event = "room_processing_teardown_done");
         // Clear `room_state` only if it's still the currently installed generation.
@@ -893,6 +892,22 @@ fn record_room_terminal_error(slot: &mut Option<Error>, error: Error) {
     if slot.is_none() {
         *slot = Some(error);
     }
+}
+
+async fn join_room_io_tasks_bounded(
+    handles: impl IntoIterator<Item = JoinHandle<Result<()>>>,
+    task_kind: &'static str,
+    event_kind: &'static str,
+) -> Option<Error> {
+    let mut terminal_error = None;
+    for mut handle in handles {
+        if let RoomTaskOutcome::Terminal(error) =
+            join_room_task_bounded(&mut handle, task_kind, event_kind).await
+        {
+            record_room_terminal_error(&mut terminal_error, error);
+        }
+    }
+    terminal_error
 }
 
 fn abort_room_task<T>(handle: &JoinHandle<T>) {
