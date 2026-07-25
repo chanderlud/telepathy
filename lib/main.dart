@@ -260,7 +260,7 @@ Future<void> main(List<String> args) async {
       statistics: statisticsController.setStatistics,
       messageReceived: chatStateController.messageReceived,
       managerActive: stateController.setSessionManager,
-      screenshareStarted: stateController.screenshareStarted);
+      videoLifecycle: stateController.handleVideoLifecycle);
 
   final telepathy = Telepathy(
       host: host,

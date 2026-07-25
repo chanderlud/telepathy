@@ -37,8 +37,9 @@ class StateController extends ChangeNotifier {
   final Map<String, SessionStatus> sessions = {};
 
   ManagerState _sessionManagerState = ManagerState.stopped;
-  FrontendNotify? _stopSendingScreenshare;
-  FrontendNotify? _stopReceivingScreenshare;
+  VideoSessionIdentity? _sendingScreenshareIdentity;
+  VideoSessionIdentity? _receivingScreenshareIdentity;
+  VideoSessionIdentity? _stoppedSendingScreenshareIdentity;
   bool isSendingScreenshare = false;
   bool isReceivingScreenshare = false;
 
@@ -345,45 +346,63 @@ class StateController extends ChangeNotifier {
     });
   }
 
-  void screenshareStarted((FrontendNotify stop, bool sending) record) {
-    if (record.$2) {
-      DebugConsole.log('Sending screenshare started');
-      _stopSendingScreenshare = record.$1;
-      isSendingScreenshare = true;
+  void handleVideoLifecycle(VideoLifecycleEvent event) {
+    if (event.source != VideoSource.display) return;
 
-      // this catches the sending screenshare being closed by the receiver
-      Future.microtask(() async {
-        await record.$1.notified();
-        // if the screen share is still sending, stop the screenshare
-        if (isSendingScreenshare) {
-          stopScreenshare(true, true);
-        }
-      });
-    } else {
-      DebugConsole.log('Receiving screenshare started');
-      _stopReceivingScreenshare = record.$1;
-      isReceivingScreenshare = true;
+    if (event.phase == VideoPhase.active) {
+      if (!isCallActive) return;
+      if (event.role == VideoRole.sender) {
+        if (event.identity == _stoppedSendingScreenshareIdentity) return;
+        _sendingScreenshareIdentity = event.identity;
+        isSendingScreenshare = true;
+      } else {
+        _receivingScreenshareIdentity = event.identity;
+        isReceivingScreenshare = true;
+      }
+      notifyListeners();
+      return;
     }
 
+    if (event.phase != VideoPhase.terminal) return;
+
+    var handled = false;
+    if (event.role == VideoRole.sender) {
+      if (event.identity == _sendingScreenshareIdentity) {
+        _sendingScreenshareIdentity = null;
+        isSendingScreenshare = false;
+        handled = true;
+      }
+      if (event.identity == _stoppedSendingScreenshareIdentity) {
+        _stoppedSendingScreenshareIdentity = null;
+        handled = true;
+      }
+    } else if (event.identity == _receivingScreenshareIdentity) {
+      _receivingScreenshareIdentity = null;
+      isReceivingScreenshare = false;
+      handled = true;
+    }
+
+    if (!handled) return;
     notifyListeners();
   }
 
-  void stopScreenshare(bool sending, bool notify) {
-    DebugConsole.log('Stopping screenshare sending: $sending');
+  VideoSessionIdentity? stopSendingScreenshare() {
+    final identity = _sendingScreenshareIdentity;
+    if (identity == null) return null;
 
-    if (sending) {
-      _stopSendingScreenshare?.notify();
-      _stopSendingScreenshare = null;
-      isSendingScreenshare = false;
-    } else {
-      _stopReceivingScreenshare?.notify();
-      _stopReceivingScreenshare = null;
-      isReceivingScreenshare = false;
-    }
+    _sendingScreenshareIdentity = null;
+    _stoppedSendingScreenshareIdentity = identity;
+    isSendingScreenshare = false;
+    notifyListeners();
+    return identity;
+  }
 
-    if (notify) {
-      notifyListeners();
-    }
+  void clearScreenshares() {
+    _sendingScreenshareIdentity = null;
+    _receivingScreenshareIdentity = null;
+    _stoppedSendingScreenshareIdentity = null;
+    isSendingScreenshare = false;
+    isReceivingScreenshare = false;
   }
 
   /// A group of actions run when the call ends.
@@ -393,8 +412,7 @@ class StateController extends ChangeNotifier {
     _activeRoom = null;
     _callTimer.stop();
     _callTimer.reset();
-    stopScreenshare(true, false);
-    stopScreenshare(false, false);
+    clearScreenshares();
 
     if (_startRequestPending) {
       // Keep the target, attempt, and operation until the original start future
