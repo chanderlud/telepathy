@@ -83,11 +83,13 @@ impl Telepathy {
         }
     }
 
-    pub async fn start_manager(&mut self) -> Result<(), DartError> {
-        self.handle
-            .start_manager_and_wait()
-            .await
-            .map_err(DartError::from)
+    /// Non-blocking: spawns the manager task and returns. The Dart side observes
+    /// the eventual `Active` transition via the `managerActive` callback. The
+    /// non-blocking contract is validated by the CLI system test
+    /// `test_start_manager_ack_precedes_active_event`; the `()` return type
+    /// prevents silent reintroduction of blocking semantics.
+    pub async fn start_manager(&mut self) {
+        self.handle.start_manager().await;
     }
 
     /// Tries to start a session for a contact

@@ -365,3 +365,48 @@ async fn prepared_token_commits_origin_runtime_after_origin_revision_applies() {
     }
     handle.shutdown().await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn try_start_session_waits_for_runtime_then_dials() {
+    init_test_tracing();
+    let gate = ManagerStartingGate::new();
+    let mut handle = mock_handle(
+        &runtime_config(0),
+        ManagerLifecycle::StartingGate(gate.clone()),
+    );
+    let identity = SecretKey::generate();
+
+    match handle.set_identity(&identity.to_bytes()).await {
+        Ok(()) => {}
+        Err(error) => panic!("failed to install test identity: {error}"),
+    }
+    handle.start_manager().await;
+    gate.wait_started().await;
+
+    let contact = match Contact::new(
+        "gated peer".to_string(),
+        SecretKey::generate().public().to_string(),
+    ) {
+        Ok(contact) => contact,
+        Err(error) => panic!("contact construction failed: {}", error.message),
+    };
+
+    let mut start_session = Box::pin(handle.try_start_session(&contact));
+    let session_is_pending = poll_fn(|context| match start_session.as_mut().poll(context) {
+        Poll::Pending => Poll::Ready(true),
+        Poll::Ready(_) => Poll::Ready(false),
+    })
+    .await;
+    assert!(
+        session_is_pending,
+        "try_start_session completed before manager setup was released"
+    );
+
+    gate.release();
+    match timeout(Duration::from_secs(5), start_session).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => panic!("try_start_session failed after gate release: {error}"),
+        Err(_) => panic!("try_start_session did not complete after gate release"),
+    }
+    handle.shutdown().await;
+}

@@ -185,10 +185,10 @@ async fn handle_command(
             hub.contacts.write().await.remove(&id);
             CommandOutcome::AckOk
         }
-        Command::StartManager => match telepathy.start_manager().await {
-            Ok(()) => CommandOutcome::AckOk,
-            Err(err) => CommandOutcome::AckErr(err),
-        },
+        Command::StartManager => {
+            telepathy.start_manager().await;
+            CommandOutcome::AckOk
+        }
         Command::RestartManager => match telepathy.restart_manager().await {
             Ok(()) => CommandOutcome::AckOk,
             Err(err) => CommandOutcome::AckErr(err),

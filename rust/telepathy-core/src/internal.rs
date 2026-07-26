@@ -50,6 +50,11 @@ use wasmtimer::tokio::timeout;
 
 type Result<T> = std::result::Result<T, Error>;
 
+/// Upper bound on how long `try_start_session` will wait for the manager to
+/// apply the runtime before returning `RuntimeNotReady`. Bounds the damage of
+/// a stalled or panicked manager task that never calls `mark_runtime_applied`.
+const START_SESSION_RUNTIME_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Upper bound on how long `TelepathyHandle::end_call` will wait for the call
 /// slot to be released before returning. Long enough to absorb controller
 /// teardown latency under load, short enough that a controller stuck on a
@@ -219,6 +224,10 @@ where
         }
     }
 
+    /// Spawns the manager (if needed) and blocks until the runtime revision is
+    /// applied. Production bindings call the non-blocking `start_manager` and
+    /// observe `ManagerState::Active` via callbacks; this is retained for
+    /// callers that need the synchronous readiness guarantee.
     pub async fn start_manager_and_wait(&mut self) -> Result<()> {
         self.start_manager().await;
         let revision = self.inner.core_state.desired_runtime()?.revision;
@@ -237,22 +246,43 @@ where
 
     pub async fn try_start_session(&self, contact: &Contact) -> Result<()> {
         let _session_gate = self.inner.core_state.identity_session_gate.lock().await;
-        self.ensure_runtime_applied()?;
-        self.start_session_internal(contact).await;
-        Ok(())
-    }
-
-    async fn start_session_internal(&self, contact: &Contact) {
-        debug!("start_session called for {}", contact.peer_id);
         self.inner
             .core_state
             .add_desired_contact_infallible(contact.clone());
+        self.await_runtime_applied(&CancellationToken::new())
+            .await?;
+        self.dial_session(contact).await;
+        Ok(())
+    }
 
+    async fn dial_session(&self, contact: &Contact) {
         if let Some(ref sender) = self.inner.start_session
             && sender.send(contact.peer_id).await.is_err()
         {
             error!("start_session channel is closed");
         }
+    }
+
+    /// Waits for the manager to apply the current runtime revision, bounded by
+    /// `START_SESSION_RUNTIME_TIMEOUT`. Returns `RuntimeNotReady` immediately
+    /// if no manager has been started, or on timeout. Selects against
+    /// `operation` so a cancelled start_call / join_room does not block on a
+    /// stalled manager.
+    async fn await_runtime_applied(&self, operation: &CancellationToken) -> Result<()> {
+        if self.inner.start_session.is_none() {
+            return Err(ErrorKind::RuntimeNotReady.into());
+        }
+        let revision = self.inner.core_state.desired_runtime()?.revision;
+        let wait = async {
+            tokio::select! {
+                biased;
+                _ = operation.cancelled() => Ok(()),
+                result = self.inner.core_state.wait_for_runtime_applied(revision) => result,
+            }
+        };
+        timeout(START_SESSION_RUNTIME_TIMEOUT, wait)
+            .await
+            .unwrap_or_else(|_| Err(ErrorKind::RuntimeNotReady.into()))
     }
 
     /// Attempts to start a call through an existing session.
@@ -274,7 +304,7 @@ where
         if operation.is_cancelled() {
             return Ok(());
         }
-        self.ensure_runtime_applied()?;
+        self.await_runtime_applied(operation).await?;
 
         // Acquire the slot and capture its ownership snapshot atomically: both
         // happen under a single mutex hold inside `try_acquire_or_match_with_owner`,
@@ -438,7 +468,7 @@ where
         if operation.is_cancelled() {
             return Ok(());
         }
-        self.ensure_runtime_applied()?;
+        self.await_runtime_applied(operation).await?;
 
         if !self
             .inner
@@ -700,13 +730,6 @@ where
         ))
     }
 
-    fn ensure_runtime_applied(&self) -> Result<()> {
-        if !self.inner.core_state.is_runtime_applied()? {
-            return Err(ErrorKind::RuntimeNotReady.into());
-        }
-        Ok(())
-    }
-
     /// shuts down the entire rust backend
     pub async fn shutdown(&self) {
         // stops sessions & manager
@@ -768,7 +791,8 @@ where
 
     /// Blocks while an audio test is running
     pub async fn audio_test(&self) -> Result<()> {
-        self.ensure_runtime_applied()?;
+        self.await_runtime_applied(&CancellationToken::new())
+            .await?;
         if !self
             .inner
             .core_state
