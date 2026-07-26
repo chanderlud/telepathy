@@ -2196,28 +2196,28 @@ fn wire__crate__overlay__Overlay_new_impl(
             };
             let mut deserializer =
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
-            let api__enabled = <bool>::sse_decode(&mut deserializer);
-            let api__x = <i32>::sse_decode(&mut deserializer);
-            let api__y = <i32>::sse_decode(&mut deserializer);
-            let api__width = <i32>::sse_decode(&mut deserializer);
-            let api__height = <i32>::sse_decode(&mut deserializer);
-            let api__font_height = <i32>::sse_decode(&mut deserializer);
-            let api__background_color = <u32>::sse_decode(&mut deserializer);
-            let api__font_color = <u32>::sse_decode(&mut deserializer);
+            let api_enabled = <bool>::sse_decode(&mut deserializer);
+            let api_x = <i32>::sse_decode(&mut deserializer);
+            let api_y = <i32>::sse_decode(&mut deserializer);
+            let api_width = <i32>::sse_decode(&mut deserializer);
+            let api_height = <i32>::sse_decode(&mut deserializer);
+            let api_font_height = <i32>::sse_decode(&mut deserializer);
+            let api_background_color = <u32>::sse_decode(&mut deserializer);
+            let api_font_color = <u32>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, ()>(
                     (move || async move {
                         let output_ok = Result::<_, ()>::Ok(
                             crate::overlay::Overlay::new(
-                                api__enabled,
-                                api__x,
-                                api__y,
-                                api__width,
-                                api__height,
-                                api__font_height,
-                                api__background_color,
-                                api__font_color,
+                                api_enabled,
+                                api_x,
+                                api_y,
+                                api_width,
+                                api_height,
+                                api_font_height,
+                                api_background_color,
+                                api_font_color,
                             )
                             .await,
                         )?;
@@ -5030,7 +5030,7 @@ fn wire__crate__flutter__Telepathy_start_manager_impl(
             >>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
-                transform_result_sse::<_, crate::types::DartError>(
+                transform_result_sse::<_, ()>(
                     (move || async move {
                         let mut api_that_guard = None;
                         let decode_indices_ =
@@ -5049,8 +5049,9 @@ fn wire__crate__flutter__Telepathy_start_manager_impl(
                             }
                         }
                         let mut api_that_guard = api_that_guard.unwrap();
-                        let output_ok =
-                            crate::flutter::Telepathy::start_manager(&mut *api_that_guard).await?;
+                        let output_ok = Result::<_, ()>::Ok({
+                            crate::flutter::Telepathy::start_manager(&mut *api_that_guard).await;
+                        })?;
                         Ok(output_ok)
                     })()
                     .await,

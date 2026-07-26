@@ -3360,7 +3360,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
-        decodeErrorData: sse_decode_dart_error,
+        decodeErrorData: null,
       ),
       constMeta: kCrateFlutterTelepathyStartManagerConstMeta,
       argValues: [that],
@@ -7236,7 +7236,7 @@ class OverlayImpl extends RustOpaque implements Overlay {
       RustLib.instance.api.crateOverlayOverlayMoveOverlay(
           that: this, x: x, y: y, width: width, height: height);
 
-  /// non-windows platforms don't have an overlay
+  /// access the screen resolution for overlay positioning in the front end
   (int, int) screenResolution() =>
       RustLib.instance.api.crateOverlayOverlayScreenResolution(
         that: this,
@@ -7626,6 +7626,8 @@ class TelepathyImpl extends RustOpaque implements Telepathy {
       RustLib.instance.api.crateFlutterTelepathyStartCall(
           that: this, contact: contact, operation: operation);
 
+  /// Non-blocking: spawns the manager task and returns. The Dart side observes
+  /// the eventual `Active` transition via the `managerActive` callback.
   Future<void> startManager() =>
       RustLib.instance.api.crateFlutterTelepathyStartManager(
         that: this,
