@@ -152,21 +152,25 @@ pub(crate) async fn run_sender<S>(
     _: &mut S,
     _: &CancellationToken,
     _: RecordingConfig,
+    startup: tokio::sync::oneshot::Sender<crate::internal::video::VideoWorkerStartup>,
 ) -> Result<()>
 where
     S: futures_util::Sink<Bytes> + Unpin,
     S::Error: Display,
 {
+    let _ = startup.send(crate::internal::video::VideoWorkerStartup::Failed);
     Err(ErrorKind::PlatformUnavailable.into())
 }
 pub(crate) async fn run_receiver<S, E>(
     _: &mut S,
     _: &CancellationToken,
     _: VideoMediaDescriptor,
+    startup: tokio::sync::oneshot::Sender<crate::internal::video::VideoWorkerStartup>,
 ) -> Result<()>
 where
     S: futures_util::Stream<Item = std::result::Result<bytes::BytesMut, E>> + Unpin,
 {
+    let _ = startup.send(crate::internal::video::VideoWorkerStartup::Failed);
     Err(ErrorKind::PlatformUnavailable.into())
 }
 

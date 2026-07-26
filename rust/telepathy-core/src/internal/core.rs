@@ -68,6 +68,29 @@ use wasmtimer::tokio::{Interval, interval, sleep_until, timeout};
 const MANAGER_RETRY_BASE_MS: u64 = 500;
 const MANAGER_RETRY_MAX_MS: u64 = 30_000;
 
+fn update_video_negotiation_deadline(
+    deadline: &mut Option<Instant>,
+    message: &ProtocolMessage,
+    timeout: Duration,
+) {
+    if matches!(
+        message,
+        ProtocolMessage::Video {
+            control: crate::internal::video::VideoControl::Offer(_),
+        }
+    ) {
+        *deadline = Some(Instant::now() + timeout);
+    }
+}
+
+async fn wait_for_video_negotiation_deadline(deadline: Option<Instant>) {
+    if let Some(deadline) = deadline {
+        sleep_until(deadline).await;
+    } else {
+        std::future::pending().await
+    }
+}
+
 pub struct TelepathyCore<C, S, H, I, O>
 where
     S: CoreStatisticsCallback + Send + Sync + 'static,
@@ -1690,6 +1713,7 @@ where
     ) -> Result<CallControllerOutcome> {
         let identity = self.peer_id().await;
         let mut stream_errors_open = true;
+        let mut video_negotiation_deadline = None;
 
         CONNECTED.store(true, Relaxed);
         // Race Connected delivery against the two authoritative teardown signals
@@ -1737,7 +1761,8 @@ where
                     write_message(o.control_send, &ProtocolMessage::goodbye()).await?;
                     break Ok(CallControllerOutcome::Silent);
                 },
-                _ = sleep_until(Instant::now() + crate::internal::video::VIDEO_NEGOTIATION_TIMEOUT) => {
+                _ = wait_for_video_negotiation_deadline(video_negotiation_deadline) => {
+                    video_negotiation_deadline = None;
                     if let Some((attempt, reason)) = o.state.video_slot.expire_waiting_ready().await {
                         self.finish_video_attempt(o.state, peer, attempt, reason).await;
                     }
@@ -1777,6 +1802,11 @@ where
                 // sends messages to the callee
                 result = o.message_receiver.recv() => {
                     if let Some(message) = result {
+                        update_video_negotiation_deadline(
+                            &mut video_negotiation_deadline,
+                            &message,
+                            crate::internal::video::VIDEO_NEGOTIATION_TIMEOUT,
+                        );
                         write_message(o.control_send, &message).await?;
                     } else {
                         // if the channel closes, the call has ended
@@ -2894,9 +2924,50 @@ fn ringtone_is_within_limit(ringtone: &Option<Vec<u8>>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_RINGTONE_LENGTH, ProtocolMessage, ringtone_is_within_limit};
+    use super::{
+        MAX_RINGTONE_LENGTH, ProtocolMessage, ringtone_is_within_limit,
+        update_video_negotiation_deadline, wait_for_video_negotiation_deadline,
+    };
     use crate::internal::messages::AudioHeader;
     use speedy::{Readable, Writable};
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn video_negotiation_deadline_survives_non_progress_messages() {
+        let mut deadline = Some(tokio::time::Instant::now() + Duration::from_millis(50));
+        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        let traffic = tokio::spawn(async move {
+            for _ in 0..20 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+                sender.send(ProtocolMessage::KeepAlive).unwrap();
+            }
+        });
+        let mut messages = 0;
+
+        loop {
+            tokio::select! {
+                _ = wait_for_video_negotiation_deadline(deadline) => break,
+                Some(message) = receiver.recv() => {
+                    update_video_negotiation_deadline(
+                        &mut deadline,
+                        &message,
+                        Duration::from_millis(50),
+                    );
+                    messages += 1;
+                },
+            }
+        }
+
+        assert!(
+            messages > 1,
+            "non-progress traffic must arrive before expiry"
+        );
+        assert!(
+            messages < 20,
+            "non-progress traffic must not postpone expiry"
+        );
+        traffic.abort();
+    }
 
     #[test]
     fn oversized_hello_ringtone_is_rejected_before_prompting() {

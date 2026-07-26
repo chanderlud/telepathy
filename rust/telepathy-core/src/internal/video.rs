@@ -44,6 +44,12 @@ impl LocalVideoGeneration {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VideoWorkerStartup {
+    Ready,
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VideoAttempt {
     session_id: VideoSessionId,
     generation: LocalVideoGeneration,
@@ -144,11 +150,44 @@ impl VideoLaunch {
 }
 
 #[derive(Debug)]
+pub struct VideoDisplacement {
+    reservation: VideoReservation,
+}
+
+impl VideoDisplacement {
+    fn new(reservation: VideoReservation) -> Self {
+        reservation.cancellation.cancel();
+        Self { reservation }
+    }
+
+    pub async fn cancel_and_join(
+        mut self,
+        peer_id: String,
+        reason: VideoTerminalReason,
+    ) -> crate::types::VideoLifecycleEvent {
+        if let Some(worker) = self.reservation.worker.take() {
+            let _ = worker.await;
+        }
+        crate::types::VideoLifecycleEvent {
+            identity: crate::types::VideoSessionIdentity {
+                peer_id,
+                session_id: self.reservation.attempt.session_id(),
+            },
+            role: self.reservation.role,
+            source: self.reservation.descriptor.source(),
+            phase: VideoPhase::Terminal,
+            terminal_reason: Some(reason),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub enum VideoSlotEffect {
     Ignored,
     Send(VideoControl),
     Launch(VideoLaunch),
     SendAndLaunch(VideoControl, VideoLaunch),
+    DisplaceAndSendAndLaunch(VideoDisplacement, VideoControl, VideoLaunch),
     Terminal(VideoAttempt, VideoTerminalReason),
 }
 
@@ -156,7 +195,9 @@ impl VideoSlotEffect {
     #[cfg(test)]
     fn launch(self) -> Option<VideoLaunch> {
         match self {
-            Self::Launch(launch) | Self::SendAndLaunch(_, launch) => Some(launch),
+            Self::Launch(launch)
+            | Self::SendAndLaunch(_, launch)
+            | Self::DisplaceAndSendAndLaunch(_, _, launch) => Some(launch),
             Self::Ignored | Self::Send(_) | Self::Terminal(_, _) => None,
         }
     }
@@ -185,7 +226,10 @@ impl VideoSlot {
         let mut state = self.state.lock().await;
         match control {
             VideoControl::Offer(offer) => match state.reservation.as_ref() {
-                None => Self::accept_remote_offer(&mut state, offer),
+                None => {
+                    let (control, launch) = Self::accept_remote_offer(&mut state, offer);
+                    VideoSlotEffect::SendAndLaunch(control, launch)
+                }
                 Some(current)
                     if current.attempt.accepts(control) && current.role == VideoRole::Receiver =>
                 {
@@ -196,8 +240,14 @@ impl VideoSlot {
                         && current.phase == VideoPhase::WaitingReady
                         && !local_offer_wins =>
                 {
-                    current.cancellation.cancel();
-                    Self::accept_remote_offer(&mut state, offer)
+                    let displaced = VideoDisplacement::new(
+                        state
+                            .reservation
+                            .take()
+                            .expect("matching reservation checked"),
+                    );
+                    let (control, launch) = Self::accept_remote_offer(&mut state, offer);
+                    VideoSlotEffect::DisplaceAndSendAndLaunch(displaced, control, launch)
                 }
                 Some(_) => VideoSlotEffect::Send(VideoControl::reject(
                     control.session_id(),
@@ -231,6 +281,22 @@ impl VideoSlot {
         }
     }
 
+    pub async fn receive_offer(
+        &self,
+        offer: VideoOffer,
+        local_offer_wins: bool,
+        receive_formats: &[VideoMediaFormat],
+    ) -> VideoSlotEffect {
+        if !receive_formats.contains(&offer.descriptor.format) {
+            return VideoSlotEffect::Send(VideoControl::reject(
+                offer.session_id,
+                VideoRejectReason::UnsupportedCodec,
+            ));
+        }
+        self.receive(VideoControl::Offer(offer), local_offer_wins)
+            .await
+    }
+
     pub async fn install(&self, launch: &VideoLaunch, worker: JoinHandle<()>) -> bool {
         let mut state = self.state.lock().await;
         let matches = state.reservation.as_ref().is_some_and(|reservation| {
@@ -243,7 +309,6 @@ impl VideoSlot {
                 .reservation
                 .as_mut()
                 .expect("matching reservation checked above");
-            reservation.phase = VideoPhase::Active;
             reservation.worker = Some(worker);
             return true;
         }
@@ -251,6 +316,36 @@ impl VideoSlot {
         launch.cancellation.cancel();
         let _ = worker.await;
         false
+    }
+
+    pub async fn complete_startup(
+        &self,
+        launch: &VideoLaunch,
+        startup: VideoWorkerStartup,
+        peer_id: String,
+    ) -> Option<crate::types::VideoLifecycleEvent> {
+        if startup != VideoWorkerStartup::Ready {
+            return None;
+        }
+        let mut state = self.state.lock().await;
+        let reservation = state.reservation.as_mut()?;
+        if reservation.attempt != launch.attempt
+            || reservation.phase != VideoPhase::Starting
+            || reservation.worker.is_none()
+        {
+            return None;
+        }
+        reservation.phase = VideoPhase::Active;
+        Some(crate::types::VideoLifecycleEvent {
+            identity: crate::types::VideoSessionIdentity {
+                peer_id,
+                session_id: reservation.attempt.session_id(),
+            },
+            role: reservation.role,
+            source: reservation.descriptor.source(),
+            phase: VideoPhase::Active,
+            terminal_reason: None,
+        })
     }
 
     pub(crate) async fn cancel_current_and_join(
@@ -361,7 +456,10 @@ impl VideoSlot {
         Some((current.attempt, VideoTerminalReason::Failed))
     }
 
-    fn accept_remote_offer(state: &mut VideoSlotState, offer: VideoOffer) -> VideoSlotEffect {
+    fn accept_remote_offer(
+        state: &mut VideoSlotState,
+        offer: VideoOffer,
+    ) -> (VideoControl, VideoLaunch) {
         state.generation = state.generation.next();
         let session_id = VideoControl::Offer(offer).session_id();
         state.reservation = Some(VideoReservation {
@@ -373,7 +471,7 @@ impl VideoSlot {
             worker: None,
         });
         let launch = Self::launch(state.reservation.as_ref().expect("reservation inserted"));
-        VideoSlotEffect::SendAndLaunch(VideoControl::ready(session_id), launch)
+        (VideoControl::ready(session_id), launch)
     }
 
     fn terminal_if_current(

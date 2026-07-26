@@ -2,13 +2,15 @@ use crate::internal::error::{Error as CoreError, ErrorKind as CoreErrorKind};
 use crate::internal::video::platform;
 use crate::internal::video::{
     VIDEO_MEDIA_MAX_FRAME_LENGTH, VIDEO_NEGOTIATION_TIMEOUT, VIDEO_PREAMBLE_MAX_LENGTH,
-    VideoPreamble, VideoProtocolError, decode_preamble, encode_preamble, validate_media_frame,
+    VideoPreamble, VideoProtocolError, VideoWorkerStartup, decode_preamble, encode_preamble,
+    validate_media_frame,
 };
 use crate::types::RecordingConfig;
 use bytes::BytesMut;
 use iroh::endpoint::{Connection, VarInt};
 use std::io::{Error, ErrorKind, Result};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::sync::oneshot;
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 use tokio_util::sync::CancellationToken;
 
@@ -93,32 +95,45 @@ pub(crate) async fn run_sender(
     preamble: VideoPreamble,
     config: RecordingConfig,
     cancellation: &CancellationToken,
+    startup: oneshot::Sender<VideoWorkerStartup>,
 ) -> std::result::Result<(), CoreError> {
     let mut stream = tokio::select! {
         biased;
-        _ = cancellation.cancelled() => return Ok(()),
+        _ = cancellation.cancelled() => {
+            let _ = startup.send(VideoWorkerStartup::Failed);
+            return Ok(());
+        },
         _ = tokio::time::sleep(VIDEO_NEGOTIATION_TIMEOUT) => {
+            let _ = startup.send(VideoWorkerStartup::Failed);
             return Err(CoreErrorKind::TransportSend.into());
         },
-        stream = connection.open_uni() => stream.map_err(|_| CoreErrorKind::TransportSend)?,
+        stream = connection.open_uni() => match stream {
+            Ok(stream) => stream,
+            Err(_) => {
+                let _ = startup.send(VideoWorkerStartup::Failed);
+                return Err(CoreErrorKind::TransportSend.into());
+            }
+        },
     };
     let preamble_result = tokio::select! {
         biased;
         _ = cancellation.cancelled() => {
             let _ = stream.reset(VarInt::from_u32(1));
+            let _ = startup.send(VideoWorkerStartup::Failed);
             return Ok(());
         },
         result = write_preamble(&mut stream, preamble) => result,
     };
     if let Err(error) = preamble_result {
         let _ = stream.reset(VarInt::from_u32(1));
+        let _ = startup.send(VideoWorkerStartup::Failed);
         return Err(error.into());
     }
     let codec = LengthDelimitedCodec::builder()
         .max_frame_length(VIDEO_MEDIA_MAX_FRAME_LENGTH)
         .new_codec();
     let mut framed = FramedWrite::new(stream, codec);
-    let result = platform::run_sender(&mut framed, cancellation, config).await;
+    let result = platform::run_sender(&mut framed, cancellation, config, startup).await;
     let mut stream = framed.into_inner();
     if result.is_ok() || cancellation.is_cancelled() {
         let _ = stream.finish();
@@ -132,31 +147,45 @@ pub(crate) async fn run_receiver(
     connection: &Connection,
     expected: VideoPreamble,
     cancellation: &CancellationToken,
+    startup: oneshot::Sender<VideoWorkerStartup>,
 ) -> std::result::Result<(), CoreError> {
     let mut stream = tokio::select! {
         biased;
-        _ = cancellation.cancelled() => return Ok(()),
+        _ = cancellation.cancelled() => {
+            let _ = startup.send(VideoWorkerStartup::Failed);
+            return Ok(());
+        },
         _ = tokio::time::sleep(VIDEO_NEGOTIATION_TIMEOUT) => {
+            let _ = startup.send(VideoWorkerStartup::Failed);
             return Err(CoreErrorKind::TransportRecv.into());
         },
-        stream = connection.accept_uni() => stream.map_err(|_| CoreErrorKind::TransportRecv)?,
+        stream = connection.accept_uni() => match stream {
+            Ok(stream) => stream,
+            Err(_) => {
+                let _ = startup.send(VideoWorkerStartup::Failed);
+                return Err(CoreErrorKind::TransportRecv.into());
+            }
+        },
     };
     let preamble = match read_preamble_until_cancelled(&mut stream, cancellation).await {
         Ok(preamble) => preamble,
         Err(error) => {
             let _ = stream.stop(VarInt::from_u32(1));
+            let _ = startup.send(VideoWorkerStartup::Failed);
             return Err(error.into());
         }
     };
     if preamble != expected {
         let _ = stream.stop(VarInt::from_u32(1));
+        let _ = startup.send(VideoWorkerStartup::Failed);
         return Err(CoreErrorKind::TransportRecv.into());
     }
     let codec = LengthDelimitedCodec::builder()
         .max_frame_length(VIDEO_MEDIA_MAX_FRAME_LENGTH)
         .new_codec();
     let mut framed = FramedRead::new(stream, codec);
-    let result = platform::run_receiver(&mut framed, cancellation, expected.descriptor).await;
+    let result =
+        platform::run_receiver(&mut framed, cancellation, expected.descriptor, startup).await;
     let mut stream = framed.into_inner();
     if result.is_err() && !cancellation.is_cancelled() {
         let _ = stream.stop(VarInt::from_u32(1));
@@ -167,10 +196,12 @@ pub(crate) async fn run_receiver(
 #[cfg(test)]
 mod tests {
     use super::{
-        read_media_frame, read_preamble, read_preamble_until_cancelled, write_media_frame,
-        write_preamble,
+        read_media_frame, read_preamble, read_preamble_until_cancelled, run_receiver,
+        write_media_frame, write_preamble,
     };
-    use crate::internal::video::{VideoCodec, VideoMediaDescriptor, VideoPreamble, VideoSessionId};
+    use crate::internal::video::{
+        VideoCodec, VideoMediaDescriptor, VideoPreamble, VideoSessionId, VideoWorkerStartup,
+    };
     use iroh::endpoint::Connection;
     use tokio::io::duplex;
     use tokio_util::sync::CancellationToken;
@@ -317,6 +348,36 @@ mod tests {
             expected.as_slice()
         );
         sender.await.expect("sender joins");
+        client.close().await;
+        server.close().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn receiver_reports_failed_startup_when_preamble_does_not_match() {
+        let (client, server, outbound, inbound) = iroh_pair().await;
+        let expected = VideoPreamble::new(
+            VideoSessionId::new(),
+            VideoMediaDescriptor::display(VideoCodec::H264, 1280, 720),
+        );
+        let mismatched = VideoPreamble::new(
+            VideoSessionId::new(),
+            VideoMediaDescriptor::display(VideoCodec::H264, 1280, 720),
+        );
+        let cancellation = CancellationToken::new();
+        let (startup_sender, startup_receiver) = tokio::sync::oneshot::channel();
+        let receiver = tokio::spawn(async move {
+            run_receiver(&inbound, expected, &cancellation, startup_sender).await
+        });
+        let mut stream = outbound.open_uni().await.expect("uni stream opens");
+        write_preamble(&mut stream, mismatched)
+            .await
+            .expect("mismatched preamble writes");
+
+        assert_eq!(
+            startup_receiver.await.expect("startup result is reported"),
+            VideoWorkerStartup::Failed
+        );
+        assert!(receiver.await.expect("receiver worker joins").is_err());
         client.close().await;
         server.close().await;
     }

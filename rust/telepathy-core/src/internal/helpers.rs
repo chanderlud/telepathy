@@ -7,7 +7,9 @@ use crate::internal::error::{AudioStreamError, Error, ErrorKind};
 #[cfg(not(target_family = "wasm"))]
 use crate::internal::messages::ProtocolMessage;
 use crate::internal::messages::{AudioHeader, RoomMessage};
-use crate::internal::state::{CallSlot, EarlyCallState, SessionState, StatisticsCollectorState};
+use crate::internal::state::{
+    CallSlot, CallSlotState, EarlyCallState, SessionState, StatisticsCollectorState,
+};
 #[cfg(target_os = "ios")]
 use crate::internal::utils::deactivate_audio_session;
 use crate::internal::utils::{JoinHandle, KanalSink, KanalSource, spawn_task};
@@ -252,6 +254,16 @@ where
             return crate::types::VideoStartOutcome::NoSession;
         };
 
+        if !self.core_state.call_slot.snapshot().is_ok_and(|slot| {
+            slot.state == CallSlotState::ActiveDirect && slot.direct_peer == Some(peer)
+        }) {
+            warn!(
+                "video started for a peer without an active direct call: {}",
+                peer
+            );
+            return crate::types::VideoStartOutcome::NoSession;
+        }
+
         let descriptor = match self
             .core_state
             .screenshare_config
@@ -303,7 +315,21 @@ where
             return Ok(());
         };
         let local_offer_wins = self.peer_id().await.to_string() < peer.to_string();
-        match state.video_slot.receive(control, local_offer_wins).await {
+        let effect = match control {
+            crate::internal::video::VideoControl::Offer(offer) => {
+                let capabilities = self
+                    .core_state
+                    .screenshare_config
+                    .video_capabilities()
+                    .await;
+                state
+                    .video_slot
+                    .receive_offer(offer, local_offer_wins, &capabilities.receive_formats)
+                    .await
+            }
+            _ => state.video_slot.receive(control, local_offer_wins).await,
+        };
+        match effect {
             crate::internal::video::VideoSlotEffect::Send(control) => {
                 let _ = state
                     .message_sender
@@ -315,6 +341,25 @@ where
                     .await;
             }
             crate::internal::video::VideoSlotEffect::SendAndLaunch(control, launch) => {
+                self.launch_video_worker(&state, peer, connection, launch)
+                    .await;
+                let _ = state
+                    .message_sender
+                    .send(ProtocolMessage::Video { control })
+                    .await;
+            }
+            crate::internal::video::VideoSlotEffect::DisplaceAndSendAndLaunch(
+                displaced,
+                control,
+                launch,
+            ) => {
+                let event = displaced
+                    .cancel_and_join(
+                        peer.to_string(),
+                        crate::types::VideoTerminalReason::Rejected,
+                    )
+                    .await;
+                self.observe_video_lifecycle(event);
                 self.launch_video_worker(&state, peer, connection, launch)
                     .await;
                 let _ = state
@@ -351,6 +396,7 @@ where
         let slot = Arc::clone(&state.video_slot);
         let connection = connection.clone();
         let worker_launch = launch.clone();
+        let (startup_sender, startup_receiver) = tokio::sync::oneshot::channel();
         let worker = match launch.role() {
             crate::internal::video::VideoRole::Sender => {
                 let Ok((config, descriptor)) = self
@@ -388,6 +434,7 @@ where
                         preamble,
                         config,
                         worker_launch.cancellation(),
+                        startup_sender,
                     )
                     .await;
                     if !worker_launch.cancellation().is_cancelled() {
@@ -409,6 +456,7 @@ where
                     &connection,
                     preamble,
                     worker_launch.cancellation(),
+                    startup_sender,
                 )
                 .await;
                 if !worker_launch.cancellation().is_cancelled() {
@@ -421,13 +469,20 @@ where
                 }
             }),
         };
-        if state.video_slot.install(&launch, worker).await
-            && let Some(event) = state
-                .video_slot
-                .current_event(peer.to_string(), crate::types::VideoPhase::Active, None)
-                .await
-        {
-            self.observe_video_lifecycle(event);
+        if state.video_slot.install(&launch, worker).await {
+            let callbacks = Arc::clone(&self.callbacks);
+            let slot = Arc::clone(&state.video_slot);
+            spawn_task(async move {
+                let Ok(startup) = startup_receiver.await else {
+                    return;
+                };
+                if let Some(event) = slot
+                    .complete_startup(&launch, startup, peer.to_string())
+                    .await
+                {
+                    callbacks.video_lifecycle(event).await;
+                }
+            });
         }
     }
 

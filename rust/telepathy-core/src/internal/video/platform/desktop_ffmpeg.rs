@@ -561,6 +561,7 @@ pub(crate) async fn run_sender<S>(
     transport: &mut S,
     stop: &CancellationToken,
     config: RecordingConfig,
+    startup: tokio::sync::oneshot::Sender<crate::internal::video::VideoWorkerStartup>,
 ) -> Result<()>
 where
     S: futures_util::Sink<Bytes> + Unpin,
@@ -577,10 +578,23 @@ where
         command.creation_flags(CREATION_FLAGS);
     }
 
-    let mut child = command.spawn()?;
-
-    let Some(mut stdout) = child.stdout.take() else {
-        return Err(ErrorKind::PlatformUnavailable.into());
+    let startup_result: Result<_> = (|| {
+        let mut child = command.spawn()?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| crate::internal::error::Error::from(ErrorKind::PlatformUnavailable))?;
+        Ok((child, stdout))
+    })();
+    let (mut child, mut stdout) = match startup_result {
+        Ok(state) => {
+            let _ = startup.send(crate::internal::video::VideoWorkerStartup::Ready);
+            state
+        }
+        Err(error) => {
+            let _ = startup.send(crate::internal::video::VideoWorkerStartup::Failed);
+            return Err(error);
+        }
     };
 
     let future = super::forward_capture_chunks(&mut stdout, transport);
@@ -604,55 +618,62 @@ pub(crate) async fn run_receiver<S, E>(
     transport: &mut S,
     stop: &CancellationToken,
     descriptor: VideoMediaDescriptor,
+    startup: tokio::sync::oneshot::Sender<crate::internal::video::VideoWorkerStartup>,
 ) -> Result<()>
 where
     S: futures_util::Stream<Item = std::result::Result<bytes::BytesMut, E>> + Unpin,
 {
     info!("Starting screen playback");
-    let encoder = match descriptor.codec() {
-        VideoCodec::H264 => Encoder::Libx264,
-        VideoCodec::Hevc => Encoder::Libx265,
-        VideoCodec::Av1 => Encoder::Av1Nvenc,
-    };
-    let decoders = encoder.decoders();
-
-    // TODO intelligently chose a decoder instead of using the first one
-    let config = PlaybackConfig {
-        decoder: decoders
-            .into_iter()
-            .next()
-            .ok_or(ErrorKind::NoEncoderAvailable)?,
-    };
-
-    let mut command = config.make_command();
-
-    command
-        .args([
-            "-x",
-            &descriptor.dimensions().0.to_string(),
-            "-y",
-            &descriptor.dimensions().1.to_string(),
-            "-flags",
-            "low_delay",
-            "-analyzeduration",
-            "1",
-            // TODO -framedrop
-            "-window_title",
-            "Telepathy Screenshare",
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-
-    #[cfg(target_os = "windows")]
-    {
+    let startup_result: Result<_> = (|| {
+        let encoder = match descriptor.codec() {
+            VideoCodec::H264 => Encoder::Libx264,
+            VideoCodec::Hevc => Encoder::Libx265,
+            VideoCodec::Av1 => Encoder::Av1Nvenc,
+        };
+        // TODO intelligently chose a decoder instead of using the first one
+        let config = PlaybackConfig {
+            decoder: encoder
+                .decoders()
+                .into_iter()
+                .next()
+                .ok_or(ErrorKind::NoEncoderAvailable)?,
+        };
+        let mut command = config.make_command();
+        command
+            .args([
+                "-x",
+                &descriptor.dimensions().0.to_string(),
+                "-y",
+                &descriptor.dimensions().1.to_string(),
+                "-flags",
+                "low_delay",
+                "-analyzeduration",
+                "1",
+                // TODO -framedrop
+                "-window_title",
+                "Telepathy Screenshare",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        #[cfg(target_os = "windows")]
         command.creation_flags(CREATION_FLAGS);
-    }
-
-    let mut child = command.spawn()?;
-
-    let Some(mut stdin) = child.stdin.take() else {
-        return Err(ErrorKind::PlatformUnavailable.into());
+        let mut child = command.spawn()?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| crate::internal::error::Error::from(ErrorKind::PlatformUnavailable))?;
+        Ok((child, stdin))
+    })();
+    let (mut child, mut stdin) = match startup_result {
+        Ok(state) => {
+            let _ = startup.send(crate::internal::video::VideoWorkerStartup::Ready);
+            state
+        }
+        Err(error) => {
+            let _ = startup.send(crate::internal::video::VideoWorkerStartup::Failed);
+            return Err(error);
+        }
     };
 
     let future = super::forward_playback_frames(transport, &mut stdin);

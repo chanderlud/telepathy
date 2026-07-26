@@ -7,9 +7,12 @@ use telepathy_core::internal::video::transport::{
     read_media_frame, read_preamble, write_media_frame, write_preamble,
 };
 use telepathy_core::internal::video::{
-    VideoControl, VideoMediaDescriptor, VideoPreamble, VideoSlot, VideoSlotEffect,
+    VideoControl, VideoMediaDescriptor, VideoPreamble, VideoRejectReason, VideoSlot,
+    VideoSlotEffect, VideoWorkerStartup,
 };
-use telepathy_core::types::{VideoCodec, VideoPhase, VideoRole, VideoTerminalReason};
+use telepathy_core::types::{
+    VideoCodec, VideoMediaFormat, VideoPhase, VideoRole, VideoTerminalReason,
+};
 use tokio::time::timeout;
 
 pub(super) struct IrohPair {
@@ -53,6 +56,60 @@ impl IrohPair {
         self.client.close().await;
         self.server.close().await;
     }
+}
+
+#[tokio::test]
+async fn incoming_offer_admission_rejects_incompatible_format_before_reserving_receiver() {
+    let slot = VideoSlot::default();
+    let incompatible_session_id = VideoSlot::default()
+        .start_local(VideoMediaDescriptor::display(VideoCodec::Hevc, 1280, 720))
+        .await
+        .expect("test session starts")
+        .session_id();
+    let incompatible = VideoControl::offer(
+        incompatible_session_id,
+        VideoMediaDescriptor::display(VideoCodec::Hevc, 1280, 720),
+    );
+    let VideoControl::Offer(incompatible) = incompatible else {
+        unreachable!();
+    };
+
+    assert!(matches!(
+        slot.receive_offer(
+            incompatible,
+            true,
+            &[VideoMediaFormat::MpegTs(VideoCodec::H264)]
+        )
+        .await,
+        VideoSlotEffect::Send(VideoControl::Reject {
+            reason: VideoRejectReason::UnsupportedCodec,
+            ..
+        })
+    ));
+    assert!(!slot.is_reserved().await);
+
+    let compatible_session_id = VideoSlot::default()
+        .start_local(VideoMediaDescriptor::display(VideoCodec::H264, 1280, 720))
+        .await
+        .expect("test session starts")
+        .session_id();
+    let compatible = VideoControl::offer(
+        compatible_session_id,
+        VideoMediaDescriptor::display(VideoCodec::H264, 1280, 720),
+    );
+    let VideoControl::Offer(compatible) = compatible else {
+        unreachable!();
+    };
+    assert!(matches!(
+        slot.receive_offer(
+            compatible,
+            true,
+            &[VideoMediaFormat::MpegTs(VideoCodec::H264)]
+        )
+        .await,
+        VideoSlotEffect::SendAndLaunch(_, _)
+    ));
+    assert!(slot.is_reserved().await);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -126,9 +183,29 @@ async fn two_real_peers_negotiate_activate_stop_and_restart_from_both_sides() {
         });
         assert!(sender_slot.install(&sender_launch, sender_worker).await);
         assert!(
+            sender_slot
+                .complete_startup(
+                    &sender_launch,
+                    VideoWorkerStartup::Ready,
+                    "sender".to_string()
+                )
+                .await
+                .is_some()
+        );
+        assert!(
             receiver_slot
                 .install(&receiver_launch, receiver_worker)
                 .await
+        );
+        assert!(
+            receiver_slot
+                .complete_startup(
+                    &receiver_launch,
+                    VideoWorkerStartup::Ready,
+                    "receiver".to_string()
+                )
+                .await
+                .is_some()
         );
         assert_eq!(
             sender_slot
@@ -167,6 +244,38 @@ async fn two_real_peers_negotiate_activate_stop_and_restart_from_both_sides() {
     pair.close().await;
 }
 
+#[tokio::test]
+async fn failed_worker_startup_never_activates_and_still_joins_on_terminal_cleanup() {
+    let slot = VideoSlot::default();
+    let descriptor = VideoMediaDescriptor::display(VideoCodec::H264, 1280, 720);
+    let offer = slot
+        .start_local(descriptor)
+        .await
+        .expect("sender reserves a generation");
+    let launch = match slot
+        .receive(VideoControl::ready(offer.session_id()), true)
+        .await
+    {
+        VideoSlotEffect::Launch(launch) => launch,
+        other => panic!("ready must launch sender, got {other:?}"),
+    };
+    let cancellation = launch.cancellation().clone();
+    let worker = tokio::spawn(async move { cancellation.cancelled().await });
+
+    assert!(slot.install(&launch, worker).await);
+    assert!(
+        slot.complete_startup(&launch, VideoWorkerStartup::Failed, "sender".to_string())
+            .await
+            .is_none()
+    );
+    assert_eq!(
+        slot.cancel_and_join(launch.attempt(), VideoTerminalReason::Failed)
+            .await,
+        Some(VideoTerminalReason::Failed)
+    );
+    assert!(!slot.is_reserved().await);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn crossed_starts_and_stale_completions_preserve_replacement_generation_under_stress() {
     let descriptor = VideoMediaDescriptor::display(VideoCodec::H264, 1280, 720);
@@ -182,13 +291,28 @@ async fn crossed_starts_and_stale_completions_preserve_replacement_generation_un
             .await
             .expect("remote identity is generated")
             .session_id();
-        let replacement = match slot
+        let (displaced, replacement) = match slot
             .receive(VideoControl::offer(remote_id, descriptor), false)
             .await
         {
-            VideoSlotEffect::SendAndLaunch(_, launch) => launch,
+            VideoSlotEffect::DisplaceAndSendAndLaunch(displaced, _, launch) => (displaced, launch),
             other => panic!("canonical remote offer must replace local, got {other:?}"),
         };
+        let terminal = displaced
+            .cancel_and_join("peer".to_string(), VideoTerminalReason::Rejected)
+            .await;
+        assert_eq!(terminal.identity.session_id, local.session_id());
+        assert_eq!(terminal.role, VideoRole::Sender);
+        assert_eq!(terminal.phase, VideoPhase::Terminal);
+        assert_eq!(
+            terminal.terminal_reason,
+            Some(VideoTerminalReason::Rejected)
+        );
+        assert!(matches!(
+            slot.receive(VideoControl::ready(local.session_id()), false)
+                .await,
+            VideoSlotEffect::Ignored
+        ));
         assert!(matches!(
             slot.receive(
                 VideoControl::stop(local.session_id(), VideoTerminalReason::Failed),
@@ -200,6 +324,12 @@ async fn crossed_starts_and_stale_completions_preserve_replacement_generation_un
         let worker_cancel = replacement.cancellation().clone();
         let worker = tokio::spawn(async move { worker_cancel.cancelled().await });
         assert!(slot.install(&replacement, worker).await);
+        let active = slot
+            .complete_startup(&replacement, VideoWorkerStartup::Ready, "peer".to_string())
+            .await
+            .expect("winning receiver starts");
+        assert_eq!(active.identity.session_id, remote_id);
+        assert_eq!(active.role, VideoRole::Receiver);
         timeout(
             Duration::from_secs(2),
             slot.cancel_and_join(replacement.attempt(), VideoTerminalReason::Stopped),

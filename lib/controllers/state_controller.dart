@@ -40,6 +40,8 @@ class StateController extends ChangeNotifier {
   VideoSessionIdentity? _sendingScreenshareIdentity;
   VideoSessionIdentity? _receivingScreenshareIdentity;
   VideoSessionIdentity? _stoppedSendingScreenshareIdentity;
+  final Set<VideoSessionIdentity> _terminalSendingScreenshareIdentities = {};
+  final Set<VideoSessionIdentity> _terminalReceivingScreenshareIdentities = {};
   bool isSendingScreenshare = false;
   bool isReceivingScreenshare = false;
 
@@ -353,9 +355,17 @@ class StateController extends ChangeNotifier {
       if (!isCallActive) return;
       if (event.role == VideoRole.sender) {
         if (event.identity == _stoppedSendingScreenshareIdentity) return;
+        if (_terminalSendingScreenshareIdentities.contains(event.identity)) {
+          return;
+        }
+        _terminalSendingScreenshareIdentities.remove(event.identity);
         _sendingScreenshareIdentity = event.identity;
         isSendingScreenshare = true;
       } else {
+        if (_terminalReceivingScreenshareIdentities.contains(event.identity)) {
+          return;
+        }
+        _terminalReceivingScreenshareIdentities.remove(event.identity);
         _receivingScreenshareIdentity = event.identity;
         isReceivingScreenshare = true;
       }
@@ -367,6 +377,7 @@ class StateController extends ChangeNotifier {
 
     var handled = false;
     if (event.role == VideoRole.sender) {
+      _terminalSendingScreenshareIdentities.add(event.identity);
       if (event.identity == _sendingScreenshareIdentity) {
         _sendingScreenshareIdentity = null;
         isSendingScreenshare = false;
@@ -376,10 +387,13 @@ class StateController extends ChangeNotifier {
         _stoppedSendingScreenshareIdentity = null;
         handled = true;
       }
-    } else if (event.identity == _receivingScreenshareIdentity) {
-      _receivingScreenshareIdentity = null;
-      isReceivingScreenshare = false;
-      handled = true;
+    } else {
+      _terminalReceivingScreenshareIdentities.add(event.identity);
+      if (event.identity == _receivingScreenshareIdentity) {
+        _receivingScreenshareIdentity = null;
+        isReceivingScreenshare = false;
+        handled = true;
+      }
     }
 
     if (!handled) return;
@@ -401,6 +415,8 @@ class StateController extends ChangeNotifier {
     _sendingScreenshareIdentity = null;
     _receivingScreenshareIdentity = null;
     _stoppedSendingScreenshareIdentity = null;
+    _terminalSendingScreenshareIdentities.clear();
+    _terminalReceivingScreenshareIdentities.clear();
     isSendingScreenshare = false;
     isReceivingScreenshare = false;
   }

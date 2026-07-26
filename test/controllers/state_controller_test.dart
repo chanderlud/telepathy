@@ -457,30 +457,71 @@ void main() {
       expect(controller.isSendingScreenshare, isFalse);
     });
 
-    test('terminal before active and stale active events leave state unchanged',
-        () {
+    test('sender terminal before active does not resurrect the sender', () {
       final controller = StateController();
       _activateVideoCall(controller);
       final identity = _videoIdentity('peer-a', 3);
 
       controller.handleVideoLifecycle(_videoEvent(
         identity: identity,
-        role: VideoRole.receiver,
+        role: VideoRole.sender,
         phase: VideoPhase.terminal,
       ));
-      expect(controller.isReceivingScreenshare, isFalse);
 
       controller.handleVideoLifecycle(_videoEvent(
         identity: identity,
         role: VideoRole.sender,
         phase: VideoPhase.active,
       ));
-      final stopped = controller.stopSendingScreenshare();
-      expect(stopped, identity);
       expect(controller.isSendingScreenshare, isFalse);
+    });
+
+    test('receiver terminal before active does not resurrect the receiver', () {
+      final controller = StateController();
+      _activateVideoCall(controller);
+      final identity = _videoIdentity('peer-a', 4);
 
       controller.handleVideoLifecycle(_videoEvent(
         identity: identity,
+        role: VideoRole.receiver,
+        phase: VideoPhase.terminal,
+      ));
+      controller.handleVideoLifecycle(_videoEvent(
+        identity: identity,
+        role: VideoRole.receiver,
+        phase: VideoPhase.active,
+      ));
+      expect(controller.isReceivingScreenshare, isFalse);
+    });
+
+    test('a distinct identity can become active after a terminal event', () {
+      final controller = StateController();
+      _activateVideoCall(controller);
+      final terminal = _videoIdentity('peer-a', 5);
+      final active = _videoIdentity('peer-a', 6);
+
+      controller.handleVideoLifecycle(_videoEvent(
+        identity: terminal,
+        role: VideoRole.receiver,
+        phase: VideoPhase.terminal,
+      ));
+      controller.handleVideoLifecycle(_videoEvent(
+        identity: active,
+        role: VideoRole.receiver,
+        phase: VideoPhase.active,
+      ));
+      expect(controller.isReceivingScreenshare, isTrue);
+
+      controller.handleVideoLifecycle(_videoEvent(
+        identity: active,
+        role: VideoRole.sender,
+        phase: VideoPhase.active,
+      ));
+      final stopped = controller.stopSendingScreenshare();
+      expect(stopped, active);
+
+      controller.handleVideoLifecycle(_videoEvent(
+        identity: active,
         role: VideoRole.sender,
         phase: VideoPhase.active,
       ));

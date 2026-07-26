@@ -232,8 +232,7 @@ async fn blocked_capture_stops_when_current_record_select_observes_stop() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn two_peer_screenshare_without_recording_config_leaves_call_and_session_teardown_available()
-{
+async fn idle_session_rejects_video_before_active_call_uses_existing_behavior() {
     init_test_tracing();
     let relay_map = shared_relay_map();
     let codec_config = CodecConfig::new(true, true, 5.0);
@@ -286,6 +285,21 @@ async fn two_peer_screenshare_without_recording_config_leaves_call_and_session_t
     client_a.telepathy.start_session(&contact_b).await;
     client_b.telepathy.start_session(&contact_a).await;
     wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
+
+    for _ in 0..2 {
+        assert_eq!(
+            client_a
+                .telepathy
+                .request_video_source(&contact_b, VideoSource::Display)
+                .await,
+            VideoStartOutcome::NoSession
+        );
+    }
+    assert_eq!(
+        client_a.telepathy.inner.core_state.call_slot.current(),
+        CallSlotState::Idle
+    );
+
     client_a
         .telepathy
         .start_call(&contact_b)
