@@ -566,17 +566,30 @@ class _FakeTelepathy implements Telepathy {
   Future<void> endCall() async {}
 
   @override
-  Future<void> joinRoom({required List<String> memberStrings}) async {}
+  Future<void> joinRoom({
+    required List<String> memberStrings,
+    required StartOperation operation,
+  }) async {}
 
   @override
   Future<(List<AudioDevice>, List<AudioDevice>)> listDevices() async =>
       (<AudioDevice>[], <AudioDevice>[]);
 
   @override
+  StartOperation newStartOperation() => throw UnimplementedError();
+
+  @override
   void pauseStatistics() {}
 
   @override
   Future<void> restartManager() async {}
+
+  @override
+  Future<PreparedIdentitySwitch> prepareIdentitySwitch({
+    required List<int> targetKey,
+    required List<Contact> targetContacts,
+  }) async =>
+      throw UnimplementedError();
 
   @override
   void resumeStatistics() {}
@@ -630,7 +643,10 @@ class _FakeTelepathy implements Telepathy {
   Future<void> shutdown() async {}
 
   @override
-  Future<void> startCall({required Contact contact}) async {}
+  Future<void> startCall({
+    required Contact contact,
+    required StartOperation operation,
+  }) async {}
 
   @override
   Future<void> startManager() async {}

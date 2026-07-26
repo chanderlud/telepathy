@@ -6,13 +6,18 @@ use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::connections::{
     ConstConnection, DynamicConnection, SharedConnections, audio_input, audio_output,
 };
-use crate::internal::error::ErrorKind;
-use crate::internal::helpers::{InputHelper, OutputHelper};
+use crate::internal::error::{
+    AudioStreamError, CALL_END_ALREADY_ACTIVE, CALL_END_GENERIC, CallEndMessage, Error, ErrorKind,
+    peer_busy_message, peer_goodbye_reason_message, peer_no_response_message,
+    peer_not_accepted_message, peer_unexpected_message,
+};
+use crate::internal::helpers::OutputHelper;
+use crate::internal::helpers::{RoomTaskOutcome, join_room_task_bounded};
 use crate::internal::messages::{
-    AudioHeader, ProtocolMessage, RoomMessage, SESSION_STOPPED_REASON, StartScreenshare,
+    AudioHeader, GoodbyeReason, ProtocolMessage, RoomControl, RoomMessage, StartScreenshare,
 };
 use crate::internal::state::{
-    CallSlot, CallSlotAcquireResult, CallSlotSnapshot, CallSlotState, CoreState,
+    CallSlot, CallSlotAcquireResult, CallSlotSnapshot, CallSlotState, CoreState, RuntimeSnapshot,
     StatisticsCollectorState,
 };
 use crate::internal::utils::{JoinHandle, spawn_task};
@@ -20,8 +25,8 @@ use crate::internal::utils::{JoinHandle, spawn_task};
 use crate::internal::utils::{configure_audio_session, deactivate_audio_session};
 use crate::internal::utils::{loopback, read_message, statistics_collector, write_message};
 use crate::internal::{
-    ALPN, EarlyCallState, HELLO_TIMEOUT, KEEP_ALIVE, Result, RoomState, SESSION_MAX_FRAME_LENGTH,
-    SessionState,
+    ALPN, EarlyCallState, HELLO_TIMEOUT, KEEP_ALIVE, MAX_RINGTONE_LENGTH, Result, RoomState,
+    SESSION_MAX_FRAME_LENGTH, SessionState,
 };
 use crate::overlay::CONNECTED;
 use crate::overlay::Overlay;
@@ -34,7 +39,7 @@ use iroh::endpoint::{
     ConnectError, ConnectingError, Connection, ConnectionError, RecvStream, SendStream, VarInt,
 };
 use iroh::{Endpoint, PublicKey};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
@@ -45,8 +50,10 @@ use telepathy_audio::devices::AudioHost;
 use tokio::select;
 #[cfg(target_family = "wasm")]
 use tokio::sync::Mutex;
-use tokio::sync::mpsc::{Receiver, Sender, channel};
-use tokio::sync::{Notify, RwLock};
+use tokio::sync::mpsc::{
+    Receiver, Sender, UnboundedReceiver, UnboundedSender, channel, unbounded_channel,
+};
+use tokio::sync::{Notify, RwLock, oneshot};
 #[cfg(not(target_family = "wasm"))]
 use tokio::time::{Instant, Interval, interval, sleep_until, timeout};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
@@ -81,9 +88,6 @@ where
 
     /// Signals the session manager to start a new session
     pub start_session: Option<Sender<PublicKey>>,
-
-    /// Restarts the session manager when needed
-    pub(crate) restart_manager: Arc<Notify>,
 
     pub(crate) cancel_outbound_connections: Arc<Notify>,
 
@@ -127,7 +131,6 @@ where
             room_state: Default::default(),
             session_states: Default::default(),
             start_session: None,
-            restart_manager: Default::default(),
             cancel_outbound_connections: Default::default(),
             outbound_attempts: Default::default(),
             overlay: overlay.clone(),
@@ -157,37 +160,62 @@ where
         Some(spawn_task(
             async move {
                 let mut retries = 0;
-                // break when stop_manager==true
-                while !manager_clone.core_state.stop_manager.load(Relaxed) {
-                    let last_launch = Instant::now();
-                    // run the session manager to completion
-                    let result = manager_clone.session_manager(&mut receive_session).await;
+                loop {
+                    if manager_clone.core_state.stop_manager.is_cancelled() {
+                        break;
+                    }
 
-                    if let Err(error) = result {
-                        manager_clone
-                            .callbacks
-                            .manager_state(ManagerState::Failed)
-                            .await;
-                        Span::current().record("restart_count", retries);
-                        error!(
-                            event = "session_manager_failed",
-                            retries,
-                            error = %error
-                        );
-                        retries += 1;
-                        let next_launch =
-                            last_launch + Duration::from_millis(manager_retry_delay_ms(retries));
-                        if next_launch > Instant::now() {
-                            // wait for the next launch or restart
-                            select! {
-                                _ = manager_clone.restart_manager.notified() => (),
-                                _ = sleep_until(next_launch) => (),
+                    let last_launch = Instant::now();
+                    let runtime = match manager_clone.core_state.desired_runtime() {
+                        Ok(runtime) => runtime,
+                        Err(error) => {
+                            error!(event = "desired_runtime_read_failed", error = %error);
+                            break;
+                        }
+                    };
+                    let result = manager_clone
+                        .session_manager(&mut receive_session, runtime.clone())
+                        .await;
+
+                    match result {
+                        Ok(ManagerIterationOutcome::Continue) => {
+                            Span::current().record("restart_count", retries);
+                            info!(event = "session_manager_exited");
+                            retries = 0;
+                        }
+                        Ok(ManagerIterationOutcome::Shutdown) => break,
+                        Err(error) => {
+                            if let Err(mark_error) = manager_clone
+                                .core_state
+                                .mark_runtime_setup_failed(runtime.revision)
+                            {
+                                error!(
+                                    event = "runtime_setup_failure_mark_failed",
+                                    error = %mark_error
+                                );
+                            }
+                            manager_clone
+                                .callbacks
+                                .manager_state(ManagerState::Failed)
+                                .await;
+                            Span::current().record("restart_count", retries);
+                            error!(
+                                event = "session_manager_failed",
+                                retries,
+                                error = %error
+                            );
+                            retries += 1;
+                            let next_launch = last_launch
+                                + Duration::from_millis(manager_retry_delay_ms(retries));
+                            if next_launch > Instant::now() {
+                                select! {
+                                    biased;
+                                    _ = manager_clone.core_state.stop_manager.cancelled() => break,
+                                    _ = runtime.cancellation.cancelled() => (),
+                                    _ = sleep_until(next_launch) => (),
+                                }
                             }
                         }
-                    } else {
-                        Span::current().record("restart_count", retries);
-                        info!(event = "session_manager_exited");
-                        retries = 0;
                     }
                 }
             }
@@ -195,38 +223,104 @@ where
         ))
     }
 
-    /// Builds the iroh endpoint, handles session start requests and incoming connections
+    /// Builds the iroh endpoint, handles session start requests and incoming connections.
     #[instrument(
         name = "manager.run",
         skip_all,
         fields(manager.id = %Uuid::new_v4(), restart_count = field::Empty)
     )]
-    async fn session_manager(&self, start: &mut Receiver<PublicKey>) -> Result<()> {
+    async fn session_manager(
+        &self,
+        start: &mut Receiver<PublicKey>,
+        runtime: RuntimeSnapshot,
+    ) -> Result<ManagerIterationOutcome> {
         let setup_started = Instant::now();
-        // build the endpoint & bring online
-        let Some(endpoint) = self.setup_endpoint().await? else {
-            info!(event = "mananger_restart_setup_endpoint");
-            return Ok(());
+        let iteration_cancellation = runtime.cancellation.clone();
+
+        let Some(identity) = runtime.identity.as_ref() else {
+            return Err(ErrorKind::NoIdentityAvailable.into());
+        };
+        let setup_result = self.setup_endpoint(identity, &iteration_cancellation).await;
+
+        let endpoint = match setup_result {
+            Ok(Some(endpoint)) => endpoint,
+            Ok(None) => {
+                self.callbacks.manager_state(ManagerState::Stopped).await;
+                return if self.core_state.stop_manager.is_cancelled() {
+                    Ok(ManagerIterationOutcome::Shutdown)
+                } else {
+                    Ok(ManagerIterationOutcome::Continue)
+                };
+            }
+            Err(error) => return Err(error),
         };
         info!(
             event = "manager_endpoint_setup",
             elapsed_ms = setup_started.elapsed().as_millis() as u64
         );
 
+        *self.core_state.identity.write().await = runtime.identity.clone();
+        self.reset_sessions().await;
+        self.core_state.reset_peer_output_volumes()?;
+
         // handles to threads spawned by the session manager
         let mut handles: Vec<JoinHandle<()>> = Vec::new();
         // preload public identity
         let public_identity = self.peer_id().await;
+        let mut pending_contacts: VecDeque<_> =
+            runtime.contacts.iter().map(Contact::get_peer_id).collect();
+        let mut published = false;
 
-        // the manager is about to start processing events
-        self.core_state.manager_active.notify_waiters();
-
-        loop {
-            select! {
-                // restart the manager
-                _ = self.restart_manager.notified() => {
-                    break;
+        let outcome = loop {
+            if let Some(peer_id) = pending_contacts.pop_front() {
+                if iteration_cancellation.is_cancelled() {
+                    break ManagerIterationOutcome::Continue;
                 }
+                if peer_id != public_identity
+                    && self.session_states.read().await.get(&peer_id).is_none()
+                {
+                    let self_clone = self.clone();
+                    let endpoint_clone = endpoint.clone();
+                    handles.push(spawn_task(async move {
+                        self_clone.open_session(peer_id, endpoint_clone).await;
+                    }));
+                }
+                continue;
+            }
+
+            if !published {
+                if iteration_cancellation.is_cancelled()
+                    || !self.core_state.mark_runtime_applied(runtime.revision)?
+                {
+                    break ManagerIterationOutcome::Continue;
+                }
+                let callbacks = Arc::clone(&self.callbacks);
+                let callback_cancellation = iteration_cancellation.clone();
+                let manager_stop = self.core_state.stop_manager.clone();
+                spawn_task(async move {
+                    select! {
+                        biased;
+                        _ = manager_stop.cancelled() => (),
+                        _ = callback_cancellation.cancelled() => (),
+                        _ = callbacks.manager_state(ManagerState::Active) => (),
+                    }
+                });
+                if iteration_cancellation.is_cancelled() || !self.core_state.is_runtime_applied()? {
+                    break ManagerIterationOutcome::Continue;
+                }
+                self.core_state.manager_active.notify_waiters();
+                published = true;
+                continue;
+            }
+
+            select! {
+                biased;
+                _ = self.core_state.stop_manager.cancelled() => {
+                    break ManagerIterationOutcome::Shutdown;
+                },
+                _ = iteration_cancellation.cancelled() => {
+                    break ManagerIterationOutcome::Continue;
+                },
                 Some(incoming) = endpoint.accept() => {
                     info!(event = "incoming_connection", remote_addr = ?incoming.remote_addr());
 
@@ -285,15 +379,16 @@ where
                 }
                 else => {
                     warn!(event = "edge_case", case = "session_manager_else_branch");
-                    break;
+                    break ManagerIterationOutcome::Continue;
                 },
             }
-        }
+        };
 
         debug!(event = "manager_teardown_start");
         self.callbacks.manager_state(ManagerState::Stopped).await;
         self.cancel_outbound_connections.notify_waiters();
         self.outbound_attempts.write().await.clear();
+        self.reset_sessions().await;
         // reset room state
         if let Some(state) = self.room_state.write().await.take() {
             state.end_call.notify_one();
@@ -307,7 +402,7 @@ where
         // TODO this currently takes 3 seconds when there are outgoing connections, i think we need to decouple the UI disappearing from the shutdown
         endpoint.close().await;
         debug!(event = "endpoint_closed");
-        Ok(())
+        Ok(outcome)
     }
 
     /// Called by the dialer to open a connection and initialize a session
@@ -609,15 +704,31 @@ where
                     let snapshot = call_slot.snapshot()?;
                     if !room_only
                         && !self.is_in_room(&peer).await
-                        && snapshot.state == CallSlotState::ActiveDirect
                         && snapshot.direct_peer == Some(peer)
-                    {
-                        warn!(event = "session_error_while_call_active", ?error);
-                        if call_slot.release_if_match(snapshot)? {
-                            self.callbacks
-                                .call_state(CallState::CallEnded(error.to_string(), false))
-                                .await;
+                        && let Some((message, remote, event)) = match snapshot.state {
+                            CallSlotState::ActiveDirect => Some((
+                                CallEndMessage::from_error(&error),
+                                false,
+                                "session_error_while_call_active",
+                            )),
+                            CallSlotState::PendingOutgoing if error.is_session_critical() => {
+                                Some((
+                                    CallEndMessage::from_text(peer_goodbye_reason_message(
+                                        &contact.nickname,
+                                        GoodbyeReason::SessionStopped,
+                                    )),
+                                    true,
+                                    "session_error_while_call_pending",
+                                ))
+                            }
+                            _ => None,
                         }
+                        && call_slot.release_if_match(snapshot)?
+                    {
+                        warn!(event, ?error);
+                        self.callbacks
+                            .call_state(CallState::CallEnded(message.into_string(), remote))
+                            .await;
                     }
 
                     if room_only || error.is_session_critical() {
@@ -644,15 +755,8 @@ where
         is_in_room: bool,
     ) -> Result<HandshakeDispatch> {
         if is_in_room {
-            self.room_handshake(
-                io.send,
-                io.recv,
-                io.connection,
-                &io.state.stop_session,
-                call_state,
-                io.state.id,
-            )
-            .await?;
+            self.room_handshake(io.send, io.recv, io.connection, call_state, io.state)
+                .await?;
             Ok(HandshakeDispatch::Completed)
         } else if let Some(_slot) = pending_slot.take() {
             match self
@@ -753,27 +857,28 @@ where
                     HandshakeDispatch::SessionStopped => Ok(HelloResponse::SessionStopped),
                 }
             }
-            ProtocolMessage::Goodbye { reason: Some(m) } => Ok(HelloResponse::EndedWith(format!(
-                "{} did not accept the call because of {m}",
-                args.contact.nickname
-            ))),
-            // In a room, peer-level reject/busy is non-fatal: other peers may still join, so keep waiting.
-            ProtocolMessage::Reject | ProtocolMessage::Busy if is_in_room => {
-                info!(event = "room_peer_rejected_or_busy_ignored");
-                Ok(HelloResponse::Continue)
+            ProtocolMessage::Goodbye { reason } if is_in_room => {
+                info!(event = "room_peer_goodbye_during_negotiation", ?reason);
+                Ok(HelloResponse::EndedSilently)
             }
-            ProtocolMessage::Goodbye { .. } | ProtocolMessage::Reject => {
+            ProtocolMessage::Goodbye { reason } => Ok(HelloResponse::EndedWith(
+                peer_goodbye_reason_message(&args.contact.nickname, reason),
+            )),
+            // Peer-level rejection ends only this room negotiation; other peers remain connected.
+            ProtocolMessage::Reject | ProtocolMessage::Busy if is_in_room => {
+                info!(event = "room_peer_rejected_or_busy_during_negotiation");
+                Ok(HelloResponse::EndedSilently)
+            }
+            ProtocolMessage::Reject => {
                 info!(event = "call_not_accepted");
-                Ok(HelloResponse::EndedWith(format!(
-                    "{} did not accept the call",
-                    args.contact.nickname
+                Ok(HelloResponse::EndedWith(peer_not_accepted_message(
+                    &args.contact.nickname,
                 )))
             }
             ProtocolMessage::Busy => {
                 info!(event = "call_peer_busy");
-                Ok(HelloResponse::EndedWith(format!(
-                    "{} is busy",
-                    args.contact.nickname
+                Ok(HelloResponse::EndedWith(peer_busy_message(
+                    &args.contact.nickname,
                 )))
             }
             ProtocolMessage::KeepAlive => Ok(HelloResponse::Continue),
@@ -820,11 +925,14 @@ where
                     Ok(HelloResponse::Continue)
                 }
             }
+            message if is_in_room => {
+                warn!(event = "room_hello_ack_flow_unexpected_message", ?message);
+                Ok(HelloResponse::EndedSilently)
+            }
             message => {
                 warn!(event = "hello_ack_flow_unexpected_message", ?message);
-                Ok(HelloResponse::EndedWith(format!(
-                    "Received an unexpected message from {}",
-                    args.contact.nickname
+                Ok(HelloResponse::EndedWith(peer_unexpected_message(
+                    &args.contact.nickname,
                 )))
             }
         }
@@ -992,13 +1100,12 @@ where
                     }
                     Err(error) => {
                         error!(event = "setup_call_failed", ?error);
-                        write_message(
-                            io.send,
-                            &ProtocolMessage::Goodbye {
-                                reason: Some("audio device error".to_string()),
-                            },
-                        )
-                        .await?;
+                        let message = CallEndMessage::from_error(&error);
+                        self.callbacks
+                            .call_state(CallState::CallEnded(message.into_string(), false))
+                            .await;
+                        // Release local ownership before the best-effort peer notification.
+                        // A closed control stream must not leave the direct-call slot pending.
                         release_pending(
                             &self.session_states,
                             peer,
@@ -1006,6 +1113,13 @@ where
                             &mut pending_slot,
                         )
                         .await?;
+                        _ = write_message(
+                            io.send,
+                            &ProtocolMessage::Goodbye {
+                                reason: GoodbyeReason::AudioDeviceError,
+                            },
+                        )
+                        .await;
                         Err(error)
                     }
                 }
@@ -1054,31 +1168,28 @@ where
                 return Ok(OutgoingNegotiationOutcome::CallEnded);
             }
         } else {
-            // Per the per-session ownership invariant, a direct-call pending slot may
-            // only be acquired (or matched) by a session that is still the current map
-            // entry for `peer`. A session that has been replaced by a collision
-            // replacement (or drained by `reset_sessions`) must not be allowed to
-            // re-pend a slot — its replacement session will take over via the
-            // `session_rearmed_pending_outgoing` path in `session_outer`.
-            if !is_session_still_current(&self.session_states, peer, io.state.id).await {
-                info!(event = "outgoing_call_skipped_stale_session", peer.id = %peer);
-                self.callbacks
-                    .call_state(CallState::CallEnded(
-                        "A call is already active".to_string(),
-                        true,
-                    ))
-                    .await;
-                return Ok(OutgoingNegotiationOutcome::CallEnded);
-            }
-            match PendingDirectCallSlot::try_acquire_outgoing(call_slot, peer)? {
-                Some(slot) => pending_slot = Some(slot),
-                None => {
-                    warn!(event = "call_slot_busy_outgoing", peer.id = %peer);
+            match self
+                .acquire_outgoing_call_slot(call_slot, peer, io.state.id, &io.state.stop_session)
+                .await?
+            {
+                OutgoingSlotDecision::SessionStopped => {
+                    info!(event = "outgoing_call_cancelled_before_acquire");
+                    return Ok(OutgoingNegotiationOutcome::SessionStopped);
+                }
+                OutgoingSlotDecision::StaleSession => {
+                    info!(event = "outgoing_call_skipped_stale_session", peer.id = %peer);
+                    let message = CallEndMessage::from_text(CALL_END_ALREADY_ACTIVE);
                     self.callbacks
-                        .call_state(CallState::CallEnded(
-                            "A call is already active".to_string(),
-                            true,
-                        ))
+                        .call_state(CallState::CallEnded(message.into_string(), true))
+                        .await;
+                    return Ok(OutgoingNegotiationOutcome::CallEnded);
+                }
+                OutgoingSlotDecision::Acquired(slot) => pending_slot = Some(slot),
+                OutgoingSlotDecision::Busy => {
+                    warn!(event = "call_slot_busy_outgoing", peer.id = %peer);
+                    let message = CallEndMessage::from_text(CALL_END_ALREADY_ACTIVE);
+                    self.callbacks
+                        .call_state(CallState::CallEnded(message.into_string(), true))
                         .await;
                     return Ok(OutgoingNegotiationOutcome::CallEnded);
                 }
@@ -1089,8 +1200,9 @@ where
         let mut call_state = match self.setup_call(peer).await {
             Ok(state) => state,
             Err(error) => {
+                let message = CallEndMessage::from_error(&error);
                 self.callbacks
-                    .call_state(CallState::CallEnded(error.to_string(), false))
+                    .call_state(CallState::CallEnded(message.into_string(), false))
                     .await;
                 release_pending(&self.session_states, peer, io.state.id, &mut pending_slot).await?;
                 return Err(error);
@@ -1129,7 +1241,7 @@ where
                 }
                 _ = io.state.end_call.notified() => {
                     info!(event = "end_call_notified_waiting_hello_ack");
-                    write_message(io.send, &ProtocolMessage::Goodbye { reason: None }).await?;
+                    write_message(io.send, &ProtocolMessage::goodbye()).await?;
                     release_pending(
                         &self.session_states,
                         peer,
@@ -1147,15 +1259,14 @@ where
                                 hello_timeout_ms = hello_timeout.as_millis() as u64,
                                 peer.id = %args.contact.peer_id
                             );
-                            self.callbacks
-                                .call_state(CallState::CallEnded(
-                                    format!(
-                                        "{} did not respond to the call",
-                                        args.contact.nickname
-                                    ),
-                                    true,
-                                ))
-                                .await;
+                            if !is_in_room {
+                                let message = CallEndMessage::from_text(peer_no_response_message(
+                                    &args.contact.nickname,
+                                ));
+                                self.callbacks
+                                    .call_state(CallState::CallEnded(message.into_string(), true))
+                                    .await;
+                            }
                             release_pending(
                                 &self.session_states,
                                 peer,
@@ -1243,6 +1354,15 @@ where
                             write_message(io.send, &ProtocolMessage::Reject).await?;
                             return Ok(false);
                         }
+                        if !ringtone_is_within_limit(&ringtone) {
+                            warn!(
+                                event = "oversized_ringtone_rejected",
+                                size = ringtone.as_ref().map_or(0, Vec::len),
+                                limit = MAX_RINGTONE_LENGTH
+                            );
+                            write_message(io.send, &ProtocolMessage::Reject).await?;
+                            return Ok(false);
+                        }
 
                         remote_audio_header = audio_header;
                         peer_room_hash = room_hash;
@@ -1325,7 +1445,7 @@ where
                 write_message(
                     send,
                     &ProtocolMessage::Goodbye {
-                        reason: Some(SESSION_STOPPED_REASON.to_string()),
+                        reason: GoodbyeReason::SessionStopped,
                     },
                 )
                 .await?;
@@ -1366,18 +1486,41 @@ where
         // ensure that all background i/o threads are stopped
         stop_io.cancel();
         // the call has ended; release only against the snapshot captured before `call()` ran.
-        if call_slot.release_if_match(expected_active)? {
+        let slot_released = call_slot.release_if_match(expected_active)?;
+        if slot_released {
             // hide the overlay
             self.overlay.hide();
         }
-        // send a goodbye message on errors
+        // Terminal `CallEnded` delivery happens AFTER authoritative teardown: by
+        // this point I/O is joined and the call slot has been released (when this
+        // session still owns it), so a stalled Dart callback cannot wedge backend
+        // ownership. The session-stopped path stays silent (handled upstream as
+        // `HandshakeDispatch::SessionStopped`); every other error path emits the
+        // user-facing copy here.
+        let terminal_payload = match result.as_ref() {
+            Ok(Some((message, remote))) => Some((message.clone(), *remote)),
+            Ok(None) => None,
+            Err(error) if !error.is_session_stopped() => {
+                let message = CallEndMessage::from_error(error);
+                Some((message.into_string(), false))
+            }
+            Err(_) => None,
+        };
+        if let Some((message, remote)) = terminal_payload {
+            self.callbacks
+                .call_state(CallState::CallEnded(message, remote))
+                .await;
+        }
+        // send a goodbye message on errors and notify the frontend so the caller
+        // exits the connecting state. Session-stopped is intentionally silent
+        // (handled as `HandshakeDispatch::SessionStopped` upstream).
         if let Err(error) = result.as_ref() {
             warn!(event = "call_handshake_sending_error_goodbye", ?error);
             let message = ProtocolMessage::error_goodbye(error);
             write_message(send, &message).await?;
         }
 
-        result
+        result.map(|_| ())
     }
 
     /// Normal call & self-test logic
@@ -1396,7 +1539,7 @@ where
         call_state: EarlyCallState,
         end_call: &Arc<Notify>,
         optional: Option<OptionalCallArgs<'_>>,
-    ) -> Result<()> {
+    ) -> Result<Option<(String, bool)>> {
         // on ios the audio session must be configured
         #[cfg(target_os = "ios")]
         configure_audio_session();
@@ -1409,9 +1552,16 @@ where
         // the two clients agree on these codec options
         let codec_config = call_state.codec_config();
 
+        let (stream_error_sender, mut stream_error_receiver) = unbounded_channel();
+
         // Setup input (stream is managed internally)
         let mut input_helper = self
-            .setup_input(codec_config, &statistics_state, end_call)
+            .setup_input(
+                codec_config,
+                &statistics_state,
+                end_call,
+                stream_error_sender.clone(),
+            )
             .await?;
 
         // Setup output (stream is managed internally)
@@ -1422,6 +1572,7 @@ where
                 codec_config.0,
                 &statistics_state,
                 end_call.clone(),
+                stream_error_sender,
             )
             .await?;
 
@@ -1433,7 +1584,7 @@ where
             self.core_state.statistics_paused.clone(),
         ));
 
-        if let Some(o) = optional {
+        let call_result = if let Some(o) = optional {
             let input_handle = spawn_task(audio_input(
                 input_helper.receiver(),
                 ConstConnection::new(o.connection.clone(), self.core_state.audio_sequence.clone()),
@@ -1448,27 +1599,23 @@ where
                 call_state.remote_configuration.sample_rate,
             ));
 
-            let controller_future = self.call_controller(o, call_state.peer, end_call);
+            let controller_future =
+                self.call_controller(o, call_state.peer, end_call, &mut stream_error_receiver);
 
             info!(event = "call_controller_starting");
 
-            let message_option = match controller_future.await {
-                Ok((message, notify)) if notify => {
-                    info!(event = "call_controller_result", notify, ?message);
-                    Some(message.unwrap_or_default())
+            let call_ended = match controller_future.await {
+                Ok(CallControllerOutcome::Notify { message, remote }) => {
+                    info!(event = "call_controller_result", remote, message = %message);
+                    Some((message, remote))
                 }
                 Err(error) => {
                     error!(event = "call_controller_error", error = %error);
-                    Some(error.to_string())
+                    let message = CallEndMessage::from_error(&error);
+                    Some((message.into_string(), false))
                 }
                 _ => None,
             };
-
-            if let Some(message) = message_option {
-                self.callbacks
-                    .call_state(CallState::CallEnded(message, true))
-                    .await;
-            }
 
             info!(event = "call_controller_done_notifying_stop_io");
             stop_io.cancel();
@@ -1494,16 +1641,19 @@ where
             }
 
             info!(event = "call_controller_returned");
+            Ok(call_ended)
         } else {
-            loopback(
+            let result = loopback(
                 input_helper.receiver(),
                 output_helper.sender(),
                 stop_io,
                 end_call,
+                &mut stream_error_receiver,
             )
             .await;
             stop_io.cancel();
-        }
+            result.map(|_| None)
+        };
 
         debug!(event = "call_teardown_start");
         // on ios the audio session must be deactivated
@@ -1518,7 +1668,7 @@ where
         statistics_handle.await?;
         // dropping input and output handles cleans up resources
         debug!(event = "call_teardown_done");
-        Ok(())
+        call_result
     }
 
     /// Controller for normal calls
@@ -1528,18 +1678,56 @@ where
         o: OptionalCallArgs<'_>,
         peer: PublicKey,
         end_call: &Arc<Notify>,
-    ) -> Result<(Option<String>, bool)> {
+        stream_errors: &mut UnboundedReceiver<AudioStreamError>,
+    ) -> Result<CallControllerOutcome> {
         let identity = self.peer_id().await;
+        let mut stream_errors_open = true;
 
         CONNECTED.store(true, Relaxed);
-        self.callbacks.call_state(CallState::Connected).await;
+        // Race Connected delivery against the two authoritative teardown signals
+        // so a parked frontend observation cannot keep the controller (and thus
+        // `TelepathyHandle::end_call`) blocked indefinitely. If teardown wins,
+        // emit the same best-effort goodbye the in-loop `end_call` branch does
+        // and return Silent so `call`/`call_handshake` proceed to release the
+        // slot without an extra CallEnded observation.
+        let connected_delivered = self
+            .deliver_callback_against_teardown(
+                end_call,
+                &[&o.state.stop_session],
+                self.callbacks.call_state(CallState::Connected),
+            )
+            .await;
+        if !connected_delivered {
+            info!(
+                event = "call_controller_teardown_during_connected",
+                peer.id = %peer
+            );
+            _ = write_message(o.control_send, &ProtocolMessage::goodbye()).await;
+            return Ok(CallControllerOutcome::Silent);
+        }
 
         loop {
             select! {
+                biased;
+
+                error = stream_errors.recv(), if stream_errors_open => {
+                    if let Some(error) = error {
+                        let message = CallEndMessage::from_stream_error(&error).into_string();
+                        _ = write_message(
+                            o.control_send,
+                            &ProtocolMessage::Goodbye {
+                                reason: error.remote_reason(),
+                            },
+                        )
+                        .await;
+                        break Ok(CallControllerOutcome::Notify { message, remote: false });
+                    }
+                    stream_errors_open = false;
+                }
                 // ends the call
                 _ = end_call.notified() => {
-                    write_message(o.control_send, &ProtocolMessage::Goodbye { reason: None }).await?;
-                    break Ok((None, false));
+                    write_message(o.control_send, &ProtocolMessage::goodbye()).await?;
+                    break Ok(CallControllerOutcome::Silent);
                 },
                 _ = o.state.start_screenshare.notified() => {
                     info!(event = "starting_screenshare", peer.id = ?peer);
@@ -1563,7 +1751,11 @@ where
                     match message {
                         ProtocolMessage::Goodbye { reason } => {
                             debug!(event = "call_goodbye_received", ?reason);
-                            break Ok((reason, true));
+                            let message = CallEndMessage::from_goodbye_reason(reason).into_string();
+                            break Ok(CallControllerOutcome::Notify {
+                                message,
+                                remote: true,
+                            });
                         },
                         ProtocolMessage::Chat { text, attachments } => {
                             self.callbacks.message_received(ChatMessage {
@@ -1599,7 +1791,10 @@ where
                     } else {
                         // if the channel closes, the call has ended
                         info!(event = "call_message_channel_closed");
-                        break Ok((None, true));
+                        break Ok(CallControllerOutcome::Notify {
+                            message: String::new(),
+                            remote: true,
+                        });
                     }
                 },
             }
@@ -1617,9 +1812,8 @@ where
         send: &mut FramedWrite<SendStream, LengthDelimitedCodec>,
         recv: &mut FramedRead<RecvStream, LengthDelimitedCodec>,
         connection: &Connection,
-        stop_session: &CancellationToken,
         call_state: EarlyCallState,
-        session_id: Uuid,
+        session: &Arc<SessionState>,
     ) -> Result<()> {
         let peer_id = call_state.peer;
         let connection_id = connection.stable_id();
@@ -1627,33 +1821,50 @@ where
             .room_handshake_snapshot()
             .await
             .ok_or(ErrorKind::RoomStateMissing)?;
+        let (terminal_sender, mut terminal_receiver) = unbounded_channel();
+        let mut terminal_controls_open = true;
 
         sender
             .send(RoomMessage::Join {
                 connection: connection.clone(),
                 state: call_state,
-                session_id,
+                session_id: session.id,
+                terminal_sender,
             })
             .await
             .map_err(|_| ErrorKind::RoomStateMissing)?;
 
         loop {
             select! {
-                _ = stop_session.cancelled() => {
+                biased;
+
+                control = terminal_receiver.recv(), if terminal_controls_open => {
+                    match control {
+                        Some(RoomControl::Goodbye(reason)) => {
+                            info!(event = "room_control_goodbye_sending", peer.id = %peer_id, ?reason);
+                            _ = write_message(send, &ProtocolMessage::Goodbye { reason }).await;
+                            break;
+                        }
+                        None => {
+                            terminal_controls_open = false;
+                        }
+                    }
+                }
+                _ = session.stop_session.cancelled() => {
                     info!(event = "room_session_stopped_sending_goodbye", peer.id = %peer_id);
-                    _ = write_message(send, &ProtocolMessage::Goodbye { reason: None }).await;
+                    _ = write_message(send, &ProtocolMessage::goodbye()).await;
                     break
                 }
                 _ = cancel.cancelled() => {
                     // try to say goodbye
                     info!(event = "room_cancelled_sending_goodbye", peer.id = %peer_id);
-                    _ = write_message(send, &ProtocolMessage::Goodbye { reason: None }).await;
+                    _ = write_message(send, &ProtocolMessage::goodbye()).await;
                     break
                 }
                 result = read_message(recv) => {
                     match result {
-                        Ok(ProtocolMessage::Goodbye { .. }) => {
-                            info!(event = "room_goodbye_received", peer.id = %peer_id);
+                        Ok(ProtocolMessage::Goodbye { reason }) => {
+                            info!(event = "room_goodbye_received", peer.id = %peer_id, ?reason);
                             break;
                         }
                         Ok(ProtocolMessage::Chat { .. }) => {
@@ -1671,6 +1882,20 @@ where
             }
         }
 
+        // Discard any `SessionState::start_call` permit latched on this session before
+        // releasing the room slot, so it cannot start a direct call against the
+        // former room peer. `timeout(Duration::ZERO, ...)` drains a pending permit
+        // (the `Notified` future resolves immediately) and is a no-op otherwise.
+        if timeout(Duration::ZERO, session.start_call.notified())
+            .await
+            .is_ok()
+        {
+            debug!(
+                event = "room_handshake_discarded_stale_start_call",
+                peer.id = %peer_id
+            );
+        }
+
         // sender may already be closed at this point
         _ = sender
             .send(RoomMessage::Leave {
@@ -1685,19 +1910,43 @@ where
     #[instrument(
         name = "room.controller",
         skip_all,
-        fields(room.hash = field::Empty, room.generation = room_generation)
+        fields(room.hash = field::Empty, room.generation = start.room_generation)
     )]
     pub(crate) async fn room_controller(
         &self,
         mut receiver: Receiver<RoomMessage>,
-        end_sessions: CancellationToken,
         stop_io: &CancellationToken,
-        end_call: Arc<Notify>,
-        room_owner: CallSlotSnapshot,
-        room_generation: u64,
-    ) -> Result<()> {
+        start: RoomControllerStart,
+    ) -> RoomControllerOutcome {
+        let RoomControllerStart {
+            end_sessions,
+            end_call,
+            operation,
+            room_owner,
+            room_generation,
+            ready_sender,
+            publication_receiver,
+        } = start;
         let room_hash = self.room_hash().await;
         Span::current().record("room.hash", field::debug(room_hash));
+        if end_sessions.is_cancelled() || operation.is_cancelled() {
+            drop(ready_sender);
+            return self
+                .cleanup_room_controller(
+                    stop_io,
+                    RoomControllerCleanup {
+                        end_sessions,
+                        room_owner,
+                        room_generation,
+                        input_handle: None,
+                        connections: HashMap::new(),
+                        statistics_handle: None,
+                        terminal_error: None,
+                        outcome: RoomControllerOutcome::Silent,
+                    },
+                )
+                .await;
+        }
         // on ios the audio session must be configured
         #[cfg(target_os = "ios")]
         configure_audio_session();
@@ -1709,24 +1958,175 @@ where
         // tracks connection state for peers keyed by transport stable id
         let mut connections: HashMap<usize, RoomConnection<O>> = HashMap::new();
         let mut peer_connections: HashMap<PublicKey, usize> = HashMap::new();
+        let (stream_error_sender, mut stream_error_receiver) = unbounded_channel();
+        let mut stream_errors_open = true;
+        let mut terminal_error = None;
+        // Completion channel for per-peer output tasks. Each spawned
+        // `audio_output` signals its `connection_id` here on return so the
+        // controller can remove the entry promptly instead of leaving the
+        // handle dormant in the map.
+        let (output_completion_tx, mut output_completion_rx) =
+            unbounded_channel::<(usize, Result<()>)>();
+        // Input task completion channel. The spawned input wrapper reports its
+        // outcome here; a dropped sender (task panic before send) surfaces as
+        // `RecvError`, letting the controller react to panics as well as clean
+        // returns without polling the `JoinHandle` directly.
+        let (input_done_tx, mut input_done_rx) = oneshot::channel::<Result<()>>();
 
-        // Setup input (stream is managed internally)
-        let mut input_helper: InputHelper<I> = self
-            .setup_input(
+        let mut input_helper = match select! {
+            _ = end_sessions.cancelled() => {
+                drop(ready_sender);
+                return self
+                    .cleanup_room_controller(
+                        stop_io,
+                        RoomControllerCleanup {
+                            end_sessions,
+                            room_owner,
+                            room_generation,
+                            input_handle: None,
+                            connections: HashMap::new(),
+                            statistics_handle: None,
+                            terminal_error: None,
+                            outcome: RoomControllerOutcome::Silent,
+                        },
+                    )
+                    .await;
+            }
+            _ = operation.cancelled() => {
+                drop(ready_sender);
+                return self
+                    .cleanup_room_controller(
+                        stop_io,
+                        RoomControllerCleanup {
+                            end_sessions,
+                            room_owner,
+                            room_generation,
+                            input_handle: None,
+                            connections: HashMap::new(),
+                            statistics_handle: None,
+                            terminal_error: None,
+                            outcome: RoomControllerOutcome::Silent,
+                        },
+                    )
+                    .await;
+            }
+            result = self.setup_input(
                 (true, true, 5_f32), // hard coded room codec options
                 &statistics_state,
                 &end_call,
-            )
-            .await?;
+                stream_error_sender.clone(),
+            ) => result,
+        } {
+            Ok(helper) => helper,
+            Err(error) => {
+                drop(ready_sender);
+                // Terminal observation is delivered from the outer controller task
+                // after `cleanup_room_controller` releases `room_state` and the
+                // slot, so a stalled Dart callback cannot wedge backend ownership.
+                let message = CallEndMessage::from_error(&error).into_string();
+                return self
+                    .cleanup_room_controller(
+                        stop_io,
+                        RoomControllerCleanup {
+                            end_sessions,
+                            room_owner,
+                            room_generation,
+                            input_handle: None,
+                            connections: HashMap::new(),
+                            statistics_handle: None,
+                            terminal_error: Some(error),
+                            outcome: RoomControllerOutcome::Notify { message },
+                        },
+                    )
+                    .await;
+            }
+        };
 
-        let input_handle = spawn_task(audio_input(
-            input_helper.receiver(),
-            DynamicConnection::new(
-                connection_sender.clone(),
-                self.core_state.audio_sequence.clone(),
-            ),
-            stop_io.clone(),
-        ));
+        // An input callback can fail synchronously from `open_input`. Preserve
+        // that error until RoomState publication has completed.
+        let pending_stream_error = stream_error_receiver.try_recv().ok();
+        if ready_sender.send(pending_stream_error.is_some()).is_err() {
+            return self
+                .cleanup_room_controller(
+                    stop_io,
+                    RoomControllerCleanup {
+                        end_sessions,
+                        room_owner,
+                        room_generation,
+                        input_handle: None,
+                        connections: HashMap::new(),
+                        statistics_handle: None,
+                        terminal_error: None,
+                        outcome: RoomControllerOutcome::Silent,
+                    },
+                )
+                .await;
+        }
+        let publication_received = select! {
+            _ = end_sessions.cancelled() => false,
+            _ = operation.cancelled() => false,
+            result = publication_receiver => result.is_ok(),
+        };
+        if !publication_received {
+            return self
+                .cleanup_room_controller(
+                    stop_io,
+                    RoomControllerCleanup {
+                        end_sessions,
+                        room_owner,
+                        room_generation,
+                        input_handle: None,
+                        connections: HashMap::new(),
+                        statistics_handle: None,
+                        terminal_error: None,
+                        outcome: RoomControllerOutcome::Silent,
+                    },
+                )
+                .await;
+        }
+
+        if let Some(error) = pending_stream_error {
+            let message = CallEndMessage::from_stream_error(&error).into_string();
+            return self
+                .cleanup_room_controller(
+                    stop_io,
+                    RoomControllerCleanup {
+                        end_sessions,
+                        room_owner,
+                        room_generation,
+                        input_handle: None,
+                        connections: HashMap::new(),
+                        statistics_handle: None,
+                        terminal_error: Some(error.into_error_kind().into()),
+                        outcome: RoomControllerOutcome::Notify { message },
+                    },
+                )
+                .await;
+        }
+
+        // Keep the input handle in an `Option` so that any completion branch
+        // which does not consume it (e.g. peer-local breaks, end_call, end_sessions)
+        // can hand the still-running task to `cleanup_room_controller` for
+        // bounded cancellation. The spawned wrapper reports its outcome via
+        // `input_done_rx`; the `JoinHandle` itself still resolves to `Ok(())`
+        // so centralized cleanup can timeout+abort a hung task.
+        let input_connection_sender = connection_sender.clone();
+        let input_audio_sequence = self.core_state.audio_sequence.clone();
+        let input_stop_io = stop_io.clone();
+        let input_receiver = input_helper.receiver();
+        let mut input_handle: Option<JoinHandle<Result<()>>> = Some(spawn_task(async move {
+            let result = audio_input(
+                input_receiver,
+                DynamicConnection::new(input_connection_sender, input_audio_sequence),
+                input_stop_io,
+            )
+            .await;
+            // Report completion to the controller loop. If the loop has already
+            // moved on (receiver dropped during teardown), this send fails
+            // silently; the JoinHandle still resolves for cleanup to classify.
+            let _ = input_done_tx.send(result);
+            Ok(())
+        }));
 
         let statistics_handle = spawn_task(statistics_collector(
             statistics_state.clone(),
@@ -1737,13 +2137,95 @@ where
         ));
 
         // kick the UI out of connecting mode
-        self.callbacks.call_state(CallState::Waiting).await;
+        if end_sessions.is_cancelled() || operation.is_cancelled() {
+            return self
+                .cleanup_room_controller(
+                    stop_io,
+                    RoomControllerCleanup {
+                        end_sessions,
+                        room_owner,
+                        room_generation,
+                        input_handle: input_handle.take(),
+                        connections,
+                        statistics_handle: Some(statistics_handle),
+                        terminal_error: None,
+                        outcome: RoomControllerOutcome::Silent,
+                    },
+                )
+                .await;
+        }
+        // Frontend callback delivery must not block authoritative teardown.
+        // If teardown is signaled while the Waiting observation is pending,
+        // abandon it and proceed straight to clean up so the call slot and
+        // room_state are released; otherwise the local hangup is consumed
+        // here and the controller never exits.
+        if !self
+            .deliver_callback_against_teardown(
+                &end_call,
+                &[&end_sessions, &operation],
+                self.callbacks.call_state(CallState::Waiting),
+            )
+            .await
+        {
+            return self
+                .cleanup_room_controller(
+                    stop_io,
+                    RoomControllerCleanup {
+                        end_sessions,
+                        room_owner,
+                        room_generation,
+                        input_handle: input_handle.take(),
+                        connections,
+                        statistics_handle: Some(statistics_handle),
+                        terminal_error: None,
+                        outcome: RoomControllerOutcome::Silent,
+                    },
+                )
+                .await;
+        }
+        let mut outcome = RoomControllerOutcome::Silent;
 
         loop {
             select! {
+                biased;
+
+                _ = end_sessions.cancelled() => {
+                    break;
+                }
+                _ = operation.cancelled() => {
+                    break;
+                }
+                error = stream_error_receiver.recv(), if stream_errors_open => {
+                    if let Some(error) = error {
+                        let message = CallEndMessage::from_stream_error(&error).into_string();
+                        let remote_reason = error.remote_reason();
+                        // Each installed handshake owns the framed control writer, so terminal
+                        // commands preserve control-stream ordering without opening a new stream.
+                        for (connection_id, room_connection) in connections.iter() {
+                            if room_connection
+                                .terminal_sender
+                                .send(RoomControl::Goodbye(remote_reason))
+                                .is_err()
+                            {
+                                warn!(
+                                    event = "room_audio_error_goodbye_signal_failed",
+                                    connection.id = connection_id
+                                );
+                            }
+                        }
+                        outcome = RoomControllerOutcome::Notify { message };
+                        break;
+                    }
+                    stream_errors_open = false;
+                }
                 message = receiver.recv() => {
                     match message {
-                        Some(RoomMessage::Join { connection, state, session_id }) => {
+                        Some(RoomMessage::Join {
+                            connection,
+                            state,
+                            session_id,
+                            terminal_sender,
+                        }) => {
                             if let Some(session) = self.session_states.read().await.get(&state.peer) {
                                 if session.id != session_id {
                                     warn!(event = "room_join_stale_session", peer.id = %state.peer);
@@ -1784,42 +2266,111 @@ where
                                     old_connection
                                         .connection
                                         .close(VarInt::from_u32(0), b"replaced");
-                                    match old_connection.handle.await {
-                                        Ok(Ok(())) => {}
-                                        Ok(Err(error)) => {
-                                            warn!(event = "room_output_closed_on_replacement", ?error);
+                                    let mut old_handle = old_connection.handle;
+                                    match join_room_task_bounded(
+                                        &mut old_handle,
+                                        "room_output",
+                                        "replacement",
+                                    )
+                                    .await
+                                    {
+                                        RoomTaskOutcome::PeerLocal => {}
+                                        RoomTaskOutcome::Terminal(error) => {
+                                            terminal_error = Some(error);
+                                            outcome = RoomControllerOutcome::generic_terminal();
+                                            break;
                                         }
-                                        Err(error) => return Err(error.into()),
                                     }
                                 }
                                 peer_connections.remove(&state.peer);
                             }
 
-                            // first connection
-                            if connections.is_empty() {
-                                CONNECTED.store(true, Relaxed);
-                                self.callbacks.call_state(CallState::Connected).await;
-                            }
-
-                            connection_sender.push(connection.clone());
-                            // setup output stack
-                            let mut helper = self
-                                .setup_output(
+                            let setup_output_result = select! {
+                                result = self.setup_output(
                                     state.peer,
                                     state.remote_configuration.sample_rate as f64,
                                     true,
                                     &statistics_state,
                                     end_call.clone(),
+                                    stream_error_sender.clone(),
+                                ) => result,
+                                _ = end_sessions.cancelled() => {
+                                    info!(event = "room_setup_output_interrupted_end_sessions", peer.id = %state.peer);
+                                    break;
+                                }
+                                _ = operation.cancelled() => {
+                                    info!(event = "room_setup_output_interrupted_operation", peer.id = %state.peer);
+                                    break;
+                                }
+                            };
+                            let mut helper = match setup_output_result {
+                                Ok(helper) => helper,
+                                Err(error) => {
+                                    let reason = GoodbyeReason::AudioDeviceError;
+                                    if terminal_sender.send(RoomControl::Goodbye(reason)).is_err() {
+                                        warn!(
+                                            event = "room_audio_error_goodbye_signal_failed",
+                                            connection.id = connection_id
+                                        );
+                                    }
+                                    for (installed_connection_id, room_connection) in &connections {
+                                        if room_connection
+                                            .terminal_sender
+                                            .send(RoomControl::Goodbye(reason))
+                                            .is_err()
+                                        {
+                                            warn!(
+                                                event = "room_audio_error_goodbye_signal_failed",
+                                                connection.id = installed_connection_id
+                                            );
+                                        }
+                                    }
+                                    let message = CallEndMessage::from_error(&error).into_string();
+                                    terminal_error = Some(error);
+                                    outcome = RoomControllerOutcome::Notify { message };
+                                    break;
+                                }
+                            };
+                            if connections.is_empty() {
+                                CONNECTED.store(true, Relaxed);
+                                // Frontend callback delivery must not block authoritative
+                                // teardown; abandon Connected and break to cleanup.
+                                if !self
+                                    .deliver_callback_against_teardown(
+                                        &end_call,
+                                        &[&end_sessions, &operation],
+                                        self.callbacks.call_state(CallState::Connected),
+                                    )
+                                    .await
+                                {
+                                    break;
+                                }
+                            }
+                            connection_sender.push(connection.clone());
+                            // begin sending. The wrapper reports completion to
+                            // `output_completion_rx` so the controller can
+                            // retire the entry instead of leaving the handle
+                            // dormant in the map. If the receiver was dropped
+                            // (room tearing down), the send fails silently;
+                            // the JoinHandle still resolves for cleanup.
+                            let completion_tx = output_completion_tx.clone();
+                            let output_sender = helper.sender();
+                            let output_connection = connection.clone();
+                            let output_stop_io = stop_io.clone();
+                            let output_loss = statistics_state.loss.clone();
+                            let output_sample_rate = state.remote_configuration.sample_rate;
+                            let handle = spawn_task(async move {
+                                let result = audio_output(
+                                    output_sender,
+                                    output_connection,
+                                    output_stop_io,
+                                    output_loss,
+                                    output_sample_rate,
                                 )
-                                .await?;
-                            // begin sending
-                            let handle = spawn_task(audio_output(
-                                helper.sender(),
-                                connection.clone(),
-                                stop_io.clone(),
-                                statistics_state.loss.clone(),
-                                state.remote_configuration.sample_rate,
-                            ));
+                                .await;
+                                let _ = completion_tx.send((connection_id, result));
+                                Ok(())
+                            });
 
                             peer_connections.insert(state.peer, connection_id);
                             connections.insert(
@@ -1828,11 +2379,22 @@ where
                                     connection,
                                     _output: helper,
                                     handle,
+                                    terminal_sender,
                                 },
                             );
-                            self.callbacks
-                                .call_state(CallState::RoomJoin(state.peer.to_string()))
-                                .await;
+                            // Frontend callback delivery must not block authoritative
+                            // teardown; abandon RoomJoin and break to cleanup.
+                            if !self
+                                .deliver_callback_against_teardown(
+                                    &end_call,
+                                    &[&end_sessions, &operation],
+                                    self.callbacks
+                                        .call_state(CallState::RoomJoin(state.peer.to_string())),
+                                )
+                                .await
+                            {
+                                break;
+                            }
                         }
                         Some(RoomMessage::Leave {
                             peer,
@@ -1842,18 +2404,36 @@ where
                                 Some(active_connection_id)
                                     if active_connection_id == connection_id =>
                                 {
-                                    self.callbacks
-                                        .call_state(CallState::RoomLeave(peer.to_string()))
-                                        .await;
+                                    // Frontend callback delivery must not block authoritative
+                                    // teardown; abandon RoomLeave and break to cleanup.
+                                    if !self
+                                        .deliver_callback_against_teardown(
+                                            &end_call,
+                                            &[&end_sessions, &operation],
+                                            self.callbacks
+                                                .call_state(CallState::RoomLeave(peer.to_string())),
+                                        )
+                                        .await
+                                    {
+                                        break;
+                                    }
                                     peer_connections.remove(&peer);
                                     if let Some(connection) = connections.remove(&connection_id) {
                                         connection_sender.remove(&connection.connection);
-                                        match connection.handle.await {
-                                            Ok(Ok(())) => (),
-                                            Ok(Err(error)) => {
-                                                warn!(event = "room_output_closed_on_leave", ?error);
+                                        let mut handle = connection.handle;
+                                        match join_room_task_bounded(
+                                            &mut handle,
+                                            "room_output",
+                                            "leave",
+                                        )
+                                        .await
+                                        {
+                                            RoomTaskOutcome::PeerLocal => {}
+                                            RoomTaskOutcome::Terminal(error) => {
+                                                terminal_error = Some(error);
+                                                outcome = RoomControllerOutcome::generic_terminal();
+                                                break;
                                             }
-                                            Err(error) => return Err(error.into()),
                                         }
                                         info!(
                                             event = "room_connection_cleaned_up",
@@ -1881,6 +2461,7 @@ where
                         }
                         None => {
                             warn!(event = "room_controller_channel_closed_unexpectedly");
+                            outcome = RoomControllerOutcome::generic_terminal();
                             break;
                         }
                     }
@@ -1889,55 +2470,70 @@ where
                     info!(event = "room_call_ended_signal");
                     break;
                 }
+                completion = output_completion_rx.recv() => {
+                    if let Some((connection_id, result)) = completion
+                        && let Some(connection) = connections.remove(&connection_id)
+                    {
+                        connection_sender.remove(&connection.connection);
+                        let mut handle = connection.handle;
+                        match join_room_task_bounded(
+                            &mut handle,
+                            "room_output",
+                            "completion",
+                        )
+                        .await
+                        {
+                            RoomTaskOutcome::PeerLocal => {
+                                let classification = match &result {
+                                    Ok(()) => "clean",
+                                    Err(_) => "error",
+                                };
+                                info!(
+                                    event = "room_output_completed",
+                                    connection.id = connection_id,
+                                    completion.classification = classification,
+                                );
+                            }
+                            RoomTaskOutcome::Terminal(error) => {
+                                terminal_error = Some(error);
+                                outcome = RoomControllerOutcome::generic_terminal();
+                                break;
+                            }
+                        }
+                    }
+                }
+                result = &mut input_done_rx => {
+                    // Input task reported completion (or panicked before
+                    // sending, surfacing as `RecvError`). Take the handle so
+                    // centralized cleanup does not double-await it.
+                    input_handle = None;
+                    match result {
+                        Ok(Ok(())) => warn!(event = "room_input_stopped_unexpectedly"),
+                        Ok(Err(error)) => {
+                            warn!(event = "room_input_closed_unexpectedly", ?error);
+                        }
+                        Err(_) => warn!(event = "room_input_join_failed_unexpectedly"),
+                    }
+                    outcome = RoomControllerOutcome::generic_terminal();
+                    break;
+                }
             }
         }
 
-        // tear down processing stack
-        debug!(event = "room_processing_teardown_start");
-        // on ios the audio session must be deactivated
-        #[cfg(target_os = "ios")]
-        deactivate_audio_session();
-        // cleanup web input on WASM
-        #[cfg(target_family = "wasm")]
-        {
-            *self.web_input.lock().await = None;
-        }
-        stop_io.cancel();
-        // join input IO task
-        input_handle.await??;
-        // join output tasks, dropping output helpers to close
-        for connection in connections.into_values() {
-            match connection.handle.await {
-                Ok(Ok(())) => (),
-                Ok(Err(error)) => {
-                    warn!(event = "room_output_closed_on_teardown", ?error);
-                }
-                Err(error) => return Err(error.into()),
-            }
-        }
-        debug!(event = "room_processing_teardown_done");
-        // cleanup room state ONLY if still the currently installed `room_state`
-        {
-            let mut room_guard = self.room_state.write().await;
-            if room_guard
-                .as_ref()
-                .is_some_and(|state| state.generation == room_generation)
-            {
-                let _ = room_guard.take();
-            } else {
-                info!(
-                    event = "room_state_take_skipped_stale_generation",
-                    room.generation = room_generation
-                );
-            }
-        }
-        // release only against the exact `room_owner` snapshot
-        self.core_state.call_slot.release_if_match(room_owner)?;
-        // cleanup sessions blocked by room
-        end_sessions.cancel();
-        // join statistics collector
-        statistics_handle.await?;
-        Ok(())
+        self.cleanup_room_controller(
+            stop_io,
+            RoomControllerCleanup {
+                end_sessions,
+                room_owner,
+                room_generation,
+                input_handle: input_handle.take(),
+                connections,
+                statistics_handle: Some(statistics_handle),
+                terminal_error,
+                outcome,
+            },
+        )
+        .await
     }
 }
 
@@ -1954,7 +2550,6 @@ where
             room_state: Arc::clone(&self.room_state),
             session_states: Arc::clone(&self.session_states),
             start_session: self.start_session.clone(),
-            restart_manager: Arc::clone(&self.restart_manager),
             cancel_outbound_connections: Arc::clone(&self.cancel_outbound_connections),
             outbound_attempts: Arc::clone(&self.outbound_attempts),
             overlay: self.overlay.clone(),
@@ -1968,10 +2563,64 @@ where
     }
 }
 
-struct RoomConnection<O> {
-    connection: Connection,
+pub(crate) struct RoomConnection<O> {
+    pub(crate) connection: Connection,
     _output: OutputHelper<O>,
-    handle: JoinHandle<Result<()>>,
+    pub(crate) handle: JoinHandle<Result<()>>,
+    terminal_sender: UnboundedSender<RoomControl>,
+}
+
+pub(crate) struct RoomControllerStart {
+    pub(crate) end_sessions: CancellationToken,
+    pub(crate) end_call: Arc<Notify>,
+    pub(crate) operation: CancellationToken,
+    pub(crate) room_owner: CallSlotSnapshot,
+    pub(crate) room_generation: u64,
+    pub(crate) ready_sender: oneshot::Sender<bool>,
+    pub(crate) publication_receiver: oneshot::Receiver<()>,
+}
+
+pub(crate) struct RoomControllerCleanup<O> {
+    pub(crate) end_sessions: CancellationToken,
+    pub(crate) room_owner: CallSlotSnapshot,
+    pub(crate) room_generation: u64,
+    pub(crate) input_handle: Option<JoinHandle<Result<()>>>,
+    pub(crate) connections: HashMap<usize, RoomConnection<O>>,
+    pub(crate) statistics_handle: Option<JoinHandle<()>>,
+    pub(crate) terminal_error: Option<Error>,
+    pub(crate) outcome: RoomControllerOutcome,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) enum RoomControllerOutcome {
+    Silent,
+    /// Terminal room observation. The `message` is delivered to the frontend
+    /// from the outer controller task AFTER `cleanup_room_controller` has
+    /// released `room_state` and the call slot, so a stalled Dart callback
+    /// cannot wedge backend ownership.
+    Notify {
+        message: String,
+    },
+}
+
+impl RoomControllerOutcome {
+    fn generic_terminal() -> Self {
+        Self::Notify {
+            message: CALL_END_GENERIC.to_string(),
+        }
+    }
+
+    pub(crate) fn into_message(self) -> Option<String> {
+        match self {
+            RoomControllerOutcome::Silent => None,
+            RoomControllerOutcome::Notify { message } => Some(message),
+        }
+    }
+}
+
+enum CallControllerOutcome {
+    Silent,
+    Notify { message: String, remote: bool },
 }
 
 pub(crate) struct OptionalCallArgs<'a> {
@@ -2047,6 +2696,13 @@ enum IncomingSlotDecision<'a> {
     Acquired(PendingDirectCallSlot<'a>),
 }
 
+pub(crate) enum OutgoingSlotDecision<'a> {
+    Acquired(PendingDirectCallSlot<'a>),
+    Busy,
+    StaleSession,
+    SessionStopped,
+}
+
 /// Result of handling one message while awaiting `HelloAck` on an outgoing call.
 enum HelloResponse {
     Completed,
@@ -2064,7 +2720,7 @@ enum HelloResponse {
 /// the matching pending slot (outgoing in the simultaneous-dial case) and is responsible
 /// for its lifecycle. Outgoing acquisition sets it for both `Acquired` and `Matched*`.
 /// The handshake path does not release the slot; it transitions the slot to active.
-struct PendingDirectCallSlot<'a> {
+pub(crate) struct PendingDirectCallSlot<'a> {
     call_slot: &'a CallSlot,
     peer: PublicKey,
     release_on_failure: bool,
@@ -2091,7 +2747,10 @@ impl<'a> PendingDirectCallSlot<'a> {
     }
 
     /// Acquires or matches an outgoing direct-call pending slot for `peer`.
-    fn try_acquire_outgoing(call_slot: &'a CallSlot, peer: PublicKey) -> Result<Option<Self>> {
+    pub(crate) fn try_acquire_outgoing(
+        call_slot: &'a CallSlot,
+        peer: PublicKey,
+    ) -> Result<Option<Self>> {
         match call_slot.try_acquire_or_match(CallSlotState::PendingOutgoing, peer)? {
             CallSlotAcquireResult::Acquired
             | CallSlotAcquireResult::MatchedPendingIncoming
@@ -2144,6 +2803,11 @@ impl OutgoingNegotiationOutcome {
     fn to_outcome(&self) -> bool {
         !matches!(self, Self::SessionStopped)
     }
+}
+
+enum ManagerIterationOutcome {
+    Continue,
+    Shutdown,
 }
 
 /// Bounded exponential backoff before restarting the session manager.
@@ -2202,19 +2866,6 @@ async fn release_pending(
     session_id: Uuid,
     pending_slot: &mut Option<PendingDirectCallSlot<'_>>,
 ) -> Result<()> {
-    // Two independent silent no-op conditions below MUST be preserved together:
-    //
-    // 1. `is_session_still_current` returns `false` -> we exit early to protect a
-    //    replacement session's slot. A collision-loser / drained session must not
-    //    clobber the slot now owned by its replacement.
-    //
-    // 2. `PendingDirectCallSlot::release_on_failure` is `false`
-    //    (matched-incoming / simultaneous-dial) -> `slot.release()` is itself a
-    //    no-op, because the outgoing peer owns the slot and is responsible for
-    //    its lifecycle. Removing this guard (e.g. by "simplifying"
-    //    `release_on_failure` to always release) would let an incoming
-    //    `Matched*` session tear down the outgoing peer's slot — a silent
-    //    slot-clobbering bug.
     if !is_session_still_current(session_states, peer, session_id).await {
         return Ok(());
     }
@@ -2237,7 +2888,7 @@ async fn abort_negotiation_session_stopped(
     _ = write_message(
         send,
         &ProtocolMessage::Goodbye {
-            reason: Some(SESSION_STOPPED_REASON.to_string()),
+            reason: GoodbyeReason::SessionStopped,
         },
     )
     .await;
@@ -2245,8 +2896,39 @@ async fn abort_negotiation_session_stopped(
     Ok(())
 }
 
+fn ringtone_is_within_limit(ringtone: &Option<Vec<u8>>) -> bool {
+    ringtone
+        .as_ref()
+        .is_none_or(|ringtone| ringtone.len() <= MAX_RINGTONE_LENGTH)
+}
+
 #[cfg(test)]
 mod tests {
+    use super::{MAX_RINGTONE_LENGTH, ProtocolMessage, ringtone_is_within_limit};
+    use crate::internal::messages::AudioHeader;
+    use speedy::{Readable, Writable};
+
+    #[test]
+    fn oversized_hello_ringtone_is_rejected_before_prompting() {
+        let message = ProtocolMessage::Hello {
+            ringtone: Some(vec![0; MAX_RINGTONE_LENGTH + 1]),
+            audio_header: AudioHeader {
+                sample_rate: 48_000,
+                codec_enabled: true,
+                vbr: false,
+                residual_bits: 4.0,
+            },
+            room_hash: None,
+        };
+        let encoded = message.write_to_vec().unwrap();
+        let ProtocolMessage::Hello { ringtone, .. } =
+            ProtocolMessage::read_from_buffer(&encoded).unwrap()
+        else {
+            panic!("expected Hello message");
+        };
+
+        assert!(!ringtone_is_within_limit(&ringtone));
+    }
     use super::{
         MANAGER_RETRY_BASE_MS, MANAGER_RETRY_MAX_MS, manager_retry_delay_ms,
         should_keep_new_session,

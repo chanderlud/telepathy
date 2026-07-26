@@ -85,21 +85,20 @@ class _AudioSettingsState extends State<AudioSettings> {
                       audioDevices.outputDevices),
                   selectedInputDevice: audioSettingsController.inputDeviceId,
                   selectedOutputDevice: audioSettingsController.outputDeviceId,
+                  hasLoadedDevices: audioDevices.hasLoadedDevices,
                 ),
                 builder: (BuildContext context, _DeviceDropdownState state, _) {
-                  final inputInitialSelection =
-                      state.selectedInputDevice != null &&
-                              state.inputDevices
-                                  .any((d) => d.id == state.selectedInputDevice)
-                          ? state.selectedInputDevice!
-                          : '';
-
-                  final outputInitialSelection = state.selectedOutputDevice !=
-                              null &&
-                          state.outputDevices
-                              .any((d) => d.id == state.selectedOutputDevice)
-                      ? state.selectedOutputDevice!
-                      : '';
+                  final inputInitialSelection = state.selectedInputDevice ?? '';
+                  final outputInitialSelection =
+                      state.selectedOutputDevice ?? '';
+                  final inputUnavailable = state.hasLoadedDevices &&
+                      inputInitialSelection.isNotEmpty &&
+                      !state.inputDevices
+                          .any((device) => device.id == inputInitialSelection);
+                  final outputUnavailable = state.hasLoadedDevices &&
+                      outputInitialSelection.isNotEmpty &&
+                      !state.outputDevices
+                          .any((device) => device.id == outputInitialSelection);
 
                   final double width = widget.constraints.maxWidth < 650
                       ? widget.constraints.maxWidth
@@ -109,34 +108,73 @@ class _AudioSettingsState extends State<AudioSettings> {
                     spacing: 20,
                     runSpacing: 20,
                     children: [
-                      DropDown(
-                          label: 'Input Device',
-                          items: state.inputDevices
-                              .map((d) => (d.id, d.name))
-                              .toList(),
-                          initialSelection: inputInitialSelection,
-                          enabled: !blockAudioChanges,
-                          onSelected: (String? id) {
-                            if (id == '') id = null;
-                            audioSettingsController.updateInputDevice(id);
-                            telepathy.setInputDevice(deviceId: id);
-                          },
-                          width: width),
-                      DropDown(
-                        label: 'Output Device',
-                        items: state.outputDevices
-                            .map((d) => (d.id, d.name))
-                            .toList(),
-                        initialSelection: outputInitialSelection,
-                        enabled: !blockAudioChanges,
-                        onSelected: (String? id) {
-                          if (id == '') id = null;
-                          audioSettingsController.updateOutputDevice(id);
-                          telepathy.setOutputDevice(deviceId: id);
-                          player.updateOutputDevice(deviceId: id);
-                        },
+                      SizedBox(
                         width: width,
-                      )
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (inputUnavailable) ...[
+                              _unavailableDeviceWarning(
+                                'Selected input device is unavailable',
+                              ),
+                              const SizedBox(height: 6),
+                            ],
+                            DropDown(
+                              key: ValueKey(Object.hashAll([
+                                inputInitialSelection,
+                                ...state.inputDevices
+                                    .map((device) => device.id),
+                              ])),
+                              label: 'Input Device',
+                              items: state.inputDevices
+                                  .map((d) => (d.id, d.name))
+                                  .toList(),
+                              initialSelection: inputInitialSelection,
+                              enabled: !blockAudioChanges,
+                              onSelected: (String? id) {
+                                if (id == '') id = null;
+                                audioSettingsController.updateInputDevice(id);
+                                telepathy.setInputDevice(deviceId: id);
+                              },
+                              width: width,
+                            ),
+                          ],
+                        ),
+                      ),
+                      SizedBox(
+                        width: width,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (outputUnavailable) ...[
+                              _unavailableDeviceWarning(
+                                'Selected output device is unavailable',
+                              ),
+                              const SizedBox(height: 6),
+                            ],
+                            DropDown(
+                              key: ValueKey(Object.hashAll([
+                                outputInitialSelection,
+                                ...state.outputDevices
+                                    .map((device) => device.id),
+                              ])),
+                              label: 'Output Device',
+                              items: state.outputDevices
+                                  .map((d) => (d.id, d.name))
+                                  .toList(),
+                              initialSelection: outputInitialSelection,
+                              enabled: !blockAudioChanges,
+                              onSelected: (String? id) {
+                                if (id == '') id = null;
+                                audioSettingsController.updateOutputDevice(id);
+                                telepathy.setOutputDevice(deviceId: id);
+                                player.updateOutputDevice(deviceId: id);
+                              },
+                              width: width,
+                            ),
+                          ],
+                        ),
+                      ),
                     ],
                   );
                 },
@@ -150,15 +188,15 @@ class _AudioSettingsState extends State<AudioSettings> {
         Row(children: [
           Selector<StateController, (bool, bool)>(
             selector: (context, controller) =>
-                (controller.inAudioTest, controller.isCallActive),
+                (controller.inAudioTest, controller.hasLiveCall),
             builder: (BuildContext context, state, _) {
-              final (inAudioTest, isCallActive) = state;
+              final (inAudioTest, hasLiveCall) = state;
               final stateController = context.read<StateController>();
               return Button(
                 text: inAudioTest ? 'End Test' : 'Sound Test',
                 width: 80,
                 height: 25,
-                disabled: isCallActive,
+                disabled: hasLiveCall,
                 onPressed: () async {
                   // 100ms debounce for safety
                   if (testCooldown) {
@@ -176,17 +214,15 @@ class _AudioSettingsState extends State<AudioSettings> {
                   }
 
                   if (inAudioTest) {
-                    stateController.setInAudioTest();
-                    telepathy.endCall();
+                    await telepathy.endCall();
+                    stateController.setInAudioTest(false);
                   } else {
-                    stateController.setInAudioTest();
                     try {
-                      await telepathy.audioTest();
+                      await stateController.runAudioTest(telepathy.audioTest);
                     } on DartError catch (e) {
                       if (!context.mounted) return;
                       showErrorDialog(
                           context, 'Error in Audio Test', e.message);
-                      stateController.setInAudioTest();
                     }
                   }
                 },
@@ -385,17 +421,43 @@ class _AudioSettingsState extends State<AudioSettings> {
   }
 }
 
+Widget _unavailableDeviceWarning(String message) {
+  return Container(
+    width: double.infinity,
+    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+    decoration: BoxDecoration(
+      color: Colors.amber.withValues(alpha: 0.16),
+      borderRadius: BorderRadius.circular(12),
+    ),
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Icon(Icons.warning_amber_rounded, color: Colors.amber, size: 18),
+        const SizedBox(width: 5),
+        Flexible(
+          child: Text(
+            message,
+            style: TextStyle(color: Colors.amber[800], fontSize: 13),
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
 class _DeviceDropdownState {
   final List<AudioDevice> inputDevices;
   final List<AudioDevice> outputDevices;
   final String? selectedInputDevice;
   final String? selectedOutputDevice;
+  final bool hasLoadedDevices;
 
   _DeviceDropdownState({
     required this.inputDevices,
     required this.outputDevices,
     required this.selectedInputDevice,
     required this.selectedOutputDevice,
+    required this.hasLoadedDevices,
   });
 
   @override
@@ -406,7 +468,8 @@ class _DeviceDropdownState {
           const ListEquality().equals(inputDevices, other.inputDevices) &&
           const ListEquality().equals(outputDevices, other.outputDevices) &&
           selectedInputDevice == other.selectedInputDevice &&
-          selectedOutputDevice == other.selectedOutputDevice;
+          selectedOutputDevice == other.selectedOutputDevice &&
+          hasLoadedDevices == other.hasLoadedDevices;
 
   @override
   int get hashCode => Object.hash(
@@ -414,5 +477,6 @@ class _DeviceDropdownState {
         const ListEquality().hash(outputDevices),
         selectedInputDevice,
         selectedOutputDevice,
+        hasLoadedDevices,
       );
 }

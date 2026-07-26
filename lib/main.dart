@@ -114,7 +114,7 @@ Future<void> main(List<String> args) async {
 
     Contact? contact = profilesController.getContact(id);
 
-    if (stateController.isCallActive) {
+    if (stateController.hasLiveCall) {
       return false;
     } else if (contact == null) {
       DebugConsole.warn('contact is null');
@@ -129,11 +129,15 @@ Future<void> main(List<String> args) async {
       bytes = ringtone;
     }
 
-    FlutterSoundHandle handle = await soundPlayer.play(bytes: bytes);
+    FlutterSoundHandle? handle = await playSoundEffect(
+      player: soundPlayer,
+      bytes: bytes,
+      sound: 'incoming',
+    );
 
     if (navigatorKey.currentState == null ||
         !navigatorKey.currentState!.mounted) {
-      handle.cancel();
+      handle?.cancel();
       return false;
     }
 
@@ -143,7 +147,7 @@ Future<void> main(List<String> args) async {
 
     final result = await Future.any([acceptedFuture, cancelFuture]);
 
-    handle.cancel();
+    handle?.cancel();
 
     if (result == null) {
       DebugConsole.debug('cancelled');
@@ -155,8 +159,10 @@ Future<void> main(List<String> args) async {
 
       return false; // cancelled
     } else if (result) {
+      // Move through the same connecting->active gate the outgoing
+      // path uses.
       stateController.setStatus('Connecting');
-      stateController.setActiveContact(contact);
+      stateController.setPendingContact(contact);
     }
 
     return result;
@@ -175,7 +181,7 @@ Future<void> main(List<String> args) async {
 
   /// called when the call state changes
   FutureOr<void> callState(CallState state) async {
-    if (!stateController.isCallActive) {
+    if (!stateController.hasLiveCall) {
       return;
     }
 
@@ -185,10 +191,24 @@ Future<void> main(List<String> args) async {
 
     switch (state) {
       case CallState_Connected():
-        // handles the initial connect
+        // Distinguish a first promotion (connecting -> active) from an
+        // already-active room (e.g. after a `Waiting` event promoted the
+        // pending slot first). Stale callbacks for idle/ending/attempts are
+        // rejected. The start future can resolve after this callback, so it
+        // must not own promotion.
+        if (!stateController
+            .handleConnectedEvent(stateController.currentCallAttempt)) {
+          return;
+        }
         bytes = await readSeaBytes('connected');
-        stateController.setStatus('Active');
+        if (stateController.callLifecycle != CallLifecycle.active) {
+          return;
+        }
       case CallState_Waiting():
+        // Rooms can wait for peers without a Connected callback. Promote the
+        // pending room so its normal call controls, including hangup, render.
+        stateController
+            .promotePendingCallAttempt(stateController.currentCallAttempt);
         stateController.setStatus('Waiting for peers');
         return;
       case CallState_RoomJoin():
@@ -198,15 +218,18 @@ Future<void> main(List<String> args) async {
         stateController.roomLeave(state.field0);
         return; // TODO add room leave sound
       case CallState_CallEnded():
-        if (!stateController.isCallActive) {
-          DebugConsole.warn('call ended entered but there is no active call');
+        // Local hangup remains in `ending` until endCall confirms backend slot
+        // release. Its trailing event must not clear that gate early.
+        final localHangup =
+            stateController.callLifecycle == CallLifecycle.ending;
+        if (localHangup) {
           return;
         }
-
         stateController.endOfCall();
         bytes = await readSeaBytes('call_ended');
 
-        if (state.field0.isNotEmpty &&
+        if (!localHangup &&
+            state.field0.isNotEmpty &&
             navigatorKey.currentState != null &&
             navigatorKey.currentState!.mounted) {
           showErrorDialog(
@@ -216,7 +239,11 @@ Future<void> main(List<String> args) async {
         }
     }
 
-    otherSoundHandle = await soundPlayer.play(bytes: bytes);
+    otherSoundHandle = await playSoundEffect(
+      player: soundPlayer,
+      bytes: bytes,
+      sound: state is CallState_Connected ? 'connected' : 'call-ended',
+    );
   }
 
   /// called when the backend wants to start sessions

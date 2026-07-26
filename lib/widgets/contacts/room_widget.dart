@@ -6,9 +6,10 @@ import 'package:telepathy/controllers/index.dart';
 import 'package:telepathy/core/utils/index.dart';
 import 'package:telepathy/models/index.dart';
 import 'package:telepathy/core/rust/player.dart';
-import 'package:telepathy/core/rust/types.dart';
 import 'package:telepathy/core/rust/flutter.dart';
 import 'package:telepathy/widgets/common/index.dart';
+
+import 'call_start_lifecycle.dart';
 
 class RoomWidget extends StatefulWidget {
   final Room room;
@@ -52,6 +53,8 @@ class RoomWidgetState extends State<RoomWidget> {
     final telepathy = context.read<Telepathy>();
     final profilesController = context.read<ProfilesController>();
     final player = context.read<SoundPlayer>();
+    final active = stateController.isActiveRoom(widget.room);
+    final pending = stateController.pendingRoom?.id == widget.room.id;
 
     return InkWell(
       mouseCursor: SystemMouseCursors.click,
@@ -111,43 +114,74 @@ class RoomWidgetState extends State<RoomWidget> {
                 }
               },
             ),
-            IconButton(
-              visualDensity: VisualDensity.comfortable,
-              icon: SvgPicture.asset(
-                'assets/icons/Phone.svg',
-                semanticsLabel: 'Call icon',
-                width: 32,
-              ),
-              onPressed: () async {
-                if (stateController.isCallActive) {
-                  showErrorDialog(
-                      context, 'Call failed', 'There is a call already active');
-                  return;
-                } else if (stateController.inAudioTest) {
-                  showErrorDialog(context, 'Call failed',
-                      'Cannot make a call while in an audio test');
-                  return;
-                } else if (stateController.callEndedRecently) {
-                  // if the call button is pressed right after a call ended, we assume the user did not want to make a call
-                  return;
-                }
-
-                stateController.setStatus('Connecting');
-                List<int> bytes = await readSeaBytes('outgoing');
-                outgoingSoundHandle = await player.play(bytes: bytes);
-
-                try {
-                  await telepathy.joinRoom(memberStrings: widget.room.peerIds);
-                  widget.room.online.clear();
-                  stateController.setActiveRoom(widget.room);
-                } on DartError catch (e) {
-                  stateController.setStatus('Inactive');
+            if (active || pending)
+              IconButton(
+                visualDensity: VisualDensity.comfortable,
+                icon: SvgPicture.asset(
+                  'assets/icons/PhoneOff.svg',
+                  semanticsLabel: 'End call icon',
+                  width: 32,
+                ),
+                onPressed: () async {
                   outgoingSoundHandle?.cancel();
-                  if (!context.mounted) return;
-                  showErrorDialog(context, 'Call failed', e.message);
-                }
-              },
-            )
+                  stateController.cancelCurrentStartOperation();
+                  if (!stateController.beginCallEnding()) return;
+                  await telepathy.endCall();
+                  stateController.endOfCall();
+
+                  List<int> bytes = await readSeaBytes('call_ended');
+                  otherSoundHandle = await playSoundEffect(
+                    player: player,
+                    bytes: bytes,
+                    sound: 'call-ended',
+                  );
+                },
+              ),
+            if (!active && !pending)
+              IconButton(
+                visualDensity: VisualDensity.comfortable,
+                icon: SvgPicture.asset(
+                  'assets/icons/Phone.svg',
+                  semanticsLabel: 'Call icon',
+                  width: 32,
+                ),
+                onPressed: () async {
+                  if (stateController.hasLiveCall) {
+                    showErrorDialog(context, 'Call failed',
+                        'There is a call already active');
+                    return;
+                  } else if (stateController.inAudioTest) {
+                    showErrorDialog(context, 'Call failed',
+                        'Cannot make a call while in an audio test');
+                    return;
+                  } else if (stateController.callEndedRecently) {
+                    // if the call button is pressed right after a call ended, we assume the user did not want to make a call
+                    return;
+                  }
+
+                  // Capture the target before any await so the continuation
+                  // and the `callState` gate observe the same room the user
+                  // clicked, even if the widget is rebuilt against a
+                  // different room while `joinRoom` is still resolving.
+                  final Room target = widget.room;
+                  final operation = telepathy.newStartOperation();
+                  stateController.setStatus('Connecting');
+                  final attempt =
+                      stateController.setPendingRoom(target, operation);
+
+                  await runOutgoingCallStartLifecycle(
+                    context: context,
+                    stateController: stateController,
+                    player: player,
+                    attempt: attempt,
+                    startRequest: () => telepathy.joinRoom(
+                      memberStrings: target.peerIds,
+                      operation: operation,
+                    ),
+                    onStartAccepted: target.online.clear,
+                  );
+                },
+              )
           ],
         ),
       ),
@@ -170,7 +204,15 @@ class RoomWidgetState extends State<RoomWidget> {
               const Text('Edit Room'),
               IconButton(
                 onPressed: () async {
-                  if (!stateController.isActiveRoom(widget.room)) {
+                  // Lifecycle-lock: deleting a pending room would remove the
+                  // only frontend hangup control while the backend join is
+                  // still in flight. The target must remain until the
+                  // lifecycle returns to idle, matching the active target
+                  // gate.
+                  final bool isCallTarget =
+                      stateController.isActiveRoom(widget.room) ||
+                          stateController.pendingRoom?.id == widget.room.id;
+                  if (!isCallTarget) {
                     bool confirm = await _confirmDelete(dialogContext);
                     if (confirm) {
                       profilesController.removeRoom(widget.room);
@@ -182,7 +224,9 @@ class RoomWidgetState extends State<RoomWidget> {
                     showErrorDialog(
                       dialogContext,
                       'Warning',
-                      'Cannot delete a room while in an active call',
+                      stateController.isActiveRoom(widget.room)
+                          ? 'Cannot delete a room while in an active call'
+                          : 'Cannot delete a room while a call is being placed',
                     );
                   }
                 },
@@ -197,16 +241,25 @@ class RoomWidgetState extends State<RoomWidget> {
               const EdgeInsets.only(top: 25, left: 25, right: 25, bottom: 20),
           children: [
             TextInput(
-                enabled: !stateController.isActiveRoom(widget.room),
+                enabled: !(stateController.isActiveRoom(widget.room) ||
+                    stateController.pendingRoom?.id == widget.room.id),
                 controller: _nicknameInput,
                 labelText: 'Nickname'),
             const SizedBox(height: 20),
             Button(
               text: 'Save',
               onPressed: () {
-                if (stateController.isActiveRoom(widget.room)) {
-                  showErrorDialog(dialogContext, 'Warning',
-                      'Cannot rename a room while in an active call');
+                final bool isCallTarget =
+                    stateController.isActiveRoom(widget.room) ||
+                        stateController.pendingRoom?.id == widget.room.id;
+                if (isCallTarget) {
+                  showErrorDialog(
+                    dialogContext,
+                    'Warning',
+                    stateController.isActiveRoom(widget.room)
+                        ? 'Cannot rename a room while in an active call'
+                        : 'Cannot rename a room while a call is being placed',
+                  );
                   return;
                 }
 

@@ -28,10 +28,14 @@
 //! ```
 
 use crate::devices::CpalAudioHost;
-use crate::error::Error;
+use crate::devices::DeviceDirection;
+use crate::devices::DeviceError;
+use crate::error::{
+    AudioFileError, ChannelError, Error, ProcessingError, StreamDirection, StreamError, TaskError,
+};
 use crate::internal::processing::wide_mul;
 #[cfg(target_family = "wasm")]
-use crate::internal::thread;
+use crate::internal::thread::safe_spawn;
 use crate::internal::traits::CHANNEL_SIZE;
 use crate::internal::utils::{db_to_multiplier, resampler_factory};
 use crate::sea::codec::file::SeaFileHeader;
@@ -66,6 +70,8 @@ use wasm_sync::{Condvar, Mutex as SyncMutex};
 #[cfg(target_family = "wasm")]
 use wasmtimer::std::Instant;
 
+/// Bound accumulated decoded SEA data before offloading playback work.
+const MAX_DECODED_SEA_FRAMES: usize = 60 * 48_000 / FRAME_SIZE;
 /// Number of frames to fade out when canceling playback.
 /// This prevents audio pops/clicks when stopping playback abruptly.
 const FADE_FRAMES: usize = 60;
@@ -204,9 +210,7 @@ impl WavFrameSource {
 impl AudioFrameSource for WavFrameSource {
     fn next_frame(&mut self, output: &mut [f32]) -> Result<Option<usize>, Error> {
         if self.channels == 0 {
-            return Err(Error::Processing(
-                "WavFrameSource: channels is 0".to_string(),
-            ));
+            return Err(Error::Processing(ProcessingError::ZeroChannelFrameSource));
         }
 
         let data_start = 44usize.saturating_add(self.position);
@@ -262,9 +266,7 @@ impl DecodedFrameSource {
 impl AudioFrameSource for DecodedFrameSource {
     fn next_frame(&mut self, output: &mut [f32]) -> Result<Option<usize>, Error> {
         if self.channels == 0 {
-            return Err(Error::Processing(
-                "DecodedFrameSource: channels is 0".to_string(),
-            ));
+            return Err(Error::Processing(ProcessingError::ZeroChannelFrameSource));
         }
 
         if self.position >= self.samples.len() {
@@ -315,12 +317,15 @@ impl TryFrom<&[u8]> for AudioHeader {
     /// Validates WAV signature (RIFF/WAVE) and ensures channels/sample_rate are non-zero.
     fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
         if value.len() < 44 {
-            return Err(Error::InvalidWav);
+            return Err(Error::AudioFile(AudioFileError::TooShort {
+                actual: value.len(),
+                required: 44,
+            }));
         }
 
         // Validate WAV signature: must start with "RIFF" and contain "WAVE"
         if &value[0..4] != b"RIFF" || &value[8..12] != b"WAVE" {
-            return Err(Error::InvalidWav);
+            return Err(Error::AudioFile(AudioFileError::InvalidSignature));
         }
 
         let bits_per_sample = u16::from_le_bytes([value[34], value[35]]);
@@ -333,7 +338,10 @@ impl TryFrom<&[u8]> for AudioHeader {
             (3, 32) => SampleFormat::F32,
             (3, 64) => SampleFormat::F64,
             _ => {
-                return Err(Error::InvalidWav);
+                return Err(Error::AudioFile(AudioFileError::UnsupportedSampleFormat {
+                    audio_format,
+                    bits_per_sample,
+                }));
             }
         };
 
@@ -341,8 +349,11 @@ impl TryFrom<&[u8]> for AudioHeader {
         let sample_rate = u32::from_le_bytes([value[24], value[25], value[26], value[27]]);
 
         // Validate channels and sample_rate are non-zero to prevent divide-by-zero
-        if channels == 0 || sample_rate == 0 {
-            return Err(Error::InvalidWav);
+        if channels == 0 {
+            return Err(Error::AudioFile(AudioFileError::ZeroChannels));
+        }
+        if sample_rate == 0 {
+            return Err(Error::AudioFile(AudioFileError::ZeroSampleRate));
         }
 
         Ok(Self {
@@ -414,21 +425,28 @@ impl AudioPlayer {
         // Preflight validation: reject clearly invalid inputs
         // SEA codec files need at least 14 bytes for header
         if bytes.len() < 14 {
-            return Err(Error::InvalidWav);
+            return Err(Error::AudioFile(AudioFileError::TooShort {
+                actual: bytes.len(),
+                required: 14,
+            }));
         }
 
         // Get output device and config before spawning to catch device errors early
         let output_device = get_output_device(&self.output_device, self.host.inner()).await?;
-        let output_config = output_device
-            .default_output_config()
-            .map_err(|e| Error::Device(format!("Failed to get output config: {}", e)))?;
+        let output_config = output_device.default_output_config().map_err(|source| {
+            Error::Device(DeviceError::DefaultConfig {
+                direction: DeviceDirection::Output,
+                source,
+            })
+        })?;
 
         let cancel = Arc::new(Notify::new());
         let cancel_clone = cancel.clone();
         let output_volume = self.output_volume.clone();
 
-        // Use a oneshot channel to receive initialization result from the spawned task
-        // This allows us to return errors from stream creation before the task continues
+        // Use a oneshot channel to receive the typed initialization result from
+        // the spawned task. The sending side gives up the error after it has
+        // crossed the channel; no stringification happens on the wire.
         let (init_tx, init_rx) = oneshot::channel::<Result<(), Error>>();
 
         #[cfg(not(target_family = "wasm"))]
@@ -478,12 +496,7 @@ impl AudioPlayer {
             #[cfg(target_family = "wasm")]
             Ok(Ok(())) => Ok(SoundHandle { cancel }),
             Ok(Err(e)) => Err(e),
-            Err(_) => {
-                // Channel was dropped, which means the task panicked or was cancelled
-                Err(Error::Processing(
-                    "Playback task terminated unexpectedly".to_string(),
-                ))
-            }
+            Err(_) => Err(Error::Task(TaskError::PlaybackInitChannelClosed)),
         }
     }
 
@@ -587,9 +600,7 @@ impl BlockingRingBufferOutput {
         let target = samples.len();
         loop {
             if self.canceled.load(Relaxed) {
-                return Err(Error::Channel(
-                    "BlockingRingBufferOutput: write canceled".to_string(),
-                ));
+                return Err(Error::Channel(ChannelError::BlockingWriteCanceled));
             }
 
             if self.producer.slots() >= target {
@@ -597,9 +608,7 @@ impl BlockingRingBufferOutput {
             }
 
             if self.producer.is_abandoned() {
-                return Err(Error::Channel(
-                    "BlockingRingBufferOutput consumer abandoned".to_string(),
-                ));
+                return Err(Error::Channel(ChannelError::ConsumerAbandoned));
             }
 
             let guard = self.mutex.lock().unwrap();
@@ -607,9 +616,7 @@ impl BlockingRingBufferOutput {
             // Re-check after acquiring the lock to avoid missed makeups.
             if self.canceled.load(Relaxed) {
                 drop(guard);
-                return Err(Error::Channel(
-                    "BlockingRingBufferOutput: write canceled".to_string(),
-                ));
+                return Err(Error::Channel(ChannelError::BlockingWriteCanceled));
             }
 
             if self.producer.slots() >= target {
@@ -647,7 +654,10 @@ impl BlockingRingBufferOutput {
 /// Returns `AudioError` if the WAV data is invalid or encoding fails.
 pub async fn wav_to_sea(bytes: Vec<u8>, residual_bits: f32) -> Result<Vec<u8>, Error> {
     if bytes.len() < 44 {
-        return Err(Error::Processing("WAV data too short".to_string()));
+        return Err(Error::AudioFile(AudioFileError::TooShort {
+            actual: bytes.len(),
+            required: 44,
+        }));
     }
 
     let spec = AudioHeader::try_from(&bytes[0..44])?;
@@ -719,19 +729,21 @@ pub async fn wav_to_sea(bytes: Vec<u8>, residual_bits: f32) -> Result<Vec<u8>, E
 }
 
 /// Gets the output device based on the configured device ID.
+///
+/// Falls back to the system default when the persisted device ID no longer
+/// resolves.
 async fn get_output_device(
     output_device: &Arc<Mutex<Option<DeviceId>>>,
     host: &Host,
 ) -> Result<cpal::Device, Error> {
-    match *output_device.lock().await {
-        Some(ref id) => Ok(host.device_by_id(id).unwrap_or(
-            host.default_output_device()
-                .ok_or(Error::Device("No output device available".to_string()))?,
-        )),
-        None => host
-            .default_output_device()
-            .ok_or(Error::Device("No output device available".to_string())),
+    if let Some(ref id) = *output_device.lock().await
+        && let Some(device) = host.device_by_id(id)
+    {
+        return Ok(device);
     }
+
+    host.default_output_device()
+        .ok_or(Error::Device(DeviceError::NoOutputDevice))
 }
 
 /// Internal play sound function with pre-obtained device and config.
@@ -754,7 +766,10 @@ async fn play_sound_with_device(
         let spec_result = if bytes.len() >= 44 {
             AudioHeader::try_from(&bytes[0..44])
         } else {
-            Err(Error::InvalidWav)
+            Err(Error::AudioFile(AudioFileError::TooShort {
+                actual: bytes.len(),
+                required: 44,
+            }))
         };
         let is_valid_wav = spec_result.is_ok();
         let mut spec = spec_result.unwrap_or(AudioHeader {
@@ -768,20 +783,27 @@ async fn play_sound_with_device(
         if !is_valid_wav {
             let now = Instant::now();
             let local_bytes = mem::take(&mut bytes);
-            let header = SeaFileHeader::from_frame(&local_bytes[..14])?;
+            let header = SeaFileHeader::from_frame(&local_bytes[..14])
+                .map_err(|e| Error::AudioFile(AudioFileError::Codec(e)))?;
             info!("loaded header {:?}", header);
             let chunk_size = header.chunk_size as usize;
             spec.channels = header.channels as u32;
             spec.sample_rate = header.sample_rate;
-            let mut decoder = SeaDecoder::new(header)?;
+            let mut decoder =
+                SeaDecoder::new(header).map_err(|e| Error::AudioFile(AudioFileError::Codec(e)))?;
+
+            let frame_count = local_bytes[14..].chunks(chunk_size).len();
+            validate_sea_frame_count(frame_count)?;
 
             samples = Some(
                 spawn_cpu_task(move || {
-                    let mut decoded = Vec::new();
+                    let mut decoded = Vec::with_capacity(frame_count);
                     let mut buffer = [0_i16; FRAME_SIZE];
 
                     for chunk in local_bytes[14..].chunks(chunk_size) {
-                        decoder.decode_frame(chunk, &mut buffer)?;
+                        decoder
+                            .decode_frame(chunk, &mut buffer)
+                            .map_err(|e| Error::AudioFile(AudioFileError::Codec(e)))?;
                         decoded.push(buffer);
                     }
 
@@ -794,8 +816,11 @@ async fn play_sound_with_device(
 
         // Validate that we have valid audio parameters before proceeding
         // This prevents divide-by-zero and buffer panics from malformed input
-        if spec.channels == 0 || spec.sample_rate == 0 {
-            return Err(Error::InvalidWav);
+        if spec.channels == 0 {
+            return Err(Error::AudioFile(AudioFileError::ZeroChannels));
+        }
+        if spec.sample_rate == 0 {
+            return Err(Error::AudioFile(AudioFileError::ZeroSampleRate));
         }
 
         // sample rates used for resampling
@@ -833,58 +858,65 @@ async fn play_sound_with_device(
         let space_available_for_stream = space_available.clone();
 
         let mut stream_consumer = stream_consumer;
-        let output_stream = output_device.build_output_stream(
-            &output_config.into(),
-            move |output: &mut [f32], _| {
-                let mut canceled = processor_canceled_for_stream.load(Relaxed);
-                for frame in output.chunks_mut(output_channels) {
-                    if canceled {
-                        // After full fade fill frames with 0
-                        if i == FADE_FRAMES {
-                            frame.fill(0_f32);
-                            continue;
-                        }
-
-                        // Fade each sample
-                        for sample in &mut last_samples {
-                            *sample *= (1_f32 - i as f32 / f32_sample_rate).max(0_f32);
-                        }
-
-                        // Play the samples
-                        frame.copy_from_slice(&last_samples);
-                        // Advance the counter
-                        i += 1;
-                        // Notify main thread once after the full fade has occurred
-                        if i == FADE_FRAMES {
-                            output_finished_clone.notify_one();
-                        }
-                    } else {
-                        match stream_consumer.read_chunk(output_channels) {
-                            Ok(chunk) => {
-                                for (sample, out) in chunk.into_iter().zip(frame.iter_mut()) {
-                                    *out = sample;
-                                }
-                                last_samples.copy_from_slice(frame);
-                                space_available_for_stream.notify_one();
+        let output_stream = output_device
+            .build_output_stream(
+                output_config.into(),
+                move |output: &mut [f32], _| {
+                    let mut canceled = processor_canceled_for_stream.load(Relaxed);
+                    for frame in output.chunks_mut(output_channels) {
+                        if canceled {
+                            // After full fade fill frames with 0
+                            if i == FADE_FRAMES {
+                                frame.fill(0_f32);
+                                continue;
                             }
-                            Err(_) => {
-                                // If the processor has finished and the buffer is empty, begin fading out.
-                                // If the processor is still running, hold the last samples (prevents pops).
-                                if processor_finished_for_stream.load(Relaxed) {
-                                    processor_canceled_for_stream.store(true, Relaxed);
-                                    canceled = true;
+
+                            // Fade each sample
+                            for sample in &mut last_samples {
+                                *sample *= (1_f32 - i as f32 / f32_sample_rate).max(0_f32);
+                            }
+
+                            // Play the samples
+                            frame.copy_from_slice(&last_samples);
+                            // Advance the counter
+                            i += 1;
+                            // Notify main thread once after the full fade has occurred
+                            if i == FADE_FRAMES {
+                                output_finished_clone.notify_one();
+                            }
+                        } else {
+                            match stream_consumer.read_chunk(output_channels) {
+                                Ok(chunk) => {
+                                    for (sample, out) in chunk.into_iter().zip(frame.iter_mut()) {
+                                        *out = sample;
+                                    }
+                                    last_samples.copy_from_slice(frame);
+                                    space_available_for_stream.notify_one();
                                 }
-                                frame.copy_from_slice(&last_samples);
+                                Err(_) => {
+                                    // If the processor has finished and the buffer is empty, begin fading out.
+                                    // If the processor is still running, hold the last samples (prevents pops).
+                                    if processor_finished_for_stream.load(Relaxed) {
+                                        processor_canceled_for_stream.store(true, Relaxed);
+                                        canceled = true;
+                                    }
+                                    frame.copy_from_slice(&last_samples);
+                                }
                             }
                         }
                     }
-                }
-            },
-            move |err| {
-                error!("Error in player stream: {}", err);
-            },
-            None,
-        )?;
+                },
+                move |err| {
+                    error!("Error in player stream: {}", err);
+                },
+                None,
+            )
+            .map_err(|source| {
+                Error::Stream(StreamError::BuildOutputStream {
+                    config: Some(output_config),
+                    source,
+                })
+            })?;
 
         let processor_canceled_for_processor = processor_canceled.clone();
         let processor_finished_for_processor = processor_finished.clone();
@@ -912,7 +944,12 @@ async fn play_sound_with_device(
             result
         });
 
-        output_stream.play()?; // Play the stream
+        output_stream.play().map_err(|source| {
+            Error::Stream(StreamError::Play {
+                direction: StreamDirection::Output,
+                source,
+            })
+        })?; // Play the stream
 
         Ok((
             output_stream,
@@ -932,9 +969,8 @@ async fn play_sound_with_device(
                 state
             }
             Err(e) => {
-                let err_msg = e.to_string();
-                let _ = init_tx.send(Err(Error::Processing(err_msg)));
-                return Err(e);
+                let _ = init_tx.send(Err(e));
+                return Err(Error::Task(TaskError::PlaybackInitChannelClosed));
             }
         };
 
@@ -1017,9 +1053,7 @@ fn processor<S: AudioFrameSource>(
 ) -> Result<(), Error> {
     let channels_usize = source.channels();
     if channels_usize == 0 {
-        return Err(Error::Processing(
-            "AudioFrameSource: channels is 0".to_string(),
-        ));
+        return Err(Error::Processing(ProcessingError::ZeroChannelFrameSource));
     }
 
     // The number of sample frames in the file (per channel)
@@ -1174,44 +1208,54 @@ fn unpack_wav_frame<T: SampleConversion + Clone>(
                 break;
             }
 
-            let sample =
-                match sample_format {
-                    SampleFormat::U8 => T::from_u8_sample(sample_bytes[0]),
-                    SampleFormat::I16 => {
-                        let value =
-                            i16::from_le_bytes(sample_bytes.try_into().map_err(|_| {
-                                Error::Processing("Invalid I16 sample".to_string())
-                            })?);
-                        T::from_i16_sample(value)
-                    }
-                    SampleFormat::I32 => {
-                        let value =
-                            i32::from_le_bytes(sample_bytes.try_into().map_err(|_| {
-                                Error::Processing("Invalid I32 sample".to_string())
-                            })?);
-                        T::from_i32_sample(value)
-                    }
-                    SampleFormat::F32 => {
-                        let value =
-                            f32::from_le_bytes(sample_bytes.try_into().map_err(|_| {
-                                Error::Processing("Invalid F32 sample".to_string())
-                            })?);
-                        T::from_f32_sample(value)
-                    }
-                    SampleFormat::F64 => {
-                        let value =
-                            f64::from_le_bytes(sample_bytes.try_into().map_err(|_| {
-                                Error::Processing("Invalid F64 sample".to_string())
-                            })?);
-                        T::from_f64_sample(value)
-                    }
-                    _ => {
-                        return Err(Error::Processing(format!(
-                            "Unsupported sample format: {:?}",
-                            sample_format
-                        )));
-                    }
-                };
+            let sample = match sample_format {
+                SampleFormat::U8 => T::from_u8_sample(sample_bytes[0]),
+                SampleFormat::I16 => {
+                    let value = i16::from_le_bytes(sample_bytes.try_into().map_err(|_| {
+                        Error::AudioFile(AudioFileError::InvalidSampleBytes {
+                            sample_format,
+                            bytes_per_sample,
+                            actual: sample_bytes.len(),
+                        })
+                    })?);
+                    T::from_i16_sample(value)
+                }
+                SampleFormat::I32 => {
+                    let value = i32::from_le_bytes(sample_bytes.try_into().map_err(|_| {
+                        Error::AudioFile(AudioFileError::InvalidSampleBytes {
+                            sample_format,
+                            bytes_per_sample,
+                            actual: sample_bytes.len(),
+                        })
+                    })?);
+                    T::from_i32_sample(value)
+                }
+                SampleFormat::F32 => {
+                    let value = f32::from_le_bytes(sample_bytes.try_into().map_err(|_| {
+                        Error::AudioFile(AudioFileError::InvalidSampleBytes {
+                            sample_format,
+                            bytes_per_sample,
+                            actual: sample_bytes.len(),
+                        })
+                    })?);
+                    T::from_f32_sample(value)
+                }
+                SampleFormat::F64 => {
+                    let value = f64::from_le_bytes(sample_bytes.try_into().map_err(|_| {
+                        Error::AudioFile(AudioFileError::InvalidSampleBytes {
+                            sample_format,
+                            bytes_per_sample,
+                            actual: sample_bytes.len(),
+                        })
+                    })?);
+                    T::from_f64_sample(value)
+                }
+                _ => {
+                    return Err(Error::AudioFile(AudioFileError::UnknownSampleFormat(
+                        sample_format,
+                    )));
+                }
+            };
 
             output[ch_idx] = sample;
         }
@@ -1243,11 +1287,21 @@ where
     R: Send + 'static,
 {
     let (tx, rx) = oneshot::channel();
-    thread::safe_spawn(move || {
+    safe_spawn(move || {
         let result = f();
         let _ = tx.send(result);
     })?;
     rx.await?
+}
+
+fn validate_sea_frame_count(frame_count: usize) -> Result<(), Error> {
+    if frame_count > MAX_DECODED_SEA_FRAMES {
+        return Err(Error::AudioFile(AudioFileError::TooLarge {
+            actual: frame_count,
+            limit: MAX_DECODED_SEA_FRAMES,
+        }));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1264,6 +1318,15 @@ mod tests {
                 "sample {idx} mismatch: expected {expected}, got {actual}"
             );
         }
+    }
+
+    #[test]
+    fn sea_decode_rejects_frame_counts_above_memory_limit() {
+        assert!(validate_sea_frame_count(MAX_DECODED_SEA_FRAMES).is_ok());
+        assert!(matches!(
+            validate_sea_frame_count(MAX_DECODED_SEA_FRAMES + 1),
+            Err(Error::AudioFile(AudioFileError::TooLarge { .. }))
+        ));
     }
 
     fn make_wav_header(
@@ -1379,23 +1442,29 @@ mod tests {
 
         assert!(matches!(
             AudioHeader::try_from(&bad_riff[..]),
-            Err(Error::InvalidWav)
+            Err(Error::AudioFile(AudioFileError::InvalidSignature))
         ));
         assert!(matches!(
             AudioHeader::try_from(&zero_channels[..]),
-            Err(Error::InvalidWav)
+            Err(Error::AudioFile(AudioFileError::ZeroChannels))
         ));
         assert!(matches!(
             AudioHeader::try_from(&zero_sample_rate[..]),
-            Err(Error::InvalidWav)
+            Err(Error::AudioFile(AudioFileError::ZeroSampleRate))
         ));
         assert!(matches!(
             AudioHeader::try_from(&unsupported_format[..]),
-            Err(Error::InvalidWav)
+            Err(Error::AudioFile(AudioFileError::UnsupportedSampleFormat {
+                audio_format: 2,
+                bits_per_sample: 16
+            }))
         ));
         assert!(matches!(
             AudioHeader::try_from(&unsupported_depth[..]),
-            Err(Error::InvalidWav)
+            Err(Error::AudioFile(AudioFileError::UnsupportedSampleFormat {
+                audio_format: 1,
+                bits_per_sample: 24
+            }))
         ));
     }
 

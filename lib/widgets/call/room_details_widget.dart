@@ -62,12 +62,18 @@ class RoomDetailsWidget extends StatelessWidget {
             ),
             onPressed: () async {
               outgoingSoundHandle?.cancel();
+              stateController.cancelCurrentStartOperation();
 
-              telepathy.endCall();
+              if (!stateController.beginCallEnding()) return;
+              await telepathy.endCall();
               stateController.endOfCall();
 
               List<int> bytes = await readSeaBytes('call_ended');
-              otherSoundHandle = await player.play(bytes: bytes);
+              otherSoundHandle = await playSoundEffect(
+                player: player,
+                bytes: bytes,
+                sound: 'call-ended',
+              );
             },
           ),
           Text('Online: ${online.map(getNickname).join(' ')}'),

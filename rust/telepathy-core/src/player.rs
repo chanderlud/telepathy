@@ -15,6 +15,10 @@ use tokio::fs::File;
 #[cfg(not(target_family = "wasm"))]
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+/// Input WAV files may be larger than their encoded ringtone, but must remain bounded.
+#[cfg(not(target_family = "wasm"))]
+const MAX_RINGTONE_WAV_LENGTH: u64 = 32 * 1024 * 1024;
+
 /// Flutter-compatible sound player wrapping the library's AudioPlayer.
 ///
 /// This struct provides Flutter Rust Bridge attributes for seamless
@@ -127,28 +131,40 @@ impl FlutterSoundHandle {
 pub async fn load_ringtone(path: String) -> Result<(), DartError> {
     let path = Path::new(&path);
 
-    let mut input_file = File::open(path).await.map_err(|error| error.to_string())?;
-    let mut output_file = File::create("ringtone.sea")
+    if path.extension().and_then(|extension| extension.to_str()) != Some("wav") {
+        return Err("Unsupported file type".to_string().into());
+    }
+
+    let file_length = tokio::fs::metadata(path)
+        .await
+        .map_err(|error| error.to_string())?
+        .len();
+    if file_length > MAX_RINGTONE_WAV_LENGTH {
+        return Err("Ringtone file is too large".to_string().into());
+    }
+
+    let input_file = File::open(path).await.map_err(|error| error.to_string())?;
+    let mut wav_bytes = Vec::with_capacity(file_length as usize);
+    input_file
+        .take(MAX_RINGTONE_WAV_LENGTH + 1)
+        .read_to_end(&mut wav_bytes)
         .await
         .map_err(|error| error.to_string())?;
-
-    match path.extension().and_then(|e| e.to_str()) {
-        Some("wav") => {
-            let mut wav_bytes = Vec::new();
-            input_file
-                .read_to_end(&mut wav_bytes)
-                .await
-                .map_err(|error| error.to_string())?;
-            let sea_bytes = wav_to_sea(wav_bytes, 5_f32)
-                .await
-                .map_err(|error| error.to_string())?;
-            output_file
-                .write_all(&sea_bytes)
-                .await
-                .map_err(|error| error.to_string())?;
-        }
-        _ => return Err("Unsupported file type".to_string().into()),
+    if wav_bytes.len() as u64 > MAX_RINGTONE_WAV_LENGTH {
+        return Err("Ringtone file is too large".to_string().into());
     }
+    let sea_bytes = wav_to_sea(wav_bytes, 5_f32)
+        .await
+        .map_err(|error| error.to_string())?;
+    if sea_bytes.len() > crate::internal::MAX_RINGTONE_LENGTH {
+        return Err("Encoded ringtone is too large".to_string().into());
+    }
+    File::create("ringtone.sea")
+        .await
+        .map_err(|error| error.to_string())?
+        .write_all(&sea_bytes)
+        .await
+        .map_err(|error| error.to_string())?;
 
     Ok(())
 }

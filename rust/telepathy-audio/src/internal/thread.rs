@@ -25,6 +25,8 @@ pub(crate) use std::thread::*;
 pub(crate) use wasm_thread::*;
 
 use crate::error::Error;
+#[cfg(target_family = "wasm")]
+use crate::error::classify_panic_payload;
 
 /// Spawns a thread, catching panics on WASM when threading is unavailable.
 ///
@@ -49,15 +51,6 @@ where
 
     match catch_unwind(AssertUnwindSafe(|| spawn(f))) {
         Ok(handle) => Ok(handle),
-        Err(panic_info) => {
-            let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
-                (*s).to_string()
-            } else if let Some(s) = panic_info.downcast_ref::<String>() {
-                s.clone()
-            } else {
-                "thread::spawn panicked (threading may be unavailable)".to_string()
-            };
-            Err(Error::WasmThreading(msg))
-        }
+        Err(panic_info) => Err(classify_panic_payload(panic_info).into()),
     }
 }

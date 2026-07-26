@@ -87,23 +87,19 @@ class AudioSettingsController with ChangeNotifier {
 
   Future<void> updateOutputDevice(String? deviceId) async {
     outputDeviceId = deviceId;
-    if (deviceId != null) {
-      await options.setString('outputDeviceId', deviceId);
-    } else {
-      await options.remove('outputDeviceId');
-    }
+    await _setOptionalString('outputDeviceId', deviceId);
 
     notifyListeners();
   }
 
   Future<void> updateInputDevice(String? deviceId) async {
     inputDeviceId = deviceId;
-    if (deviceId != null) {
-      await options.setString('inputDeviceId', deviceId);
-    } else {
-      await options.remove('inputDeviceId');
-    }
+    await _setOptionalString('inputDeviceId', deviceId);
 
     notifyListeners();
+  }
+
+  Future<void> _setOptionalString(String key, String? value) {
+    return value == null ? options.remove(key) : options.setString(key, value);
   }
 }

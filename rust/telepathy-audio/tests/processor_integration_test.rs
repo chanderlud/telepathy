@@ -195,9 +195,11 @@ fn output_processor_source_failures_propagate() {
     )
     .unwrap_err();
 
-    assert!(
-        matches!(err, telepathy_audio::Error::Processing(msg) if msg.contains("intentional source failure"))
-    );
+    assert!(matches!(
+        err,
+        telepathy_audio::Error::Channel(telepathy_audio::ChannelError::DataSourceFailed(io))
+            if io.to_string().contains("intentional source failure")
+    ));
 }
 
 #[test]
@@ -214,9 +216,11 @@ fn output_processor_sink_failures_propagate() {
     )
     .unwrap_err();
 
-    assert!(
-        matches!(err, telepathy_audio::Error::Processing(msg) if msg.contains("intentional output failure"))
-    );
+    assert!(matches!(
+        err,
+        telepathy_audio::Error::Channel(telepathy_audio::ChannelError::DataSinkFailed(io))
+            if io.to_string().contains("intentional output failure")
+    ));
 }
 
 fn run_input_and_measure_rms(input_volume: f32) -> f32 {
@@ -846,7 +850,10 @@ fn output_processor_propagates_decoder_error() {
     )
     .unwrap_err();
 
-    assert!(matches!(err, telepathy_audio::Error::Processing(msg) if msg.contains("Codec error")));
+    assert!(matches!(
+        err,
+        telepathy_audio::Error::Processing(telepathy_audio::ProcessingError::Codec(_))
+    ));
 }
 
 #[test]

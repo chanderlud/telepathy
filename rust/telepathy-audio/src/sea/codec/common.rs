@@ -1,3 +1,5 @@
+use std::fmt;
+
 pub const SEAC_MAGIC: u32 = u32::from_be_bytes(*b"seac"); // 0x73 0x65 0x61 0x63
 
 #[inline(always)]
@@ -54,7 +56,7 @@ impl SeaResidualSize {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum SeaError {
     ReadError,
     InvalidParameters,
@@ -65,6 +67,23 @@ pub enum SeaError {
     TooManyFrames,
     MetadataTooLarge,
 }
+
+impl fmt::Display for SeaError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SeaError::ReadError => f.write_str("failed to read SEA data"),
+            SeaError::InvalidParameters => f.write_str("invalid SEA parameters"),
+            SeaError::InvalidFile => f.write_str("invalid SEA file"),
+            SeaError::InvalidFrame => f.write_str("invalid SEA frame"),
+            SeaError::EncoderClosed => f.write_str("SEA encoder is closed"),
+            SeaError::UnsupportedVersion => f.write_str("unsupported SEA version"),
+            SeaError::TooManyFrames => f.write_str("too many SEA frames"),
+            SeaError::MetadataTooLarge => f.write_str("SEA metadata too large"),
+        }
+    }
+}
+
+impl std::error::Error for SeaError {}
 
 pub trait SeaEncoderTrait {
     fn encode_into(

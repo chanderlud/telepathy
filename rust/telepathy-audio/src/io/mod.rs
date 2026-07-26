@@ -43,7 +43,7 @@ pub mod input;
 pub mod output;
 pub mod traits;
 
-pub type StreamErrorCallback = Box<dyn FnMut(cpal::StreamError) + Send + 'static>;
+pub type StreamErrorCallback = Box<dyn FnMut(cpal::Error) + Send + 'static>;
 
 // Re-export main types for convenience
 pub use input::{AudioInputBuilder, AudioInputConfig, AudioInputHandle, CodecBitrateMode};

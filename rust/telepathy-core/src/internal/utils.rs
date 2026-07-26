@@ -1,5 +1,5 @@
 use crate::internal::callbacks::CoreStatisticsCallback;
-use crate::internal::error::{Error, ErrorKind};
+use crate::internal::error::{AudioStreamError, Error, ErrorKind};
 use crate::internal::messages::ProtocolMessage;
 use crate::internal::state::StatisticsCollectorState;
 use crate::overlay::{CONNECTED, LATENCY, LOSS};
@@ -20,6 +20,7 @@ use telepathy_audio::io::traits::ClosedOrFailed;
 use telepathy_audio::io::{AudioDataSink, AudioDataSource};
 use tokio::select;
 use tokio::sync::Notify;
+use tokio::sync::mpsc::{UnboundedReceiver, error::TryRecvError};
 #[cfg(all(feature = "native", not(feature = "flutter")))]
 pub use tokio::task::JoinHandle;
 #[cfg(not(target_family = "wasm"))]
@@ -168,9 +169,20 @@ pub(crate) async fn loopback(
     output_sender: kanal::Sender<Bytes>,
     cancel: &CancellationToken,
     end_call: &Arc<Notify>,
-) {
+    stream_errors: &mut UnboundedReceiver<AudioStreamError>,
+) -> Result<()> {
+    let mut stream_errors_open = true;
+
     loop {
         select! {
+            biased;
+
+            error = stream_errors.recv(), if stream_errors_open => {
+                if let Some(error) = error {
+                    return Err(error.into_error_kind().into());
+                }
+                stream_errors_open = false;
+            }
             _ = end_call.notified() => {
                 break;
             }
@@ -187,6 +199,11 @@ pub(crate) async fn loopback(
                 }
             },
         }
+    }
+
+    match stream_errors.try_recv() {
+        Ok(error) => Err(error.into_error_kind().into()),
+        Err(TryRecvError::Empty | TryRecvError::Disconnected) => Ok(()),
     }
 }
 
