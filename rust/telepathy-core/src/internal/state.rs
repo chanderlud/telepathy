@@ -913,6 +913,14 @@ impl CoreState {
     }
 }
 
+pub(crate) fn room_hash_for_peers(peers: &[PublicKey]) -> u64 {
+    peers.iter().fold(0u64, |acc, peer| {
+        let mut hasher = DefaultHasher::new();
+        peer.hash(&mut hasher);
+        acc ^ hasher.finish()
+    })
+}
+
 pub(crate) struct RoomState {
     pub(crate) peers: Vec<PublicKey>,
 
@@ -931,11 +939,7 @@ pub(crate) struct RoomState {
 impl RoomState {
     /// Computes the room hash from the current member list
     pub(crate) fn room_hash(&self) -> u64 {
-        self.peers.iter().fold(0u64, |acc, peer| {
-            let mut hasher = DefaultHasher::new();
-            peer.hash(&mut hasher);
-            acc ^ hasher.finish()
-        })
+        room_hash_for_peers(&self.peers)
     }
 }
 
@@ -1014,6 +1018,12 @@ pub struct SessionState {
     pub(crate) start_screenshare: Notify,
 
     pub(crate) stop_screenshare: Arc<Mutex<Option<Arc<Notify>>>>,
+
+    finished: CancellationToken,
+
+    room_admission: AtomicU64,
+
+    deferred_room_predecessor: Mutex<Option<Arc<SessionState>>>,
 }
 
 impl SessionState {
@@ -1029,6 +1039,49 @@ impl SessionState {
             end_call: Default::default(),
             start_screenshare: Default::default(),
             stop_screenshare: Default::default(),
+            finished: Default::default(),
+            room_admission: AtomicU64::new(0),
+            deferred_room_predecessor: Default::default(),
+        }
+    }
+
+    pub(crate) fn mark_finished(&self) {
+        self.finished.cancel();
+    }
+
+    pub(crate) fn is_finished(&self) -> bool {
+        self.finished.is_cancelled()
+    }
+
+    pub(crate) fn can_restore_room_predecessor(&self) -> bool {
+        !self.stop_session.is_cancelled() && !self.is_finished()
+    }
+
+    pub(crate) fn admit_to_room(&self, generation: u64) {
+        self.room_admission.store(generation, Relaxed);
+    }
+
+    pub(crate) fn is_admitted_to_room(&self, generation: u64) -> bool {
+        self.room_admission.load(Relaxed) == generation
+    }
+
+    pub(crate) fn leave_room(&self, generation: u64) {
+        _ = self
+            .room_admission
+            .compare_exchange(generation, 0, Relaxed, Relaxed);
+    }
+
+    pub(crate) async fn defer_room_predecessor(&self, predecessor: Arc<SessionState>) {
+        *self.deferred_room_predecessor.lock().await = Some(predecessor);
+    }
+
+    pub(crate) async fn take_deferred_room_predecessor(&self) -> Option<Arc<SessionState>> {
+        self.deferred_room_predecessor.lock().await.take()
+    }
+
+    pub(crate) async fn complete_room_replacement(&self) {
+        if let Some(predecessor) = self.take_deferred_room_predecessor().await {
+            predecessor.teardown().await;
         }
     }
 

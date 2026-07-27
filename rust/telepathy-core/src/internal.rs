@@ -467,16 +467,25 @@ where
         }
         self.await_runtime_applied(operation).await?;
 
-        if !self
+        // Parse the exact authorized member set before claiming RoomCall ownership.
+        let members: Vec<_> = member_strings
+            .into_iter()
+            .filter_map(|member| member.parse().ok())
+            .collect();
+
+        let Some(room_owner) = self
             .inner
             .core_state
             .call_slot
-            .try_acquire(CallSlotState::RoomCall, None)?
-        {
+            .try_acquire_with_snapshot(CallSlotState::RoomCall)?
+        else {
             return Err(ErrorKind::CallAlreadyActive.into());
-        }
-
-        let room_owner = self.inner.core_state.call_slot.snapshot()?;
+        };
+        // No await/yield is allowed between slot acquisition and admission publication.
+        let mut pending_admission = Some(
+            self.inner
+                .install_pending_room_admission(room_owner, &members),
+        );
 
         if operation.is_cancelled() {
             let _ = self
@@ -507,11 +516,6 @@ where
             }
         }
 
-        // parse members
-        let members: Vec<_> = member_strings
-            .into_iter()
-            .filter_map(|m| m.parse().ok())
-            .collect();
         // delivers messages from each session to the room controller
         let (sender, receiver) = channel(32);
         // cancels all processing threads
@@ -609,6 +613,7 @@ where
                 Err(_) => return Ok(()),
             },
             _ = operation.cancelled() => {
+                drop(pending_admission.take());
                 abort_room_generation(&cancel, &end_call, &mut controller_completion_receiver)
                     .await;
                 return Ok(());
@@ -619,6 +624,7 @@ where
         let mut room_guard = tokio::select! {
             guard = self.inner.room_state.write() => guard,
             _ = operation.cancelled() => {
+                drop(pending_admission.take());
                 abort_room_generation(&cancel, &end_call, &mut controller_completion_receiver)
                     .await;
                 return Ok(());
@@ -626,6 +632,7 @@ where
         };
         if operation.is_cancelled() {
             drop(room_guard);
+            drop(pending_admission.take());
             abort_room_generation(&cancel, &end_call, &mut controller_completion_receiver).await;
             return Ok(());
         }
@@ -638,6 +645,10 @@ where
             generation: room_generation,
         });
         drop(room_guard);
+        if let Some(pending_admission) = pending_admission.take() {
+            pending_admission.publish();
+        }
+        self.inner.request_room_reconcile();
         if operation.is_cancelled() {
             drop(publication_sender);
             abort_room_generation(&cancel, &end_call, &mut controller_completion_receiver).await;
@@ -671,20 +682,6 @@ where
             };
             if let Some(state) = read_guard.get(&member) {
                 state.start_call.notify_one();
-            } else if let Some(sender) = &self.inner.start_session {
-                let cancelled_during_send = tokio::select! {
-                    _ = operation.cancelled() => true,
-                    send_result = sender.send(member) => {
-                        let _ = send_result;
-                        false
-                    }
-                };
-                if cancelled_during_send {
-                    drop(read_guard);
-                    abort_room_generation(&cancel, &end_call, &mut controller_completion_receiver)
-                        .await;
-                    return Ok(());
-                }
             }
         }
         Ok(())
@@ -784,6 +781,7 @@ where
         if let Some(state) = removed_state {
             state.stop_session.cancel();
         }
+        self.inner.request_room_reconcile();
     }
 
     /// Blocks while an audio test is running
