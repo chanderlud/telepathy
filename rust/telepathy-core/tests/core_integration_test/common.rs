@@ -132,6 +132,7 @@ impl ContactLookupProbe {
 #[derive(Clone)]
 pub(super) struct SessionStatusProbe {
     statuses: Arc<Mutex<HashMap<Vec<u8>, SessionStatus>>>,
+    connected_counts: Arc<Mutex<HashMap<Vec<u8>, usize>>>,
     changed: Arc<Notify>,
     park_connecting: Arc<AtomicBool>,
     connecting_released: watch::Sender<bool>,
@@ -142,6 +143,7 @@ impl Default for SessionStatusProbe {
         let (connecting_released, _) = watch::channel(false);
         Self {
             statuses: Arc::default(),
+            connected_counts: Arc::default(),
             changed: Arc::new(Notify::new()),
             park_connecting: Arc::new(AtomicBool::new(false)),
             connecting_released,
@@ -152,12 +154,51 @@ impl Default for SessionStatusProbe {
 impl SessionStatusProbe {
     fn record(&self, peer_id: &[u8], status: SessionStatus) -> bool {
         let is_connecting = matches!(status, SessionStatus::Connecting);
+        if matches!(status, SessionStatus::Connected { .. }) {
+            *self
+                .connected_counts
+                .lock()
+                .unwrap()
+                .entry(peer_id.to_vec())
+                .or_default() += 1;
+        }
         self.statuses
             .lock()
             .unwrap()
             .insert(peer_id.to_vec(), status);
         self.changed.notify_waiters();
         is_connecting && self.park_connecting.load(Relaxed)
+    }
+
+    pub(super) fn connected_count(&self, peer_id: &[u8]) -> usize {
+        self.connected_counts
+            .lock()
+            .unwrap()
+            .get(peer_id)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    pub(super) async fn wait_for_connected_after(&self, peer_id: &[u8], previous: usize) {
+        let wait = async {
+            loop {
+                let changed = self.changed.notified();
+                tokio::pin!(changed);
+                changed.as_mut().enable();
+                if self.connected_count(peer_id) > previous {
+                    return;
+                }
+                changed.await;
+            }
+        };
+        tokio::time::timeout(Duration::from_secs(60), wait)
+            .await
+            .unwrap_or_else(|_| {
+                panic!(
+                    "timed out waiting for a new Connected session status for {peer_id:?}; previous={previous}, current={}",
+                    self.connected_count(peer_id)
+                )
+            });
     }
 
     pub(super) fn park_connecting(&self) {

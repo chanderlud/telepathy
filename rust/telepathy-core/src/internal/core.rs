@@ -97,6 +97,8 @@ where
 
     pending_room_admission: PendingRoomAdmissionRegistry,
 
+    pending_session_candidates: PendingSessionCandidateRegistry,
+
     /// Keeps track of and controls the sessions
     pub session_states: Arc<RwLock<HashMap<PublicKey, Arc<SessionState>>>>,
 
@@ -242,6 +244,7 @@ where
             room_state: Default::default(),
             room_reconcile: Default::default(),
             pending_room_admission: Default::default(),
+            pending_session_candidates: Default::default(),
             session_states: Default::default(),
             start_session: None,
             cancel_outbound_connections: Default::default(),
@@ -810,13 +813,19 @@ where
         let state = Arc::new(SessionState::new(&message_channel.0));
         Span::current().record("session.id", state.id.to_string());
         let local_peer = self.peer_id().await;
+        let is_room = self.is_in_room(&peer).await;
         let keep_new_session =
             should_keep_new_session(&local_peer, &peer, connection.side().is_client());
         let mut states = self.session_states.write().await;
+        let mut deferred_candidate = None;
         let old_state_option = if let Some(old_state) = states.get(&peer).cloned() {
             if keep_new_session {
                 states.insert(peer, state.clone());
                 self.publish_session_locked(peer);
+            } else {
+                deferred_candidate = self
+                    .pending_session_candidates
+                    .try_install(peer, old_state.id);
             }
 
             Some(old_state)
@@ -826,8 +835,6 @@ where
             None
         };
         drop(states);
-
-        drop(incoming_candidate);
 
         if let Some(old_state) = old_state_option {
             if keep_new_session {
@@ -839,12 +846,53 @@ where
                     old_session.id = %old_state.id,
                     connection.side.client = connection.side().is_client()
                 );
-                if self.is_in_room(&peer).await {
+                if is_room {
                     state.defer_room_predecessor(old_state).await;
                 } else {
                     old_state.teardown().await;
                 }
+            } else if let Some(candidate) = deferred_candidate {
+                drop(incoming_candidate);
+                warn!(
+                    event = "session_collision_deferred_candidate",
+                    peer.id = %peer,
+                    peer.local = %local_peer,
+                    session.id = %state.id,
+                    old_session.id = %old_state.id,
+                    connection.side.client = connection.side().is_client()
+                );
+
+                select! {
+                    biased;
+                    _ = candidate.cancelled() => {
+                        connection.close(VarInt::from_u32(0), b"session candidate canceled");
+                        return Ok(());
+                    }
+                    _ = connection.closed() => return Ok(()),
+                    _ = old_state.finished() => {}
+                }
+
+                let mut states = self.session_states.write().await;
+                if candidate.is_cancelled()
+                    || states
+                        .get(&peer)
+                        .is_none_or(|current| current.id != old_state.id)
+                {
+                    drop(states);
+                    connection.close(VarInt::from_u32(0), b"session predecessor replaced");
+                    return Ok(());
+                }
+                states.insert(peer, state.clone());
+                self.publish_session_locked(peer);
+                drop(states);
+                info!(
+                    event = "session_collision_candidate_promoted",
+                    peer.id = %peer,
+                    session.id = %state.id,
+                    old_session.id = %old_state.id
+                );
             } else {
+                drop(incoming_candidate);
                 warn!(
                     event = "session_collision_kept_existing",
                     peer.id = %peer,
@@ -857,6 +905,8 @@ where
                 connection.close(VarInt::from_u32(0), &[]);
                 return Ok(());
             }
+        } else {
+            drop(incoming_candidate);
         }
 
         self.request_room_reconcile();
@@ -905,6 +955,17 @@ where
         // call-slot state, output volume, or emit Inactive — all of those are owned by the
         // replacement session.
         let mut states = self.session_states.write().await;
+        if states
+            .get(&peer)
+            .is_some_and(|current| current.id == state.id)
+            && let Some(completion) = self
+                .pending_session_candidates
+                .resolution_for(peer, state.id)
+        {
+            drop(states);
+            completion.cancelled().await;
+            states = self.session_states.write().await;
+        }
         let still_current = states.get(&peer).map(|s| s.id == state.id).unwrap_or(false);
         if still_current {
             // this session still owns the connection — close it before tearing down our
@@ -3044,6 +3105,7 @@ where
             room_state: Arc::clone(&self.room_state),
             room_reconcile: Arc::clone(&self.room_reconcile),
             pending_room_admission: self.pending_room_admission.clone(),
+            pending_session_candidates: self.pending_session_candidates.clone(),
             session_states: Arc::clone(&self.session_states),
             start_session: self.start_session.clone(),
             cancel_outbound_connections: Arc::clone(&self.cancel_outbound_connections),
@@ -3581,6 +3643,94 @@ struct IncomingCandidateLease {
     attempt_id: u64,
 }
 
+#[derive(Clone, Default)]
+struct PendingSessionCandidateRegistry {
+    inner: Arc<StdMutex<HashMap<PublicKey, PendingSessionCandidate>>>,
+}
+
+struct PendingSessionCandidate {
+    id: Uuid,
+    predecessor_id: Uuid,
+    cancellation: CancellationToken,
+    completion: CancellationToken,
+}
+
+impl PendingSessionCandidateRegistry {
+    fn try_install(
+        &self,
+        peer: PublicKey,
+        predecessor_id: Uuid,
+    ) -> Option<PendingSessionCandidateLease> {
+        let mut candidates = self.inner.lock().unwrap();
+        if candidates.contains_key(&peer) {
+            return None;
+        }
+        let id = Uuid::new_v4();
+        let cancellation = CancellationToken::new();
+        let completion = CancellationToken::new();
+        candidates.insert(
+            peer,
+            PendingSessionCandidate {
+                id,
+                predecessor_id,
+                cancellation: cancellation.clone(),
+                completion: completion.clone(),
+            },
+        );
+        Some(PendingSessionCandidateLease {
+            registry: self.clone(),
+            peer,
+            id,
+            cancellation,
+            completion,
+        })
+    }
+
+    fn resolution_for(&self, peer: PublicKey, predecessor_id: Uuid) -> Option<CancellationToken> {
+        self.inner.lock().unwrap().get(&peer).and_then(|candidate| {
+            (candidate.predecessor_id == predecessor_id).then(|| candidate.completion.clone())
+        })
+    }
+
+    fn cancel_all(&self) {
+        let candidates = std::mem::take(&mut *self.inner.lock().unwrap());
+        for candidate in candidates.into_values() {
+            candidate.cancellation.cancel();
+        }
+    }
+}
+
+struct PendingSessionCandidateLease {
+    registry: PendingSessionCandidateRegistry,
+    peer: PublicKey,
+    id: Uuid,
+    cancellation: CancellationToken,
+    completion: CancellationToken,
+}
+
+impl PendingSessionCandidateLease {
+    async fn cancelled(&self) {
+        self.cancellation.cancelled().await;
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancellation.is_cancelled()
+    }
+}
+
+impl Drop for PendingSessionCandidateLease {
+    fn drop(&mut self) {
+        let mut candidates = self.registry.inner.lock().unwrap();
+        if candidates
+            .get(&self.peer)
+            .is_some_and(|candidate| candidate.id == self.id)
+        {
+            candidates.remove(&self.peer);
+        }
+        self.completion.cancel();
+    }
+}
+
 impl Drop for IncomingCandidateLease {
     fn drop(&mut self) {
         let mut peers = self.availability.peers.lock().unwrap();
@@ -3638,6 +3788,10 @@ where
 
     pub(crate) fn clear_session_availability(&self) {
         self.session_availability.terminalize_all();
+    }
+
+    pub(crate) fn cancel_pending_session_candidates(&self) {
+        self.pending_session_candidates.cancel_all();
     }
 
     pub(crate) fn complete_direct_attempt(&self, peer: PublicKey, attempt_id: u64) {
@@ -4137,6 +4291,36 @@ mod tests {
         let state = availability.peers.lock().unwrap();
         assert!(state.get(&peer).unwrap().active_attempt.is_none());
         assert_eq!(state.get(&peer).unwrap().generation, 5);
+    }
+
+    #[tokio::test]
+    async fn pending_session_candidates_are_bounded_and_cancel_to_completion() {
+        let registry = PendingSessionCandidateRegistry::default();
+        let peer = SecretKey::generate().public();
+        let predecessor_id = Uuid::new_v4();
+        let first = registry
+            .try_install(peer, predecessor_id)
+            .expect("the first candidate should claim the peer");
+        assert!(
+            registry.try_install(peer, predecessor_id).is_none(),
+            "a peer must retain at most one pending candidate"
+        );
+        let completion = registry
+            .resolution_for(peer, predecessor_id)
+            .expect("the predecessor should observe candidate completion");
+
+        registry.cancel_all();
+        assert!(
+            first.is_cancelled(),
+            "reset must cancel the retained candidate"
+        );
+        drop(first);
+        completion.cancelled().await;
+
+        assert!(
+            registry.try_install(peer, predecessor_id).is_some(),
+            "candidate ownership must be reusable after cancellation completes"
+        );
     }
 
     #[test]

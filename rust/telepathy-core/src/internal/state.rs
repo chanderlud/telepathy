@@ -1059,6 +1059,10 @@ impl SessionState {
         self.finished.is_cancelled()
     }
 
+    pub(crate) async fn finished(&self) {
+        self.finished.cancelled().await;
+    }
+
     pub(crate) fn can_restore_room_predecessor(&self) -> bool {
         !self.stop_session.is_cancelled() && !self.is_finished()
     }

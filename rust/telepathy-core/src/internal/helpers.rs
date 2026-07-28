@@ -685,6 +685,8 @@ where
             states.drain().map(|(_, session)| session).collect()
         };
 
+        self.cancel_pending_session_candidates();
+
         for session in &sessions {
             session.teardown().await;
         }

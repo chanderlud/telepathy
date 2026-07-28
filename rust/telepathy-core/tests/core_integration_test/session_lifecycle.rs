@@ -1,8 +1,9 @@
 use super::common::{
     DEFAULT_SAMPLE_RATE, PendingAcceptProbe, TwoClientShutdownGuard, assert_no_busy_end,
     assert_no_call_ended_before_connected, build_client, build_client_with_accept_probe,
-    call_state_snapshot, init_test_tracing, shared_address_lookup, shared_relay_map,
-    wait_for_active_transport, wait_for_connected, wait_for_sessions,
+    build_client_with_lookup_contacts, call_state_snapshot, init_test_tracing,
+    shared_address_lookup, shared_relay_map, wait_for_active_transport, wait_for_connected,
+    wait_for_sessions,
 };
 
 use iroh::SecretKey;
@@ -12,7 +13,7 @@ use std::time::Duration;
 use telepathy_audio::devices::{MockAudioHost, MockAudioInput, MockAudioOutput};
 use telepathy_core::internal::state::SessionState;
 use telepathy_core::types::Contact;
-use telepathy_core::types::{CallState, CodecConfig};
+use telepathy_core::types::{CallState, CodecConfig, SessionStatus};
 use tokio::time::sleep;
 use tracing::info;
 
@@ -30,7 +31,9 @@ async fn session_collision_doesnt_fail() {
     let contact_b = Contact::new("client-b".to_string(), key_b.public().to_string())
         .expect("contact a invalid");
 
-    let client_a = build_client(
+    let call_states_a = Arc::new(Mutex::new(Vec::new()));
+    let call_states_b = Arc::new(Mutex::new(Vec::new()));
+    let client_a = build_client_with_lookup_contacts(
         relay_map,
         key_a,
         vec![contact_b.clone()],
@@ -41,11 +44,11 @@ async fn session_collision_doesnt_fail() {
             MockAudioOutput,
             DEFAULT_SAMPLE_RATE,
         ),
-        Default::default(),
+        call_states_a.clone(),
     )
     .await;
 
-    let client_b = build_client(
+    let client_b = build_client_with_lookup_contacts(
         relay_map,
         key_b,
         vec![contact_a.clone()],
@@ -56,15 +59,16 @@ async fn session_collision_doesnt_fail() {
             MockAudioOutput,
             DEFAULT_SAMPLE_RATE,
         ),
-        Default::default(),
+        call_states_b.clone(),
     )
     .await;
 
-    client_a.telepathy.start_session(&contact_b).await;
+    tokio::join!(
+        client_a.telepathy.start_session(&contact_b),
+        client_b.telepathy.start_session(&contact_a),
+    );
 
     wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
-
-    tokio::time::sleep(Duration::from_secs(1)).await;
 
     let b_session = client_a
         .telepathy
@@ -88,12 +92,170 @@ async fn session_collision_doesnt_fail() {
     info!("session state a: {:?}", a_session);
     info!("session state b: {:?}", b_session);
 
-    a_session.start_call.notify_one();
-
-    tokio::time::sleep(Duration::from_secs(5)).await;
+    client_a
+        .telepathy
+        .start_call(&contact_b)
+        .await
+        .expect("client_a should start a call after simultaneous session dialing");
+    wait_for_connected(&call_states_a, "simultaneous-dial client_a").await;
+    wait_for_connected(&call_states_b, "simultaneous-dial client_b").await;
+    client_a.telepathy.end_call().await;
 
     client_a.telepathy.shutdown().await;
     client_b.telepathy.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stale_predecessor_promotes_same_identity_replacement_and_allows_call() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+    let codec_config = CodecConfig::new(true, true, 5.0);
+
+    let (key_a, key_b) = loop {
+        let key_a = SecretKey::generate();
+        let key_b = SecretKey::generate();
+        if key_a.public() < key_b.public() {
+            break (key_a, key_b);
+        }
+    };
+    let replacement_key_b = key_b.clone();
+    let contact_a = Contact::new(
+        "replacement-client-a".to_string(),
+        key_a.public().to_string(),
+    )
+    .expect("contact a invalid");
+    let contact_b = Contact::new(
+        "replacement-client-b".to_string(),
+        key_b.public().to_string(),
+    )
+    .expect("contact b invalid");
+    let peer_a = contact_a.get_peer_id();
+    let peer_b = contact_b.get_peer_id();
+    let call_states_a = Arc::new(Mutex::new(Vec::new()));
+    let call_states_old_b = Arc::new(Mutex::new(Vec::new()));
+    let call_states_replacement_b = Arc::new(Mutex::new(Vec::new()));
+
+    let client_a = build_client(
+        relay_map,
+        key_a,
+        vec![contact_b.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_a.clone(),
+    )
+    .await;
+    let old_client_b = build_client(
+        relay_map,
+        key_b,
+        vec![contact_a.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_old_b,
+    )
+    .await;
+
+    client_a.telepathy.start_session(&contact_b).await;
+    old_client_b.telepathy.start_session(&contact_a).await;
+    wait_for_sessions(&client_a, &contact_b, &old_client_b, &contact_a).await;
+    wait_for_active_transport(&client_a, "client_a predecessor").await;
+    wait_for_active_transport(&old_client_b, "old client_b").await;
+
+    let predecessor_id = client_a
+        .telepathy
+        .inner
+        .session_states
+        .read()
+        .await
+        .get(&peer_b)
+        .map(|state| state.id())
+        .expect("client_a should register the predecessor");
+    let connected_before_replacement = client_a
+        .session_status_probe
+        .connected_count(peer_b.as_bytes());
+
+    let replacement_client_b = build_client_with_lookup_contacts(
+        relay_map,
+        replacement_key_b,
+        vec![contact_a.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_replacement_b.clone(),
+    )
+    .await;
+    replacement_client_b
+        .telepathy
+        .start_session(&contact_a)
+        .await;
+    replacement_client_b
+        .session_status_probe
+        .wait_for(
+            peer_a.as_bytes(),
+            SessionStatus::Connected {
+                relayed: false,
+                remote_address: String::new(),
+            },
+        )
+        .await;
+
+    assert_eq!(
+        client_a
+            .telepathy
+            .inner
+            .session_states
+            .read()
+            .await
+            .get(&peer_b)
+            .map(|state| state.id()),
+        Some(predecessor_id),
+        "the retained candidate must wait while the predecessor remains live"
+    );
+
+    old_client_b.telepathy.shutdown().await;
+    client_a
+        .session_status_probe
+        .wait_for_connected_after(peer_b.as_bytes(), connected_before_replacement)
+        .await;
+
+    let promoted_id = client_a
+        .telepathy
+        .inner
+        .session_states
+        .read()
+        .await
+        .get(&peer_b)
+        .map(|state| state.id())
+        .expect("client_a should promote the retained candidate");
+    assert_ne!(
+        promoted_id, predecessor_id,
+        "the completed predecessor must be replaced by the fresh candidate"
+    );
+
+    replacement_client_b
+        .telepathy
+        .start_call(&contact_a)
+        .await
+        .expect("the promoted session should carry a new call");
+    wait_for_connected(&call_states_replacement_b, "replacement client_b").await;
+    wait_for_connected(&call_states_a, "client_a after handoff").await;
+
+    replacement_client_b.telepathy.end_call().await;
+    replacement_client_b.telepathy.shutdown().await;
+    client_a.telepathy.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
