@@ -1,10 +1,11 @@
+#[cfg(not(target_family = "wasm"))]
+use crate::internal::MAX_RINGTONE_LENGTH;
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::core::{
     OutgoingSlotDecision, PendingDirectCallSlot, RoomControllerCleanup, RoomControllerOutcome,
     TelepathyCore,
 };
 use crate::internal::error::{AudioStreamError, Error, ErrorKind};
-#[cfg(not(target_family = "wasm"))]
 use crate::internal::messages::ProtocolMessage;
 use crate::internal::messages::{AudioHeader, RoomMessage};
 use crate::internal::state::{
@@ -13,12 +14,10 @@ use crate::internal::state::{
 #[cfg(target_os = "ios")]
 use crate::internal::utils::deactivate_audio_session;
 use crate::internal::utils::{JoinHandle, KanalSink, KanalSource, spawn_task};
-use crate::internal::{ALPN, MAX_RINGTONE_LENGTH, Result};
-#[cfg(not(target_family = "wasm"))]
+use crate::internal::{ALPN, Result};
 use crate::types::{ManagerState, SessionStatus};
 use bytes::Bytes;
 use iroh::address_lookup::PkarrPublisher;
-#[cfg(not(target_family = "wasm"))]
 use iroh::endpoint::Connection;
 use iroh::endpoint::{default_relay_mode, presets};
 use iroh::{Endpoint, PublicKey, RelayMode, SecretKey};
