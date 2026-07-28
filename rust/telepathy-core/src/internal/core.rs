@@ -2311,6 +2311,22 @@ where
                 peer.id = %peer_id
             );
         }
+        // Discard any `reconcile_room_call` permit latched on this session
+        // during the handshake. Without this drain, `session_inner` re-launches
+        // `negotiate_outgoing_call` against a peer that has already moved on,
+        // deadlocking both sessions in a hello_ack_timeout loop. Clearing the
+        // generation only on an actual drain avoids dropping a fresh reconcile
+        // that races between the two calls.
+        if timeout(Duration::ZERO, session.reconcile_room_call.notified())
+            .await
+            .is_ok()
+        {
+            debug!(
+                event = "room_handshake_discarded_stale_reconcile",
+                peer.id = %peer_id
+            );
+            session.take_room_reconcile_generation();
+        }
         session.leave_room(room_generation);
         self.request_room_reconcile();
 
