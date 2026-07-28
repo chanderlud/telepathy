@@ -56,6 +56,7 @@ where
     pub(super) telepathy: MockTelepathyHandle<H, I, O>,
     pub(super) is_active: Arc<AtomicBool>,
     pub(super) contact_lookup_probe: ContactLookupProbe,
+    pub(super) session_status_probe: SessionStatusProbe,
 }
 
 impl<H, I, O> ClientHarness<H, I, O>
@@ -123,6 +124,47 @@ impl ContactLookupProbe {
                 .unwrap_or_default();
             panic!(
                 "timed out waiting for {expected} contact lookups for {peer_id:?}, got {observed}"
+            );
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+pub(super) struct SessionStatusProbe {
+    statuses: Arc<Mutex<HashMap<Vec<u8>, SessionStatus>>>,
+    changed: Arc<Notify>,
+}
+
+impl SessionStatusProbe {
+    fn record(&self, peer_id: &[u8], status: SessionStatus) {
+        self.statuses
+            .lock()
+            .unwrap()
+            .insert(peer_id.to_vec(), status);
+        self.changed.notify_waiters();
+    }
+
+    pub(super) async fn wait_for(&self, peer_id: &[u8], expected: SessionStatus) {
+        let wait = async {
+            loop {
+                let changed = self.changed.notified();
+                tokio::pin!(changed);
+                changed.as_mut().enable();
+                if let Some(status) = self.statuses.lock().unwrap().get(peer_id) {
+                    if std::mem::discriminant(status) == std::mem::discriminant(&expected) {
+                        return;
+                    }
+                }
+                changed.await;
+            }
+        };
+        if tokio::time::timeout(Duration::from_secs(60), wait)
+            .await
+            .is_err()
+        {
+            let observed = self.statuses.lock().unwrap().get(peer_id).cloned();
+            panic!(
+                "timed out waiting for {expected:?} session status for {peer_id:?}, got {observed:?}"
             );
         }
     }
@@ -921,6 +963,7 @@ where
 
     let is_active = Arc::new(AtomicBool::new(false));
     let is_relayed = Arc::new(AtomicBool::new(false));
+    let session_status_probe = SessionStatusProbe::default();
     let mock = construct_mock_callbacks(
         contacts,
         is_active.clone(),
@@ -931,6 +974,7 @@ where
         Some(waiting_gate),
         None,
         None,
+        Some(session_status_probe.clone()),
     );
 
     let mut telepathy: MockTelepathyHandle<H, I, O> = TelepathyHandle::new(
@@ -949,6 +993,7 @@ where
         telepathy,
         is_active,
         contact_lookup_probe: Default::default(),
+        session_status_probe,
     }
 }
 
@@ -984,6 +1029,7 @@ where
 
     let is_active = Arc::new(AtomicBool::new(false));
     let is_relayed = Arc::new(AtomicBool::new(false));
+    let session_status_probe = SessionStatusProbe::default();
     let mock = construct_mock_callbacks(
         contacts,
         is_active.clone(),
@@ -994,6 +1040,7 @@ where
         None,
         Some(connected_gate),
         None,
+        Some(session_status_probe.clone()),
     );
 
     let mut telepathy: MockTelepathyHandle<H, I, O> = TelepathyHandle::new(
@@ -1012,6 +1059,7 @@ where
         telepathy,
         is_active,
         contact_lookup_probe: Default::default(),
+        session_status_probe,
     }
 }
 
@@ -1047,6 +1095,7 @@ where
 
     let is_active = Arc::new(AtomicBool::new(false));
     let is_relayed = Arc::new(AtomicBool::new(false));
+    let session_status_probe = SessionStatusProbe::default();
     let mock = construct_mock_callbacks(
         contacts,
         is_active.clone(),
@@ -1057,6 +1106,7 @@ where
         None,
         None,
         Some(call_ended_park),
+        Some(session_status_probe.clone()),
     );
 
     let mut telepathy: MockTelepathyHandle<H, I, O> = TelepathyHandle::new(
@@ -1075,6 +1125,7 @@ where
         telepathy,
         is_active,
         contact_lookup_probe: Default::default(),
+        session_status_probe,
     }
 }
 
@@ -1139,6 +1190,7 @@ where
     let is_active = Arc::new(AtomicBool::new(false));
     let is_relayed = Arc::new(AtomicBool::new(false));
     let contact_lookup_probe = ContactLookupProbe::default();
+    let session_status_probe = SessionStatusProbe::default();
     let mock = construct_mock_callbacks_with_contact_lookup(
         contacts,
         initial_contacts,
@@ -1151,6 +1203,7 @@ where
         None,
         None,
         Some(contact_lookup_probe.clone()),
+        Some(session_status_probe.clone()),
     );
 
     let mut telepathy: MockTelepathyHandle<H, I, O> = TelepathyHandle::new(
@@ -1169,6 +1222,7 @@ where
         telepathy,
         is_active,
         contact_lookup_probe,
+        session_status_probe,
     }
 }
 
@@ -1190,6 +1244,7 @@ pub(super) fn construct_mock_callbacks(
     waiting_gate: Option<WaitingCallbackGate>,
     connected_gate: Option<ConnectedCallbackGate>,
     call_ended_park: Option<CallEndedPark>,
+    session_status_probe: Option<SessionStatusProbe>,
 ) -> MockCoreCallbacks<MockCoreStatisticsCallback> {
     let initial_contacts = contacts.clone();
     construct_mock_callbacks_with_contact_lookup(
@@ -1204,6 +1259,7 @@ pub(super) fn construct_mock_callbacks(
         connected_gate,
         call_ended_park,
         None,
+        session_status_probe,
     )
 }
 
@@ -1220,12 +1276,16 @@ fn construct_mock_callbacks_with_contact_lookup(
     connected_gate: Option<ConnectedCallbackGate>,
     call_ended_park: Option<CallEndedPark>,
     contact_lookup_probe: Option<ContactLookupProbe>,
+    session_status_probe: Option<SessionStatusProbe>,
 ) -> MockCoreCallbacks<MockCoreStatisticsCallback> {
     let mut mock: MockCoreCallbacks<MockCoreStatisticsCallback> = MockCoreCallbacks::new();
 
     mock.expect_session_status()
         .returning(move |status, _peer| {
             info!("session status got called {status:?} {_peer}");
+            if let Some(probe) = session_status_probe.clone() {
+                probe.record(_peer.as_bytes(), status.clone());
+            }
             let is_active_clone = is_active.clone();
             let is_relayed_clone = is_relayed.clone();
             Box::pin(async move {

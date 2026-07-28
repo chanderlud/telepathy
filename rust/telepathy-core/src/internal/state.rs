@@ -8,7 +8,7 @@ use iroh::endpoint::{Connection, Path};
 use iroh::{PublicKey, SecretKey, TransportAddr};
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::sync::atomic::Ordering::Relaxed;
+use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
@@ -998,6 +998,8 @@ pub struct SessionState {
     /// signals the session to initiate a call
     pub start_call: Notify,
 
+    pub(crate) reconcile_room_call: Notify,
+
     /// notifies during shutdown & manager restarts
     pub(crate) stop_session: CancellationToken,
 
@@ -1023,6 +1025,8 @@ pub struct SessionState {
 
     room_admission: AtomicU64,
 
+    reconcile_room_generation: AtomicU64,
+
     deferred_room_predecessor: Mutex<Option<Arc<SessionState>>>,
 }
 
@@ -1031,6 +1035,7 @@ impl SessionState {
         Self {
             id: Uuid::new_v4(),
             start_call: Notify::new(),
+            reconcile_room_call: Notify::new(),
             stop_session: Default::default(),
             message_sender: message_sender.clone(),
             latency: Default::default(),
@@ -1041,6 +1046,7 @@ impl SessionState {
             stop_screenshare: Default::default(),
             finished: Default::default(),
             room_admission: AtomicU64::new(0),
+            reconcile_room_generation: AtomicU64::new(0),
             deferred_room_predecessor: Default::default(),
         }
     }
@@ -1069,6 +1075,18 @@ impl SessionState {
         _ = self
             .room_admission
             .compare_exchange(generation, 0, Relaxed, Relaxed);
+    }
+
+    pub(crate) fn notify_room_reconcile(&self, generation: u64) {
+        self.reconcile_room_generation.store(generation, Release);
+        self.reconcile_room_call.notify_one();
+    }
+
+    pub(crate) fn take_room_reconcile_generation(&self) -> Option<u64> {
+        match self.reconcile_room_generation.swap(0, Acquire) {
+            0 => None,
+            generation => Some(generation),
+        }
     }
 
     pub(crate) async fn defer_room_predecessor(&self, predecessor: Arc<SessionState>) {

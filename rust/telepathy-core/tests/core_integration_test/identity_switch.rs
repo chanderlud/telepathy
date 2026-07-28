@@ -220,6 +220,7 @@ async fn manager_retries_after_missing_identity_until_latest_runtime_arrives() {
         None,
         None,
         None,
+        None,
     );
     let mut handle: MockHandle = TelepathyHandle::new(
         host(),

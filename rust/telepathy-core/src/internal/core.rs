@@ -42,6 +42,7 @@ use iroh::endpoint::{
 use iroh::{Endpoint, PublicKey};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::marker::PhantomData;
+use std::ops::{Deref, DerefMut};
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
@@ -71,7 +72,10 @@ const MANAGER_RETRY_MAX_MS: u64 = 30_000;
 const ROOM_DIAL_CONCURRENCY: usize = 4;
 const ROOM_DIAL_RECONCILE_INTERVAL: Duration = Duration::from_secs(1);
 const ROOM_DIAL_BACKOFF_BASE_MS: u64 = 100;
-const ROOM_DIAL_BACKOFF_MAX_MS: u64 = 2_000;
+const ROOM_DIAL_BACKOFF_MAX_MS: u64 = 30_000;
+/// failed attempts before a room dial is exhausted; the backoff curve reaches
+/// the 30s cap at retry 10, so exhaustion follows ~80s of active retrying
+const ROOM_DIAL_MAX_RETRIES: u32 = 10;
 const ROOM_DIAL_EXISTING_SESSION_BACKOFF: Duration = Duration::from_secs(5);
 
 pub struct TelepathyCore<C, S, H, I, O>
@@ -610,8 +614,11 @@ where
                 })
                 .collect();
             for (peer, state) in &sessions {
-                if peers.contains(peer) && !admitted.contains(peer) {
-                    state.start_call.notify_one();
+                if peers.contains(peer)
+                    && !admitted.contains(peer)
+                    && room_dials.rearm(*peer, *room_generation, Instant::now())
+                {
+                    state.notify_room_reconcile(*room_generation);
                 }
             }
             admitted
@@ -769,6 +776,20 @@ where
         };
 
         let contact_option = self.callbacks.get_contact(peer.to_vec()).await;
+        let contact = contact_option.unwrap_or_else(|| {
+            // there may be no contact for members of a group
+            debug!(event = "group_contact_created", peer.id = %peer);
+            Contact {
+                id: Uuid::new_v4().to_string(),
+                nickname: String::from("GroupContact"),
+                peer_id: peer,
+                output_volume: 0_f32,
+                is_room_only: true,
+            }
+        });
+
+        self.core_state.set_peer_output_volume(&contact)?;
+
         // sends messages to the session from elsewhere in the program
         let message_channel = channel::<ProtocolMessage>(8);
         // create the state and a clone of it for the session
@@ -832,21 +853,6 @@ where
                 .await;
         });
 
-        let contact = contact_option.unwrap_or_else(|| {
-            // there may be no contact for members of a group
-            debug!(event = "group_contact_created", peer.id = %peer);
-            Contact {
-                id: Uuid::new_v4().to_string(),
-                nickname: String::from("GroupContact"),
-                peer_id: peer,
-                output_volume: 0_f32,
-                is_room_only: true,
-            }
-        });
-
-        // seed the initial per-contact output volume
-        self.core_state.set_peer_output_volume(&contact)?;
-
         let _ = self
             .session_outer(peer, &connection, &state, &contact, message_channel)
             .await;
@@ -863,6 +869,8 @@ where
                     states.insert(peer, predecessor);
                     true
                 } else {
+                    drop(states);
+                    predecessor.teardown().await;
                     false
                 }
             } else {
@@ -1755,6 +1763,37 @@ where
                     .await?;
                 Ok(outcome.to_outcome())
             }
+            _ = io.state.reconcile_room_call.notified() => {
+                let Some(expected_generation) = io.state.take_room_reconcile_generation() else {
+                    debug!(event = "room_reconcile_call_discarded_missing_generation");
+                    return Ok(true);
+                };
+                let room_snapshot = self.room_snapshot_for_peer(&contact.peer_id).await;
+                if room_snapshot.room_generation != expected_generation
+                    || !self
+                        .is_current_room_dial(&contact.peer_id, expected_generation)
+                        .await
+                {
+                    debug!(
+                        event = "room_reconcile_call_discarded_stale_generation",
+                        expected_room_generation = expected_generation,
+                        actual_room_generation = room_snapshot.room_generation
+                    );
+                    return Ok(true);
+                }
+                Span::current().record("room.hash", field::debug(room_snapshot.local_room_hash));
+                Span::current().record("room.generation", room_snapshot.room_generation);
+                let outcome = self
+                    .negotiate_outgoing_call(
+                        io,
+                        OutgoingCallArgs {
+                            contact,
+                            room_hash: room_snapshot.local_room_hash,
+                        },
+                    )
+                    .await?;
+                Ok(outcome.to_outcome())
+            }
             _ = io.keep_alive.tick() => {
                 debug!(event = "session_keep_alive_sent");
                 write_message(io.send, &ProtocolMessage::KeepAlive).await?;
@@ -2293,7 +2332,7 @@ where
     )]
     pub(crate) async fn room_controller(
         &self,
-        mut receiver: Receiver<RoomMessage>,
+        receiver: Receiver<RoomMessage>,
         stop_io: &CancellationToken,
         start: RoomControllerStart,
     ) -> RoomControllerOutcome {
@@ -2306,6 +2345,7 @@ where
             ready_sender,
             publication_receiver,
         } = start;
+        let mut receiver = PendingRoomJoinGuard::new(receiver);
         let room_hash = self.room_hash().await;
         Span::current().record("room.hash", field::debug(room_hash));
         if end_sessions.is_cancelled() || operation.is_cancelled() {
@@ -2447,7 +2487,6 @@ where
             result = publication_receiver => result.is_ok(),
         };
         if !publication_received {
-            abort_pending_room_joins(&mut receiver);
             return self
                 .cleanup_room_controller(
                     stop_io,
@@ -2466,7 +2505,6 @@ where
         }
 
         if let Some(error) = pending_stream_error {
-            abort_pending_room_joins(&mut receiver);
             let message = CallEndMessage::from_stream_error(&error).into_string();
             return self
                 .cleanup_room_controller(
@@ -2519,7 +2557,6 @@ where
 
         // kick the UI out of connecting mode
         if end_sessions.is_cancelled() || operation.is_cancelled() {
-            abort_pending_room_joins(&mut receiver);
             return self
                 .cleanup_room_controller(
                     stop_io,
@@ -2549,7 +2586,6 @@ where
             )
             .await
         {
-            abort_pending_room_joins(&mut receiver);
             return self
                 .cleanup_room_controller(
                     stop_io,
@@ -2573,11 +2609,9 @@ where
                 biased;
 
                 _ = end_sessions.cancelled() => {
-                    abort_pending_room_joins(&mut receiver);
                     break;
                 }
                 _ = operation.cancelled() => {
-                    abort_pending_room_joins(&mut receiver);
                     break;
                 }
                 error = stream_error_receiver.recv(), if stream_errors_open => {
@@ -2599,7 +2633,6 @@ where
                             }
                         }
                         outcome = RoomControllerOutcome::Notify { message };
-                        abort_pending_room_joins(&mut receiver);
                         break;
                     }
                     stream_errors_open = false;
@@ -2654,13 +2687,11 @@ where
                                 _ = end_sessions.cancelled() => {
                                     info!(event = "room_setup_output_interrupted_end_sessions", peer.id = %state.peer);
                                     let _ = admission_sender.send(RoomJoinAdmission::Aborted);
-                                    abort_pending_room_joins(&mut receiver);
                                     break;
                                 }
                                 _ = operation.cancelled() => {
                                     info!(event = "room_setup_output_interrupted_operation", peer.id = %state.peer);
                                     let _ = admission_sender.send(RoomJoinAdmission::Aborted);
-                                    abort_pending_room_joins(&mut receiver);
                                     break;
                                 }
                             };
@@ -2690,7 +2721,6 @@ where
                                     let message = CallEndMessage::from_error(&error).into_string();
                                     terminal_error = Some(error);
                                     outcome = RoomControllerOutcome::Notify { message };
-                                    abort_pending_room_joins(&mut receiver);
                                     break;
                                 }
                             };
@@ -2707,7 +2737,6 @@ where
                                     .await
                                 {
                                     let _ = admission_sender.send(RoomJoinAdmission::Aborted);
-                                    abort_pending_room_joins(&mut receiver);
                                     break;
                                 }
                             }
@@ -2775,7 +2804,6 @@ where
                                         RoomTaskOutcome::Terminal(error) => {
                                             terminal_error = Some(error);
                                             outcome = RoomControllerOutcome::generic_terminal();
-                                            abort_pending_room_joins(&mut receiver);
                                             break;
                                         }
                                     }
@@ -2809,7 +2837,6 @@ where
                                     RoomTaskOutcome::Terminal(error) => {
                                         terminal_error = Some(error);
                                         outcome = RoomControllerOutcome::generic_terminal();
-                                        abort_pending_room_joins(&mut receiver);
                                         break;
                                     }
                                 }
@@ -2825,7 +2852,6 @@ where
                                 )
                                 .await
                             {
-                                abort_pending_room_joins(&mut receiver);
                                 break;
                             }
                         }
@@ -2902,7 +2928,6 @@ where
                 }
                 _ = end_call.notified() => {
                     info!(event = "room_call_ended_signal");
-                    abort_pending_room_joins(&mut receiver);
                     break;
                 }
                 completion = output_completion_rx.recv() => {
@@ -2950,7 +2975,6 @@ where
                         Err(_) => warn!(event = "room_input_join_failed_unexpectedly"),
                     }
                     outcome = RoomControllerOutcome::generic_terminal();
-                    abort_pending_room_joins(&mut receiver);
                     break;
                 }
             }
@@ -3376,9 +3400,37 @@ fn abort_pending_room_joins(receiver: &mut Receiver<RoomMessage>) {
     }
 }
 
+struct PendingRoomJoinGuard(Receiver<RoomMessage>);
+
+impl PendingRoomJoinGuard {
+    fn new(receiver: Receiver<RoomMessage>) -> Self {
+        Self(receiver)
+    }
+}
+
+impl Drop for PendingRoomJoinGuard {
+    fn drop(&mut self) {
+        abort_pending_room_joins(&mut self.0);
+    }
+}
+
+impl Deref for PendingRoomJoinGuard {
+    type Target = Receiver<RoomMessage>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for PendingRoomJoinGuard {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
 #[derive(Default)]
 struct RoomDialScheduler {
     dials: HashMap<PublicKey, RoomDialState>,
+    rearms: HashMap<PublicKey, RoomRearmState>,
     next_attempt_id: u64,
 }
 
@@ -3398,6 +3450,12 @@ struct RoomDialLaunch {
     room_generation: u64,
     attempt_id: u64,
     cancel: CancellationToken,
+}
+
+struct RoomRearmState {
+    room_generation: u64,
+    attempts: u32,
+    last_attempt_at: Instant,
 }
 
 struct RoomDialEvent {
@@ -3430,6 +3488,9 @@ impl RoomDialScheduler {
                 dial.cancel.cancel();
             }
             keep
+        });
+        self.rearms.retain(|peer, rearm| {
+            rearm.room_generation == room_generation && desired_peers.contains(peer)
         });
 
         for (peer, dial) in &mut self.dials {
@@ -3490,6 +3551,7 @@ impl RoomDialScheduler {
                 !dial.in_flight
                     && !dial.has_session
                     && !dial.has_live_session
+                    && dial.retries < ROOM_DIAL_MAX_RETRIES
                     && dial.next_attempt_at <= now
             })
             .filter(|(peer, _)| !direct_dials.contains(*peer))
@@ -3523,16 +3585,43 @@ impl RoomDialScheduler {
         self.dials.get(&peer).is_some_and(|dial| dial.in_flight)
     }
 
+    /// gates session re-arm notifications for a retained, non-admitted member:
+    /// allowed immediately the first time per room generation, then throttled by
+    /// the room dial backoff curve so a departed member is not re-negotiated
+    /// on every reconcile tick
+    fn rearm(&mut self, peer: PublicKey, room_generation: u64, now: Instant) -> bool {
+        let attempts = match self.rearms.get(&peer) {
+            Some(rearm) if rearm.room_generation == room_generation => {
+                if now < rearm.last_attempt_at + room_dial_backoff(rearm.attempts) {
+                    return false;
+                }
+                rearm.attempts.saturating_add(1)
+            }
+            _ => 1,
+        };
+        self.rearms.insert(
+            peer,
+            RoomRearmState {
+                room_generation,
+                attempts,
+                last_attempt_at: now,
+            },
+        );
+        true
+    }
+
     fn cancel_all(&mut self) {
         for dial in self.dials.values() {
             dial.cancel.cancel();
         }
         self.dials.clear();
+        self.rearms.clear();
     }
 }
 
 fn room_dial_backoff(retries: u32) -> Duration {
-    let multiplier = 1_u64 << retries.saturating_sub(1).min(5);
+    // 100ms * 2^9 = 51.2s, so the shift limit lets the curve reach the 30s cap
+    let multiplier = 1_u64 << retries.saturating_sub(1).min(9);
     Duration::from_millis(
         ROOM_DIAL_BACKOFF_BASE_MS
             .saturating_mul(multiplier)
@@ -3839,6 +3928,48 @@ mod tests {
             room_dial_backoff(99),
             Duration::from_millis(ROOM_DIAL_BACKOFF_MAX_MS)
         );
+    }
+
+    #[test]
+    fn throttles_session_rearms_with_backoff_per_room_generation() {
+        let peer = peers(1)[0];
+        let mut scheduler = RoomDialScheduler::default();
+        let now = Instant::now();
+
+        assert!(scheduler.rearm(peer, 1, now));
+        assert!(!scheduler.rearm(peer, 1, now));
+        assert!(scheduler.rearm(peer, 1, now + room_dial_backoff(1)));
+        assert!(!scheduler.rearm(peer, 1, now + room_dial_backoff(1)));
+        assert!(scheduler.rearm(peer, 2, now + room_dial_backoff(1)));
+    }
+
+    #[test]
+    fn stops_redialing_a_peer_after_the_retry_bound() {
+        let peer = peers(1)[0];
+        let mut scheduler = RoomDialScheduler::default();
+        let mut now = Instant::now();
+
+        scheduler.reconcile(
+            Some((1, HashSet::from([peer]))),
+            &HashSet::new(),
+            &HashSet::new(),
+            now,
+        );
+
+        for _ in 0..ROOM_DIAL_MAX_RETRIES {
+            let launch = scheduler.take_ready(now, &HashSet::new()).pop().unwrap();
+            scheduler.complete(
+                RoomDialEvent {
+                    peer,
+                    room_generation: launch.room_generation,
+                    attempt_id: launch.attempt_id,
+                },
+                now,
+            );
+            now += room_dial_backoff(ROOM_DIAL_MAX_RETRIES);
+        }
+
+        assert!(scheduler.take_ready(now, &HashSet::new()).is_empty());
     }
 
     #[tokio::test]
