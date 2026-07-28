@@ -5,11 +5,12 @@ use super::common::{
     WaitingCallbackGate, assert_call_slot_idle, assert_room_event_sequence,
     assert_slot_remains_outside_direct_call_states, build_client, build_client_with_accept_probe,
     build_client_with_call_ended_park, build_client_with_lookup_contacts,
-    build_client_with_options, build_client_with_waiting_gate, call_state_snapshot,
-    init_test_tracing, room_join_count, room_leave_count, shared_relay_map, sorted_room_members,
-    wait_for_call_ended_contains, wait_for_connected, wait_for_no_extra_room_leave,
-    wait_for_room_join_count, wait_for_room_leave_count, wait_for_sessions, wait_for_slot_idle,
-    wait_for_slot_room_call, wait_for_stable_session_pair,
+    build_client_with_options, build_client_with_options_and_initial_contacts,
+    build_client_with_waiting_gate, call_state_snapshot, init_test_tracing, room_join_count,
+    room_leave_count, shared_relay_map, sorted_room_members, wait_for_call_ended_contains,
+    wait_for_connected, wait_for_no_extra_room_leave, wait_for_room_join_count,
+    wait_for_room_leave_count, wait_for_sessions, wait_for_slot_idle, wait_for_slot_room_call,
+    wait_for_stable_session_pair,
 };
 
 use iroh::SecretKey;
@@ -2515,13 +2516,8 @@ async fn room_session_collision_handoff_keeps_membership_until_replacement_is_ad
     .await;
     cancelled_replacement
         .telepathy
-        .inner
-        .start_session
-        .as_ref()
-        .expect("replacement manager should accept session starts")
-        .send(peer_a)
-        .await
-        .expect("cancelled replacement dial should queue");
+        .start_session(&contact_a)
+        .await;
 
     wait_for_stable_session_pair(
         &client_a,
@@ -2690,15 +2686,7 @@ async fn room_replacement_map_mismatch_tears_down_deferred_predecessor() {
         Arc::new(Mutex::new(Vec::new())),
     )
     .await;
-    replacement_client
-        .telepathy
-        .inner
-        .start_session
-        .as_ref()
-        .expect("replacement manager should accept session starts")
-        .send(peer_a)
-        .await
-        .expect("replacement dial should queue");
+    replacement_client.telepathy.start_session(&contact_a).await;
     wait_for_stable_session_pair(
         &client_a,
         &peer_b,
@@ -3055,6 +3043,96 @@ async fn room_teardown_cancels_a_pending_canonical_reconnect() {
     wait_for_slot_idle(&client_b, &peer_b_str).await;
     client_a.telepathy.shutdown().await;
     client_b.telepathy.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn direct_start_terminalizes_while_room_dial_is_in_flight() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+    let codec_config = CodecConfig::new(true, true, 5.0);
+    let (key_a, key_b) = loop {
+        let key_a = SecretKey::generate();
+        let key_b = SecretKey::generate();
+        if key_a.public() < key_b.public() {
+            break (key_a, key_b);
+        }
+    };
+    let contact_a = Contact::new("coalesced-room-a".to_string(), key_a.public().to_string())
+        .expect("contact a invalid");
+    let contact_b = Contact::new("coalesced-room-b".to_string(), key_b.public().to_string())
+        .expect("contact b invalid");
+    let peer_a = contact_a.get_peer_id().to_string();
+    let peer_b = contact_b.get_peer_id();
+    let members = sorted_room_members(&contact_a, &contact_b);
+    let client_a = build_client_with_options_and_initial_contacts(
+        relay_map,
+        key_a,
+        vec![contact_b.clone()],
+        vec![],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        Arc::new(Mutex::new(Vec::new())),
+        None,
+        ManagerLifecycle::Single,
+    )
+    .await;
+
+    let client_b = build_client(
+        relay_map,
+        key_b,
+        vec![contact_a.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        Arc::new(Mutex::new(Vec::new())),
+    )
+    .await;
+
+    client_b.telepathy.start_session(&contact_a).await;
+    wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
+    client_b.telepathy.shutdown().await;
+    client_a
+        .session_status_probe
+        .wait_for(peer_b.as_bytes(), SessionStatus::Inactive)
+        .await;
+    client_a.session_status_probe.park_connecting();
+    client_a
+        .telepathy
+        .join_room(members)
+        .await
+        .expect("client a should join while client b is offline");
+    client_a
+        .session_status_probe
+        .wait_for(peer_b.as_bytes(), SessionStatus::Connecting)
+        .await;
+
+    client_a.telepathy.start_session(&contact_b).await;
+    let direct_availability = tokio::time::timeout(
+        Duration::from_secs(5),
+        client_a.telepathy.start_call(&contact_b),
+    )
+    .await;
+
+    client_a.session_status_probe.release_connecting();
+    client_a.telepathy.end_call().await;
+    wait_for_slot_idle(&client_a, &peer_a).await;
+    client_a.telepathy.shutdown().await;
+
+    let direct_result = direct_availability
+        .expect("room-coalesced direct availability must terminalize through session_manager");
+    assert!(
+        direct_result.is_err(),
+        "an offline room peer must not produce a callable session"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

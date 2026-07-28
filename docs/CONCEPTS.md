@@ -17,3 +17,15 @@ A wrapping identifier advanced for each desired runtime replacement, used to dis
 
 ### Runtime Readiness
 The state in which the session manager has applied the requested runtime revision, making identity-dependent activity safe to start.
+
+## Session Establishment
+
+### Direct Session Attempt
+A peer-scoped request to establish a direct session, identified so that completion and terminal outcomes apply only to the attempt that initiated them.
+
+An attempt remains active while direct dialing or an associated inbound candidate can still publish a usable session; terminal outcomes and runtime teardown end it.
+
+### Session Availability
+The observable per-peer state that tells a call request whether a direct session already exists, a direct session attempt may still publish one, or no session can be expected.
+
+Availability changes wake waiting call requests; a request only acquires call ownership after the session is published.

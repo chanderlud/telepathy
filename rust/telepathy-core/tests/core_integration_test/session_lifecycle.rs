@@ -60,15 +60,7 @@ async fn session_collision_doesnt_fail() {
     )
     .await;
 
-    client_a
-        .telepathy
-        .inner
-        .start_session
-        .as_ref()
-        .unwrap()
-        .send(contact_b.get_peer_id())
-        .await
-        .unwrap();
+    client_a.telepathy.start_session(&contact_b).await;
 
     wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
 

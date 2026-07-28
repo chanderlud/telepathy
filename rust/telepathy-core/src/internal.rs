@@ -248,16 +248,26 @@ where
             .add_desired_contact_infallible(contact.clone());
         self.await_runtime_applied(&CancellationToken::new())
             .await?;
-        self.dial_session(contact).await;
+        let attempt_id = self.inner.begin_direct_attempt(contact.peer_id);
+        self.dial_session(contact, attempt_id).await?;
         Ok(())
     }
 
-    async fn dial_session(&self, contact: &Contact) {
+    async fn dial_session(&self, contact: &Contact, attempt_id: u64) -> Result<()> {
         if let Some(ref sender) = self.inner.start_session
-            && sender.send(contact.peer_id).await.is_err()
+            && sender.send((contact.peer_id, attempt_id)).await.is_err()
         {
             error!("start_session channel is closed");
+            self.inner
+                .complete_direct_attempt(contact.peer_id, attempt_id);
+            return Err(ErrorKind::RuntimeNotReady.into());
         }
+        if self.inner.start_session.is_none() {
+            self.inner
+                .complete_direct_attempt(contact.peer_id, attempt_id);
+            return Err(ErrorKind::RuntimeNotReady.into());
+        }
+        Ok(())
     }
 
     /// Waits for the manager to apply the current runtime revision, bounded by
@@ -302,6 +312,33 @@ where
             return Ok(());
         }
         self.await_runtime_applied(operation).await?;
+        if operation.is_cancelled() {
+            return Ok(());
+        }
+
+        loop {
+            let availability = self.inner.session_availability_snapshot(contact.peer_id);
+            if self
+                .inner
+                .session_states
+                .read()
+                .await
+                .contains_key(&contact.peer_id)
+            {
+                break;
+            }
+            if !availability.waiting_for_session {
+                if operation.is_cancelled() {
+                    return Ok(());
+                }
+                return Err(ErrorKind::NoSessionForContact.into());
+            }
+            tokio::select! {
+                biased;
+                _ = operation.cancelled() => return Ok(()),
+                _ = self.inner.wait_for_session_availability_change(contact.peer_id, availability.generation) => {}
+            }
+        }
 
         // Acquire the slot and capture its ownership snapshot atomically: both
         // happen under a single mutex hold inside `try_acquire_or_match_with_owner`,

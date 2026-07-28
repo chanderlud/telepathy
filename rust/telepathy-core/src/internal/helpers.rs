@@ -706,6 +706,7 @@ where
         }
 
         self.outbound_attempts.write().await.clear();
+        self.clear_session_availability();
     }
 
     pub(crate) async fn cleanup_room_controller(

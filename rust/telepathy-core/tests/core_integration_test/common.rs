@@ -19,7 +19,7 @@ use telepathy_core::types::Contact;
 use telepathy_core::types::{
     CallState, CodecConfig, ManagerState, NetworkConfig, ScreenshareConfig, SessionStatus,
 };
-use tokio::sync::Notify;
+use tokio::sync::{Notify, watch};
 use tokio::time::{interval, sleep};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -129,19 +129,57 @@ impl ContactLookupProbe {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub(super) struct SessionStatusProbe {
     statuses: Arc<Mutex<HashMap<Vec<u8>, SessionStatus>>>,
     changed: Arc<Notify>,
+    park_connecting: Arc<AtomicBool>,
+    connecting_released: watch::Sender<bool>,
+}
+
+impl Default for SessionStatusProbe {
+    fn default() -> Self {
+        let (connecting_released, _) = watch::channel(false);
+        Self {
+            statuses: Arc::default(),
+            changed: Arc::new(Notify::new()),
+            park_connecting: Arc::new(AtomicBool::new(false)),
+            connecting_released,
+        }
+    }
 }
 
 impl SessionStatusProbe {
-    fn record(&self, peer_id: &[u8], status: SessionStatus) {
+    fn record(&self, peer_id: &[u8], status: SessionStatus) -> bool {
+        let is_connecting = matches!(status, SessionStatus::Connecting);
         self.statuses
             .lock()
             .unwrap()
             .insert(peer_id.to_vec(), status);
         self.changed.notify_waiters();
+        is_connecting && self.park_connecting.load(Relaxed)
+    }
+
+    pub(super) fn park_connecting(&self) {
+        self.park_connecting.store(true, Relaxed);
+        let _ = self.connecting_released.send(true);
+    }
+
+    pub(super) fn release_connecting(&self) {
+        self.park_connecting.store(false, Relaxed);
+        let _ = self.connecting_released.send(false);
+    }
+
+    async fn wait_for_connecting_release(&self) {
+        let mut released = self.connecting_released.subscribe();
+        loop {
+            if !self.park_connecting.load(Relaxed) || !*released.borrow() {
+                return;
+            }
+            if released.changed().await.is_err() {
+                return;
+            }
+        }
     }
 
     pub(super) async fn wait_for(&self, peer_id: &[u8], expected: SessionStatus) {
@@ -1160,7 +1198,7 @@ where
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn build_client_with_options_and_initial_contacts<H, I, O>(
+pub(super) async fn build_client_with_options_and_initial_contacts<H, I, O>(
     relay_map: &RelayMap,
     identity: SecretKey,
     contacts: Vec<Contact>,
@@ -1283,12 +1321,16 @@ fn construct_mock_callbacks_with_contact_lookup(
     mock.expect_session_status()
         .returning(move |status, _peer| {
             info!("session status got called {status:?} {_peer}");
-            if let Some(probe) = session_status_probe.clone() {
-                probe.record(_peer.as_bytes(), status.clone());
-            }
+            let park_connecting = session_status_probe
+                .as_ref()
+                .is_some_and(|probe| probe.record(_peer.as_bytes(), status.clone()));
+            let session_status_probe = session_status_probe.clone();
             let is_active_clone = is_active.clone();
             let is_relayed_clone = is_relayed.clone();
             Box::pin(async move {
+                if park_connecting && let Some(probe) = session_status_probe {
+                    probe.wait_for_connecting_release().await;
+                }
                 if let SessionStatus::Connected { relayed, .. } = status {
                     is_active_clone.store(true, Relaxed);
                     is_relayed_clone.store(relayed, Relaxed);
