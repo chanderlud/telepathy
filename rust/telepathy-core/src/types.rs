@@ -7,7 +7,7 @@ use crate::internal::screenshare::{Decoder, Device, Encoder, ScreenshareConfigDi
 use crate::internal::spawn_task;
 use atomic_float::AtomicF32;
 use chrono::{DateTime, Local, SecondsFormat, Utc};
-use iroh::{RelayMap, TransportAddr};
+use iroh::RelayMap;
 use iroh::RelayUrl;
 #[cfg(feature = "integration-testing")]
 use iroh::address_lookup::memory::MemoryLookup;
@@ -175,7 +175,7 @@ impl Contact {
     pub fn set_direct_connection_string(&mut self, connection_string: Option<String>) {
         self.direct_connection_string = connection_string;
     }
-    
+
     pub(crate) fn group_contact(peer_id: PublicKey) -> Self {
         Self {
             id: Uuid::new_v4().to_string(),

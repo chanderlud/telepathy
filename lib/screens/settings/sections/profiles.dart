@@ -1,10 +1,10 @@
-import 'dart:core';
 import 'package:flutter/services.dart';
 import 'package:flutter/material.dart' hide Overlay;
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:provider/provider.dart';
 import 'package:telepathy/controllers/index.dart';
 import 'package:telepathy/core/rust/flutter.dart';
+import 'package:telepathy/core/utils/console.dart';
 import 'package:telepathy/models/index.dart';
 import 'package:telepathy/widgets/common/index.dart';
 
@@ -18,6 +18,8 @@ class ProfileSettings extends StatefulWidget {
 class ProfileSettingsState extends State<ProfileSettings> {
   final TextEditingController _profileNameInput = TextEditingController();
   String? _profileNameError;
+
+  String? _deleteProfileError;
 
   InputDecoration _profileNameInputDecoration(BuildContext context) {
     if (_profileNameError == null) {
@@ -148,18 +150,33 @@ class ProfileSettingsState extends State<ProfileSettings> {
                               : 'Set Active',
                           width: 65,
                           height: 25,
-                          disabled: stateController.isCallActive ||
+                          disabled: stateController.blockAudioChanges ||
+                              profilesController.isIdentitySwitchPending ||
                               profilesController.activeProfile == profile.id,
                           onPressed: () async {
-                            await profilesController
-                                .setActiveProfile(profile.id);
-                            await telepathy.setIdentity(key: profile.keypair);
-                            await telepathy.restartManager();
+                            if (stateController.blockAudioChanges ||
+                                profilesController.isIdentitySwitchPending) {
+                              return;
+                            }
+                            try {
+                              await profilesController.switchActiveProfile(
+                                profile.id,
+                                telepathy: telepathy,
+                              );
+                            } catch (error) {
+                              DebugConsole.warn(
+                                'switchActiveProfile failed for '
+                                '${profile.id}: $error; '
+                                'frontend active profile left unchanged',
+                              );
+                            }
                           },
                           noSplash: true,
                           disabledColor:
                               profilesController.activeProfile == profile.id &&
-                                      stateController.isCallActive
+                                      (stateController.blockAudioChanges ||
+                                          profilesController
+                                              .isIdentitySwitchPending)
                                   ? Theme.of(listContext)
                                       .colorScheme
                                       .tertiaryContainer
@@ -179,33 +196,110 @@ class ProfileSettingsState extends State<ProfileSettings> {
                             )),
                         IconButton(
                           tooltip: 'Delete Profile',
-                          onPressed: () {
-                            showDialog(
-                                context: listContext,
-                                builder: (BuildContext dialogContext) {
-                                  return AlertDialog(
-                                    title: const Text('Delete Profile'),
-                                    content: const Text(
-                                        'Are you sure you want to delete this profile?'),
-                                    actions: [
-                                      Button(
-                                        text: 'Cancel',
-                                        onPressed: () {
-                                          Navigator.of(dialogContext).pop();
-                                        },
-                                      ),
-                                      Button(
-                                        text: 'Delete',
-                                        onPressed: () {
-                                          profilesController
-                                              .removeProfile(profile.id);
-                                          Navigator.of(dialogContext).pop();
-                                        },
-                                      )
-                                    ],
-                                  );
-                                });
-                          },
+                          onPressed: (stateController.blockAudioChanges &&
+                                      profilesController.activeProfile ==
+                                          profile.id) ||
+                                  profilesController.isIdentitySwitchPending
+                              ? null
+                              : () {
+                                  setState(() {
+                                    _deleteProfileError = null;
+                                  });
+                                  showDialog(
+                                      context: listContext,
+                                      builder: (BuildContext dialogContext) {
+                                        return StatefulBuilder(builder:
+                                            (BuildContext dialogContext,
+                                                StateSetter setDialogState) {
+                                          return AlertDialog(
+                                            title: const Text('Delete Profile'),
+                                            content: Column(
+                                              mainAxisSize: MainAxisSize.min,
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                const Text(
+                                                    'Are you sure you want to delete this profile?'),
+                                                if (_deleteProfileError != null)
+                                                  Padding(
+                                                    padding:
+                                                        const EdgeInsets.only(
+                                                            top: 12),
+                                                    child: Text(
+                                                      _deleteProfileError!,
+                                                      style: TextStyle(
+                                                        color: Theme.of(
+                                                                dialogContext)
+                                                            .colorScheme
+                                                            .error,
+                                                      ),
+                                                    ),
+                                                  ),
+                                              ],
+                                            ),
+                                            actions: [
+                                              Button(
+                                                text: 'Cancel',
+                                                onPressed: () {
+                                                  Navigator.of(dialogContext)
+                                                      .pop();
+                                                },
+                                              ),
+                                              Button(
+                                                text: 'Delete',
+                                                disabled: profilesController
+                                                    .isIdentitySwitchPending,
+                                                onPressed: () async {
+                                                  final navigator =
+                                                      Navigator.of(
+                                                          dialogContext);
+                                                  final messenger =
+                                                      ScaffoldMessenger.of(
+                                                          context);
+                                                  try {
+                                                    await profilesController
+                                                        .removeProfile(
+                                                      profile.id,
+                                                      telepathy: telepathy,
+                                                    );
+                                                    if (mounted) {
+                                                      navigator.pop();
+                                                    }
+                                                  } catch (error) {
+                                                    DebugConsole.warn(
+                                                      'delete of profile '
+                                                      '${profile.id} failed: '
+                                                      '$error',
+                                                    );
+                                                    if (!mounted) {
+                                                      return;
+                                                    }
+                                                    if (!profilesController
+                                                        .profiles
+                                                        .containsKey(
+                                                            profile.id)) {
+                                                      navigator.pop();
+                                                      messenger.showSnackBar(
+                                                        const SnackBar(
+                                                          content: Text(
+                                                            'Profile deleted. Cleanup will retry at next startup.',
+                                                          ),
+                                                        ),
+                                                      );
+                                                      return;
+                                                    }
+                                                    setDialogState(() {
+                                                      _deleteProfileError =
+                                                          'Could not delete profile. Please try again.';
+                                                    });
+                                                  }
+                                                },
+                                              )
+                                            ],
+                                          );
+                                        });
+                                      });
+                                },
                           icon: SvgPicture.asset(
                             'assets/icons/Trash.svg',
                             semanticsLabel: 'Delete Profile',
@@ -220,54 +314,62 @@ class ProfileSettingsState extends State<ProfileSettings> {
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 5, horizontal: 20),
             child: IconButton(
-              onPressed: () {
-                _profileNameError = null;
-                showDialog(
-                    context: context,
-                    builder: (BuildContext context) {
-                      return StatefulBuilder(
-                        builder:
-                            (BuildContext context, StateSetter setDialogState) {
-                          return CallbackShortcuts(
-                            bindings: <ShortcutActivator, VoidCallback>{
-                              const SingleActivator(LogicalKeyboardKey.enter):
-                                  () => _createProfile(context,
-                                      profilesController, setDialogState),
-                            },
-                            child: SimpleDialog(
-                              title: const Text('Create Profile'),
-                              contentPadding: const EdgeInsets.only(
-                                  bottom: 25, left: 25, right: 25),
-                              titlePadding: const EdgeInsets.only(
-                                  top: 25, left: 25, right: 25, bottom: 15),
-                              children: [
-                                TextField(
-                                  decoration:
-                                      _profileNameInputDecoration(context),
-                                  controller: _profileNameInput,
-                                  onChanged: (_) {
-                                    if (_profileNameError == null) return;
-
-                                    setDialogState(() {
-                                      _profileNameError = null;
-                                    });
+              onPressed: profilesController.isIdentitySwitchPending
+                  ? null
+                  : () {
+                      _profileNameError = null;
+                      showDialog(
+                          context: context,
+                          builder: (BuildContext context) {
+                            return StatefulBuilder(
+                              builder: (BuildContext context,
+                                  StateSetter setDialogState) {
+                                return CallbackShortcuts(
+                                  bindings: <ShortcutActivator, VoidCallback>{
+                                    const SingleActivator(
+                                            LogicalKeyboardKey.enter):
+                                        () => _createProfile(context,
+                                            profilesController, setDialogState),
                                   },
-                                  onSubmitted: (_) => _createProfile(context,
-                                      profilesController, setDialogState),
-                                ),
-                                const SizedBox(height: 20),
-                                Button(
-                                  text: 'Create',
-                                  onPressed: () => _createProfile(context,
-                                      profilesController, setDialogState),
-                                )
-                              ],
-                            ),
-                          );
-                        },
-                      );
-                    });
-              },
+                                  child: SimpleDialog(
+                                    title: const Text('Create Profile'),
+                                    contentPadding: const EdgeInsets.only(
+                                        bottom: 25, left: 25, right: 25),
+                                    titlePadding: const EdgeInsets.only(
+                                        top: 25,
+                                        left: 25,
+                                        right: 25,
+                                        bottom: 15),
+                                    children: [
+                                      TextField(
+                                        decoration: _profileNameInputDecoration(
+                                            context),
+                                        controller: _profileNameInput,
+                                        onChanged: (_) {
+                                          if (_profileNameError == null) return;
+
+                                          setDialogState(() {
+                                            _profileNameError = null;
+                                          });
+                                        },
+                                        onSubmitted: (_) => _createProfile(
+                                            context,
+                                            profilesController,
+                                            setDialogState),
+                                      ),
+                                      const SizedBox(height: 20),
+                                      Button(
+                                        text: 'Create',
+                                        onPressed: () => _createProfile(context,
+                                            profilesController, setDialogState),
+                                      )
+                                    ],
+                                  ),
+                                );
+                              },
+                            );
+                          });
+                    },
               visualDensity: VisualDensity.comfortable,
               icon: SvgPicture.asset(
                 'assets/icons/Plus.svg',

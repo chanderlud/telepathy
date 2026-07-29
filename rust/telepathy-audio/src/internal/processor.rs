@@ -20,7 +20,7 @@
 //! dedicated threads, since they perform blocking I/O on the source/sink.
 
 use crate::constants::MINIMUM_SILENCE_LENGTH;
-use crate::error::Error;
+use crate::error::{ChannelError, Error};
 use crate::internal::NETWORK_FRAME;
 use crate::internal::buffer_pool::BufferPool;
 use crate::internal::processing::*;
@@ -199,7 +199,9 @@ pub fn input_processor<I: AudioInput>(
             Ok(()) => (),
             Err(ClosedOrFailed::Closed) => break,
             // propagate failures
-            Err(ClosedOrFailed::Failed(error)) => Err(error)?,
+            Err(ClosedOrFailed::Failed(error)) => {
+                return Err(Error::Channel(ChannelError::DataSinkFailed(error)));
+            }
         }
     }
 
@@ -275,7 +277,9 @@ pub fn output_processor<O: AudioOutput>(
         let buffer = match source.recv() {
             Ok(b) => b,
             Err(ClosedOrFailed::Closed) => break,
-            Err(ClosedOrFailed::Failed(error)) => Err(error)?,
+            Err(ClosedOrFailed::Failed(error)) => {
+                return Err(Error::Channel(ChannelError::DataSourceFailed(error)));
+            }
         };
 
         let int_samples = if state.is_deafened() {

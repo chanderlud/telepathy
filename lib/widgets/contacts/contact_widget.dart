@@ -8,6 +8,8 @@ import 'package:telepathy/core/rust/flutter.dart';
 import 'package:telepathy/widgets/common/index.dart';
 import 'package:telepathy/core/rust/types.dart';
 
+import 'call_start_lifecycle.dart';
+
 /// A widget which displays a single contact.
 class ContactWidget extends StatefulWidget {
   final Contact contact;
@@ -56,6 +58,7 @@ class ContactWidgetState extends State<ContactWidget> {
     final player = context.read<SoundPlayer>();
 
     bool active = stateController.isActiveContact(widget.contact);
+    bool pending = stateController.pendingContact?.id() == widget.contact.id();
     SessionStatus status = stateController.sessionStatus(widget.contact);
     bool online = status is SessionStatus_Connected;
     bool connecting = status is SessionStatus_Connecting;
@@ -85,8 +88,17 @@ class ContactWidgetState extends State<ContactWidget> {
                       const Text('Edit Contact'),
                       IconButton(
                         onPressed: () async {
-                          if (!stateController
-                              .isActiveContact(widget.contact)) {
+                          // Lifecycle-lock: deleting a pending target would
+                          // remove the only frontend hangup control while the
+                          // backend start request is still in flight. The
+                          // target must remain editable-only after the
+                          // lifecycle returns to idle, matching the active
+                          // target gate.
+                          final bool isCallTarget =
+                              stateController.isActiveContact(widget.contact) ||
+                                  stateController.pendingContact?.id() ==
+                                      widget.contact.id();
+                          if (!isCallTarget) {
                             bool confirm = await showDialog<bool>(
                                     context: context,
                                     builder: (BuildContext context) {
@@ -137,8 +149,12 @@ class ContactWidgetState extends State<ContactWidget> {
                               Navigator.pop(context);
                             }
                           } else {
-                            showErrorDialog(context, 'Warning',
-                                'Cannot delete a contact while in an active call');
+                            showErrorDialog(
+                                context,
+                                'Warning',
+                                stateController.isActiveContact(widget.contact)
+                                    ? 'Cannot delete a contact while in an active call'
+                                    : 'Cannot delete a contact while a call is being placed');
                           }
                         },
                         icon: SvgPicture.asset('assets/icons/Trash.svg',
@@ -153,7 +169,9 @@ class ContactWidgetState extends State<ContactWidget> {
                   children: [
                     TextInput(
                         enabled:
-                            !stateController.isActiveContact(widget.contact),
+                            !(stateController.isActiveContact(widget.contact) ||
+                                stateController.pendingContact?.id() ==
+                                    widget.contact.id()),
                         controller: _nicknameInput,
                         labelText: 'Nickname',
                         onChanged: (value) {
@@ -279,7 +297,7 @@ class ContactWidgetState extends State<ContactWidget> {
               const SizedBox(width: 5),
               Text(connectedStatus.remoteAddress),
             ],
-            if (active)
+            if (active || pending)
               IconButton(
                 visualDensity: VisualDensity.comfortable,
                 icon: SvgPicture.asset(
@@ -290,14 +308,20 @@ class ContactWidgetState extends State<ContactWidget> {
                 onPressed: () async {
                   outgoingSoundHandle?.cancel();
 
-                  telepathy.endCall();
+                  stateController.cancelCurrentStartOperation();
+                  if (!stateController.beginCallEnding()) return;
+                  await telepathy.endCall();
                   stateController.endOfCall();
 
                   List<int> bytes = await readSeaBytes('call_ended');
-                  otherSoundHandle = await player.play(bytes: bytes);
+                  otherSoundHandle = await playSoundEffect(
+                    player: player,
+                    bytes: bytes,
+                    sound: 'call-ended',
+                  );
                 },
               ),
-            if (!active && online)
+            if (!active && !pending && online)
               IconButton(
                 visualDensity: VisualDensity.comfortable,
                 icon: SvgPicture.asset(
@@ -306,7 +330,7 @@ class ContactWidgetState extends State<ContactWidget> {
                   width: 32,
                 ),
                 onPressed: () async {
-                  if (stateController.isCallActive) {
+                  if (stateController.hasLiveCall) {
                     showErrorDialog(context, 'Call failed',
                         'There is a call already active');
                     return;
@@ -319,19 +343,26 @@ class ContactWidgetState extends State<ContactWidget> {
                     return;
                   }
 
+                  // Capture the target before any await so the continuation
+                  // and the `callState` gate observe the same contact the
+                  // user clicked, even if the widget is rebuilt against a
+                  // different contact while `startCall` is still resolving.
+                  final Contact target = widget.contact;
+                  final operation = telepathy.newStartOperation();
                   stateController.setStatus('Connecting');
-                  List<int> bytes = await readSeaBytes('outgoing');
-                  outgoingSoundHandle = await player.play(bytes: bytes);
+                  final attempt =
+                      stateController.setPendingContact(target, operation);
 
-                  try {
-                    await telepathy.startCall(contact: widget.contact);
-                    stateController.setActiveContact(widget.contact);
-                  } on DartError catch (e) {
-                    stateController.setStatus('Inactive');
-                    outgoingSoundHandle?.cancel();
-                    if (!context.mounted) return;
-                    showErrorDialog(context, 'Call failed', e.message);
-                  }
+                  await runOutgoingCallStartLifecycle(
+                    context: context,
+                    stateController: stateController,
+                    player: player,
+                    attempt: attempt,
+                    startRequest: () => telepathy.startCall(
+                      contact: target,
+                      operation: operation,
+                    ),
+                  );
                 },
               )
           ],

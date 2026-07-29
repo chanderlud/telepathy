@@ -797,6 +797,7 @@ async def test_room_three_all_contacts_full_mesh(
 
 
 @pytest.mark.asyncio
+@pytest.mark.xdist_group(name="room_twenty_partial_contacts_full_mesh")
 @pytest.mark.parametrize("profile", [NETWORK_PROFILES[0]], ids=lambda profile: profile.name)
 async def test_room_twenty_partial_contacts_full_mesh(
     room_cli_twenty: RoomCliGroup,
@@ -1234,3 +1235,57 @@ async def test_session_client_disappears_and_reappears(
 
     assert not _has_error_event(alice_after_restart)
     assert not _has_error_event(bob_after_restart)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("profile", [NETWORK_PROFILES[0]], ids=lambda profile: profile.name)
+async def test_start_manager_ack_precedes_active_event(
+    topology: TopologyManager,
+    binaries: dict[str, str],
+    profile: NetworkProfile,
+) -> None:
+    _ = profile
+    namespace = topology.client_namespaces[0]
+
+    actor = CliProcess(
+        binary_path=binaries["cli"],
+        namespace=namespace,
+        listen_port=0,
+        bind_addresses=["0.0.0.0"],
+        relay_url=topology.relay_url(namespace),
+        dns_endpoint=topology.dns_endpoint(namespace),
+        dns_origin_domain=topology.dns_origin_domain(namespace),
+        pkarr_relay=topology.pkarr_relay(namespace),
+    )
+
+    try:
+        await actor.start()
+        await _set_identity_on_actor(actor, _generate_identity())
+
+        loop = asyncio.get_running_loop()
+        ack_start = loop.time()
+        ack = await actor.send({"cmd": "start_manager", "args": {}})
+        ack_elapsed = loop.time() - ack_start
+
+        assert ack.get("ok") is True, f"start_manager ack failed: {ack}"
+
+        active_event = await actor.expect_event(
+            lambda event: _manager_state_from_event(event) == "Active",
+            timeout=30.0,
+        )
+        active_elapsed = loop.time() - ack_start
+
+        assert active_elapsed > ack_elapsed, (
+            "manager_active Active was observed before the start_manager ack, "
+            "indicating start_manager blocked until Active. "
+            f"ack_elapsed={ack_elapsed:.3f}s, active_elapsed={active_elapsed:.3f}s"
+        )
+        assert ack_elapsed < 1.0, (
+            f"start_manager ack took {ack_elapsed:.3f}s — the manager spawn "
+            "should return near-instantly; the wait-for-active path appears to "
+            "have been restored"
+        )
+
+        _ = active_event
+    finally:
+        await actor.terminate()

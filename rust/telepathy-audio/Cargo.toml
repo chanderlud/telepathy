@@ -1,6 +1,6 @@
 [package]
 name = "telepathy-audio"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 description = "Audio processing library for telepathy with device management, codec support, and SIMD optimization"
 license = "MIT"
@@ -20,7 +20,7 @@ audioadapter-buffers = "3"
 bytes = "1"
 crossbeam = "0.8"
 cfg-if = "1"
-cpal = { version = "0.17", features = ["wasm-bindgen"] }
+cpal = { version = "0.18", features = ["wasm-bindgen", "realtime"] }
 tracing = "0.1"
 nnnoiseless = { git = "https://github.com/chanderlud/nnnoiseless", branch="wasm-optimization", default-features = false }
 rubato = "3"

@@ -1,10 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:collection/collection.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:telepathy/core/rust/flutter.dart';
 import 'package:telepathy/core/rust/flutter/utils.dart';
 import 'package:telepathy/core/rust/types.dart';
 import 'package:telepathy/core/utils/console.dart';
@@ -20,6 +20,14 @@ class ProfilesController with ChangeNotifier {
   static const String _unnamedProfileNickname = 'Unnamed Profile';
   static const double _minContactOutputVolumeDb = -15.0;
   static const double _maxContactOutputVolumeDb = 15.0;
+  static const String _deletionTombstonesKey = 'profileDeletionTombstones';
+
+  /// Iroh SecretKey length. Profiles whose persisted keypair does not decode
+  /// to exactly this many bytes are rejected at load time so they cannot
+  /// become switch targets — a malformed target previously caused the
+  /// backend's commit_identity_switch to fail AFTER the slot was reserved,
+  /// wedging the call slot.
+  static const int identityKeyLength = 32;
 
   final FlutterSecureStorage storage;
   final SharedPreferencesAsync options;
@@ -35,7 +43,21 @@ class ProfilesController with ChangeNotifier {
   Map<String, Profile> profiles = <String, Profile>{};
 
   /// The id of the active profile. Empty until [init] completes.
-  String activeProfile = '';
+  ///
+  /// Read-only outside this controller: runtime profile changes must go
+  /// through [switchActiveProfile] (or active-profile deletion) so the
+  /// Rust backend's identity invariant stays in lockstep with the
+  /// frontend's persisted active profile. The previous public setter
+  /// bypassed the backend entirely, leaving the frontend pointing at a
+  /// profile whose signing key the backend had never installed.
+  String _activeProfile = '';
+
+  String get activeProfile => _activeProfile;
+
+  /// True while a prepared identity switch is in flight.
+  bool _isIdentitySwitchPending = false;
+
+  bool get isIdentitySwitchPending => _isIdentitySwitchPending;
 
   bool _initialized = false;
   bool _disposed = false;
@@ -67,8 +89,13 @@ class ProfilesController with ChangeNotifier {
 
   Future<void> _init(List<String> args) async {
     _initialized = false;
-    activeProfile = '';
+    _activeProfile = '';
     profiles = <String, Profile>{};
+
+    // Honor deletion tombstones before loading profiles so orphaned records
+    // cannot become switch targets. The profile index is authoritative: an
+    // indexed id is live, while an unindexed tombstoned id needs cleanup.
+    await _retryTombstonedDeletions();
 
     final List<String> profileIds = _dedupe(
       await _getStringListOption(_profilesKey) ?? const <String>[],
@@ -115,10 +142,13 @@ class ProfilesController with ChangeNotifier {
 
       final String? override = args.elementAtOrNull(0);
       if (override != null && override.trim().isNotEmpty) {
-        final MapEntry<String, Profile>? match =
-            profiles.entries.firstWhereOrNull(
-          (entry) => entry.key == override || entry.value.nickname == override,
-        );
+        MapEntry<String, Profile>? match;
+        for (final MapEntry<String, Profile> entry in profiles.entries) {
+          if (entry.key == override || entry.value.nickname == override) {
+            match = entry;
+            break;
+          }
+        }
         if (match != null) {
           selectedId = match.key;
         } else {
@@ -265,40 +295,33 @@ class ProfilesController with ChangeNotifier {
   Future<String> _createProfile(String nickname, {bool notify = true}) async {
     final String cleanNickname =
         nickname.trim().isEmpty ? _unnamedProfileNickname : nickname;
-
-    late final String peerId;
-    late final Uint8List keypair;
-    try {
-      (peerId, keypair) = generateKeys();
-    } catch (error, stackTrace) {
-      DebugConsole.warn('failed to generate profile keys: $error\n$stackTrace');
-      rethrow;
-    }
-
     final String id = const Uuid().v4();
-    final Profile profile = Profile(
-      id: id,
-      nickname: cleanNickname,
-      peerId: peerId,
-      keypair: keypair,
-      contacts: <String, Contact>{},
-      rooms: <String, Room>{},
-    );
-
-    profiles[id] = profile;
 
     try {
+      late final String peerId;
+      late final Uint8List keypair;
+      try {
+        (peerId, keypair) = generateKeys();
+      } catch (error, stackTrace) {
+        DebugConsole.warn(
+            'failed to generate profile keys: $error\n$stackTrace');
+        rethrow;
+      }
+
+      final Profile profile = Profile(
+        id: id,
+        nickname: cleanNickname,
+        peerId: peerId,
+        keypair: keypair,
+        contacts: <String, Contact>{},
+        rooms: <String, Room>{},
+      );
+
+      profiles[id] = profile;
       await _writeProfile(profile);
       await _persistProfileIds();
     } catch (error, stackTrace) {
-      profiles.remove(id);
-      try {
-        await _deleteProfileStorage(id);
-      } catch (cleanupError) {
-        DebugConsole.warn(
-          'failed to clean up profile $id after create error: $cleanupError',
-        );
-      }
+      await _cleanupFailedProfileCreation(id);
       Error.throwWithStackTrace(error, stackTrace);
     }
 
@@ -309,49 +332,102 @@ class ProfilesController with ChangeNotifier {
     return id;
   }
 
-  Future<void> removeProfile(String id) {
-    return _enqueue(() => _removeProfile(id));
+  Future<void> removeProfile(String id, {required Telepathy telepathy}) {
+    return _enqueue(() => _removeProfile(id, telepathy: telepathy));
   }
 
-  Future<void> _removeProfile(String id) async {
+  Future<void> _removeProfile(String id, {required Telepathy telepathy}) async {
     if (!profiles.containsKey(id)) {
       DebugConsole.warn('removeProfile called for unknown profile: $id');
       return;
     }
 
-    final Map<String, Profile> profilesBefore =
-        Map<String, Profile>.from(profiles);
-    final String activeBefore = activeProfile;
-    final bool wasActive = activeProfile == id;
+    if (id == _activeProfile) {
+      final String replacementId = await _replacementProfileId(id);
+      await _switchActiveProfile(replacementId, telepathy: telepathy);
+    }
 
+    await _removeInactiveProfile(id);
+  }
+
+  Future<String> _replacementProfileId(String deletedId) async {
+    for (final String id in profiles.keys) {
+      if (id != deletedId) {
+        return id;
+      }
+    }
+    return _createProfile(_defaultProfileNickname, notify: false);
+  }
+
+  Future<void> _removeInactiveProfile(String id) async {
+    await _recordDeletionIntent(id);
+    final List<String> remainingIds = profiles.keys
+        .where((String profileId) => profileId != id)
+        .toList(growable: false);
+    await _persistProfileIds(remainingIds);
     profiles.remove(id);
 
     try {
-      await _persistProfileIds();
       await _deleteProfileStorage(id);
-
-      if (profiles.isEmpty) {
-        final String defaultId = await _createProfile(
-          _defaultProfileNickname,
-          notify: false,
-        );
-        await _setActiveProfile(defaultId, notify: false);
-      } else if (wasActive || !profiles.containsKey(activeProfile)) {
-        await _setActiveProfile(profiles.keys.first, notify: false);
-      }
-
+      await _clearDeletionIntent(id);
+    } finally {
       _safeNotifyListeners();
-    } catch (error, stackTrace) {
-      profiles
-        ..clear()
-        ..addAll(profilesBefore);
-      activeProfile = activeBefore;
-      Error.throwWithStackTrace(error, stackTrace);
     }
   }
 
-  Future<void> setActiveProfile(String id) {
-    return _enqueue(() => _setActiveProfile(id));
+  /// Switches active profile through a prepared identity token.
+  /// Persists target active id, updates memory, then commits target identity.
+  ///
+  /// This is the ONLY public runtime path that mutates the active profile:
+  /// the previous `setActiveProfile` setter bypassed the backend entirely,
+  /// so the frontend could end up pointing at a profile whose signing key
+  /// the backend had never installed. Startup selection uses the private
+  /// [_setActiveProfile] helper instead.
+  Future<void> switchActiveProfile(
+    String id, {
+    required Telepathy telepathy,
+  }) {
+    return _enqueue(() => _switchActiveProfile(id, telepathy: telepathy));
+  }
+
+  Future<void> _switchActiveProfile(
+    String id, {
+    required Telepathy telepathy,
+  }) async {
+    if (!profiles.containsKey(id)) {
+      DebugConsole.warn('switch to unknown profile: $id');
+      return;
+    }
+    if (id == _activeProfile) {
+      return;
+    }
+
+    final Profile target = profiles[id]!;
+
+    _isIdentitySwitchPending = true;
+    _safeNotifyListeners();
+
+    try {
+      final List<Contact> snapshot =
+          target.contacts.values.map((Contact c) => c.pubClone()).toList();
+      final PreparedIdentitySwitch prepared =
+          await telepathy.prepareIdentitySwitch(
+        targetKey: target.keypair,
+        targetContacts: snapshot,
+      );
+      try {
+        await _setStringOption(_activeProfileKey, id);
+      } catch (error, stackTrace) {
+        prepared.dispose();
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+
+      _activeProfile = id;
+      await prepared.commit();
+    } finally {
+      _isIdentitySwitchPending = false;
+      _safeNotifyListeners();
+    }
   }
 
   Future<void> _setActiveProfile(String id, {bool notify = true}) async {
@@ -368,12 +444,12 @@ class ProfilesController with ChangeNotifier {
     }
 
     final String previousActive = activeProfile;
-    activeProfile = targetId;
+    _activeProfile = targetId;
 
     try {
       await _setStringOption(_activeProfileKey, targetId);
     } catch (error, stackTrace) {
-      activeProfile = previousActive;
+      _activeProfile = previousActive;
       Error.throwWithStackTrace(error, stackTrace);
     }
 
@@ -490,6 +566,15 @@ class ProfilesController with ChangeNotifier {
       return null;
     }
 
+    if (keyBytes.length != identityKeyLength) {
+      DebugConsole.warn(
+        'profile $id has malformed keypair: expected '
+        '$identityKeyLength bytes, got ${keyBytes.length}; '
+        'rejecting so this profile cannot become a switch target',
+      );
+      return null;
+    }
+
     final String nickname =
         await _readStorage('$id-nickname') ?? _unnamedProfileNickname;
 
@@ -583,17 +668,122 @@ class ProfilesController with ChangeNotifier {
     await _writeStorage(key: '${profile.id}-nickname', value: profile.nickname);
   }
 
-  Future<void> _deleteProfileStorage(String id) async {
-    await _deleteStorage('$id-keypair');
-    await _deleteStorage('$id-peerId');
-    await _deleteStorage('$id-contacts');
-    await _deleteStorage('$id-rooms');
-    await _deleteStorage('$id-nickname');
+  Future<void> _cleanupFailedProfileCreation(String id) async {
+    try {
+      await _recordDeletionIntent(id);
+    } catch (error, stackTrace) {
+      DebugConsole.warn(
+        'failed to tombstone profile $id after create error; retaining its '
+        'index and storage: $error\n$stackTrace',
+      );
+      return;
+    }
+
+    profiles.remove(id);
+    try {
+      await _persistProfileIds();
+    } catch (error, stackTrace) {
+      DebugConsole.warn(
+        'failed to exclude profile $id from the profile index after create '
+        'error; retaining its storage: $error\n$stackTrace',
+      );
+      return;
+    }
+
+    try {
+      await _deleteProfileStorage(id);
+      await _clearDeletionIntent(id);
+    } catch (error, stackTrace) {
+      DebugConsole.warn(
+        'failed to delete profile $id storage after create error: '
+        '$error\n$stackTrace',
+      );
+    }
   }
 
-  Future<void> _persistProfileIds() async {
+  Future<void> _deleteProfileStorage(String id) async {
+    final List<String> keys = <String>[
+      '$id-keypair',
+      '$id-peerId',
+      '$id-contacts',
+      '$id-rooms',
+      '$id-nickname',
+    ];
+    Object? firstError;
+    StackTrace? firstStackTrace;
+
+    for (final String key in keys) {
+      try {
+        await _deleteStorage(key);
+      } catch (error, stackTrace) {
+        firstError ??= error;
+        firstStackTrace ??= stackTrace;
+      }
+    }
+
+    if (firstError != null) {
+      Error.throwWithStackTrace(firstError, firstStackTrace!);
+    }
+  }
+
+  Future<void> _persistProfileIds([List<String>? ids]) async {
     await _setStringListOption(
-        _profilesKey, profiles.keys.toList(growable: false));
+      _profilesKey,
+      ids ?? profiles.keys.toList(growable: false),
+    );
+  }
+
+  /// Records a durable deletion intent for `id`. MUST be called before
+  /// removing `id` from the profile index or deleting its secure-storage
+  /// records. Startup's [_retryTombstonedDeletions] honors this journal
+  /// before loading profiles and redrives cleanup until it succeeds.
+  Future<void> _recordDeletionIntent(String id) async {
+    final List<String> tombstones = _dedupe(
+      await _getStringListOption(_deletionTombstonesKey) ?? const <String>[],
+    );
+    if (!tombstones.contains(id)) {
+      tombstones.add(id);
+      await _setStringListOption(_deletionTombstonesKey, tombstones);
+    }
+  }
+
+  /// Clears the deletion intent for `id`. Called only after the id's
+  /// secure-storage records are confirmed removed.
+  Future<void> _clearDeletionIntent(String id) async {
+    final List<String> tombstones = _dedupe(
+      await _getStringListOption(_deletionTombstonesKey) ?? const <String>[],
+    );
+    if (tombstones.isEmpty || !tombstones.contains(id)) {
+      return;
+    }
+    tombstones.remove(id);
+    await _setStringListOption(_deletionTombstonesKey, tombstones);
+  }
+
+  Future<void> _retryTombstonedDeletions() async {
+    final List<String> indexedIds = _dedupe(
+      await _getStringListOption(_profilesKey) ?? const <String>[],
+    );
+    final List<String> tombstones = _dedupe(
+      await _getStringListOption(_deletionTombstonesKey) ?? const <String>[],
+    );
+    final List<String> remaining = <String>[];
+
+    for (final String id in tombstones) {
+      if (indexedIds.contains(id)) {
+        continue;
+      }
+      try {
+        await _deleteProfileStorage(id);
+      } catch (error, stackTrace) {
+        DebugConsole.warn(
+          'startup storage cleanup retry failed for profile $id: '
+          '$error\n$stackTrace',
+        );
+        remaining.add(id);
+      }
+    }
+    await _setStringListOption(_deletionTombstonesKey, remaining);
   }
 
   Profile _currentProfile() {
@@ -607,7 +797,7 @@ class ProfilesController with ChangeNotifier {
       DebugConsole.warn(
         'active profile "$activeProfile" is invalid; falling back to "$fallbackId"',
       );
-      activeProfile = fallbackId;
+      _activeProfile = fallbackId;
       unawaited(
         _enqueue(() => _setStringOption(_activeProfileKey, fallbackId)),
       );

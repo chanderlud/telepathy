@@ -4,12 +4,11 @@ use crate::internal::error::ErrorKind;
 use crate::internal::messages::{AudioHeader, ProtocolMessage, RoomMessage};
 use crate::types::{CodecConfig, Contact, NetworkConfig, ScreenshareConfig, SessionStatus};
 use atomic_float::AtomicF32;
-use iroh::EndpointAddr;
 use iroh::endpoint::{Connection, Path};
 use iroh::{PublicKey, SecretKey, TransportAddr};
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::sync::atomic::Ordering::Relaxed;
+use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize};
 use std::sync::{Arc, Mutex as StdMutex, RwLock as StdRwLock};
 use std::time::Duration;
@@ -37,6 +36,8 @@ pub enum CallSlotState {
     ActiveDirect,
     RoomCall,
     AudioTest,
+    /// Held while prepared identity switching owns the call slot.
+    IdentitySwitch,
 }
 
 /// Result of [`CallSlot::try_acquire_or_match`].
@@ -89,6 +90,7 @@ struct CallSlotInner {
 #[derive(Clone)]
 pub struct CallSlot {
     inner: Arc<StdMutex<CallSlotInner>>,
+    released: Arc<Notify>,
 }
 
 impl Default for CallSlot {
@@ -99,6 +101,7 @@ impl Default for CallSlot {
                 direct_peer: None,
                 generation: 0,
             })),
+            released: Arc::new(Notify::new()),
         }
     }
 }
@@ -168,6 +171,38 @@ impl CallSlot {
         state: CallSlotState,
         peer: PublicKey,
     ) -> Result<CallSlotAcquireResult> {
+        Ok(self.try_acquire_or_match_with_owner(state, peer)?.0)
+    }
+
+    /// Atomic variant of [`try_acquire_or_match`] that also returns the exact
+    /// [`CallSlotSnapshot`] captured under the same mutex acquisition.
+    ///
+    /// The returned snapshot is `Some(_)` only on [`CallSlotAcquireResult::Acquired`]:
+    /// it reflects precisely the ownership this call established (the new pending
+    /// state, the requesting peer, and the freshly bumped generation). A concurrent
+    /// caller (for example a handshake thread transitioning the slot from pending
+    /// to active) cannot leak its transition into this snapshot because both the
+    /// acquisition and the snapshot read happen under a single lock hold.
+    ///
+    /// [`CallSlotAcquireResult::MatchedPendingIncoming`] and
+    /// [`CallSlotAcquireResult::MatchedPendingOutgoing`] deliberately return `None`:
+    /// the matcher does not own the slot (the original acquirer does) and must not
+    /// be able to release it through the snapshot-based path. [`Failed`] likewise
+    /// returns `None`.
+    ///
+    /// Callers that observe the operation they used to acquire the slot (e.g.
+    /// cancellation of a `start_call` operation) must release through
+    /// [`release_if_match`] using the snapshot returned here. Deriving the snapshot
+    /// from a later [`snapshot`] call re-acquires the mutex and can observe a state
+    /// that was transitioned or replaced after acquisition, which would let the
+    /// cancellation release a call this operation never owned.
+    ///
+    /// [`Failed`]: CallSlotAcquireResult::Failed
+    pub fn try_acquire_or_match_with_owner(
+        &self,
+        state: CallSlotState,
+        peer: PublicKey,
+    ) -> Result<(CallSlotAcquireResult, Option<CallSlotSnapshot>)> {
         let mut inner = self
             .inner
             .lock()
@@ -175,17 +210,27 @@ impl CallSlot {
         if let Some(matched) =
             Self::matched_pending_for_peer(state, inner.state, peer, inner.direct_peer)
         {
-            return Ok(matched);
+            // Matched callers do not own the slot; the original acquirer does. Return
+            // no snapshot so the matcher cannot release ownership it never held.
+            return Ok((matched, None));
         }
 
         if inner.state == CallSlotState::Idle {
             inner.state = state;
             inner.direct_peer = Some(peer);
             inner.generation = inner.generation.wrapping_add(1);
-            return Ok(CallSlotAcquireResult::Acquired);
+            // Capture the ownership snapshot under the same lock that performed the
+            // acquisition. A release keyed on this snapshot can never match a state
+            // that a concurrent caller transitioned to after this method returned.
+            let snapshot = CallSlotSnapshot {
+                state: inner.state,
+                direct_peer: inner.direct_peer,
+                generation: inner.generation,
+            };
+            return Ok((CallSlotAcquireResult::Acquired, Some(snapshot)));
         }
 
-        Ok(CallSlotAcquireResult::Failed)
+        Ok((CallSlotAcquireResult::Failed, None))
     }
 
     /// Returns the [`CallSlotAcquireResult::Matched*`] variant for the held pending state when
@@ -251,7 +296,24 @@ impl CallSlot {
             .map_err(|_| ErrorKind::Poison("call slot mutex poisoned"))?;
         inner.state = CallSlotState::Idle;
         inner.direct_peer = None;
+        drop(inner);
+        self.released.notify_waiters();
         Ok(())
+    }
+
+    /// Waits until the owner represented by [expected] has released the slot.
+    /// A newer generation also proves that this owner released before replacement.
+    pub async fn wait_for_release(&self, expected: CallSlotSnapshot) -> Result<()> {
+        loop {
+            let released = self.released.notified();
+            tokio::pin!(released);
+            released.as_mut().enable();
+            let current = self.snapshot()?;
+            if current.state == CallSlotState::Idle || current.generation != expected.generation {
+                return Ok(());
+            }
+            released.await;
+        }
     }
 
     /// Releases the slot only if the current state, peer, and generation still match `expected`.
@@ -273,6 +335,8 @@ impl CallSlot {
         {
             inner.state = CallSlotState::Idle;
             inner.direct_peer = None;
+            drop(inner);
+            self.released.notify_waiters();
             Ok(true)
         } else {
             warn!(
@@ -283,6 +347,37 @@ impl CallSlot {
                 actual.generation = inner.generation
             );
             Ok(false)
+        }
+    }
+
+    /// Atomically claims the call slot from idle, capturing the ownership
+    /// snapshot under the same lock so a release keyed on the snapshot cannot
+    /// race with a state transition that happens between a separate
+    /// `try_acquire` + `snapshot()` pair.
+    ///
+    /// Used by identity-switch begin to acquire the `IdentitySwitch` gate and
+    /// capture the snapshot in one operation. Returns `Ok(Some(snapshot))`
+    /// when the slot moved from idle to `state`, `Ok(None)` when the slot was
+    /// not idle so begin can surface `ManagerRestartDuringCall`.
+    pub fn try_acquire_with_snapshot(
+        &self,
+        state: CallSlotState,
+    ) -> Result<Option<CallSlotSnapshot>> {
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| ErrorKind::Poison("call slot mutex poisoned"))?;
+        if inner.state == CallSlotState::Idle {
+            inner.state = state;
+            inner.direct_peer = None;
+            inner.generation = inner.generation.wrapping_add(1);
+            Ok(Some(CallSlotSnapshot {
+                state: inner.state,
+                direct_peer: None,
+                generation: inner.generation,
+            }))
+        } else {
+            Ok(None)
         }
     }
 
@@ -299,6 +394,8 @@ impl CallSlot {
             if inner.direct_peer == Some(peer) {
                 inner.state = CallSlotState::Idle;
                 inner.direct_peer = None;
+                drop(inner);
+                self.released.notify_waiters();
             } else {
                 warn!(
                     event = "call_slot_release_skipped_peer_mismatch",
@@ -332,6 +429,8 @@ impl CallSlot {
             inner.state = CallSlotState::Idle;
             inner.direct_peer = None;
             inner.generation = inner.generation.wrapping_add(1);
+            drop(inner);
+            self.released.notify_waiters();
             Ok(true)
         } else {
             Ok(false)
@@ -387,11 +486,23 @@ pub struct CoreState {
     /// Pauses statistics callbacks when window is minimized
     pub(crate) statistics_paused: Arc<AtomicBool>,
 
-    /// set to true at shutdown to break manager loop
-    pub(crate) stop_manager: Arc<AtomicBool>,
+    pub(crate) stop_manager: CancellationToken,
 
     /// notifies when a manager starts
     pub manager_active: Arc<Notify>,
+
+    /// Runtime configuration the manager is converging toward.
+    pub(crate) desired_runtime: Arc<StdMutex<DesiredRuntime>>,
+
+    /// Revision last published by an active manager using the matching desired runtime.
+    pub(crate) applied_runtime_revision: Arc<AtomicU64>,
+
+    pub(crate) failed_runtime_revision: Arc<AtomicU64>,
+
+    pub(crate) runtime_applied: Arc<Notify>,
+
+    /// Serializes public session starts with identity-switch installation.
+    pub(crate) identity_session_gate: Arc<Mutex<()>>,
 
     /// Network configuration for p2p connections
     pub(crate) network_config: NetworkConfig,
@@ -428,6 +539,282 @@ pub struct CoreState {
     pub(crate) endpoint_addrs: Arc<StdRwLock<Vec<TransportAddr>>>,
 }
 
+/// Immutable runtime target captured by one manager generation.
+#[derive(Clone)]
+pub(crate) struct RuntimeSnapshot {
+    pub(crate) identity: Option<SecretKey>,
+    pub(crate) contacts: Vec<Contact>,
+    pub(crate) revision: u64,
+    pub(crate) cancellation: CancellationToken,
+}
+
+/// Latest requested runtime. Replacing it cancels obsolete manager setup.
+pub(crate) struct DesiredRuntime {
+    snapshot: RuntimeSnapshot,
+}
+
+impl Default for DesiredRuntime {
+    fn default() -> Self {
+        Self {
+            snapshot: RuntimeSnapshot {
+                identity: None,
+                contacts: Vec::new(),
+                revision: 0,
+                cancellation: CancellationToken::new(),
+            },
+        }
+    }
+}
+
+impl CoreState {
+    pub(crate) fn desired_runtime(&self) -> Result<RuntimeSnapshot> {
+        self.desired_runtime
+            .lock()
+            .map(|runtime| runtime.snapshot.clone())
+            .map_err(|_| ErrorKind::Poison("desired runtime mutex poisoned").into())
+    }
+
+    pub(crate) fn replace_desired_runtime_infallible(
+        &self,
+        identity: SecretKey,
+        contacts: Vec<Contact>,
+    ) -> u64 {
+        let mut runtime = match self.desired_runtime.lock() {
+            Ok(runtime) => runtime,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        runtime.snapshot.cancellation.cancel();
+        let revision = runtime.snapshot.revision.wrapping_add(1);
+        runtime.snapshot = RuntimeSnapshot {
+            identity: Some(identity),
+            contacts,
+            revision,
+            cancellation: CancellationToken::new(),
+        };
+        self.failed_runtime_revision.store(u64::MAX, Relaxed);
+        self.runtime_applied.notify_waiters();
+        revision
+    }
+
+    pub(crate) fn replace_desired_identity_infallible(&self, identity: SecretKey) -> u64 {
+        let contacts = match self.desired_runtime.lock() {
+            Ok(runtime) => runtime.snapshot.contacts.clone(),
+            Err(poisoned) => poisoned.into_inner().snapshot.contacts.clone(),
+        };
+        self.replace_desired_runtime_infallible(identity, contacts)
+    }
+
+    pub(crate) fn restart_desired_runtime_infallible(&self) -> u64 {
+        let runtime = match self.desired_runtime.lock() {
+            Ok(runtime) => runtime.snapshot.clone(),
+            Err(poisoned) => poisoned.into_inner().snapshot.clone(),
+        };
+        match runtime.identity {
+            Some(identity) => self.replace_desired_runtime_infallible(identity, runtime.contacts),
+            None => runtime.revision,
+        }
+    }
+
+    pub(crate) fn remove_desired_contact_infallible(&self, peer: PublicKey) {
+        let runtime = match self.desired_runtime.lock() {
+            Ok(runtime) => runtime.snapshot.clone(),
+            Err(poisoned) => poisoned.into_inner().snapshot.clone(),
+        };
+        let contacts: Vec<_> = runtime
+            .contacts
+            .iter()
+            .filter(|contact| contact.peer_id != peer)
+            .cloned()
+            .collect();
+        if contacts.len() != runtime.contacts.len()
+            && let Some(identity) = runtime.identity
+        {
+            self.replace_desired_runtime_infallible(identity, contacts);
+        }
+    }
+
+    pub(crate) fn add_desired_contact_infallible(&self, contact: Contact) {
+        let mut runtime = match self.desired_runtime.lock() {
+            Ok(runtime) => runtime,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if runtime
+            .snapshot
+            .contacts
+            .iter()
+            .all(|existing| existing.peer_id != contact.peer_id)
+        {
+            runtime.snapshot.contacts.push(contact);
+        }
+    }
+
+    pub(crate) fn is_runtime_applied(&self) -> Result<bool> {
+        Ok(self.desired_runtime()?.revision == self.applied_runtime_revision.load(Relaxed))
+    }
+
+    pub(crate) fn mark_runtime_applied(&self, revision: u64) -> Result<bool> {
+        if self.desired_runtime()?.revision == revision {
+            self.applied_runtime_revision.store(revision, Relaxed);
+            self.runtime_applied.notify_waiters();
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    pub(crate) fn mark_runtime_setup_failed(&self, revision: u64) -> Result<bool> {
+        if self.desired_runtime()?.revision == revision {
+            self.failed_runtime_revision.store(revision, Relaxed);
+            self.runtime_applied.notify_waiters();
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    pub(crate) async fn wait_for_runtime_applied(&self, revision: u64) -> Result<()> {
+        loop {
+            let notified = self.runtime_applied.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.desired_runtime()?.revision != revision {
+                return Err(ErrorKind::RuntimeSuperseded.into());
+            }
+            if self.applied_runtime_revision.load(Relaxed) == revision {
+                return Ok(());
+            }
+            if self.failed_runtime_revision.load(Relaxed) == revision {
+                return Err(ErrorKind::RuntimeSetupFailed.into());
+            }
+            if self.stop_manager.is_cancelled() {
+                return Err(ErrorKind::RuntimeManagerStopped.into());
+            }
+            select! {
+                biased;
+                _ = self.stop_manager.cancelled() => return Err(ErrorKind::RuntimeManagerStopped.into()),
+                _ = notified => (),
+            }
+        }
+    }
+}
+
+/// Exact call-slot ownership held between prepare and commit.
+pub(crate) struct PreparedSwitchLease {
+    slot: CallSlot,
+    snapshot: CallSlotSnapshot,
+}
+
+impl PreparedSwitchLease {
+    pub(crate) fn acquire(slot: &CallSlot) -> Result<Self> {
+        let snapshot = slot
+            .try_acquire_with_snapshot(CallSlotState::IdentitySwitch)?
+            .ok_or(ErrorKind::ManagerRestartDuringCall)?;
+        Ok(Self {
+            slot: slot.clone(),
+            snapshot,
+        })
+    }
+}
+
+impl Drop for PreparedSwitchLease {
+    fn drop(&mut self) {
+        if let Err(error) = self.slot.release_if_match(self.snapshot) {
+            warn!(event = "prepared_identity_switch_lease_release_failed", error = %error);
+        }
+    }
+}
+
+/// Validated target plus its exact prepared-switch lease.
+pub struct PreparedIdentitySwitch {
+    identity: SecretKey,
+    contacts: Vec<Contact>,
+    core_state: CoreState,
+    _session_gate: tokio::sync::OwnedMutexGuard<()>,
+    _lease: PreparedSwitchLease,
+}
+
+impl PreparedIdentitySwitch {
+    pub(crate) fn new(
+        identity: SecretKey,
+        contacts: Vec<Contact>,
+        core_state: CoreState,
+        session_gate: tokio::sync::OwnedMutexGuard<()>,
+        lease: PreparedSwitchLease,
+    ) -> Self {
+        Self {
+            identity,
+            contacts,
+            core_state,
+            _session_gate: session_gate,
+            _lease: lease,
+        }
+    }
+
+    pub async fn commit(self) -> Result<()> {
+        let revision = self
+            .core_state
+            .replace_desired_runtime_infallible(self.identity, self.contacts);
+        self.core_state.wait_for_runtime_applied(revision).await
+    }
+}
+
+#[cfg(test)]
+mod prepared_switch_tests {
+    use super::{CallSlot, CallSlotState, CoreState, PreparedSwitchLease};
+    use iroh::SecretKey;
+
+    #[test]
+    fn dropped_lease_releases_only_its_exact_slot_generation() {
+        let slot = CallSlot::default();
+        match PreparedSwitchLease::acquire(&slot) {
+            Ok(lease) => {
+                let stale_snapshot = lease.snapshot;
+                drop(lease);
+                match slot.try_acquire_with_snapshot(CallSlotState::AudioTest) {
+                    Ok(Some(_)) => {}
+                    Ok(None) => panic!("new owner could not acquire released slot"),
+                    Err(error) => panic!("new slot acquisition failed: {error}"),
+                }
+                match slot.release_if_match(stale_snapshot) {
+                    Ok(released) => assert!(!released),
+                    Err(error) => panic!("stale lease release failed: {error}"),
+                }
+            }
+            Err(error) => panic!("lease acquisition failed: {error}"),
+        }
+        assert_eq!(slot.current(), CallSlotState::AudioTest);
+    }
+
+    #[test]
+    fn only_matching_desired_revision_becomes_applied() {
+        let state = CoreState::default();
+        let first_revision =
+            state.replace_desired_runtime_infallible(SecretKey::generate(), Vec::new());
+        assert!(state.is_runtime_applied().is_ok_and(|applied| !applied));
+        assert!(
+            state
+                .mark_runtime_applied(first_revision)
+                .is_ok_and(|published| published)
+        );
+
+        let second_revision =
+            state.replace_desired_runtime_infallible(SecretKey::generate(), Vec::new());
+        assert_ne!(first_revision, second_revision);
+        assert!(
+            state
+                .mark_runtime_applied(first_revision)
+                .is_ok_and(|published| !published)
+        );
+        assert!(state.is_runtime_applied().is_ok_and(|applied| !applied));
+        assert!(
+            state
+                .mark_runtime_applied(second_revision)
+                .is_ok_and(|published| published)
+        );
+        assert!(state.is_runtime_applied().is_ok_and(|applied| applied));
+    }
+}
+
 impl CoreState {
     pub(crate) fn new(
         network_config: &NetworkConfig,
@@ -438,6 +825,8 @@ impl CoreState {
             network_config: network_config.clone(),
             screenshare_config: screenshare_config.clone(),
             codec_config: codec_config.clone(),
+            applied_runtime_revision: Arc::new(AtomicU64::new(u64::MAX)),
+            failed_runtime_revision: Arc::new(AtomicU64::new(u64::MAX)),
             ..Self::default()
         }
     }
@@ -548,6 +937,14 @@ impl CoreState {
     }
 }
 
+pub(crate) fn room_hash_for_peers(peers: &[PublicKey]) -> u64 {
+    peers.iter().fold(0u64, |acc, peer| {
+        let mut hasher = DefaultHasher::new();
+        peer.hash(&mut hasher);
+        acc ^ hasher.finish()
+    })
+}
+
 pub(crate) struct RoomState {
     pub(crate) peers: Vec<PublicKey>,
 
@@ -566,11 +963,7 @@ pub(crate) struct RoomState {
 impl RoomState {
     /// Computes the room hash from the current member list
     pub(crate) fn room_hash(&self) -> u64 {
-        self.peers.iter().fold(0u64, |acc, peer| {
-            let mut hasher = DefaultHasher::new();
-            peer.hash(&mut hasher);
-            acc ^ hasher.finish()
-        })
+        room_hash_for_peers(&self.peers)
     }
 }
 
@@ -629,6 +1022,8 @@ pub struct SessionState {
     /// signals the session to initiate a call
     pub start_call: Notify,
 
+    pub(crate) reconcile_room_call: Notify,
+
     /// notifies during shutdown & manager restarts
     pub(crate) stop_session: CancellationToken,
 
@@ -649,6 +1044,14 @@ pub struct SessionState {
     pub(crate) start_screenshare: Notify,
 
     pub(crate) stop_screenshare: Arc<Mutex<Option<Arc<Notify>>>>,
+
+    finished: CancellationToken,
+
+    room_admission: AtomicU64,
+
+    reconcile_room_generation: AtomicU64,
+
+    deferred_room_predecessor: Mutex<Option<Arc<SessionState>>>,
 }
 
 impl SessionState {
@@ -656,6 +1059,7 @@ impl SessionState {
         Self {
             id: Uuid::new_v4(),
             start_call: Notify::new(),
+            reconcile_room_call: Notify::new(),
             stop_session: Default::default(),
             message_sender: message_sender.clone(),
             latency: Default::default(),
@@ -664,6 +1068,66 @@ impl SessionState {
             end_call: Default::default(),
             start_screenshare: Default::default(),
             stop_screenshare: Default::default(),
+            finished: Default::default(),
+            room_admission: AtomicU64::new(0),
+            reconcile_room_generation: AtomicU64::new(0),
+            deferred_room_predecessor: Default::default(),
+        }
+    }
+
+    pub(crate) fn mark_finished(&self) {
+        self.finished.cancel();
+    }
+
+    pub(crate) fn is_finished(&self) -> bool {
+        self.finished.is_cancelled()
+    }
+
+    pub(crate) async fn finished(&self) {
+        self.finished.cancelled().await;
+    }
+
+    pub(crate) fn can_restore_room_predecessor(&self) -> bool {
+        !self.stop_session.is_cancelled() && !self.is_finished()
+    }
+
+    pub(crate) fn admit_to_room(&self, generation: u64) {
+        self.room_admission.store(generation, Relaxed);
+    }
+
+    pub(crate) fn is_admitted_to_room(&self, generation: u64) -> bool {
+        self.room_admission.load(Relaxed) == generation
+    }
+
+    pub(crate) fn leave_room(&self, generation: u64) {
+        _ = self
+            .room_admission
+            .compare_exchange(generation, 0, Relaxed, Relaxed);
+    }
+
+    pub(crate) fn notify_room_reconcile(&self, generation: u64) {
+        self.reconcile_room_generation.store(generation, Release);
+        self.reconcile_room_call.notify_one();
+    }
+
+    pub(crate) fn take_room_reconcile_generation(&self) -> Option<u64> {
+        match self.reconcile_room_generation.swap(0, Acquire) {
+            0 => None,
+            generation => Some(generation),
+        }
+    }
+
+    pub(crate) async fn defer_room_predecessor(&self, predecessor: Arc<SessionState>) {
+        *self.deferred_room_predecessor.lock().await = Some(predecessor);
+    }
+
+    pub(crate) async fn take_deferred_room_predecessor(&self) -> Option<Arc<SessionState>> {
+        self.deferred_room_predecessor.lock().await.take()
+    }
+
+    pub(crate) async fn complete_room_replacement(&self) {
+        if let Some(predecessor) = self.take_deferred_room_predecessor().await {
+            predecessor.teardown().await;
         }
     }
 
@@ -743,9 +1207,9 @@ impl SessionState {
                             .session_status(
                                 SessionStatus::Connected {
                                     relayed: primary_connection.is_relay(),
-                                    remote_address: match *primary_connection.remote_addr() {
+                                    remote_address: match primary_connection.remote_addr() {
                                         TransportAddr::Ip(socket) => socket.ip().to_string(),
-                                        TransportAddr::Relay(_) => "relay".to_string(),
+                                        TransportAddr::Relay(relay_url) => relay_identifier(relay_url),
                                         TransportAddr::Custom(_) => "custom".to_string(),
                                         _ => "unknown".to_string(),
                                     },
@@ -786,10 +1250,60 @@ impl PeerVolume {
     }
 }
 
+fn relay_identifier(relay_url: &iroh::RelayUrl) -> String {
+    let port = relay_url.port().map(|port| format!(":{port}"));
+
+    match relay_url.host() {
+        Some(url::Host::Domain(domain)) => {
+            let mut labels = domain.trim_end_matches('.').split('.');
+            let first = labels.next().unwrap_or("unknown");
+            let identifier = if first.eq_ignore_ascii_case("relay") {
+                labels
+                    .next()
+                    .map(|second| format!("{first}.{second}"))
+                    .unwrap_or_else(|| first.to_string())
+            } else {
+                first.to_string()
+            };
+            format!("{identifier}{}", port.as_deref().unwrap_or_default())
+        }
+        Some(url::Host::Ipv4(address)) => {
+            format!("{address}{}", port.as_deref().unwrap_or_default())
+        }
+        Some(url::Host::Ipv6(address)) => match port {
+            Some(port) => format!("[{address}]{port}"),
+            None => address.to_string(),
+        },
+        None => "unknown".to_string(),
+    }
+}
+
 #[cfg(test)]
 mod call_slot_tests {
-    use super::{CallSlot, CallSlotAcquireResult, CallSlotState};
-    use iroh::SecretKey;
+    use super::{CallSlot, CallSlotAcquireResult, CallSlotState, relay_identifier};
+    use iroh::{RelayUrl, SecretKey};
+
+    #[test]
+    fn relay_identifier_uses_short_distinct_part_of_domain() {
+        let production: RelayUrl = "https://use1-1.relay.n0.iroh.link."
+            .parse()
+            .expect("valid production relay URL");
+        let custom: RelayUrl = "https://relay.example.com"
+            .parse()
+            .expect("valid custom relay URL");
+
+        assert_eq!(relay_identifier(&production), "use1-1");
+        assert_eq!(relay_identifier(&custom), "relay.example");
+    }
+
+    #[test]
+    fn relay_identifier_keeps_ip_and_port_for_local_relays() {
+        let local: RelayUrl = "https://127.0.0.1:3340"
+            .parse()
+            .expect("valid local relay URL");
+
+        assert_eq!(relay_identifier(&local), "127.0.0.1:3340");
+    }
 
     impl CallSlot {
         fn try_transition(&self, from: CallSlotState, to: CallSlotState) -> bool {
@@ -857,6 +1371,26 @@ mod call_slot_tests {
 
         slot.release_if_pending_for_peer(peer).unwrap();
         assert_eq!(slot.current(), CallSlotState::Idle);
+    }
+
+    #[tokio::test]
+    async fn call_slot_wait_for_release_confirms_owner_release() {
+        let slot = CallSlot::default();
+        let peer = SecretKey::generate().public();
+        assert!(
+            slot.try_acquire(CallSlotState::PendingOutgoing, Some(peer))
+                .unwrap()
+        );
+        let owner = slot.snapshot().unwrap();
+        let waiter = {
+            let slot = slot.clone();
+            tokio::spawn(async move { slot.wait_for_release(owner).await })
+        };
+
+        tokio::task::yield_now().await;
+        slot.release().unwrap();
+
+        waiter.await.unwrap().unwrap();
     }
 
     #[test]
@@ -1210,6 +1744,158 @@ mod call_slot_tests {
             // Clean up so the next iteration starts from a known idle state.
             slot.release().unwrap();
         }
+    }
+
+    #[test]
+    fn call_slot_try_acquire_or_match_with_owner_acquired_carries_snapshot() {
+        use super::CallSlotSnapshot;
+
+        let slot = CallSlot::default();
+        let peer = SecretKey::generate().public();
+
+        let (result, owner) = slot
+            .try_acquire_or_match_with_owner(CallSlotState::PendingOutgoing, peer)
+            .unwrap();
+        assert_eq!(result, CallSlotAcquireResult::Acquired);
+        let owner = owner.expect("Acquired must carry an ownership snapshot");
+        assert_eq!(
+            owner,
+            CallSlotSnapshot {
+                state: CallSlotState::PendingOutgoing,
+                direct_peer: Some(peer),
+                generation: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn call_slot_try_acquire_or_match_with_owner_matched_is_non_owning() {
+        let slot = CallSlot::default();
+        let peer = SecretKey::generate().public();
+
+        assert!(
+            slot.try_acquire(CallSlotState::PendingOutgoing, Some(peer))
+                .unwrap()
+        );
+
+        let (result, owner) = slot
+            .try_acquire_or_match_with_owner(CallSlotState::PendingIncoming, peer)
+            .unwrap();
+        assert_eq!(result, CallSlotAcquireResult::MatchedPendingOutgoing);
+        assert!(
+            owner.is_none(),
+            "Matched* must be explicitly non-owning: the original acquirer owns the slot"
+        );
+
+        let (result, owner) = slot
+            .try_acquire_or_match_with_owner(CallSlotState::PendingOutgoing, peer)
+            .unwrap();
+        assert_eq!(result, CallSlotAcquireResult::MatchedPendingOutgoing);
+        assert!(owner.is_none());
+    }
+
+    #[test]
+    fn call_slot_try_acquire_or_match_with_owner_failed_is_non_owning() {
+        let slot = CallSlot::default();
+        let peer = SecretKey::generate().public();
+        let other = SecretKey::generate().public();
+
+        assert!(
+            slot.try_acquire(CallSlotState::PendingOutgoing, Some(peer))
+                .unwrap()
+        );
+
+        let (result, owner) = slot
+            .try_acquire_or_match_with_owner(CallSlotState::PendingOutgoing, other)
+            .unwrap();
+        assert_eq!(result, CallSlotAcquireResult::Failed);
+        assert!(owner.is_none());
+    }
+
+    #[test]
+    fn call_slot_acquisition_snapshot_does_not_release_post_acquisition_transition() {
+        // Regression guard for the atomic ownership snapshot: a snapshot captured
+        // atomically with acquisition must reflect the acquisition-time state, so
+        // releasing against it after a concurrent handshake transitioned the slot
+        // to ActiveDirect must NOT release the active call.
+        //
+        // transition_pending_to_active_for_peer preserves the generation, so a
+        // non-atomic snapshot taken after the transition would share the
+        // generation but report ActiveDirect; release_if_match against it would
+        // succeed and release the active call. The atomic snapshot reports the
+        // acquisition-time PendingOutgoing state, so the state mismatch prevents
+        // the release.
+        let slot = CallSlot::default();
+        let peer = SecretKey::generate().public();
+
+        let (result, owner) = slot
+            .try_acquire_or_match_with_owner(CallSlotState::PendingOutgoing, peer)
+            .unwrap();
+        assert_eq!(result, CallSlotAcquireResult::Acquired);
+        let acquisition_snapshot = owner.expect("Acquired must carry an ownership snapshot");
+        let acquisition_generation = acquisition_snapshot.generation;
+
+        assert!(
+            slot.transition_pending_to_active_for_peer(peer).unwrap(),
+            "pending slot must transition to ActiveDirect for the acquiring peer"
+        );
+        let after_transition = slot.snapshot().unwrap();
+        assert_eq!(after_transition.state, CallSlotState::ActiveDirect);
+        assert_eq!(after_transition.direct_peer, Some(peer));
+        assert_eq!(
+            after_transition.generation, acquisition_generation,
+            "transition_pending_to_active_for_peer must preserve the acquisition generation"
+        );
+
+        let released = slot.release_if_match(acquisition_snapshot).unwrap();
+        assert!(
+            !released,
+            "cancelling the original operation must not release the active slot a \
+             concurrent handshake transitioned to after acquisition"
+        );
+
+        let final_snapshot = slot.snapshot().unwrap();
+        assert_eq!(final_snapshot.state, CallSlotState::ActiveDirect);
+        assert_eq!(final_snapshot.direct_peer, Some(peer));
+        assert_eq!(final_snapshot.generation, acquisition_generation);
+
+        slot.release().unwrap();
+    }
+
+    #[test]
+    fn call_slot_acquisition_snapshot_does_not_release_replacement_generation() {
+        // Companion to the transition test above: if the slot is released and
+        // re-acquired (rather than transitioned) after acquisition, the new owner
+        // has a different generation. The acquisition-time snapshot must not match
+        // the replacement, so the cancellation release is skipped.
+        let slot = CallSlot::default();
+        let peer_a = SecretKey::generate().public();
+        let peer_b = SecretKey::generate().public();
+
+        let (result, owner_a) = slot
+            .try_acquire_or_match_with_owner(CallSlotState::PendingOutgoing, peer_a)
+            .unwrap();
+        assert_eq!(result, CallSlotAcquireResult::Acquired);
+        let acquisition_snapshot = owner_a.expect("Acquired must carry an ownership snapshot");
+
+        slot.release().unwrap();
+        let (result, _owner_b) = slot
+            .try_acquire_or_match_with_owner(CallSlotState::PendingOutgoing, peer_b)
+            .unwrap();
+        assert_eq!(result, CallSlotAcquireResult::Acquired);
+
+        let released = slot.release_if_match(acquisition_snapshot).unwrap();
+        assert!(
+            !released,
+            "cancelling the original operation must not release a replacement \
+             acquisition's slot (different generation)"
+        );
+
+        let final_snapshot = slot.snapshot().unwrap();
+        assert_eq!(final_snapshot.state, CallSlotState::PendingOutgoing);
+        assert_eq!(final_snapshot.direct_peer, Some(peer_b));
+
+        slot.release().unwrap();
     }
 
     #[test]

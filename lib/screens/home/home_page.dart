@@ -44,7 +44,7 @@ class HomePage extends StatelessWidget {
                                     duration: const Duration(milliseconds: 250),
                                     curve: Curves.easeInOut,
                                     alignment: Alignment.centerLeft,
-                                    child: stateController.isCallActive
+                                    child: stateController.hasLiveCall
                                         ? Row(
                                             mainAxisSize: MainAxisSize.min,
                                             children: [

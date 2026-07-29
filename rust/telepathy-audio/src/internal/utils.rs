@@ -25,7 +25,7 @@
 //! `SendStream` wraps a cpal stream to allow sending across thread boundaries.
 //! This is necessary because cpal streams are not inherently `Send`.
 
-use crate::error::Error;
+use crate::error::{Error, ProcessingError};
 use rubato::{Fft, FixedSync};
 
 /// Converts a decibel value to a linear multiplier.
@@ -92,9 +92,7 @@ pub fn resampler_factory(
     if input_rate == output_rate {
         Ok(None)
     } else if channels == 0 {
-        Err(Error::Processing(
-            "Resampler requires > 0 channels".to_string(),
-        ))
+        Err(Error::Processing(ProcessingError::ResamplerZeroChannels))
     } else {
         // create the resampler if needed
         Ok(Some(Fft::<f32>::new(

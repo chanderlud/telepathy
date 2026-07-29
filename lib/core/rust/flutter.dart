@@ -41,6 +41,16 @@ abstract class FlutterCallbacks implements RustOpaqueInterface {
           screenshareStarted: screenshareStarted);
 }
 
+// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<PreparedIdentitySwitch>>
+abstract class PreparedIdentitySwitch implements RustOpaqueInterface {
+  Future<void> commit();
+}
+
+// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<StartOperation>>
+abstract class StartOperation implements RustOpaqueInterface {
+  void cancel();
+}
+
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Telepathy>>
 abstract class Telepathy implements RustOpaqueInterface {
   /// Blocks while an audio test is running
@@ -54,8 +64,9 @@ abstract class Telepathy implements RustOpaqueInterface {
   /// Ends the current audio test, room, or call in that order
   Future<void> endCall();
 
-  /// The only entry point into participating in a room
-  Future<void> joinRoom({required List<String> memberStrings});
+  /// The only entry point into participating in a room.
+  Future<void> joinRoom(
+      {required List<String> memberStrings, required StartOperation operation});
 
   /// Lists the input and output devices
   Future<(List<AudioDevice>, List<AudioDevice>)> listDevices();
@@ -75,6 +86,9 @@ abstract class Telepathy implements RustOpaqueInterface {
           codecConfig: codecConfig,
           callbacks: callbacks);
 
+  /// Creates an operation token that can cancel one pending call or room start.
+  StartOperation newStartOperation();
+
   /// Returns a JSON-serialized [`EndpointAddr`] of the local endpoint, or
   /// `None` if the session manager is not active. The frontend displays
   /// this in the networking settings so users can share their direct
@@ -82,6 +96,9 @@ abstract class Telepathy implements RustOpaqueInterface {
   Future<String?> nodeAddr();
 
   void pauseStatistics();
+
+  Future<PreparedIdentitySwitch> prepareIdentitySwitch(
+      {required List<int> targetKey, required List<Contact> targetContacts});
 
   /// Restarts the session manager
   Future<void> restartManager();
@@ -124,9 +141,15 @@ abstract class Telepathy implements RustOpaqueInterface {
   /// shuts down the entire rust backend
   Future<void> shutdown();
 
-  /// Attempts to start a call through an existing session
-  Future<void> startCall({required Contact contact});
+  /// Attempts to start a call through an existing session.
+  Future<void> startCall(
+      {required Contact contact, required StartOperation operation});
 
+  /// Non-blocking: spawns the manager task and returns. The Dart side observes
+  /// the eventual `Active` transition via the `managerActive` callback. The
+  /// non-blocking contract is validated by the CLI system test
+  /// `test_start_manager_ack_precedes_active_event`; the `()` return type
+  /// prevents silent reintroduction of blocking semantics.
   Future<void> startManager();
 
   Future<void> startScreenshare({required Contact contact});

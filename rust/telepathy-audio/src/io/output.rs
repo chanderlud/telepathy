@@ -28,7 +28,7 @@
 //! ```
 
 use crate::devices::AudioHost;
-use crate::error::Error;
+use crate::error::{ConfigError, Error};
 use crate::internal::NETWORK_FRAME;
 use crate::internal::processor::output_processor;
 use crate::internal::state::OutputProcessorState;
@@ -204,7 +204,7 @@ where
     /// When set, the callback receives the underlying CPAL stream error.
     pub fn on_error<F>(mut self, callback: F) -> Self
     where
-        F: FnMut(cpal::StreamError) + Send + 'static,
+        F: FnMut(cpal::Error) + Send + 'static,
     {
         self.config.error_callback = Some(Box::new(callback));
         self
@@ -234,9 +234,7 @@ where
         I: Send + 'static,
     {
         if self.source.is_none() {
-            return Err(Error::Config(
-                "a data source must be set via source()".to_string(),
-            ));
+            return Err(Error::Config(ConfigError::MissingDataSource));
         }
 
         // Open the output
@@ -254,7 +252,7 @@ where
         let loss_sender = self.shared_loss.clone().unwrap_or_default();
         let source = self
             .source
-            .ok_or_else(|| Error::Config("a data source must be set via source()".to_string()))?;
+            .ok_or(Error::Config(ConfigError::MissingDataSource))?;
 
         let state =
             OutputProcessorState::new(&output_volume, rms_sender, &deafened, loss_sender.clone());

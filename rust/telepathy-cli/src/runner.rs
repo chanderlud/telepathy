@@ -193,10 +193,10 @@ async fn handle_command(
         },
         Command::Shutdown => CommandOutcome::Shutdown,
         Command::StartSession { contact_id } => match contact_by_id(hub, &contact_id).await {
-            Ok(contact) => {
-                telepathy.start_session(&contact).await;
-                CommandOutcome::AckOk
-            }
+            Ok(contact) => match telepathy.start_session(&contact).await {
+                Ok(()) => CommandOutcome::AckOk,
+                Err(err) => CommandOutcome::AckErr(err),
+            },
             Err(err) => CommandOutcome::AckErr(err),
         },
         Command::StopSession { contact_id } => match contact_by_id(hub, &contact_id).await {

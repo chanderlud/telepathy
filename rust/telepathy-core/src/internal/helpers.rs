@@ -1,22 +1,33 @@
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
-use crate::internal::core::TelepathyCore;
-use crate::internal::error::ErrorKind;
-use crate::internal::messages::{AudioHeader, ProtocolMessage, RoomMessage, StartScreenshare};
+use crate::internal::core::{
+    OutgoingSlotDecision, PendingDirectCallSlot, RoomControllerCleanup, RoomControllerOutcome,
+    TelepathyCore,
+};
+use crate::internal::error::{AudioStreamError, Error, ErrorKind};
+use crate::internal::messages::{AudioHeader, RoomMessage};
+#[cfg(not(target_family = "wasm"))]
+use crate::internal::messages::{ProtocolMessage, StartScreenshare};
 #[cfg(not(target_family = "wasm"))]
 use crate::internal::screenshare;
-use crate::internal::state::{EarlyCallState, StatisticsCollectorState};
-use crate::internal::utils::{KanalSink, KanalSource};
-use crate::internal::{ALPN, Result};
+use crate::internal::state::{CallSlot, EarlyCallState, StatisticsCollectorState};
+#[cfg(target_os = "ios")]
+use crate::internal::utils::deactivate_audio_session;
+use crate::internal::utils::{JoinHandle, KanalSink, KanalSource};
+use crate::internal::{ALPN, MAX_RINGTONE_LENGTH, Result};
+#[cfg(not(target_family = "wasm"))]
 use crate::types::FrontendNotify;
 use crate::types::{ManagerState, SessionStatus};
 use bytes::Bytes;
 use iroh::address_lookup::PkarrPublisher;
 use iroh::endpoint::{default_relay_mode, presets};
 use iroh::{Endpoint, PublicKey, RelayMode, SecretKey};
+#[cfg(not(target_family = "wasm"))]
 use std::net::SocketAddr;
+#[cfg(not(target_family = "wasm"))]
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
+use std::time::Duration;
 #[cfg(target_family = "wasm")]
 use telepathy_audio::WebAudioWrapper;
 use telepathy_audio::devices::AudioHost;
@@ -30,10 +41,17 @@ use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 use tokio::select;
 use tokio::sync::Notify;
-use tokio::sync::mpsc::Sender;
+use tokio::sync::mpsc::{Sender, UnboundedSender};
+#[cfg(not(target_family = "wasm"))]
+use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, instrument, trace, warn};
+use tracing::{debug, error, info, instrument, trace, warn};
 use url::Url;
+use uuid::Uuid;
+#[cfg(target_family = "wasm")]
+use wasmtimer::tokio::timeout;
+
+const ROOM_TASK_JOIN_TIMEOUT: Duration = Duration::from_secs(5);
 
 impl<C, S, H, I, O> TelepathyCore<C, S, H, I, O>
 where
@@ -43,20 +61,22 @@ where
     I: Send + Sync + 'static,
     O: Send + Sync + 'static,
 {
-    /// builds an iroh endpoint and waits for it to come online
     #[instrument(name = "manager.setup_endpoint", skip_all)]
-    pub(crate) async fn setup_endpoint(&self) -> Result<Option<Endpoint>> {
-        let identity = if let Some(keypair) = self.core_state.identity.read().await.as_ref() {
-            keypair.clone()
-        } else {
-            return Err(ErrorKind::NoIdentityAvailable.into());
-        };
-
+    pub(crate) async fn setup_endpoint(
+        &self,
+        identity: &SecretKey,
+        iteration_cancellation: &CancellationToken,
+    ) -> Result<Option<Endpoint>> {
         trace!(event = "endpoint_launch", config = ?self.core_state.network_config);
-        self.callbacks.manager_state(ManagerState::Starting).await;
+        select! {
+            biased;
+            _ = self.core_state.stop_manager.cancelled() => return Ok(None),
+            _ = iteration_cancellation.cancelled() => return Ok(None),
+            _ = self.callbacks.manager_state(ManagerState::Starting) => (),
+        }
 
         let mut endpoint_builder = Endpoint::builder(presets::Empty)
-            .secret_key(identity)
+            .secret_key(identity.clone())
             .alpns(vec![ALPN.to_vec()])
             .relay_mode(default_relay_mode());
 
@@ -181,7 +201,12 @@ where
                 endpoint_builder.ca_tls_config(iroh::tls::CaTlsConfig::insecure_skip_verify());
         }
 
-        let endpoint = endpoint_builder.bind().await?;
+        let endpoint = select! {
+            biased;
+            _ = self.core_state.stop_manager.cancelled() => return Ok(None),
+            _ = iteration_cancellation.cancelled() => return Ok(None),
+            endpoint = endpoint_builder.bind() => endpoint?,
+        };
 
         // Register this endpoint's own `addr()` (relay URL + direct addrs) into
         // the shared `MemoryLookup` so other in-process peers can resolve it.
@@ -200,15 +225,19 @@ where
         }
 
         select! {
-            _ = self.restart_manager.notified() => {
-                self.callbacks.manager_state(ManagerState::Stopped).await;
-                Ok(None)
+            biased;
+            _ = self.core_state.stop_manager.cancelled() => {
+                endpoint.close().await;
+                return Ok(None);
             },
-            _ = endpoint.online() => {
-                self.callbacks.manager_state(ManagerState::Active).await;
-                Ok(Some(endpoint))
-            }
+            _ = iteration_cancellation.cancelled() => {
+                endpoint.close().await;
+                return Ok(None);
+            },
+            _ = endpoint.online() => (),
         }
+
+        Ok(Some(endpoint))
     }
 
     #[cfg(not(target_family = "wasm"))]
@@ -293,21 +322,28 @@ where
         codec_options: (bool, bool, f32),
         statistics_state: &StatisticsCollectorState,
         end_call: &Arc<Notify>,
+        stream_error: UnboundedSender<AudioStreamError>,
     ) -> Result<InputHelper<I>> {
         let (codec_enabled, vbr, residual_bits) = codec_options;
         // Channel for receiving processed audio data
         let (sender, receiver) = kanal::unbounded_async();
         let input_end_call = end_call.clone();
 
+        let input_device_id = self.core_state.input_device.lock().await.clone();
+
         let mut builder = AudioInputBuilder::new()
-            .device(self.core_state.input_device.lock().await.clone())
+            .device(input_device_id)
             .input_volume_shared(self.core_state.get_input_volume())
             .rms_threshold_shared(self.core_state.get_rms_threshold())
             .muted_shared(&self.core_state.muted)
             .rms_shared(&statistics_state.input_rms)
             .on_error(move |error| {
                 error!(error = %error, "input_stream_error");
-                input_end_call.notify_one();
+                report_stream_error(
+                    &stream_error,
+                    &input_end_call,
+                    AudioStreamError::input(error.to_string()),
+                );
             })
             .sink(KanalSink::new(sender));
 
@@ -349,8 +385,8 @@ where
         codec_enabled: bool,
         statistics_state: &StatisticsCollectorState,
         end_call: Arc<Notify>,
+        stream_error: UnboundedSender<AudioStreamError>,
     ) -> Result<OutputHelper<O>> {
-        // Get device ID
         let device_id = self.core_state.output_device.lock().await.clone();
         // Create the input channel
         let (sender, receiver) = kanal::unbounded();
@@ -368,7 +404,11 @@ where
             .codec(codec_enabled)
             .on_error(move |error| {
                 error!(error = %error, "output_stream_error");
-                end_call.notify_one();
+                report_stream_error(
+                    &stream_error,
+                    &end_call,
+                    AudioStreamError::output(error.to_string()),
+                );
             })
             .build(&self.host)?;
 
@@ -435,11 +475,22 @@ where
                     None
                 } else {
                     match File::open("ringtone.sea").await {
-                        Ok(mut file) => {
+                        Ok(file) => {
                             let mut buffer = Vec::new();
 
-                            if let Err(error) = file.read_to_end(&mut buffer).await {
+                            if let Err(error) = file
+                                .take((MAX_RINGTONE_LENGTH + 1) as u64)
+                                .read_to_end(&mut buffer)
+                                .await
+                            {
                                 error!("failed to read ringtone: {:?}", error);
+                                None
+                            } else if buffer.len() > MAX_RINGTONE_LENGTH {
+                                warn!(
+                                    event = "custom_ringtone_too_large",
+                                    size = buffer.len(),
+                                    limit = MAX_RINGTONE_LENGTH
+                                );
                                 None
                             } else {
                                 Some(buffer)
@@ -501,13 +552,16 @@ where
 
     /// Atomic snapshot of `(sender, cancel)` for the current `room_state`,
     /// or `None` if no room is currently active.
-    pub(crate) async fn room_handshake_snapshot(
+    pub(crate) async fn room_handshake_snapshot_for_peer(
         &self,
+        peer: &PublicKey,
+        expected_room_hash: u64,
     ) -> Option<(Sender<RoomMessage>, CancellationToken)> {
         self.room_state
             .read()
             .await
             .as_ref()
+            .filter(|state| state.peers.contains(peer) && state.room_hash() == expected_room_hash)
             .map(|s| (s.sender.clone(), s.cancel.clone()))
     }
 
@@ -520,12 +574,8 @@ where
     }
 
     pub async fn shutdown(&self) {
-        // guaranteed to end all sessions
+        self.core_state.stop_manager.cancel();
         self.reset_sessions().await;
-        // the manager will now stop & not run again
-        self.core_state.stop_manager.store(true, Relaxed);
-        // end the current manager
-        self.restart_manager.notify_one();
     }
 
     /// Inserts a new outbound attempt
@@ -627,30 +677,26 @@ where
 
     /// Ends all sessions & restores session_states to default
     pub(crate) async fn reset_sessions(&self) {
-        // Phase 1: drain the current `session_states` map. Removing the entries under
-        // the write lock establishes the per-session ownership invariant: no session
-        // task can re-acquire a pending direct-call slot for a peer whose session is
-        // no longer the current map entry.
+        // Drain `session_states` under the write lock so no session task can
+        // re-acquire a pending direct-call slot for a peer whose session is no
+        // longer the current map entry.
         let sessions: Vec<_> = {
             let mut states = self.session_states.write().await;
             states.drain().map(|(_, session)| session).collect()
         };
 
+        self.cancel_pending_session_candidates();
+
         for session in &sessions {
             session.teardown().await;
         }
 
-        // Phase 2: take the write lock as a terminal barrier. Any session task that
-        // somehow raced past the drain above will have observed an empty map and
-        // abandoned its acquisition. Now that the barrier has been observed, no
-        // remaining session can own a pending direct-call slot, so the slot can be
-        // atomically cleared without any per-session guard. The clear leaves
-        // `Idle`/`ActiveDirect`/`RoomCall`/`AudioTest` untouched.
-        //
-        // The write-lock barrier is a secondary defense. The primary defense against
-        // a session task that has already passed `is_session_still_current` is the
-        // `stop_session.is_cancelled()` check at the entry of `negotiate_outgoing_call`
-        // and `negotiate_incoming_call`. Both guards must be preserved together.
+        // Terminal barrier: re-acquire the write lock so any session task that
+        // raced past the drain observed an empty map and abandoned its acquisition.
+        // Only then can the pending slot be cleared atomically — `Idle`/`ActiveDirect`/
+        // `RoomCall`/`AudioTest` are left untouched. The barrier is a secondary
+        // defense; the primary one is the `stop_session.is_cancelled()` check at the
+        // entry of `negotiate_outgoing_call` and `negotiate_incoming_call`.
         {
             let _states = self.session_states.write().await;
             if let Err(error) = self.core_state.call_slot.clear_pending_direct() {
@@ -662,6 +708,259 @@ where
         }
 
         self.outbound_attempts.write().await.clear();
+        self.clear_session_availability();
+    }
+
+    pub(crate) async fn cleanup_room_controller(
+        &self,
+        stop_io: &CancellationToken,
+        cleanup: RoomControllerCleanup<O>,
+    ) -> RoomControllerOutcome {
+        let RoomControllerCleanup {
+            end_sessions,
+            room_owner,
+            room_generation,
+            input_handle,
+            connections,
+            statistics_handle,
+            terminal_error,
+            outcome,
+        } = cleanup;
+
+        debug!(event = "room_processing_teardown_start");
+        end_sessions.cancel();
+        #[cfg(target_os = "ios")]
+        deactivate_audio_session();
+        #[cfg(target_family = "wasm")]
+        {
+            *self.web_input.lock().await = None;
+        }
+        stop_io.cancel();
+        let mut terminal_error = terminal_error;
+        if let Some(error) =
+            join_room_io_tasks_bounded(input_handle, "room_input", "teardown").await
+        {
+            record_room_terminal_error(&mut terminal_error, error);
+        }
+        if let Some(error) = join_room_io_tasks_bounded(
+            connections
+                .into_values()
+                .map(|connection| connection.handle),
+            "room_output",
+            "teardown",
+        )
+        .await
+        {
+            record_room_terminal_error(&mut terminal_error, error);
+        }
+        debug!(event = "room_processing_teardown_done");
+        // Clear `room_state` only if it's still the currently installed generation.
+        {
+            let mut room_guard = self.room_state.write().await;
+            if room_guard
+                .as_ref()
+                .is_some_and(|state| state.generation == room_generation)
+            {
+                let _ = room_guard.take();
+            } else {
+                info!(
+                    event = "room_state_take_skipped_stale_generation",
+                    room.generation = room_generation
+                );
+            }
+        }
+        self.request_room_reconcile();
+        // Release the slot only against the exact `room_owner` snapshot.
+        if let Err(error) = self.core_state.call_slot.release_if_match(room_owner) {
+            warn!(event = "room_call_slot_release_failed_on_teardown", ?error);
+            record_room_terminal_error(&mut terminal_error, error);
+        }
+        if let Some(mut statistics_handle) = statistics_handle {
+            match timeout(ROOM_TASK_JOIN_TIMEOUT, &mut statistics_handle).await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    warn!(event = "room_statistics_join_failed_on_teardown", ?error);
+                    record_room_terminal_error(&mut terminal_error, error.into());
+                }
+                Err(error) => {
+                    abort_room_task(&statistics_handle);
+                    warn!(event = "room_statistics_join_timed_out", ?error);
+                    record_room_terminal_error(&mut terminal_error, error.into());
+                }
+            }
+        }
+        if let Some(error) = terminal_error {
+            error!(event = "room_controller_terminated_with_error", ?error);
+        }
+        outcome
+    }
+
+    /// Races delivery of a frontend observation callback against any teardown
+    /// signal so a stalled frontend delivery cannot block teardown paths that
+    /// depend on the controller exiting.
+    ///
+    /// `stop_signals` carries every cancellation token the controller must
+    /// honor in addition to `end_call`: direct calls pass `[&state.stop_session]`,
+    /// room calls pass `[&end_sessions, &operation]`.
+    ///
+    /// Returns `true` when the callback completed normally. Returns `false`
+    /// when any teardown signal won; callers must then skip further observation
+    /// work and proceed straight to authoritative teardown.
+    pub(crate) async fn deliver_callback_against_teardown<F>(
+        &self,
+        end_call: &Notify,
+        stop_signals: &[&CancellationToken],
+        callback: F,
+    ) -> bool
+    where
+        F: Future<Output = ()> + Send,
+    {
+        use std::future::Future;
+        use std::pin::Pin;
+        use std::task::{Context, Poll};
+
+        // Box so a runtime-sized slice can be raced uniformly. The boxed future
+        // borrows each token for the lifetime of this call.
+        let mut cancelled_futures: Vec<Pin<Box<dyn Future<Output = ()> + Send + '_>>> =
+            stop_signals
+                .iter()
+                .map(|signal| {
+                    Box::pin(signal.cancelled()) as Pin<Box<dyn Future<Output = ()> + Send + '_>>
+                })
+                .collect();
+
+        // Do not switch back to `std::pin::pin!`: under edition 2024 it
+        // expands to `super let`, which `flutter_rust_bridge_codegen`'s
+        // bundled `syn` cannot parse, blocking all pub-API codegen cycles.
+        let mut end_call_future = Box::pin(end_call.notified());
+        let mut callback = Box::pin(callback);
+
+        // Biased: end_call -> each token -> callback. Teardown always wins over
+        // a stalled callback; wakers from any branch re-arm this poll_fn.
+        std::future::poll_fn(move |cx: &mut Context<'_>| -> Poll<bool> {
+            if end_call_future.as_mut().poll(cx).is_ready() {
+                return Poll::Ready(false);
+            }
+            for cancelled in &mut cancelled_futures {
+                if cancelled.as_mut().poll(cx).is_ready() {
+                    return Poll::Ready(false);
+                }
+            }
+            if callback.as_mut().poll(cx).is_ready() {
+                return Poll::Ready(true);
+            }
+            Poll::Pending
+        })
+        .await
+    }
+
+    /// Atomically validates a direct-call session and acquires its outgoing slot.
+    pub(crate) async fn acquire_outgoing_call_slot<'a>(
+        &self,
+        call_slot: &'a CallSlot,
+        peer: PublicKey,
+        session_id: Uuid,
+        stop_session: &CancellationToken,
+    ) -> Result<OutgoingSlotDecision<'a>> {
+        // Keep session-map read lock through synchronous slot acquisition.
+        // `reset_sessions` needs map write lock before terminal slot clearing, so
+        // it drains this session before validation or clears after acquisition.
+        // No await occurs while either lock is held.
+        let states = self.session_states.read().await;
+        if stop_session.is_cancelled() {
+            return Ok(OutgoingSlotDecision::SessionStopped);
+        }
+        if states.get(&peer).is_none_or(|state| state.id != session_id) {
+            return Ok(OutgoingSlotDecision::StaleSession);
+        }
+
+        match PendingDirectCallSlot::try_acquire_outgoing(call_slot, peer)? {
+            Some(slot) => Ok(OutgoingSlotDecision::Acquired(slot)),
+            None => Ok(OutgoingSlotDecision::Busy),
+        }
+    }
+}
+
+/// Bounded join classification for room tasks.
+///
+/// `PeerLocal` covers expected connection closure: the task completed cleanly,
+/// returned an `Err` from a peer-side condition (e.g. socket close), or was
+/// aborted after exceeding [`ROOM_TASK_JOIN_TIMEOUT`]. The owning connection
+/// is already removed by the caller and the task itself is aborted before
+/// this verdict is returned, so a slow peer-output shutdown stays scoped to
+/// that peer and never tears down the rest of the room.
+///
+/// `Terminal` covers genuinely unexpected failures: a panic or `JoinError`
+/// observed while awaiting the handle. These can indicate corrupted shared
+/// state and propagate as terminal room errors with user-visible notification.
+pub(crate) enum RoomTaskOutcome {
+    PeerLocal,
+    Terminal(Error),
+}
+
+fn record_room_terminal_error(slot: &mut Option<Error>, error: Error) {
+    if slot.is_none() {
+        *slot = Some(error);
+    }
+}
+
+async fn join_room_io_tasks_bounded(
+    handles: impl IntoIterator<Item = JoinHandle<Result<()>>>,
+    task_kind: &'static str,
+    event_kind: &'static str,
+) -> Option<Error> {
+    let mut terminal_error = None;
+    for mut handle in handles {
+        if let RoomTaskOutcome::Terminal(error) =
+            join_room_task_bounded(&mut handle, task_kind, event_kind).await
+        {
+            record_room_terminal_error(&mut terminal_error, error);
+        }
+    }
+    terminal_error
+}
+
+fn abort_room_task<T>(handle: &JoinHandle<T>) {
+    #[cfg(all(feature = "native", not(feature = "flutter")))]
+    handle.abort();
+
+    #[cfg(not(all(feature = "native", not(feature = "flutter"))))]
+    let _ = handle;
+}
+
+/// Joins a room task with a bounded timeout and classifies the outcome.
+pub(crate) async fn join_room_task_bounded(
+    handle: &mut JoinHandle<Result<()>>,
+    task_kind: &'static str,
+    event_kind: &'static str,
+) -> RoomTaskOutcome {
+    match timeout(ROOM_TASK_JOIN_TIMEOUT, &mut *handle).await {
+        Ok(Ok(Ok(()))) => RoomTaskOutcome::PeerLocal,
+        Ok(Ok(Err(error))) => {
+            warn!(event = %format!("{task_kind}_closed_on_{event_kind}"), ?error);
+            RoomTaskOutcome::PeerLocal
+        }
+        Ok(Err(error)) => {
+            abort_room_task(handle);
+            warn!(event = %format!("{task_kind}_join_failed_on_{event_kind}"), ?error);
+            RoomTaskOutcome::Terminal(error.into())
+        }
+        Err(error) => {
+            abort_room_task(handle);
+            warn!(event = %format!("{task_kind}_timed_out_on_{event_kind}"), ?error);
+            RoomTaskOutcome::PeerLocal
+        }
+    }
+}
+
+fn report_stream_error(
+    sender: &UnboundedSender<AudioStreamError>,
+    end_call: &Notify,
+    error: AudioStreamError,
+) {
+    let sent = sender.send(error).is_ok();
+    if !sent {
+        end_call.notify_one();
     }
 }
 

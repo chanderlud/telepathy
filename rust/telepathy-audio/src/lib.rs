@@ -247,7 +247,12 @@ pub mod sea;
 mod platform;
 
 pub use constants::FRAME_SIZE;
-pub use error::Error;
+pub use cpal::{Error as CpalError, ErrorKind as CpalErrorKind};
+pub use error::{
+    AudioFileError, ChannelError, ConfigError, Error, ProcessingError, StreamError, TaskError,
+};
+#[cfg(target_family = "wasm")]
+pub use error::{SpawnFailureReason, WasmError};
 
 #[cfg(any(test, feature = "test-internals"))]
 pub use constants::MINIMUM_SILENCE_LENGTH;

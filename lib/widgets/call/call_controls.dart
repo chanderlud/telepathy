@@ -171,8 +171,13 @@ class _CallControlsState extends State<CallControls> {
                                     List<int> bytes = stateController.isMuted
                                         ? await readSeaBytes('unmute')
                                         : await readSeaBytes('mute');
-                                    otherSoundHandle =
-                                        await player.play(bytes: bytes);
+                                    otherSoundHandle = await playSoundEffect(
+                                      player: player,
+                                      bytes: bytes,
+                                      sound: stateController.isMuted
+                                          ? 'unmute'
+                                          : 'mute',
+                                    );
 
                                     stateController.mute();
                                     telepathy.setMuted(
@@ -189,8 +194,13 @@ class _CallControlsState extends State<CallControls> {
                                     List<int> bytes = stateController.isDeafened
                                         ? await readSeaBytes('deafen')
                                         : await readSeaBytes('undeafen');
-                                    otherSoundHandle =
-                                        await player.play(bytes: bytes);
+                                    otherSoundHandle = await playSoundEffect(
+                                      player: player,
+                                      bytes: bytes,
+                                      sound: stateController.isDeafened
+                                          ? 'deafen'
+                                          : 'undeafen',
+                                    );
 
                                     stateController.deafen();
                                     telepathy.setDeafened(

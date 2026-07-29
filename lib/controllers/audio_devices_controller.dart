@@ -12,6 +12,7 @@ class AudioDevices extends ChangeNotifier {
 
   late List<AudioDevice> _inputDevices = [];
   late List<AudioDevice> _outputDevices = [];
+  bool _hasLoadedDevices = false;
 
   final ListEquality<AudioDevice> _listEquality =
       const ListEquality<AudioDevice>();
@@ -22,6 +23,8 @@ class AudioDevices extends ChangeNotifier {
 
   List<AudioDevice> get outputDevices =>
       [const AudioDevice(name: 'Default', id: ''), ..._outputDevices];
+
+  bool get hasLoadedDevices => _hasLoadedDevices;
 
   AudioDevices({required this.telepathy}) {
     DebugConsole.debug('AudioDevices created');
@@ -43,6 +46,11 @@ class AudioDevices extends ChangeNotifier {
       var (inputDevices, outputDevices) = await telepathy.listDevices();
 
       bool notify = false;
+
+      if (!_hasLoadedDevices) {
+        _hasLoadedDevices = true;
+        notify = true;
+      }
 
       if (!_listEquality.equals(_inputDevices, inputDevices)) {
         _inputDevices = inputDevices;

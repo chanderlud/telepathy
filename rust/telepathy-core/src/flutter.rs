@@ -14,6 +14,7 @@ use telepathy_audio::Stream;
 use telepathy_audio::devices::CpalAudioHost;
 use telepathy_audio::io::SendStream;
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 
 type DartVoid<A> = Arc<Mutex<dyn Fn(A) -> DartFnFuture<()> + Send>>;
 type DartMethod<A, R> = Arc<Mutex<dyn Fn(A) -> DartFnFuture<R> + Send>>;
@@ -21,6 +22,32 @@ type AcceptCallArgs = (String, Option<Vec<u8>>, FrontendNotify);
 type SessionStatusArgs = (String, SessionStatus);
 type ScreenshareStartedArgs = (FrontendNotify, bool);
 type ManagerActiveArgs = ManagerState;
+
+#[frb(opaque)]
+pub struct StartOperation {
+    cancel: CancellationToken,
+}
+
+impl StartOperation {
+    #[frb(sync)]
+    pub fn cancel(&self) {
+        self.cancel.cancel();
+    }
+}
+
+#[frb(opaque)]
+pub struct PreparedIdentitySwitch {
+    prepared: Option<crate::internal::state::PreparedIdentitySwitch>,
+}
+
+impl PreparedIdentitySwitch {
+    pub async fn commit(&mut self) -> Result<(), DartError> {
+        if let Some(prepared) = self.prepared.take() {
+            prepared.commit().await.map_err(DartError::from)?;
+        }
+        Ok(())
+    }
+}
 
 /// Rust API for FRB frontend. Mirrors `impl NativeTelepathy` 1:1; both
 /// forward to `impl TelepathyHandle`.
@@ -57,19 +84,39 @@ impl Telepathy {
         }
     }
 
+    /// Non-blocking: spawns the manager task and returns. The Dart side observes
+    /// the eventual `Active` transition via the `managerActive` callback. The
+    /// non-blocking contract is validated by the CLI system test
+    /// `test_start_manager_ack_precedes_active_event`; the `()` return type
+    /// prevents silent reintroduction of blocking semantics.
     pub async fn start_manager(&mut self) {
         self.handle.start_manager().await;
     }
 
     /// Tries to start a session for a contact
-    pub async fn start_session(&self, contact: &Contact) {
-        self.handle.start_session(contact).await;
+    pub async fn start_session(&self, contact: &Contact) -> Result<(), DartError> {
+        self.handle
+            .try_start_session(contact)
+            .await
+            .map_err(DartError::from)
     }
 
-    /// Attempts to start a call through an existing session
-    pub async fn start_call(&self, contact: &Contact) -> Result<(), DartError> {
+    /// Creates an operation token that can cancel one pending call or room start.
+    #[frb(sync)]
+    pub fn new_start_operation(&self) -> StartOperation {
+        StartOperation {
+            cancel: tokio_util::sync::CancellationToken::new(),
+        }
+    }
+
+    /// Attempts to start a call through an existing session.
+    pub async fn start_call(
+        &self,
+        contact: &Contact,
+        operation: &StartOperation,
+    ) -> Result<(), DartError> {
         self.handle
-            .start_call(contact)
+            .start_call_with_operation(contact, &operation.cancel)
             .await
             .map_err(DartError::from)
     }
@@ -79,10 +126,14 @@ impl Telepathy {
         self.handle.end_call().await;
     }
 
-    /// The only entry point into participating in a room
-    pub async fn join_room(&self, member_strings: Vec<String>) -> Result<(), DartError> {
+    /// The only entry point into participating in a room.
+    pub async fn join_room(
+        &self,
+        member_strings: Vec<String>,
+        operation: &StartOperation,
+    ) -> Result<(), DartError> {
         self.handle
-            .join_room(member_strings)
+            .join_room_with_operation(member_strings, &operation.cancel)
             .await
             .map_err(DartError::from)
     }
@@ -90,6 +141,23 @@ impl Telepathy {
     /// Restarts the session manager
     pub async fn restart_manager(&self) -> Result<(), DartError> {
         self.handle.restart_manager().await.map_err(DartError::from)
+    }
+
+    pub async fn prepare_identity_switch(
+        &self,
+        target_key: Vec<u8>,
+        target_contacts: Vec<Contact>,
+    ) -> Result<PreparedIdentitySwitch, DartError> {
+        let target_key: [u8; 32] = target_key
+            .try_into()
+            .map_err(|_| DartError::from(IDENTITY_KEY_LENGTH_MESSAGE.to_string()))?;
+        self.handle
+            .prepare_identity_switch(target_key, target_contacts)
+            .await
+            .map(|prepared| PreparedIdentitySwitch {
+                prepared: Some(prepared),
+            })
+            .map_err(DartError::from)
     }
 
     /// shuts down the entire rust backend

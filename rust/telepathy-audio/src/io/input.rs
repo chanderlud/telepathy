@@ -63,7 +63,7 @@
 //! ```
 
 use crate::devices::AudioHost;
-use crate::error::Error;
+use crate::error::{ConfigError, Error};
 use crate::internal::buffer_pool::{DEFAULT_POOL_CAPACITY, PooledBuffer};
 use crate::internal::processor::input_processor;
 use crate::internal::state::InputProcessorState;
@@ -295,7 +295,7 @@ where
     /// When set, the callback receives the underlying CPAL stream error.
     pub fn on_error<F>(mut self, callback: F) -> Self
     where
-        F: FnMut(cpal::StreamError) + Send + 'static,
+        F: FnMut(cpal::Error) + Send + 'static,
     {
         self.config.error_callback = Some(Box::new(callback));
         self
@@ -434,9 +434,9 @@ where
             .shared_muted
             .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
         let rms_sender = self.shared_rms.unwrap_or_default();
-        let sink = self.sink.ok_or_else(|| {
-            Error::Config("a data sink must be set via callback() or sink()".to_string())
-        })?;
+        let sink = self
+            .sink
+            .ok_or(Error::Config(ConfigError::MissingDataSink))?;
 
         // create denoiser if needed
         let denoiser = self.config.denoise_model.map(DenoiseState::from_model);
@@ -515,9 +515,7 @@ where
         I: Send + 'static,
     {
         if self.sink.is_none() {
-            return Err(Error::Config(
-                "a data sink must be set via callback() or sink()".to_string(),
-            ));
+            return Err(Error::Config(ConfigError::MissingDataSink));
         }
 
         // Open the input
@@ -575,15 +573,11 @@ where
         _host: &impl AudioHost<InputStream = I>,
     ) -> Result<AudioInputHandle<I>, Error> {
         if self.sink.is_none() {
-            return Err(Error::Config(
-                "a data sink must be set via callback() or sink()".to_string(),
-            ));
+            return Err(Error::Config(ConfigError::MissingDataSink));
         }
 
         let Some(mut web_audio) = self.web_audio_wrapper.take() else {
-            return Err(Error::Config(
-                "WebAudioWrapper must be set via web_audio_wrapper() method before calling build() on WASM targets. Initialize the wrapper using WebAudioWrapper::new().await on the main thread.".to_string(),
-            ));
+            return Err(Error::Config(ConfigError::MissingWebAudioWrapper));
         };
 
         let input_sample_rate = web_audio.sample_rate as u32;

@@ -220,30 +220,30 @@ via `web_audio_wrapper()` before calling `build()`:
 
 ```rust
 #[cfg(target_family = "wasm")]
-fn setup_audio(wrapper: WebAudioWrapper) -> Result<(), AudioError> {
+fn setup_audio(wrapper: WebAudioWrapper) -> Result<(), telepathy_audio::Error> {
     use telepathy_audio::{
-        AudioError, CpalAudioHost, AudioInputBuilder, AudioOutputBuilder,
+        CpalAudioHost, AudioInputBuilder, AudioOutputBuilder,
     };
     use bytes::Bytes;
     use std::sync::mpsc;
     use telepathy_audio::adapters::MpscSource;
-    
+
     let host = CpalAudioHost::new();
-    
+
     // Input requires a pre-initialized WebAudioWrapper on WASM
     let input = AudioInputBuilder::new()
         .web_audio_wrapper(wrapper)
         .callback(|data| { /* process audio */ })
         .build(&host)?;
-    
+
     let (_tx, rx) = mpsc::channel::<Bytes>();
-    
+
     // Output uses synchronous build even on WASM
     let output = AudioOutputBuilder::new()
         .sample_rate(48000)
         .source(MpscSource::new(rx))
         .build(&host)?;
-    
+
     Ok(())
 }
 ```
