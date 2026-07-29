@@ -1,0 +1,16 @@
+name: System Tests Nightly
+
+on:
+  schedule:
+    # 03:00 UTC nightly.
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  system_tests:
+    uses: ./.github/workflows/system-tests.yml
+    with:
+      sweep-count: 10
