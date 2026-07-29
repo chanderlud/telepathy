@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import sys
+from random import Random
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,9 @@ BINARY_PATHS = {
     "cli": str(RUST_TARGET / "telepathy-cli"),
 }
 FAILED_PROFILES: dict[str, str] = {}
+FAILED_ORDER_SEEDS: dict[str, str] = {}
+SYSTEM_TEST_ORDER_SEED_ENV = "SYSTEM_TEST_ORDER_SEED"
+SYSTEM_TEST_ORDER_SEED_PROPERTY = "system_test_order_seed"
 
 def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption(
@@ -82,6 +86,7 @@ def _ensure_relay_certs() -> None:
 def pytest_configure(config: pytest.Config) -> None:
     if not hasattr(config, "workerinput"):
         FAILED_PROFILES.clear()
+        FAILED_ORDER_SEEDS.clear()
 
     _ensure_relay_certs()
 
@@ -103,7 +108,19 @@ def pytest_configure(config: pytest.Config) -> None:
     config._system_test_binary_paths = BINARY_PATHS
     config._system_test_artifacts_dir = Path(config.getoption("artifacts_dir")).resolve()
     config._system_test_save_artifacts = str(config.getoption("save_artifacts"))
+    config._system_test_order_seed = _resolve_order_seed(config)
     config._system_test_artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+
+def pytest_configure_node(node: pytest.Node) -> None:
+    seed = getattr(node.config, "_system_test_order_seed", None)
+    if isinstance(seed, str):
+        node.workerinput[SYSTEM_TEST_ORDER_SEED_PROPERTY] = seed
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    seed = getattr(config, "_system_test_order_seed", None)
+    _seeded_shuffle(items, seed)
 
 
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
@@ -130,6 +147,10 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[Any]) -> 
     if isinstance(profile_name, str):
         rep.user_properties.append(("system_test_profile", profile_name))
 
+    order_seed = getattr(item.config, "_system_test_order_seed", None)
+    if isinstance(order_seed, str):
+        rep.user_properties.append((SYSTEM_TEST_ORDER_SEED_PROPERTY, order_seed))
+
 
 def pytest_runtest_logreport(report: pytest.TestReport) -> None:
     if not report.failed:
@@ -145,6 +166,17 @@ def pytest_runtest_logreport(report: pytest.TestReport) -> None:
     )
     FAILED_PROFILES.setdefault(report.nodeid, profile)
 
+    order_seed = next(
+        (
+            value
+            for key, value in report.user_properties
+            if key == SYSTEM_TEST_ORDER_SEED_PROPERTY and isinstance(value, str)
+        ),
+        None,
+    )
+    if isinstance(order_seed, str):
+        FAILED_ORDER_SEEDS.setdefault(report.nodeid, order_seed)
+
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     _ = exitstatus
@@ -152,7 +184,18 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
         return
 
     for nodeid, profile in sorted(FAILED_PROFILES.items()):
-        print(f"{nodeid} profile={profile}")
+        seed = FAILED_ORDER_SEEDS.get(nodeid)
+        if isinstance(seed, str):
+            print(f"{nodeid} profile={profile} system_test_order_seed={seed}")
+        else:
+            print(f"{nodeid} profile={profile}")
+
+
+def pytest_report_header(config: pytest.Config) -> list[str]:
+    seed = getattr(config, "_system_test_order_seed", None)
+    if isinstance(seed, str):
+        return [f"system_test_order_seed={seed}"]
+    return []
 
 
 def _sanitize_nodeid(nodeid: str) -> str:
@@ -205,6 +248,62 @@ def _serialize_profile(profile: Any) -> Any:
     return repr(profile)
 
 
+def _seeded_shuffle(items: list[Any], seed: str | None) -> None:
+    if isinstance(seed, str) and len(items) > 1:
+        Random(seed).shuffle(items)
+
+
+def _build_debug_artifact_payload(
+    *,
+    nodeid: str,
+    failed: bool,
+    setup_report: Any,
+    call_report: Any,
+    teardown_report: Any,
+    funcargs: dict[str, Any],
+    order_seed: str | None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "nodeid": nodeid,
+        "failed": failed,
+        "reports": {
+            "setup": getattr(setup_report, "longreprtext", ""),
+            "call": getattr(call_report, "longreprtext", ""),
+            "teardown": getattr(teardown_report, "longreprtext", ""),
+        },
+    }
+
+    profile = funcargs.get("profile")
+    topology = funcargs.get("topology")
+
+    if profile is not None:
+        payload["profile"] = _serialize_profile(profile)
+    if topology is not None:
+        payload["topology"] = _serialize_topology(topology)
+    for fixture_name in ("cli_pair", "room_cli_three", "room_cli_four", "room_cli_twenty"):
+        serialized = _serialize_cli_fixture(funcargs.get(fixture_name))
+        if serialized is not None:
+            payload[fixture_name] = serialized
+    if failed and isinstance(order_seed, str):
+        payload[SYSTEM_TEST_ORDER_SEED_PROPERTY] = order_seed
+
+    return payload
+
+
+def _resolve_order_seed(config: pytest.Config) -> str | None:
+    workerinput = getattr(config, "workerinput", None)
+    if isinstance(workerinput, dict):
+        seed = workerinput.get(SYSTEM_TEST_ORDER_SEED_PROPERTY)
+        if isinstance(seed, str) and seed:
+            return seed
+
+    seed = os.environ.get(SYSTEM_TEST_ORDER_SEED_ENV)
+    if isinstance(seed, str) and seed:
+        return seed
+
+    return None
+
+
 @pytest.fixture(autouse=True)
 def record_test_artifacts(request: pytest.FixtureRequest) -> Any:
     yield
@@ -230,28 +329,16 @@ def record_test_artifacts(request: pytest.FixtureRequest) -> Any:
     test_dir = artifacts_root / f"{_sanitize_nodeid(request.node.nodeid)}__{timestamp}"
     test_dir.mkdir(parents=True, exist_ok=True)
 
-    payload: dict[str, Any] = {
-        "nodeid": request.node.nodeid,
-        "failed": failed,
-        "reports": {
-            "setup": getattr(setup_report, "longreprtext", ""),
-            "call": getattr(call_report, "longreprtext", ""),
-            "teardown": getattr(teardown_report, "longreprtext", ""),
-        },
-    }
-
     funcargs = getattr(request.node, "funcargs", {})
-    profile = funcargs.get("profile")
-    topology = funcargs.get("topology")
-
-    if profile is not None:
-        payload["profile"] = _serialize_profile(profile)
-    if topology is not None:
-        payload["topology"] = _serialize_topology(topology)
-    for fixture_name in ("cli_pair", "room_cli_three", "room_cli_four", "room_cli_twenty"):
-        serialized = _serialize_cli_fixture(funcargs.get(fixture_name))
-        if serialized is not None:
-            payload[fixture_name] = serialized
+    payload = _build_debug_artifact_payload(
+        nodeid=request.node.nodeid,
+        failed=failed,
+        setup_report=setup_report,
+        call_report=call_report,
+        teardown_report=teardown_report,
+        funcargs=funcargs,
+        order_seed=getattr(config, "_system_test_order_seed", None),
+    )
 
     payload_path = test_dir / "debug.json"
     payload_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")

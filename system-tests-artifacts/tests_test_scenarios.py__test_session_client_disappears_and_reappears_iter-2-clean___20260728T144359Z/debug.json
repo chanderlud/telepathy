@@ -1,0 +1,470 @@
+{
+  "nodeid": "tests/test_scenarios.py::test_session_client_disappears_and_reappears[iter-2-clean]",
+  "failed": true,
+  "reports": {
+    "setup": "",
+    "call": "fut = <coroutine object CliProcess.expect_event.<locals>._next_match at 0x7f7a91e25c40>\ntimeout = 30.0\n\n    async def wait_for(fut, timeout):\n        \"\"\"Wait for the single Future or coroutine to complete, with timeout.\n    \n        Coroutine will be wrapped in Task.\n    \n        Returns result of the Future or coroutine.  When a timeout occurs,\n        it cancels the task and raises TimeoutError.  To avoid the task\n        cancellation, wrap it in shield().\n    \n        If the wait is cancelled, the task is also cancelled.\n    \n        If the task suppresses the cancellation and returns a value instead,\n        that value is returned.\n    \n        This function is a coroutine.\n        \"\"\"\n        # The special case for timeout <= 0 is for the following case:\n        #\n        # async def test_waitfor():\n        #     func_started = False\n        #\n        #     async def func():\n        #         nonlocal func_started\n        #         func_started = True\n        #\n        #     try:\n        #         await asyncio.wait_for(func(), 0)\n        #     except asyncio.TimeoutError:\n        #         assert not func_started\n        #     else:\n        #         assert False\n        #\n        # asyncio.run(test_waitfor())\n    \n    \n        if timeout is not None and timeout <= 0:\n            fut = ensure_future(fut)\n    \n            if fut.done():\n                return fut.result()\n    \n            await _cancel_and_wait(fut)\n            try:\n                return fut.result()\n            except exceptions.CancelledError as exc:\n                raise TimeoutError from exc\n    \n        async with timeouts.timeout(timeout):\n>           return await fut\n                   ^^^^^^^^^\n\n/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/asyncio/tasks.py:520: \n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \nsystem-tests/harness/process.py:114: in _next_match\n    event = await self._events.get()\n            ^^^^^^^^^^^^^^^^^^^^^^^^\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n\nself = <Queue at 0x7f7a911fb110 maxsize=0 tasks=8>\n\n    async def get(self):\n        \"\"\"Remove and return an item from the queue.\n    \n        If queue is empty, wait until an item is available.\n        \"\"\"\n        while self.empty():\n            getter = self._get_loop().create_future()\n            self._getters.append(getter)\n            try:\n>               await getter\nE               asyncio.exceptions.CancelledError\n\n/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/asyncio/queues.py:158: CancelledError\n\nThe above exception was the direct cause of the following exception:\n\ntopology = <harness.topology.TopologyManager object at 0x7f7a911f85f0>\ncli_pair = {'alice': <harness.process.CliProcess object at 0x7f7a911fbdd0>, 'bob': <harness.process.CliProcess object at 0x7f7a911f8d70>}\nprofile = NetworkProfile(name='clean', delay_ms=0, jitter_ms=0, loss_pct=0.0, burst_loss=False, seed=100)\n\n    @pytest.mark.asyncio\n    @pytest.mark.parametrize(\n        \"profile\",\n        NETWORK_PROFILES,\n        ids=lambda profile: profile.name,\n    )\n    async def test_session_client_disappears_and_reappears(\n        topology: TopologyManager,\n        cli_pair: dict[str, CliProcess],\n        profile: NetworkProfile,\n    ) -> None:\n        _ = topology, profile\n        alice = cli_pair[\"alice\"]\n        bob = cli_pair[\"bob\"]\n    \n        def _status_name(status: object) -> str | None:\n            if isinstance(status, str):\n                return status\n            if isinstance(status, dict) and len(status) == 1:\n                only_key = next(iter(status.keys()))\n                if isinstance(only_key, str):\n                    return only_key\n            return None\n    \n        def _is_connected_event(event: dict) -> bool:\n            if event.get(\"type\") != \"session_status\":\n                return False\n            return _status_name(event.get(\"status\")) == \"Connected\"\n    \n        alice_ready = await alice.expect_event(\n            lambda event: event.get(\"type\") == \"ready\", timeout=10.0\n        )\n        bob_ready = await bob.expect_event(\n            lambda event: event.get(\"type\") == \"ready\", timeout=10.0\n        )\n        assert alice_ready.get(\"type\") == \"ready\"\n        assert bob_ready.get(\"type\") == \"ready\"\n    \n        alice_add_contact = await alice.send(\n            {\n                \"cmd\": \"add_contact\",\n                \"args\": {\"contact_id\": \"bob\", \"peer_id\": bob.identity_peer_id},\n            }\n        )\n        bob_add_contact = await bob.send(\n            {\n                \"cmd\": \"add_contact\",\n                \"args\": {\"contact_id\": \"alice\", \"peer_id\": alice.identity_peer_id},\n            }\n        )\n        assert alice_add_contact.get(\"ok\") is True\n        assert bob_add_contact.get(\"ok\") is True\n    \n        start_response = await alice.send(\n            {\"cmd\": \"start_session\", \"args\": {\"contact_id\": \"bob\"}}\n        )\n        assert start_response.get(\"ok\") is True\n    \n        alice_connecting = await alice.expect_event(\n            lambda event: event.get(\"type\") == \"session_status\"\n            and _status_name(event.get(\"status\")) in {\"Connecting\", \"Connected\"},\n            timeout=10.0,\n        )\n        assert _status_name(alice_connecting.get(\"status\")) in {\"Connecting\", \"Connected\"}\n    \n        alice_stdout_before_restart = len(alice.stdout_lines())\n        await bob.terminate()\n        await asyncio.sleep(2.0)\n        await bob.restart()\n        bob_identity = getattr(bob, \"identity\", None)\n        if not isinstance(bob_identity, Identity):\n            raise AssertionError(\"bob identity missing before restart\")\n        await _set_identity_on_actor(bob, bob_identity)\n    \n        bob_start_manager = await bob.send({\"cmd\": \"start_manager\", \"args\": {}})\n        assert bob_start_manager.get(\"ok\") is True\n        bob_add_contact_after_restart = await bob.send(\n            {\n                \"cmd\": \"add_contact\",\n                \"args\": {\"contact_id\": \"alice\", \"peer_id\": alice.identity_peer_id},\n            }\n        )\n        assert bob_add_contact_after_restart.get(\"ok\") is True\n    \n        # simulate frontend starting sessions on launch\n        start_response = await bob.send(\n            {\"cmd\": \"start_session\", \"args\": {\"contact_id\": \"alice\"}}\n        )\n        assert start_response.get(\"ok\") is True\n    \n>       bob_session = await bob.expect_event(_is_connected_event, timeout=30.0)\n                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\nsystem-tests/tests/test_scenarios.py:1200: \n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \nsystem-tests/harness/process.py:118: in expect_event\n    return await asyncio.wait_for(_next_match(), timeout=timeout)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/asyncio/tasks.py:519: in wait_for\n    async with timeouts.timeout(timeout):\n               ^^^^^^^^^^^^^^^^^^^^^^^^^\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n\nself = <Timeout [expired]>\nexc_type = <class 'asyncio.exceptions.CancelledError'>\nexc_val = CancelledError(), exc_tb = <traceback object at 0x7f7a911fc7c0>\n\n    async def __aexit__(\n        self,\n        exc_type: Optional[Type[BaseException]],\n        exc_val: Optional[BaseException],\n        exc_tb: Optional[TracebackType],\n    ) -> Optional[bool]:\n        assert self._state in (_State.ENTERED, _State.EXPIRING)\n    \n        if self._timeout_handler is not None:\n            self._timeout_handler.cancel()\n            self._timeout_handler = None\n    \n        if self._state is _State.EXPIRING:\n            self._state = _State.EXPIRED\n    \n            if self._task.uncancel() <= self._cancelling and exc_type is exceptions.CancelledError:\n                # Since there are no new cancel requests, we're\n                # handling this.\n>               raise TimeoutError from exc_val\nE               TimeoutError\n\n/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/asyncio/timeouts.py:115: TimeoutError",
+    "teardown": ""
+  },
+  "profile": {
+    "name": "clean",
+    "delay_ms": 0,
+    "jitter_ms": 0,
+    "loss_pct": 0.0,
+    "burst_loss": false,
+    "seed": 100
+  },
+  "topology": {
+    "client_namespaces": [],
+    "discovery": {}
+  },
+  "cli_pair": {
+    "alice": {
+      "stdout": [
+        {
+          "kind": "event",
+          "type": "ready",
+          "version": "0.1.0"
+        },
+        {
+          "kind": "ack",
+          "id": "0f5fc537-5f5a-4e06-9075-4cfc21ea892b",
+          "ok": true
+        },
+        {
+          "kind": "ack",
+          "id": "1829fa05-b1f7-4a7b-bc3f-305ba63b4a1d",
+          "ok": true
+        },
+        {
+          "kind": "event",
+          "type": "manager_active",
+          "Starting": null
+        },
+        {
+          "kind": "event",
+          "type": "manager_active",
+          "Active": null
+        },
+        {
+          "kind": "ack",
+          "id": "e4c43a48-3359-4eb8-874e-68a13c8a120e",
+          "ok": true
+        },
+        {
+          "kind": "ack",
+          "id": "0c767769-c626-4274-9eef-e4dc433f1208",
+          "ok": true
+        },
+        {
+          "kind": "event",
+          "type": "session_status",
+          "peer": "edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400",
+          "status": "Connecting"
+        },
+        {
+          "kind": "event",
+          "type": "session_status",
+          "peer": "edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400",
+          "status": {
+            "Connected": {
+              "relayed": true,
+              "remote_address": "100.64.0.1:3340"
+            }
+          }
+        },
+        {
+          "kind": "event",
+          "type": "session_status",
+          "peer": "edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400",
+          "status": {
+            "Connected": {
+              "relayed": true,
+              "remote_address": "100.64.0.1:3340"
+            }
+          }
+        },
+        {
+          "kind": "event",
+          "type": "session_status",
+          "peer": "edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400",
+          "status": {
+            "Connected": {
+              "relayed": true,
+              "remote_address": "100.64.0.1:3340"
+            }
+          }
+        },
+        {
+          "kind": "event",
+          "type": "session_status",
+          "peer": "edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400",
+          "status": {
+            "Connected": {
+              "relayed": true,
+              "remote_address": "100.64.0.1:3340"
+            }
+          }
+        },
+        {
+          "kind": "event",
+          "type": "session_status",
+          "peer": "edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400",
+          "status": {
+            "Connected": {
+              "relayed": true,
+              "remote_address": "100.64.0.1:3340"
+            }
+          }
+        },
+        {
+          "kind": "event",
+          "type": "session_status",
+          "peer": "edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400",
+          "status": {
+            "Connected": {
+              "relayed": true,
+              "remote_address": "100.64.0.1:3340"
+            }
+          }
+        },
+        {
+          "kind": "event",
+          "type": "session_status",
+          "peer": "edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400",
+          "status": {
+            "Connected": {
+              "relayed": true,
+              "remote_address": "100.64.0.1:3340"
+            }
+          }
+        },
+        {
+          "kind": "event",
+          "type": "session_status",
+          "peer": "edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400",
+          "status": {
+            "Connected": {
+              "relayed": true,
+              "remote_address": "100.64.0.1:3340"
+            }
+          }
+        },
+        {
+          "kind": "event",
+          "type": "session_status",
+          "peer": "edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400",
+          "status": {
+            "Connected": {
+              "relayed": true,
+              "remote_address": "100.64.0.1:3340"
+            }
+          }
+        },
+        {
+          "kind": "event",
+          "type": "session_status",
+          "peer": "edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400",
+          "status": {
+            "Connected": {
+              "relayed": true,
+              "remote_address": "100.64.0.1:3340"
+            }
+          }
+        },
+        {
+          "kind": "event",
+          "type": "session_status",
+          "peer": "edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400",
+          "status": {
+            "Connected": {
+              "relayed": true,
+              "remote_address": "100.64.0.1:3340"
+            }
+          }
+        },
+        {
+          "kind": "event",
+          "type": "session_status",
+          "peer": "edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400",
+          "status": {
+            "Connected": {
+              "relayed": true,
+              "remote_address": "100.64.0.1:3340"
+            }
+          }
+        },
+        {
+          "kind": "event",
+          "type": "session_status",
+          "peer": "edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400",
+          "status": {
+            "Connected": {
+              "relayed": true,
+              "remote_address": "100.64.0.1:3340"
+            }
+          }
+        },
+        {
+          "kind": "event",
+          "type": "session_status",
+          "peer": "edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400",
+          "status": {
+            "Connected": {
+              "relayed": true,
+              "remote_address": "100.64.0.1:3340"
+            }
+          }
+        },
+        {
+          "kind": "event",
+          "type": "session_status",
+          "peer": "edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400",
+          "status": {
+            "Connected": {
+              "relayed": true,
+              "remote_address": "100.64.0.1:3340"
+            }
+          }
+        },
+        {
+          "kind": "event",
+          "type": "session_status",
+          "peer": "edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400",
+          "status": {
+            "Connected": {
+              "relayed": true,
+              "remote_address": "100.64.0.1:3340"
+            }
+          }
+        },
+        {
+          "kind": "event",
+          "type": "session_status",
+          "peer": "edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400",
+          "status": {
+            "Connected": {
+              "relayed": true,
+              "remote_address": "100.64.0.1:3340"
+            }
+          }
+        },
+        {
+          "kind": "event",
+          "type": "session_status",
+          "peer": "edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400",
+          "status": {
+            "Connected": {
+              "relayed": true,
+              "remote_address": "100.64.0.1:3340"
+            }
+          }
+        },
+        {
+          "kind": "event",
+          "type": "session_status",
+          "peer": "edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400",
+          "status": {
+            "Connected": {
+              "relayed": true,
+              "remote_address": "100.64.0.1:3340"
+            }
+          }
+        },
+        {
+          "kind": "event",
+          "type": "session_status",
+          "peer": "edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400",
+          "status": {
+            "Connected": {
+              "relayed": true,
+              "remote_address": "100.64.0.1:3340"
+            }
+          }
+        },
+        {
+          "kind": "event",
+          "type": "session_status",
+          "peer": "edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400",
+          "status": {
+            "Connected": {
+              "relayed": true,
+              "remote_address": "100.64.0.1:3340"
+            }
+          }
+        },
+        {
+          "kind": "event",
+          "type": "session_status",
+          "peer": "edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400",
+          "status": {
+            "Connected": {
+              "relayed": true,
+              "remote_address": "100.64.0.1:3340"
+            }
+          }
+        },
+        {
+          "kind": "event",
+          "type": "session_status",
+          "peer": "edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400",
+          "status": {
+            "Connected": {
+              "relayed": true,
+              "remote_address": "100.64.0.1:3340"
+            }
+          }
+        },
+        {
+          "kind": "event",
+          "type": "session_status",
+          "peer": "edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400",
+          "status": {
+            "Connected": {
+              "relayed": true,
+              "remote_address": "100.64.0.1:3340"
+            }
+          }
+        },
+        {
+          "kind": "event",
+          "type": "session_status",
+          "peer": "edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400",
+          "status": {
+            "Connected": {
+              "relayed": true,
+              "remote_address": "100.64.0.1:3340"
+            }
+          }
+        },
+        {
+          "kind": "event",
+          "type": "session_status",
+          "peer": "edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400",
+          "status": {
+            "Connected": {
+              "relayed": true,
+              "remote_address": "100.64.0.1:3340"
+            }
+          }
+        },
+        {
+          "kind": "event",
+          "type": "session_status",
+          "peer": "edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400",
+          "status": {
+            "Connected": {
+              "relayed": true,
+              "remote_address": "100.64.0.1:3340"
+            }
+          }
+        },
+        {
+          "kind": "event",
+          "type": "session_status",
+          "peer": "edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400",
+          "status": {
+            "Connected": {
+              "relayed": true,
+              "remote_address": "100.64.0.1:3340"
+            }
+          }
+        },
+        {
+          "kind": "event",
+          "type": "session_status",
+          "peer": "edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400",
+          "status": {
+            "Connected": {
+              "relayed": true,
+              "remote_address": "100.64.0.1:3340"
+            }
+          }
+        },
+        {
+          "kind": "event",
+          "type": "session_status",
+          "peer": "edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400",
+          "status": "Inactive"
+        }
+      ],
+      "stderr": [
+        "2026-07-28T14:43:09.404939Z  WARN manager.spawn:manager.run{manager.id=79131d15-d229-44ae-a30c-7026ed01bd7f}:manager.setup_endpoint:endpoint{id=4e9e3bd38c}: iroh_relay::tls: Insecure TLS config: server certificates will be trusted without verification",
+        "2026-07-28T14:43:12.012255Z  INFO manager.spawn:manager.run{manager.id=79131d15-d229-44ae-a30c-7026ed01bd7f}:manager.setup_endpoint:endpoint{id=4e9e3bd38c}:relay-actor: iroh::socket::transports::relay::actor: home is now relay http://100.64.0.1:3340/, was None",
+        "2026-07-28T14:43:12.146459Z  INFO manager.spawn:manager.run{manager.id=79131d15-d229-44ae-a30c-7026ed01bd7f}: telepathy_core::internal::core: event=\"manager_endpoint_setup\" elapsed_ms=2743",
+        "2026-07-28T14:43:12.879098Z  INFO session.open{peer.id=edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400}: telepathy_core::internal::core: event=\"connect_succeeded\" peer.id=edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400",
+        "2026-07-28T14:43:12.879512Z  INFO session.open{peer.id=edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400}:session.init{peer.id=edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400 session.id=\"c6f3fe96-fa34-4167-886b-8132d749aaf4\"}:session.run{peer.id=edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400 session.id=c6f3fe96-fa34-4167-886b-8132d749aaf4 peer.nickname=bob session.role=\"dialer\"}:session.iter{peer.id=edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400}: telepathy_core::internal::core: event=\"session_waiting_for_event\"",
+        "2026-07-28T14:43:12.942552Z  INFO session.open{peer.id=edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400}:session.init{peer.id=edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400 session.id=\"c6f3fe96-fa34-4167-886b-8132d749aaf4\"}:session.run{peer.id=edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400 session.id=c6f3fe96-fa34-4167-886b-8132d749aaf4 peer.nickname=bob session.role=\"dialer\"}:session.iter{peer.id=edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400}: telepathy_core::internal::core: event=\"session_waiting_for_event\"",
+        "2026-07-28T14:43:19.358066Z  INFO manager.spawn:manager.run{manager.id=79131d15-d229-44ae-a30c-7026ed01bd7f}: telepathy_core::internal::core: event=\"incoming_connection\" remote_addr=Relay { url: RelayUrl(\"http://100.64.0.1:3340/\"), endpoint_id: PublicKey(edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400) }",
+        "2026-07-28T14:43:20.770799Z  WARN session.init{peer.id=edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400 session.id=\"af8619ef-86e7-4f01-954b-500871b25ff0\"}: telepathy_core::internal::core: event=\"session_collision_kept_existing\" peer.id=edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400 peer.local=4e9e3bd38c2ff1aa16d692271dccabc6f2be85448e4a6983df98178518a7e6ac session.id=af8619ef-86e7-4f01-954b-500871b25ff0 old_session.id=c6f3fe96-fa34-4167-886b-8132d749aaf4 connection.side.client=false",
+        "2026-07-28T14:43:22.880803Z  INFO session.open{peer.id=edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400}:session.init{peer.id=edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400 session.id=\"c6f3fe96-fa34-4167-886b-8132d749aaf4\"}:session.run{peer.id=edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400 session.id=c6f3fe96-fa34-4167-886b-8132d749aaf4 peer.nickname=bob session.role=\"dialer\"}:session.iter{peer.id=edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400}: telepathy_core::internal::core: event=\"session_waiting_for_event\"",
+        "2026-07-28T14:43:32.885943Z  INFO session.open{peer.id=edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400}:session.init{peer.id=edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400 session.id=\"c6f3fe96-fa34-4167-886b-8132d749aaf4\"}:session.run{peer.id=edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400 session.id=c6f3fe96-fa34-4167-886b-8132d749aaf4 peer.nickname=bob session.role=\"dialer\"}:session.iter{peer.id=edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400}: telepathy_core::internal::core: event=\"session_waiting_for_event\"",
+        "2026-07-28T14:43:42.851580Z  INFO session.open{peer.id=edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400}:session.init{peer.id=edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400 session.id=\"c6f3fe96-fa34-4167-886b-8132d749aaf4\"}:session.run{peer.id=edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400 session.id=c6f3fe96-fa34-4167-886b-8132d749aaf4 peer.nickname=bob session.role=\"dialer\"}:session.iter{peer.id=edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400}: telepathy_core::internal::core: event=\"session_message_received\" result=Err(Error { kind: TransportRecv })",
+        "2026-07-28T14:43:42.851674Z ERROR session.open{peer.id=edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400}:session.init{peer.id=edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400 session.id=\"c6f3fe96-fa34-4167-886b-8132d749aaf4\"}:session.run{peer.id=edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400 session.id=c6f3fe96-fa34-4167-886b-8132d749aaf4 peer.nickname=bob session.role=\"dialer\"}: telepathy_core::internal::core: event=\"session_error_critical\" error=Error { kind: TransportRecv }",
+        "2026-07-28T14:43:42.851875Z  INFO session.open{peer.id=edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400}:session.init{peer.id=edfba8fe96d57648bbcc0bc43a4e1e6265cae3524afe84c8c5f6bd73c9f17400 session.id=\"c6f3fe96-fa34-4167-886b-8132d749aaf4\"}: telepathy_core::internal::core: event=\"session_cleaned_up\" session.id=c6f3fe96-fa34-4167-886b-8132d749aaf4"
+      ]
+    },
+    "bob": {
+      "stdout": [
+        {
+          "kind": "event",
+          "type": "ready",
+          "version": "0.1.0"
+        },
+        {
+          "kind": "ack",
+          "id": "c7b07487-2e0e-4d0e-8484-69ab0af54b76",
+          "ok": true
+        },
+        {
+          "kind": "ack",
+          "id": "cf070770-3802-4790-82df-7fbb708998a0",
+          "ok": true
+        },
+        {
+          "kind": "event",
+          "type": "manager_active",
+          "Starting": null
+        },
+        {
+          "kind": "ack",
+          "id": "49dabf5f-057d-49eb-b100-ab59d03cba7f",
+          "ok": true
+        },
+        {
+          "kind": "ack",
+          "id": "4ab5c105-a8ff-4203-bc19-a03a1659bd40",
+          "ok": true
+        },
+        {
+          "kind": "event",
+          "type": "manager_active",
+          "Active": null
+        },
+        {
+          "kind": "event",
+          "type": "session_status",
+          "peer": "4e9e3bd38c2ff1aa16d692271dccabc6f2be85448e4a6983df98178518a7e6ac",
+          "status": "Connecting"
+        },
+        {
+          "kind": "event",
+          "type": "session_status",
+          "peer": "4e9e3bd38c2ff1aa16d692271dccabc6f2be85448e4a6983df98178518a7e6ac",
+          "status": "Inactive"
+        }
+      ],
+      "stderr": [
+        "2026-07-28T14:43:15.166212Z  WARN manager.spawn:manager.run{manager.id=edc3e630-21f6-4082-9ed4-cc44df16178e}:manager.setup_endpoint:endpoint{id=edfba8fe96}: iroh_relay::tls: Insecure TLS config: server certificates will be trusted without verification",
+        "2026-07-28T14:43:18.993472Z  INFO manager.spawn:manager.run{manager.id=edc3e630-21f6-4082-9ed4-cc44df16178e}:manager.setup_endpoint:endpoint{id=edfba8fe96}:relay-actor: iroh::socket::transports::relay::actor: home is now relay http://100.64.0.1:3340/, was None",
+        "2026-07-28T14:43:19.073671Z  INFO manager.spawn:manager.run{manager.id=edc3e630-21f6-4082-9ed4-cc44df16178e}: telepathy_core::internal::core: event=\"manager_endpoint_setup\" elapsed_ms=3909",
+        "2026-07-28T14:43:20.115803Z  INFO session.open{peer.id=4e9e3bd38c2ff1aa16d692271dccabc6f2be85448e4a6983df98178518a7e6ac}: telepathy_core::internal::core: event=\"connect_succeeded\" peer.id=4e9e3bd38c2ff1aa16d692271dccabc6f2be85448e4a6983df98178518a7e6ac",
+        "2026-07-28T14:43:20.116169Z  INFO session.open{peer.id=4e9e3bd38c2ff1aa16d692271dccabc6f2be85448e4a6983df98178518a7e6ac}:session.init{peer.id=4e9e3bd38c2ff1aa16d692271dccabc6f2be85448e4a6983df98178518a7e6ac session.id=\"a2907a98-7d07-40a4-ba54-7e1a3199c2f0\"}:session.run{peer.id=4e9e3bd38c2ff1aa16d692271dccabc6f2be85448e4a6983df98178518a7e6ac session.id=a2907a98-7d07-40a4-ba54-7e1a3199c2f0 peer.nickname=alice session.role=\"dialer\"}:session.iter{peer.id=4e9e3bd38c2ff1aa16d692271dccabc6f2be85448e4a6983df98178518a7e6ac}: telepathy_core::internal::core: event=\"session_waiting_for_event\"",
+        "2026-07-28T14:43:20.200660Z  INFO session.open{peer.id=4e9e3bd38c2ff1aa16d692271dccabc6f2be85448e4a6983df98178518a7e6ac}:session.init{peer.id=4e9e3bd38c2ff1aa16d692271dccabc6f2be85448e4a6983df98178518a7e6ac session.id=\"a2907a98-7d07-40a4-ba54-7e1a3199c2f0\"}:session.run{peer.id=4e9e3bd38c2ff1aa16d692271dccabc6f2be85448e4a6983df98178518a7e6ac session.id=a2907a98-7d07-40a4-ba54-7e1a3199c2f0 peer.nickname=alice session.role=\"dialer\"}:session.iter{peer.id=4e9e3bd38c2ff1aa16d692271dccabc6f2be85448e4a6983df98178518a7e6ac}: telepathy_core::internal::core: event=\"session_waiting_for_event\"",
+        "2026-07-28T14:43:20.851379Z  INFO session.open{peer.id=4e9e3bd38c2ff1aa16d692271dccabc6f2be85448e4a6983df98178518a7e6ac}:session.init{peer.id=4e9e3bd38c2ff1aa16d692271dccabc6f2be85448e4a6983df98178518a7e6ac session.id=\"a2907a98-7d07-40a4-ba54-7e1a3199c2f0\"}:session.run{peer.id=4e9e3bd38c2ff1aa16d692271dccabc6f2be85448e4a6983df98178518a7e6ac session.id=a2907a98-7d07-40a4-ba54-7e1a3199c2f0 peer.nickname=alice session.role=\"dialer\"}:session.iter{peer.id=4e9e3bd38c2ff1aa16d692271dccabc6f2be85448e4a6983df98178518a7e6ac}: telepathy_core::internal::core: event=\"session_message_received\" result=Err(Error { kind: TransportRecv })",
+        "2026-07-28T14:43:20.851464Z ERROR session.open{peer.id=4e9e3bd38c2ff1aa16d692271dccabc6f2be85448e4a6983df98178518a7e6ac}:session.init{peer.id=4e9e3bd38c2ff1aa16d692271dccabc6f2be85448e4a6983df98178518a7e6ac session.id=\"a2907a98-7d07-40a4-ba54-7e1a3199c2f0\"}:session.run{peer.id=4e9e3bd38c2ff1aa16d692271dccabc6f2be85448e4a6983df98178518a7e6ac session.id=a2907a98-7d07-40a4-ba54-7e1a3199c2f0 peer.nickname=alice session.role=\"dialer\"}: telepathy_core::internal::core: event=\"session_error_critical\" error=Error { kind: TransportRecv }",
+        "2026-07-28T14:43:20.851592Z  INFO session.open{peer.id=4e9e3bd38c2ff1aa16d692271dccabc6f2be85448e4a6983df98178518a7e6ac}:session.init{peer.id=4e9e3bd38c2ff1aa16d692271dccabc6f2be85448e4a6983df98178518a7e6ac session.id=\"a2907a98-7d07-40a4-ba54-7e1a3199c2f0\"}: telepathy_core::internal::core: event=\"session_cleaned_up\" session.id=a2907a98-7d07-40a4-ba54-7e1a3199c2f0"
+      ]
+    }
+  }
+}

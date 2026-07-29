@@ -99,6 +99,12 @@ steps:
       timeout: 15.0
       match:
         state: CallEnded
+  - actor: bob
+    expect_event:
+      type: accept_call_canceled
+      timeout: 20.0
+      match:
+        request_id: ${bob.request_id}
   - concurrent:
       - actor: alice
         send:

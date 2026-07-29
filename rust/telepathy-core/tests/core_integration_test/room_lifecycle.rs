@@ -1,14 +1,16 @@
 use super::common::{
     CallEndedPark, CallbackCapturingAudioHost, DEFAULT_SAMPLE_RATE, DeviceSelectionOperation,
     DeviceSelectionProbe, InputSampleRateGate, MOCK_DEVICE_ID, ManagerLifecycle, OutputOpenGate,
-    RoomEventKind, StreamErrorProbe, TwoClientShutdownGuard, WaitingCallbackGate,
-    assert_call_slot_idle, assert_room_event_sequence,
-    assert_slot_remains_outside_direct_call_states, build_client,
-    build_client_with_call_ended_park, build_client_with_options, build_client_with_waiting_gate,
-    call_state_snapshot, init_test_tracing, room_join_count, room_leave_count, shared_relay_map,
-    sorted_room_members, wait_for_call_ended_contains, wait_for_connected,
-    wait_for_no_extra_room_leave, wait_for_room_join_count, wait_for_room_leave_count,
-    wait_for_sessions, wait_for_slot_idle, wait_for_slot_room_call,
+    PendingAcceptProbe, RoomEventKind, StreamErrorProbe, TwoClientShutdownGuard,
+    WaitingCallbackGate, assert_call_slot_idle, assert_room_event_sequence,
+    assert_slot_remains_outside_direct_call_states, build_client, build_client_with_accept_probe,
+    build_client_with_call_ended_park, build_client_with_lookup_contacts,
+    build_client_with_options, build_client_with_options_and_initial_contacts,
+    build_client_with_waiting_gate, call_state_snapshot, init_test_tracing, room_join_count,
+    room_leave_count, shared_relay_map, sorted_room_members, wait_for_call_ended_contains,
+    wait_for_connected, wait_for_no_extra_room_leave, wait_for_room_join_count,
+    wait_for_room_leave_count, wait_for_sessions, wait_for_slot_idle, wait_for_slot_room_call,
+    wait_for_stable_session_pair,
 };
 
 use iroh::SecretKey;
@@ -17,7 +19,7 @@ use std::sync::atomic::Ordering::Relaxed;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use telepathy_audio::devices::{MockAudioHost, MockAudioInput, MockAudioOutput};
-use telepathy_core::types::{CallState, CodecConfig, Contact};
+use telepathy_core::types::{CallState, CodecConfig, Contact, SessionStatus};
 use tokio::sync::Notify;
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
@@ -1398,6 +1400,210 @@ async fn room_end_releases_slot_and_allows_rejoin() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn concurrent_room_end_immediately_rejoins_without_direct_negotiation() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+    let codec_config = CodecConfig::new(true, true, 5.0);
+
+    let key_a = SecretKey::generate();
+    let key_b = SecretKey::generate();
+    let key_c = SecretKey::generate();
+    let contact_a = Contact::new("rejoin-race-a".to_string(), key_a.public().to_string())
+        .expect("contact a invalid");
+    let contact_b = Contact::new("rejoin-race-b".to_string(), key_b.public().to_string())
+        .expect("contact b invalid");
+    let contact_c = Contact::new("rejoin-race-c".to_string(), key_c.public().to_string())
+        .expect("contact c invalid");
+    let peer_a = contact_a.get_peer_id().to_string();
+    let peer_b = contact_b.get_peer_id().to_string();
+    let peer_c = contact_c.get_peer_id().to_string();
+    let mut room_members = vec![peer_a.clone(), peer_b.clone(), peer_c.clone()];
+    room_members.sort();
+
+    let call_states_a = Arc::new(Mutex::new(Vec::new()));
+    let call_states_b = Arc::new(Mutex::new(Vec::new()));
+    let call_states_c = Arc::new(Mutex::new(Vec::new()));
+    let accept_probe_a = PendingAcceptProbe::default();
+    let accept_probe_b = PendingAcceptProbe::default();
+    let accept_probe_c = PendingAcceptProbe::default();
+    let client_a = build_client_with_accept_probe(
+        relay_map,
+        key_a,
+        vec![contact_b.clone(), contact_c.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_a.clone(),
+        accept_probe_a.clone(),
+    )
+    .await;
+    let client_b = build_client_with_accept_probe(
+        relay_map,
+        key_b,
+        vec![contact_a.clone(), contact_c.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_b.clone(),
+        accept_probe_b.clone(),
+    )
+    .await;
+    let client_c = build_client_with_accept_probe(
+        relay_map,
+        key_c,
+        vec![contact_a.clone(), contact_b.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_c.clone(),
+        accept_probe_c.clone(),
+    )
+    .await;
+
+    client_a.telepathy.start_session(&contact_b).await;
+    client_a.telepathy.start_session(&contact_c).await;
+    client_b.telepathy.start_session(&contact_a).await;
+    client_b.telepathy.start_session(&contact_c).await;
+    client_c.telepathy.start_session(&contact_a).await;
+    client_c.telepathy.start_session(&contact_b).await;
+    wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
+    wait_for_sessions(&client_a, &contact_c, &client_c, &contact_a).await;
+    wait_for_sessions(&client_b, &contact_c, &client_c, &contact_b).await;
+
+    let (join_a, join_b, join_c) = tokio::join!(
+        client_a.telepathy.join_room(room_members.clone()),
+        client_b.telepathy.join_room(room_members.clone()),
+        client_c.telepathy.join_room(room_members.clone()),
+    );
+    join_a.expect("client a should establish the initial room mesh");
+    join_b.expect("client b should establish the initial room mesh");
+    join_c.expect("client c should establish the initial room mesh");
+    wait_for_room_join_count(&call_states_a, &peer_b, 1).await;
+    wait_for_room_join_count(&call_states_a, &peer_c, 1).await;
+    wait_for_room_join_count(&call_states_b, &peer_a, 1).await;
+    wait_for_room_join_count(&call_states_b, &peer_c, 1).await;
+    wait_for_room_join_count(&call_states_c, &peer_a, 1).await;
+    wait_for_room_join_count(&call_states_c, &peer_b, 1).await;
+
+    // Each controller is tearing down while its peers' room handshakes leave
+    // and request reconciliation. Rejoin as soon as every end_call confirms
+    // release: a stale old-generation reconcile would have latched a direct
+    // start_call permit and make one of these joins fail with CallAlreadyActive.
+    tokio::join!(
+        client_a.telepathy.end_call(),
+        client_b.telepathy.end_call(),
+        client_c.telepathy.end_call(),
+    );
+    let (rejoin_a, rejoin_b, rejoin_c) = tokio::join!(
+        client_a.telepathy.join_room(room_members.clone()),
+        client_b.telepathy.join_room(room_members.clone()),
+        client_c.telepathy.join_room(room_members),
+    );
+    rejoin_a.expect("client a should immediately rejoin after concurrent room teardown");
+    rejoin_b.expect("client b should immediately rejoin after concurrent room teardown");
+    rejoin_c.expect("client c should immediately rejoin after concurrent room teardown");
+
+    wait_for_room_join_count(&call_states_a, &peer_b, 2).await;
+    wait_for_room_join_count(&call_states_a, &peer_c, 2).await;
+    wait_for_room_join_count(&call_states_b, &peer_a, 2).await;
+    wait_for_room_join_count(&call_states_b, &peer_c, 2).await;
+    wait_for_room_join_count(&call_states_c, &peer_a, 2).await;
+    wait_for_room_join_count(&call_states_c, &peer_b, 2).await;
+    wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
+    wait_for_sessions(&client_a, &contact_c, &client_c, &contact_a).await;
+    wait_for_sessions(&client_b, &contact_c, &client_c, &contact_b).await;
+    wait_for_slot_room_call(&client_a, "client a after immediate room rejoin").await;
+    wait_for_slot_room_call(&client_b, "client b after immediate room rejoin").await;
+    wait_for_slot_room_call(&client_c, "client c after immediate room rejoin").await;
+
+    assert_eq!(
+        accept_probe_a.opened.load(Relaxed),
+        0,
+        "client a must not receive a ghost direct-call prompt"
+    );
+    assert_eq!(
+        accept_probe_b.opened.load(Relaxed),
+        0,
+        "client b must not receive a ghost direct-call prompt"
+    );
+    assert_eq!(
+        accept_probe_c.opened.load(Relaxed),
+        0,
+        "client c must not receive a ghost direct-call prompt"
+    );
+
+    let states_a = call_state_snapshot(&call_states_a);
+    let states_b = call_state_snapshot(&call_states_b);
+    let states_c = call_state_snapshot(&call_states_c);
+    for (label, states) in [
+        ("client a", &states_a),
+        ("client b", &states_b),
+        ("client c", &states_c),
+    ] {
+        assert!(
+            !states
+                .iter()
+                .any(|state| matches!(state, CallState::CallEnded(_, _))),
+            "{label} must not observe a direct-call timeout or terminal state; states={states:?}"
+        );
+    }
+    assert_room_event_sequence(
+        &states_a,
+        &peer_b,
+        [RoomEventKind::Join, RoomEventKind::Join],
+    );
+    assert_room_event_sequence(
+        &states_a,
+        &peer_c,
+        [RoomEventKind::Join, RoomEventKind::Join],
+    );
+    assert_room_event_sequence(
+        &states_b,
+        &peer_a,
+        [RoomEventKind::Join, RoomEventKind::Join],
+    );
+    assert_room_event_sequence(
+        &states_b,
+        &peer_c,
+        [RoomEventKind::Join, RoomEventKind::Join],
+    );
+    assert_room_event_sequence(
+        &states_c,
+        &peer_a,
+        [RoomEventKind::Join, RoomEventKind::Join],
+    );
+    assert_room_event_sequence(
+        &states_c,
+        &peer_b,
+        [RoomEventKind::Join, RoomEventKind::Join],
+    );
+
+    tokio::join!(
+        client_a.telepathy.end_call(),
+        client_b.telepathy.end_call(),
+        client_c.telepathy.end_call(),
+    );
+    wait_for_slot_idle(&client_a, &peer_a).await;
+    wait_for_slot_idle(&client_b, &peer_b).await;
+    wait_for_slot_idle(&client_c, &peer_c).await;
+    client_a.telepathy.shutdown().await;
+    client_b.telepathy.shutdown().await;
+    client_c.telepathy.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn room_peer_rejection_does_not_end_active_room() {
     init_test_tracing();
     let relay_map = shared_relay_map();
@@ -2047,4 +2253,1470 @@ async fn parked_call_ended_callback_does_not_wedge_room_slot_ownership() {
     wait_for_slot_idle(&client_b, &peer_b).await;
     client_a.telepathy.shutdown().await;
     client_b.telepathy.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cold_room_join_admits_member_before_room_state_publication() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+    let codec_config = CodecConfig::new(true, true, 5.0);
+
+    let (key_a, key_b) = loop {
+        let key_a = SecretKey::generate();
+        let key_b = SecretKey::generate();
+        if key_a.public() < key_b.public() {
+            break (key_a, key_b);
+        }
+    };
+    let contact_a = Contact::new("cold-room-a".to_string(), key_a.public().to_string())
+        .expect("contact a invalid");
+    let contact_b = Contact::new("cold-room-b".to_string(), key_b.public().to_string())
+        .expect("contact b invalid");
+
+    let peer_a = contact_a.get_peer_id();
+    let peer_b = contact_b.get_peer_id();
+    let peer_a_str = peer_a.to_string();
+    let peer_b_str = peer_b.to_string();
+    let room_members = sorted_room_members(&contact_a, &contact_b);
+
+    let call_states_a = Arc::new(Mutex::new(Vec::new()));
+    let call_states_b = Arc::new(Mutex::new(Vec::new()));
+
+    // Gate B's `setup_call` -> `input_sample_rate` (helpers.rs:447). With the
+    // gate held, B's `join_room_with_operation` stalls in `setup_call`
+    // (internal.rs:527) BEFORE it publishes its `RoomState` (internal.rs:632).
+    // During that window B's `is_in_room(peer)` returns false because
+    // `room_state` is still None, so B's `session_manager` (core.rs:338-343)
+    // closes any authorized no-contact room peer that dials in.
+    let device_probe_b = DeviceSelectionProbe::default();
+    let input_gate_b = InputSampleRateGate::default();
+    let host_b = CallbackCapturingAudioHost::new(StreamErrorProbe::new(), StreamErrorProbe::new())
+        .with_device_selection_probe(device_probe_b.clone())
+        .with_input_sample_rate_gate(input_gate_b.clone());
+
+    // Both clients are built with EMPTY contact vectors. A and B know each
+    // other only through the shared sorted two-peer member list, so an inbound
+    // dial from A exercises the no-contact room-admission path.
+    let client_a = build_client(
+        relay_map,
+        key_a,
+        vec![],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_a.clone(),
+    )
+    .await;
+    let client_b = build_client(
+        relay_map,
+        key_b,
+        vec![],
+        &codec_config,
+        host_b,
+        call_states_b.clone(),
+    )
+    .await;
+
+    // B's input device must resolve to MOCK_DEVICE_ID so the device-selection
+    // probe records the matching id when `input_sample_rate` is reached.
+    client_b
+        .telepathy
+        .set_input_device(Some(MOCK_DEVICE_ID.to_string()))
+        .await;
+
+    let core_b = client_b.telepathy.inner.clone();
+    let contact_lookup_b = client_b.contact_lookup_probe.clone();
+
+    // Start B's room join in a spawned task. B acquires the RoomCall slot
+    // (internal.rs:474), enters `setup_call`, and parks on the gated
+    // `input_sample_rate`. It cannot publish its `RoomState` until the gate
+    // is released. The InputSampleRateGate blocks on a sync Condvar, so B's
+    // join must run on a dedicated worker thread.
+    let b_join_handle = {
+        let members = room_members.clone();
+        tokio::spawn(async move {
+            let result = client_b.telepathy.join_room(members).await;
+            (client_b, result)
+        })
+    };
+
+    // Deterministically confirm B is parked inside `setup_call` before A
+    // joins: the probe records InputSampleRate before the gate blocks.
+    device_probe_b
+        .wait_for(DeviceSelectionOperation::InputSampleRate, MOCK_DEVICE_ID, 1)
+        .await;
+
+    // A joins the room. A publishes its `RoomState` quickly (MockAudioHost
+    // returns immediately), then iterates the member list and dials B
+    // (internal.rs:659-689). A's dial arrives at B's session_manager while B
+    // is still gated -- the cold room-join publication race window.
+    client_a
+        .telepathy
+        .join_room(room_members)
+        .await
+        .expect("client a should join room");
+
+    contact_lookup_b.wait_for(&peer_a.to_vec(), 2).await;
+    assert!(
+        core_b.current_room_generation().await.is_none(),
+        "B must admit A before publishing RoomState"
+    );
+
+    // Release the input-sample-rate gate so B's `setup_call` returns and B's
+    // `join_room` can publish its `RoomState` and iterate its own member list.
+    // Await B's join before asserting so the blocking gate/task can never be
+    // stranded by an earlier assertion failure.
+    input_gate_b.release();
+    let (client_b, b_join_result) = b_join_handle
+        .await
+        .expect("b join task should complete after gate release");
+    b_join_result.expect("client b should join room after gate release");
+
+    let shutdown_guard = TwoClientShutdownGuard {
+        a: &client_a,
+        b: &client_b,
+        dropped: AtomicBool::new(false),
+    };
+
+    // --- Post-release behavior (fixed path): both clients reach RoomCall and
+    // observe each other's RoomJoin with no spurious leaves.
+    wait_for_slot_room_call(&client_a, "client_a after cold room join").await;
+    wait_for_slot_room_call(&client_b, "client_b after cold room join").await;
+    wait_for_room_join_count(&call_states_a, &peer_b_str, 1).await;
+    wait_for_room_join_count(&call_states_b, &peer_a_str, 1).await;
+    wait_for_no_extra_room_leave(&call_states_a, &peer_b_str, 0, Duration::from_secs(1)).await;
+    wait_for_no_extra_room_leave(&call_states_b, &peer_a_str, 0, Duration::from_secs(1)).await;
+
+    let states_a = call_state_snapshot(&call_states_a);
+    let states_b = call_state_snapshot(&call_states_b);
+    assert_room_event_sequence(&states_a, &peer_b_str, [RoomEventKind::Join]);
+    assert_room_event_sequence(&states_b, &peer_a_str, [RoomEventKind::Join]);
+
+    // --- Orderly teardown.
+    client_a.telepathy.end_call().await;
+    client_b.telepathy.end_call().await;
+    wait_for_slot_idle(&client_a, &peer_a_str).await;
+    wait_for_slot_idle(&client_b, &peer_b_str).await;
+
+    shutdown_guard.disarm();
+    client_a.telepathy.shutdown().await;
+    client_b.telepathy.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn room_session_collision_handoff_keeps_membership_until_replacement_is_admitted() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+    let codec_config = CodecConfig::new(true, true, 5.0);
+
+    // An incoming replacement wins only when the local peer sorts after the
+    // remote peer. Pick identities deterministically so the replacement below
+    // exercises `session_collision_kept_new` on client_a.
+    let (key_a, key_b) = loop {
+        let key_a = SecretKey::generate();
+        let key_b = SecretKey::generate();
+        if key_a.public() > key_b.public() {
+            break (key_a, key_b);
+        }
+    };
+    let cancelled_replacement_key = key_b.clone();
+    let admitted_replacement_key = key_b.clone();
+    let contact_a = Contact::new(
+        "handoff-room-client-a".to_string(),
+        key_a.public().to_string(),
+    )
+    .expect("contact a invalid");
+    let contact_b = Contact::new(
+        "handoff-room-client-b".to_string(),
+        key_b.public().to_string(),
+    )
+    .expect("contact b invalid");
+    let peer_a = contact_a.get_peer_id();
+    let peer_b = contact_b.get_peer_id();
+    let peer_a_str = peer_a.to_string();
+    let peer_b_str = peer_b.to_string();
+    let room_members = sorted_room_members(&contact_a, &contact_b);
+
+    let call_states_a = Arc::new(Mutex::new(Vec::new()));
+    let call_states_b = Arc::new(Mutex::new(Vec::new()));
+    let client_a = build_client(
+        relay_map,
+        key_a,
+        vec![contact_b.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_a.clone(),
+    )
+    .await;
+    let client_b = build_client(
+        relay_map,
+        key_b,
+        vec![contact_a.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_b,
+    )
+    .await;
+
+    client_a.telepathy.start_session(&contact_b).await;
+    client_b.telepathy.start_session(&contact_a).await;
+    wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
+    client_a
+        .telepathy
+        .join_room(room_members.clone())
+        .await
+        .expect("client a should join room");
+    client_b
+        .telepathy
+        .join_room(room_members.clone())
+        .await
+        .expect("client b should join room");
+    wait_for_room_join_count(&call_states_a, &peer_b_str, 1).await;
+
+    let old_session_id = client_a
+        .telepathy
+        .inner
+        .session_states
+        .read()
+        .await
+        .get(&peer_b)
+        .map(|state| state.id())
+        .expect("client a should have the admitted room session");
+
+    // A same-identity client creates a collision-winning incoming replacement
+    // but never starts room negotiation. Shutting it down must restore the
+    // admitted old session rather than leaving the map owned by a dead session.
+    let cancelled_replacement = build_client_with_lookup_contacts(
+        relay_map,
+        cancelled_replacement_key,
+        vec![contact_a.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        Arc::new(Mutex::new(Vec::new())),
+    )
+    .await;
+    cancelled_replacement
+        .telepathy
+        .start_session(&contact_a)
+        .await;
+
+    wait_for_stable_session_pair(
+        &client_a,
+        &peer_b,
+        &cancelled_replacement,
+        &peer_a,
+        Some(old_session_id),
+    )
+    .await;
+    assert_eq!(
+        room_leave_count(&call_state_snapshot(&call_states_a), &peer_b_str),
+        0,
+        "the old room connection must remain effective while the replacement is unadmitted"
+    );
+    cancelled_replacement.telepathy.shutdown().await;
+
+    wait_for_stable_session_pair(&client_a, &peer_b, &client_b, &peer_a, None).await;
+    assert_eq!(
+        client_a
+            .telepathy
+            .inner
+            .session_states
+            .read()
+            .await
+            .get(&peer_b)
+            .map(|state| state.id()),
+        Some(old_session_id),
+        "a cancelled replacement must restore the admitted old room session"
+    );
+    wait_for_no_extra_room_leave(&call_states_a, &peer_b_str, 0, Duration::from_secs(1)).await;
+
+    // A second same-identity client joins the same room. Its incoming session
+    // wins the collision at A; the old transport must remain effective until
+    // this replacement is admitted, producing a second Join but no Leave.
+    let admitted_replacement = build_client(
+        relay_map,
+        admitted_replacement_key,
+        vec![],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        Arc::new(Mutex::new(Vec::new())),
+    )
+    .await;
+    admitted_replacement
+        .telepathy
+        .join_room(room_members)
+        .await
+        .expect("replacement should join room");
+    wait_for_room_join_count(&call_states_a, &peer_b_str, 2).await;
+    wait_for_no_extra_room_leave(&call_states_a, &peer_b_str, 0, Duration::from_secs(1)).await;
+    assert_room_event_sequence(
+        &call_state_snapshot(&call_states_a),
+        &peer_b_str,
+        [RoomEventKind::Join, RoomEventKind::Join],
+    );
+
+    admitted_replacement.telepathy.end_call().await;
+    client_a.telepathy.end_call().await;
+    client_b.telepathy.end_call().await;
+    wait_for_slot_idle(&client_a, &peer_a_str).await;
+    wait_for_slot_idle(&client_b, &peer_b_str).await;
+    wait_for_slot_idle(&admitted_replacement, &peer_b_str).await;
+    admitted_replacement.telepathy.shutdown().await;
+    client_a.telepathy.shutdown().await;
+    client_b.telepathy.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn active_room_retains_same_identity_candidate_until_predecessor_finishes() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+    let codec_config = CodecConfig::new(true, true, 5.0);
+
+    let (key_a, key_b) = loop {
+        let key_a = SecretKey::generate();
+        let key_b = SecretKey::generate();
+        if key_a.public() < key_b.public() {
+            break (key_a, key_b);
+        }
+    };
+    let replacement_key_b = key_b.clone();
+    let contact_a = Contact::new(
+        "stale-room-client-a".to_string(),
+        key_a.public().to_string(),
+    )
+    .expect("contact a invalid");
+    let contact_b = Contact::new(
+        "stale-room-client-b".to_string(),
+        key_b.public().to_string(),
+    )
+    .expect("contact b invalid");
+    let peer_a = contact_a.get_peer_id();
+    let peer_b = contact_b.get_peer_id();
+    let peer_a_str = peer_a.to_string();
+    let peer_b_str = peer_b.to_string();
+    let room_members = sorted_room_members(&contact_a, &contact_b);
+    let call_states_a = Arc::new(Mutex::new(Vec::new()));
+    let call_states_old_b = Arc::new(Mutex::new(Vec::new()));
+    let call_states_replacement_b = Arc::new(Mutex::new(Vec::new()));
+
+    let client_a = build_client(
+        relay_map,
+        key_a,
+        vec![contact_b.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_a.clone(),
+    )
+    .await;
+    let old_client_b = build_client(
+        relay_map,
+        key_b,
+        vec![contact_a.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_old_b,
+    )
+    .await;
+
+    client_a.telepathy.start_session(&contact_b).await;
+    old_client_b.telepathy.start_session(&contact_a).await;
+    wait_for_sessions(&client_a, &contact_b, &old_client_b, &contact_a).await;
+    let (join_a, join_b) = tokio::join!(
+        client_a.telepathy.join_room(room_members.clone()),
+        old_client_b.telepathy.join_room(room_members.clone()),
+    );
+    join_a.expect("client_a should join the room");
+    join_b.expect("old client_b should join the room");
+    wait_for_room_join_count(&call_states_a, &peer_b_str, 1).await;
+
+    let predecessor_id = client_a
+        .telepathy
+        .inner
+        .session_states
+        .read()
+        .await
+        .get(&peer_b)
+        .map(|state| state.id())
+        .expect("client_a should register the admitted predecessor");
+    let connected_before_replacement = client_a
+        .session_status_probe
+        .connected_count(peer_b.as_bytes());
+
+    let replacement_client_b = build_client_with_lookup_contacts(
+        relay_map,
+        replacement_key_b,
+        vec![contact_a.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_replacement_b,
+    )
+    .await;
+    replacement_client_b
+        .telepathy
+        .start_session(&contact_a)
+        .await;
+    replacement_client_b
+        .session_status_probe
+        .wait_for(
+            peer_a.as_bytes(),
+            SessionStatus::Connected {
+                relayed: false,
+                remote_address: String::new(),
+            },
+        )
+        .await;
+
+    assert_eq!(
+        client_a
+            .telepathy
+            .inner
+            .session_states
+            .read()
+            .await
+            .get(&peer_b)
+            .map(|state| state.id()),
+        Some(predecessor_id),
+        "the active-room candidate must wait while the admitted predecessor remains live"
+    );
+
+    old_client_b.telepathy.shutdown().await;
+
+    client_a
+        .session_status_probe
+        .wait_for_connected_after(peer_b.as_bytes(), connected_before_replacement)
+        .await;
+    assert_ne!(
+        client_a
+            .telepathy
+            .inner
+            .session_states
+            .read()
+            .await
+            .get(&peer_b)
+            .map(|state| state.id()),
+        Some(predecessor_id),
+        "the active-room candidate should replace the dead predecessor"
+    );
+
+    replacement_client_b
+        .telepathy
+        .join_room(room_members)
+        .await
+        .expect("the replacement should rejoin through the promoted session");
+    wait_for_room_join_count(&call_states_a, &peer_b_str, 2).await;
+    wait_for_slot_room_call(&client_a, "client_a after stale room handoff").await;
+
+    replacement_client_b.telepathy.end_call().await;
+    client_a.telepathy.end_call().await;
+    wait_for_slot_idle(&client_a, &peer_a_str).await;
+    wait_for_slot_idle(&replacement_client_b, &peer_b_str).await;
+    replacement_client_b.telepathy.shutdown().await;
+    client_a.telepathy.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn room_replacement_map_mismatch_tears_down_deferred_predecessor() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+    let codec_config = CodecConfig::new(true, true, 5.0);
+
+    let (key_a, key_b) = loop {
+        let key_a = SecretKey::generate();
+        let key_b = SecretKey::generate();
+        if key_a.public() > key_b.public() {
+            break (key_a, key_b);
+        }
+    };
+    let replacement_key = key_b.clone();
+    let contact_a = Contact::new(
+        "predecessor-teardown-a".to_string(),
+        key_a.public().to_string(),
+    )
+    .expect("contact a invalid");
+    let contact_b = Contact::new(
+        "predecessor-teardown-b".to_string(),
+        key_b.public().to_string(),
+    )
+    .expect("contact b invalid");
+    let peer_a = contact_a.get_peer_id();
+    let peer_b = contact_b.get_peer_id();
+    let peer_a_str = peer_a.to_string();
+    let peer_b_str = peer_b.to_string();
+    let room_members = sorted_room_members(&contact_a, &contact_b);
+    let call_states_a = Arc::new(Mutex::new(Vec::new()));
+    let client_a = build_client(
+        relay_map,
+        key_a,
+        vec![contact_b.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_a.clone(),
+    )
+    .await;
+    let client_b = build_client(
+        relay_map,
+        key_b,
+        vec![contact_a.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        Arc::new(Mutex::new(Vec::new())),
+    )
+    .await;
+
+    client_a.telepathy.start_session(&contact_b).await;
+    client_b.telepathy.start_session(&contact_a).await;
+    wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
+    let (join_a, join_b) = tokio::join!(
+        client_a.telepathy.join_room(room_members.clone()),
+        client_b.telepathy.join_room(room_members),
+    );
+    join_a.expect("client a should join the room");
+    join_b.expect("client b should join the room");
+    wait_for_room_join_count(&call_states_a, &peer_b_str, 1).await;
+
+    let predecessor = client_a
+        .telepathy
+        .inner
+        .session_states
+        .read()
+        .await
+        .get(&peer_b)
+        .cloned()
+        .expect("client a should have the admitted predecessor session");
+    let predecessor_id = predecessor.id();
+
+    // Given: a real incoming replacement wins the collision while the predecessor is admitted.
+    let replacement_client = build_client_with_lookup_contacts(
+        relay_map,
+        replacement_key,
+        vec![contact_a.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        Arc::new(Mutex::new(Vec::new())),
+    )
+    .await;
+    replacement_client.telepathy.start_session(&contact_a).await;
+    wait_for_stable_session_pair(
+        &client_a,
+        &peer_b,
+        &replacement_client,
+        &peer_a,
+        Some(predecessor_id),
+    )
+    .await;
+
+    let replacement = client_a
+        .telepathy
+        .inner
+        .session_states
+        .read()
+        .await
+        .get(&peer_b)
+        .cloned()
+        .expect("client a should install the collision-winning replacement");
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if Arc::strong_count(&predecessor) >= 4 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("replacement should defer the admitted predecessor");
+
+    let predecessor_weak = Arc::downgrade(&predecessor);
+    let replacement_weak = Arc::downgrade(&replacement);
+
+    // When: a third session state takes the map entry before the replacement exits.
+    let displaced = client_a
+        .telepathy
+        .inner
+        .session_states
+        .write()
+        .await
+        .insert(
+            peer_b,
+            Arc::new(telepathy_core::internal::state::SessionState::new_for_test()),
+        )
+        .expect("the replacement should still own the map entry");
+    assert_eq!(displaced.id(), replacement.id());
+    drop(displaced);
+    drop(replacement);
+    drop(predecessor);
+
+    replacement_client.telepathy.shutdown().await;
+
+    // Then: restore cannot run, so teardown must release both session tasks and the connection.
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while replacement_weak.upgrade().is_some() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the aborted replacement session should finish");
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while predecessor_weak.upgrade().is_some() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the deferred predecessor should be torn down rather than orphaned");
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if !client_b
+                .telepathy
+                .inner
+                .session_states
+                .read()
+                .await
+                .contains_key(&peer_a)
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the predecessor connection should close on the remote client");
+
+    client_a.telepathy.end_call().await;
+    client_b.telepathy.end_call().await;
+    wait_for_slot_idle(&client_a, &peer_a_str).await;
+    wait_for_slot_idle(&client_b, &peer_b_str).await;
+    client_a.telepathy.shutdown().await;
+    client_b.telepathy.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn reciprocal_room_joins_use_one_canonical_session_without_churn() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+    let codec_config = CodecConfig::new(true, true, 5.0);
+    let (key_a, key_b) = loop {
+        let key_a = SecretKey::generate();
+        let key_b = SecretKey::generate();
+        if key_a.public() < key_b.public() {
+            break (key_a, key_b);
+        }
+    };
+    let contact_a = Contact::new("canonical-room-a".to_string(), key_a.public().to_string())
+        .expect("contact a invalid");
+    let contact_b = Contact::new("canonical-room-b".to_string(), key_b.public().to_string())
+        .expect("contact b invalid");
+    let peer_a = contact_a.get_peer_id();
+    let peer_b = contact_b.get_peer_id();
+    let peer_a_str = peer_a.to_string();
+    let peer_b_str = peer_b.to_string();
+    let members = sorted_room_members(&contact_a, &contact_b);
+    let call_states_a = Arc::new(Mutex::new(Vec::new()));
+    let call_states_b = Arc::new(Mutex::new(Vec::new()));
+    let client_a = build_client(
+        relay_map,
+        key_a,
+        vec![],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_a.clone(),
+    )
+    .await;
+    let client_b = build_client(
+        relay_map,
+        key_b,
+        vec![],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_b.clone(),
+    )
+    .await;
+
+    let (join_a, join_b) = tokio::join!(
+        client_a.telepathy.join_room(members.clone()),
+        client_b.telepathy.join_room(members),
+    );
+    join_a.expect("client a should join room");
+    join_b.expect("client b should join room");
+
+    wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
+    wait_for_room_join_count(&call_states_a, &peer_b_str, 1).await;
+    wait_for_room_join_count(&call_states_b, &peer_a_str, 1).await;
+    wait_for_no_extra_room_leave(&call_states_a, &peer_b_str, 0, Duration::from_secs(1)).await;
+    wait_for_no_extra_room_leave(&call_states_b, &peer_a_str, 0, Duration::from_secs(1)).await;
+    assert_eq!(
+        room_join_count(&call_state_snapshot(&call_states_a), &peer_b_str),
+        1
+    );
+    assert_eq!(
+        room_join_count(&call_state_snapshot(&call_states_b), &peer_a_str),
+        1
+    );
+
+    client_a.telepathy.end_call().await;
+    client_b.telepathy.end_call().await;
+    wait_for_slot_idle(&client_a, &peer_a_str).await;
+    wait_for_slot_idle(&client_b, &peer_b_str).await;
+    client_a.telepathy.shutdown().await;
+    client_b.telepathy.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn room_reconciles_a_missing_session_without_another_join() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+    let codec_config = CodecConfig::new(true, true, 5.0);
+    let (key_a, key_b) = loop {
+        let key_a = SecretKey::generate();
+        let key_b = SecretKey::generate();
+        if key_a.public() < key_b.public() {
+            break (key_a, key_b);
+        }
+    };
+    let contact_a = Contact::new("retry-room-a".to_string(), key_a.public().to_string())
+        .expect("contact a invalid");
+    let contact_b = Contact::new("retry-room-b".to_string(), key_b.public().to_string())
+        .expect("contact b invalid");
+    let peer_a = contact_a.get_peer_id();
+    let peer_b = contact_b.get_peer_id();
+    let peer_a_str = peer_a.to_string();
+    let peer_b_str = peer_b.to_string();
+    let members = sorted_room_members(&contact_a, &contact_b);
+    let call_states_a = Arc::new(Mutex::new(Vec::new()));
+    let call_states_b = Arc::new(Mutex::new(Vec::new()));
+    let client_a = build_client(
+        relay_map,
+        key_a,
+        vec![],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_a.clone(),
+    )
+    .await;
+    let client_b = build_client(
+        relay_map,
+        key_b,
+        vec![],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_b.clone(),
+    )
+    .await;
+
+    let (join_a, join_b) = tokio::join!(
+        client_a.telepathy.join_room(members.clone()),
+        client_b.telepathy.join_room(members),
+    );
+    join_a.expect("client a should join room");
+    join_b.expect("client b should join room");
+    wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
+    wait_for_room_join_count(&call_states_a, &peer_b_str, 1).await;
+    wait_for_room_join_count(&call_states_b, &peer_a_str, 1).await;
+
+    client_a.telepathy.stop_session(&contact_b).await;
+
+    wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
+    wait_for_room_join_count(&call_states_a, &peer_b_str, 2).await;
+    wait_for_room_join_count(&call_states_b, &peer_a_str, 2).await;
+
+    client_a.telepathy.end_call().await;
+    client_b.telepathy.end_call().await;
+    wait_for_slot_idle(&client_a, &peer_a_str).await;
+    wait_for_slot_idle(&client_b, &peer_b_str).await;
+    client_a.telepathy.shutdown().await;
+    client_b.telepathy.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn room_teardown_cancels_a_pending_canonical_reconnect() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+    let codec_config = CodecConfig::new(true, true, 5.0);
+    let (key_a, key_b) = loop {
+        let key_a = SecretKey::generate();
+        let key_b = SecretKey::generate();
+        if key_a.public() < key_b.public() {
+            break (key_a, key_b);
+        }
+    };
+    let contact_a = Contact::new("teardown-room-a".to_string(), key_a.public().to_string())
+        .expect("contact a invalid");
+    let contact_b = Contact::new("teardown-room-b".to_string(), key_b.public().to_string())
+        .expect("contact b invalid");
+    let peer_a = contact_a.get_peer_id();
+    let peer_b = contact_b.get_peer_id();
+    let peer_a_str = peer_a.to_string();
+    let peer_b_str = peer_b.to_string();
+    let members = sorted_room_members(&contact_a, &contact_b);
+    let client_a = build_client(
+        relay_map,
+        key_a,
+        vec![],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        Arc::new(Mutex::new(Vec::new())),
+    )
+    .await;
+
+    client_a
+        .telepathy
+        .join_room(members.clone())
+        .await
+        .expect("client a should join the room before peer b starts");
+    // Wait until A's first canonical dial to B has been attempted and failed.
+    // This is the deterministic precondition: end_call must arrive while a
+    // reconnect dial for B is pending in the scheduler.
+    client_a
+        .session_status_probe
+        .wait_for(peer_b.as_bytes(), SessionStatus::Inactive)
+        .await;
+    client_a.telepathy.end_call().await;
+    wait_for_slot_idle(&client_a, &peer_a_str).await;
+
+    let client_b = build_client(
+        relay_map,
+        key_b,
+        vec![],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        Arc::new(Mutex::new(Vec::new())),
+    )
+    .await;
+    client_b
+        .telepathy
+        .join_room(members)
+        .await
+        .expect("client b should join after client a leaves");
+
+    // A regressed late reconcile tick cannot slip past a 2.5s negative window
+    // (ROOM_DIAL_RECONCILE_INTERVAL is 1s, so this spans more than two ticks).
+    let stability_deadline = tokio::time::Instant::now() + Duration::from_millis(2500);
+    loop {
+        assert!(
+            client_a
+                .telepathy
+                .inner
+                .session_states
+                .read()
+                .await
+                .get(&peer_b)
+                .is_none(),
+            "client a must not reconnect after room teardown"
+        );
+        assert!(
+            client_b
+                .telepathy
+                .inner
+                .session_states
+                .read()
+                .await
+                .get(&peer_a)
+                .is_none(),
+            "client b must not receive a late room reconnection"
+        );
+        if tokio::time::Instant::now() >= stability_deadline {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    client_b.telepathy.end_call().await;
+    wait_for_slot_idle(&client_b, &peer_b_str).await;
+    client_a.telepathy.shutdown().await;
+    client_b.telepathy.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn direct_start_terminalizes_while_room_dial_is_in_flight() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+    let codec_config = CodecConfig::new(true, true, 5.0);
+    let (key_a, key_b) = loop {
+        let key_a = SecretKey::generate();
+        let key_b = SecretKey::generate();
+        if key_a.public() < key_b.public() {
+            break (key_a, key_b);
+        }
+    };
+    let contact_a = Contact::new("coalesced-room-a".to_string(), key_a.public().to_string())
+        .expect("contact a invalid");
+    let contact_b = Contact::new("coalesced-room-b".to_string(), key_b.public().to_string())
+        .expect("contact b invalid");
+    let peer_a = contact_a.get_peer_id().to_string();
+    let peer_b = contact_b.get_peer_id();
+    let members = sorted_room_members(&contact_a, &contact_b);
+    let client_a = build_client_with_options_and_initial_contacts(
+        relay_map,
+        key_a,
+        vec![contact_b.clone()],
+        vec![],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        Arc::new(Mutex::new(Vec::new())),
+        None,
+        ManagerLifecycle::Single,
+    )
+    .await;
+
+    let client_b = build_client(
+        relay_map,
+        key_b,
+        vec![contact_a.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        Arc::new(Mutex::new(Vec::new())),
+    )
+    .await;
+
+    client_b.telepathy.start_session(&contact_a).await;
+    wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
+    client_b.telepathy.shutdown().await;
+    client_a
+        .session_status_probe
+        .wait_for(peer_b.as_bytes(), SessionStatus::Inactive)
+        .await;
+    client_a.session_status_probe.park_connecting();
+    client_a
+        .telepathy
+        .join_room(members)
+        .await
+        .expect("client a should join while client b is offline");
+    client_a
+        .session_status_probe
+        .wait_for(peer_b.as_bytes(), SessionStatus::Connecting)
+        .await;
+
+    client_a.telepathy.start_session(&contact_b).await;
+    let direct_availability = tokio::time::timeout(
+        Duration::from_secs(5),
+        client_a.telepathy.start_call(&contact_b),
+    )
+    .await;
+
+    client_a.session_status_probe.release_connecting();
+    client_a.telepathy.end_call().await;
+    wait_for_slot_idle(&client_a, &peer_a).await;
+    client_a.telepathy.shutdown().await;
+
+    let direct_result = direct_availability
+        .expect("room-coalesced direct availability must terminalize through session_manager");
+    assert!(
+        direct_result.is_err(),
+        "an offline room peer must not produce a callable session"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn room_retries_when_the_canonical_peer_starts_late() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+    let codec_config = CodecConfig::new(true, true, 5.0);
+    let (key_a, key_b) = loop {
+        let key_a = SecretKey::generate();
+        let key_b = SecretKey::generate();
+        if key_a.public() < key_b.public() {
+            break (key_a, key_b);
+        }
+    };
+    let contact_a = Contact::new("late-room-a".to_string(), key_a.public().to_string())
+        .expect("contact a invalid");
+    let contact_b = Contact::new("late-room-b".to_string(), key_b.public().to_string())
+        .expect("contact b invalid");
+    let peer_a = contact_a.get_peer_id();
+    let peer_b = contact_b.get_peer_id();
+    let peer_a_str = peer_a.to_string();
+    let peer_b_str = peer_b.to_string();
+    let members = sorted_room_members(&contact_a, &contact_b);
+    let call_states_a = Arc::new(Mutex::new(Vec::new()));
+    let call_states_b = Arc::new(Mutex::new(Vec::new()));
+    let client_a = build_client(
+        relay_map,
+        key_a,
+        vec![],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_a.clone(),
+    )
+    .await;
+
+    client_a
+        .telepathy
+        .join_room(members.clone())
+        .await
+        .expect("client a should join before peer b starts");
+    sleep(Duration::from_millis(300)).await;
+
+    let client_b = build_client(
+        relay_map,
+        key_b,
+        vec![],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_b.clone(),
+    )
+    .await;
+    client_b
+        .telepathy
+        .join_room(members)
+        .await
+        .expect("client b should join once it starts");
+
+    wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
+    wait_for_room_join_count(&call_states_a, &peer_b_str, 1).await;
+    wait_for_room_join_count(&call_states_b, &peer_a_str, 1).await;
+
+    client_a.telepathy.end_call().await;
+    client_b.telepathy.end_call().await;
+    wait_for_slot_idle(&client_a, &peer_a_str).await;
+    wait_for_slot_idle(&client_b, &peer_b_str).await;
+    client_a.telepathy.shutdown().await;
+    client_b.telepathy.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn room_goodbye_rearms_a_persistent_session_for_peer_rejoin() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+    let codec_config = CodecConfig::new(true, true, 5.0);
+    let (key_a, key_b) = loop {
+        let key_a = SecretKey::generate();
+        let key_b = SecretKey::generate();
+        if key_a.public() < key_b.public() {
+            break (key_a, key_b);
+        }
+    };
+    let contact_a = Contact::new("goodbye-room-a".to_string(), key_a.public().to_string())
+        .expect("contact a invalid");
+    let contact_b = Contact::new("goodbye-room-b".to_string(), key_b.public().to_string())
+        .expect("contact b invalid");
+    let peer_a = contact_a.get_peer_id();
+    let peer_b = contact_b.get_peer_id();
+    let peer_a_str = peer_a.to_string();
+    let peer_b_str = peer_b.to_string();
+    let members = sorted_room_members(&contact_a, &contact_b);
+    let call_states_a = Arc::new(Mutex::new(Vec::new()));
+    let call_states_b = Arc::new(Mutex::new(Vec::new()));
+    let client_a = build_client(
+        relay_map,
+        key_a,
+        vec![contact_b.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_a.clone(),
+    )
+    .await;
+    let client_b = build_client(
+        relay_map,
+        key_b,
+        vec![contact_a.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_b.clone(),
+    )
+    .await;
+
+    client_a.telepathy.start_session(&contact_b).await;
+    client_b.telepathy.start_session(&contact_a).await;
+    wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
+    let (join_a, join_b) = tokio::join!(
+        client_a.telepathy.join_room(members.clone()),
+        client_b.telepathy.join_room(members.clone()),
+    );
+    join_a.expect("client a should join room");
+    join_b.expect("client b should join room");
+    wait_for_room_join_count(&call_states_a, &peer_b_str, 1).await;
+    wait_for_room_join_count(&call_states_b, &peer_a_str, 1).await;
+    wait_for_no_extra_room_leave(&call_states_a, &peer_b_str, 0, Duration::from_millis(500)).await;
+    wait_for_no_extra_room_leave(&call_states_b, &peer_a_str, 0, Duration::from_millis(500)).await;
+    assert_eq!(
+        room_join_count(&call_state_snapshot(&call_states_a), &peer_b_str),
+        1
+    );
+    assert_eq!(
+        room_join_count(&call_state_snapshot(&call_states_b), &peer_a_str),
+        1
+    );
+
+    client_b.telepathy.end_call().await;
+    wait_for_slot_idle(&client_b, &peer_b_str).await;
+    wait_for_room_leave_count(&call_states_a, &peer_b_str, 1).await;
+    assert!(
+        client_a
+            .telepathy
+            .inner
+            .session_states
+            .read()
+            .await
+            .contains_key(&peer_b),
+        "client a should retain the direct session after room goodbye"
+    );
+
+    client_b
+        .telepathy
+        .join_room(members)
+        .await
+        .expect("client b should rejoin the room");
+    wait_for_room_join_count(&call_states_a, &peer_b_str, 2).await;
+    wait_for_room_join_count(&call_states_b, &peer_a_str, 2).await;
+    wait_for_no_extra_room_leave(&call_states_a, &peer_b_str, 1, Duration::from_millis(500)).await;
+    wait_for_no_extra_room_leave(&call_states_b, &peer_a_str, 0, Duration::from_millis(500)).await;
+    assert_eq!(
+        room_join_count(&call_state_snapshot(&call_states_a), &peer_b_str),
+        2
+    );
+    assert_eq!(
+        room_join_count(&call_state_snapshot(&call_states_b), &peer_a_str),
+        2
+    );
+
+    client_a.telepathy.end_call().await;
+    client_b.telepathy.end_call().await;
+    wait_for_slot_idle(&client_a, &peer_a_str).await;
+    wait_for_slot_idle(&client_b, &peer_b_str).await;
+    client_a.telepathy.shutdown().await;
+    client_b.telepathy.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn room_reconcile_discards_stale_generation_after_teardown() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+    let codec_config = CodecConfig::new(true, true, 5.0);
+    let (key_a, key_b) = loop {
+        let key_a = SecretKey::generate();
+        let key_b = SecretKey::generate();
+        if key_a.public() < key_b.public() {
+            break (key_a, key_b);
+        }
+    };
+    let contact_a = Contact::new(
+        "reconcile-teardown-a".to_string(),
+        key_a.public().to_string(),
+    )
+    .expect("contact a invalid");
+    let contact_b = Contact::new(
+        "reconcile-teardown-b".to_string(),
+        key_b.public().to_string(),
+    )
+    .expect("contact b invalid");
+    let peer_a = contact_a.get_peer_id();
+    let peer_b = contact_b.get_peer_id();
+    let peer_a_str = peer_a.to_string();
+    let peer_b_str = peer_b.to_string();
+    let members = sorted_room_members(&contact_a, &contact_b);
+    let call_states_a = Arc::new(Mutex::new(Vec::new()));
+    let call_states_b = Arc::new(Mutex::new(Vec::new()));
+    let accept_probe_b = PendingAcceptProbe::default();
+    let client_a = build_client(
+        relay_map,
+        key_a,
+        vec![contact_b.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_a.clone(),
+    )
+    .await;
+    let client_b = build_client_with_accept_probe(
+        relay_map,
+        key_b,
+        vec![contact_a.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_b.clone(),
+        accept_probe_b.clone(),
+    )
+    .await;
+
+    client_a.telepathy.start_session(&contact_b).await;
+    client_b.telepathy.start_session(&contact_a).await;
+    wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
+    let (join_a, join_b) = tokio::join!(
+        client_a.telepathy.join_room(members.clone()),
+        client_b.telepathy.join_room(members.clone()),
+    );
+    join_a.expect("client a should join the initial room");
+    join_b.expect("client b should join the initial room");
+    wait_for_room_join_count(&call_states_a, &peer_b_str, 1).await;
+    wait_for_room_join_count(&call_states_b, &peer_a_str, 1).await;
+
+    let session_states = client_a.telepathy.inner.session_states.clone();
+    let session_guard = session_states.write().await;
+    assert!(
+        session_guard.contains_key(&peer_b),
+        "client a should retain its session for client b"
+    );
+
+    client_b.telepathy.end_call().await;
+    wait_for_slot_idle(&client_b, &peer_b_str).await;
+    wait_for_room_leave_count(&call_states_a, &peer_b_str, 1).await;
+
+    // `room_handshake` requests reconciliation before delivering RoomLeave. The
+    // held writer therefore parks the manager at reconcile's session-state read;
+    // yielding covers the remaining scheduler handoff because the harness has no
+    // probe between the preceding room-state snapshot and that read acquisition.
+    tokio::task::yield_now().await;
+    client_a.telepathy.end_call().await;
+    wait_for_slot_idle(&client_a, &peer_a_str).await;
+    assert!(
+        client_a
+            .telepathy
+            .inner
+            .current_room_generation()
+            .await
+            .is_none(),
+        "client a room must be torn down while reconcile is gated"
+    );
+
+    drop(session_guard);
+    tokio::task::yield_now().await;
+    tokio::task::yield_now().await;
+
+    let (rejoin_a, rejoin_b) = tokio::join!(
+        client_a.telepathy.join_room(members.clone()),
+        client_b.telepathy.join_room(members),
+    );
+    rejoin_a.expect("client a should immediately rejoin after the gated reconcile");
+    rejoin_b.expect("client b should immediately rejoin after the gated reconcile");
+    wait_for_room_join_count(&call_states_a, &peer_b_str, 2).await;
+    wait_for_room_join_count(&call_states_b, &peer_a_str, 2).await;
+    wait_for_slot_room_call(&client_a, "client a after gated reconcile rejoin").await;
+    wait_for_slot_room_call(&client_b, "client b after gated reconcile rejoin").await;
+
+    assert_eq!(
+        accept_probe_b.opened.load(Relaxed),
+        0,
+        "client b must not receive a ghost direct-call prompt"
+    );
+    for (label, states) in [
+        ("client a", call_state_snapshot(&call_states_a)),
+        ("client b", call_state_snapshot(&call_states_b)),
+    ] {
+        assert!(
+            !states
+                .iter()
+                .any(|state| matches!(state, CallState::CallEnded(_, _))),
+            "{label} must not observe a terminal direct-call state; states={states:?}"
+        );
+    }
+
+    client_a.telepathy.end_call().await;
+    client_b.telepathy.end_call().await;
+    wait_for_slot_idle(&client_a, &peer_a_str).await;
+    wait_for_slot_idle(&client_b, &peer_b_str).await;
+    client_a.telepathy.shutdown().await;
+    client_b.telepathy.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn six_peer_room_builds_the_canonical_mesh() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+    let codec_config = CodecConfig::new(true, true, 5.0);
+    let mut identities: Vec<_> = (0..6).map(|_| SecretKey::generate()).collect();
+    identities.sort_by_key(|identity| identity.public());
+    let contacts: Vec<_> = identities
+        .iter()
+        .enumerate()
+        .map(|(index, identity)| {
+            Contact::new(
+                format!("six-peer-room-{index}"),
+                identity.public().to_string(),
+            )
+            .expect("contact invalid")
+        })
+        .collect();
+    let peers: Vec<_> = contacts.iter().map(Contact::get_peer_id).collect();
+    let peer_strings: Vec<_> = peers.iter().map(ToString::to_string).collect();
+    let members = peer_strings.clone();
+    let call_states: Vec<_> = (0..contacts.len())
+        .map(|_| Arc::new(Mutex::new(Vec::new())))
+        .collect();
+    let mut clients = Vec::with_capacity(contacts.len());
+
+    for (identity, states) in identities.into_iter().zip(call_states.iter().cloned()) {
+        clients.push(
+            build_client(
+                relay_map,
+                identity,
+                vec![],
+                &codec_config,
+                MockAudioHost::new(
+                    MockAudioInput::default(),
+                    DEFAULT_SAMPLE_RATE,
+                    MockAudioOutput,
+                    DEFAULT_SAMPLE_RATE,
+                ),
+                states,
+            )
+            .await,
+        );
+    }
+
+    for client in &clients {
+        client
+            .telepathy
+            .join_room(members.clone())
+            .await
+            .expect("client should join six-peer room");
+    }
+
+    for (index, client) in clients.iter().enumerate() {
+        for (other_index, peer) in peer_strings.iter().enumerate() {
+            if index != other_index {
+                wait_for_room_join_count(&call_states[index], peer, 1).await;
+            }
+        }
+        assert_eq!(
+            client.telepathy.inner.session_states.read().await.len(),
+            contacts.len() - 1,
+            "each six-peer member should retain every other canonical session"
+        );
+    }
+    wait_for_no_extra_room_leave(
+        &call_states[0],
+        &peer_strings[1],
+        0,
+        Duration::from_millis(500),
+    )
+    .await;
+    sleep(Duration::from_millis(500)).await;
+    for (index, states) in call_states.iter().enumerate() {
+        let snapshot = call_state_snapshot(states);
+        for (other_index, peer) in peer_strings.iter().enumerate() {
+            if index != other_index {
+                assert_eq!(room_join_count(&snapshot, peer), 1);
+                assert_eq!(room_leave_count(&snapshot, peer), 0);
+            }
+        }
+    }
+
+    for client in &clients {
+        client.telepathy.end_call().await;
+    }
+    for (client, peer) in clients.iter().zip(peer_strings.iter()) {
+        wait_for_slot_idle(client, peer).await;
+        client.telepathy.shutdown().await;
+    }
 }

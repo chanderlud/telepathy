@@ -797,6 +797,7 @@ async def test_room_three_all_contacts_full_mesh(
 
 
 @pytest.mark.asyncio
+@pytest.mark.xdist_group(name="room_twenty_partial_contacts_full_mesh")
 @pytest.mark.parametrize("profile", [NETWORK_PROFILES[0]], ids=lambda profile: profile.name)
 async def test_room_twenty_partial_contacts_full_mesh(
     room_cli_twenty: RoomCliGroup,

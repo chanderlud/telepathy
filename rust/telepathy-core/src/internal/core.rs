@@ -14,11 +14,11 @@ use crate::internal::error::{
 use crate::internal::helpers::OutputHelper;
 use crate::internal::helpers::{RoomTaskOutcome, join_room_task_bounded};
 use crate::internal::messages::{
-    AudioHeader, GoodbyeReason, ProtocolMessage, RoomControl, RoomMessage,
+    AudioHeader, GoodbyeReason, ProtocolMessage, RoomControl, RoomJoinAdmission, RoomMessage,
 };
 use crate::internal::state::{
     CallSlot, CallSlotAcquireResult, CallSlotSnapshot, CallSlotState, CoreState, RuntimeSnapshot,
-    StatisticsCollectorState,
+    StatisticsCollectorState, room_hash_for_peers,
 };
 use crate::internal::utils::{JoinHandle, spawn_task};
 #[cfg(target_os = "ios")]
@@ -39,10 +39,11 @@ use iroh::endpoint::{
     ConnectError, ConnectingError, Connection, ConnectionError, RecvStream, SendStream, VarInt,
 };
 use iroh::{Endpoint, PublicKey};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::marker::PhantomData;
-use std::sync::Arc;
+use std::ops::{Deref, DerefMut};
 use std::sync::atomic::Ordering::Relaxed;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 #[cfg(target_family = "wasm")]
 use telepathy_audio::WebAudioWrapper;
@@ -67,6 +68,14 @@ use wasmtimer::tokio::{Interval, interval, sleep_until, timeout};
 
 const MANAGER_RETRY_BASE_MS: u64 = 500;
 const MANAGER_RETRY_MAX_MS: u64 = 30_000;
+const ROOM_DIAL_CONCURRENCY: usize = 4;
+const ROOM_DIAL_RECONCILE_INTERVAL: Duration = Duration::from_secs(1);
+const ROOM_DIAL_BACKOFF_BASE_MS: u64 = 100;
+const ROOM_DIAL_BACKOFF_MAX_MS: u64 = 30_000;
+/// failed attempts before a room dial is exhausted; the backoff curve reaches
+/// the 30s cap at retry 10, so exhaustion follows ~80s of active retrying
+const ROOM_DIAL_MAX_RETRIES: u32 = 10;
+const ROOM_DIAL_EXISTING_SESSION_BACKOFF: Duration = Duration::from_secs(5);
 
 fn update_video_negotiation_deadline(
     deadline: &mut Option<Instant>,
@@ -106,16 +115,24 @@ where
     /// Tracks state for the current room
     pub(crate) room_state: Arc<RwLock<Option<RoomState>>>,
 
+    room_reconcile: Arc<Notify>,
+
+    pending_room_admission: PendingRoomAdmissionRegistry,
+
+    pending_session_candidates: PendingSessionCandidateRegistry,
+
     /// Keeps track of and controls the sessions
     pub session_states: Arc<RwLock<HashMap<PublicKey, Arc<SessionState>>>>,
 
     /// Signals the session manager to start a new session
-    pub start_session: Option<Sender<PublicKey>>,
+    pub start_session: Option<Sender<(PublicKey, u64)>>,
 
     pub(crate) cancel_outbound_connections: Arc<Notify>,
 
     /// Monotonic outbound dial generation per peer; stale attempts must not emit UI status.
     pub(crate) outbound_attempts: Arc<RwLock<HashMap<PublicKey, u64>>>,
+
+    session_availability: Arc<SessionAvailability>,
 
     /// A reference to the object that controls the call overlay
     pub(crate) overlay: Overlay,
@@ -140,6 +157,101 @@ where
     I: Send + Sync + 'static,
     O: Send + Sync + 'static,
 {
+    pub(crate) fn install_pending_room_admission(
+        &self,
+        owner: CallSlotSnapshot,
+        members: &[PublicKey],
+    ) -> PendingRoomAdmissionLease {
+        self.pending_room_admission.install(owner, members)
+    }
+
+    pub(crate) fn request_room_reconcile(&self) {
+        self.room_reconcile.notify_one();
+    }
+
+    async fn is_admitted_room_peer(&self, peer: &PublicKey) -> Result<bool> {
+        let owner = self.core_state.call_slot.snapshot()?;
+        if self.pending_room_admission.allows(peer, owner) {
+            return Ok(true);
+        }
+        Ok(self.is_in_room(peer).await)
+    }
+
+    fn pending_room_negotiation_for_peer(
+        &self,
+        peer: &PublicKey,
+    ) -> Result<Option<PendingRoomNegotiationSnapshot>> {
+        let owner = self.core_state.call_slot.snapshot()?;
+        Ok(self.pending_room_admission.negotiation_for(peer, owner))
+    }
+
+    async fn active_room_handshake_for_peer(
+        &self,
+        peer: &PublicKey,
+        expected_room_hash: u64,
+    ) -> Option<(Sender<RoomMessage>, CancellationToken)> {
+        self.room_handshake_snapshot_for_peer(peer, expected_room_hash)
+            .await
+    }
+
+    async fn active_room_generation_for_peer(
+        &self,
+        peer: &PublicKey,
+        expected_room_hash: u64,
+    ) -> Option<u64> {
+        self.room_state
+            .read()
+            .await
+            .as_ref()
+            .filter(|state| {
+                !state.cancel.is_cancelled()
+                    && state.peers.contains(peer)
+                    && state.room_hash() == expected_room_hash
+            })
+            .map(|state| state.generation)
+    }
+
+    async fn is_current_room_dial(&self, peer: &PublicKey, room_generation: u64) -> bool {
+        self.room_state.read().await.as_ref().is_some_and(|state| {
+            !state.cancel.is_cancelled()
+                && state.generation == room_generation
+                && state.peers.contains(peer)
+        })
+    }
+
+    async fn await_room_state_for_peer(
+        &self,
+        stop_session: &CancellationToken,
+        peer: &PublicKey,
+        expected_room_hash: u64,
+    ) -> Result<Option<(Sender<RoomMessage>, CancellationToken)>> {
+        loop {
+            if let Some(active) = self
+                .active_room_handshake_for_peer(peer, expected_room_hash)
+                .await
+            {
+                return Ok(Some(active));
+            }
+            if stop_session.is_cancelled() {
+                return Ok(None);
+            }
+
+            let Some(pending) = self.pending_room_negotiation_for_peer(peer)? else {
+                return Ok(self
+                    .active_room_handshake_for_peer(peer, expected_room_hash)
+                    .await);
+            };
+            if pending.expected_room_hash != expected_room_hash {
+                return Ok(None);
+            }
+            select! {
+                biased;
+                _ = stop_session.cancelled() => return Ok(None),
+                _ = pending.completion.cancelled() => {}
+            }
+        }
+    }
+
     pub fn new(
         host: H,
         network_config: &NetworkConfig,
@@ -152,10 +264,14 @@ where
             host,
             core_state: CoreState::new(network_config, screenshare_config, codec_config),
             room_state: Default::default(),
+            room_reconcile: Default::default(),
+            pending_room_admission: Default::default(),
+            pending_session_candidates: Default::default(),
             session_states: Default::default(),
             start_session: None,
             cancel_outbound_connections: Default::default(),
             outbound_attempts: Default::default(),
+            session_availability: Default::default(),
             overlay: overlay.clone(),
             #[cfg(target_family = "wasm")]
             web_input: Default::default(),
@@ -254,7 +370,7 @@ where
     )]
     async fn session_manager(
         &self,
-        start: &mut Receiver<PublicKey>,
+        start: &mut Receiver<(PublicKey, u64)>,
         runtime: RuntimeSnapshot,
     ) -> Result<ManagerIterationOutcome> {
         let setup_started = Instant::now();
@@ -288,6 +404,11 @@ where
 
         // handles to threads spawned by the session manager
         let mut handles: Vec<JoinHandle<()>> = Vec::new();
+        let (dial_events, mut dial_event_receiver) = unbounded_channel();
+        let mut direct_dials = HashSet::new();
+        let mut room_dials = RoomDialScheduler::default();
+        let mut room_reconcile_timer = interval(ROOM_DIAL_RECONCILE_INTERVAL);
+        room_reconcile_timer.tick().await;
         // preload public identity
         let public_identity = self.peer_id().await;
         let mut pending_contacts: VecDeque<_> =
@@ -301,11 +422,16 @@ where
                 }
                 if peer_id != public_identity
                     && self.session_states.read().await.get(&peer_id).is_none()
+                    && !room_dials.is_in_flight(peer_id)
+                    && direct_dials.insert(peer_id)
                 {
+                    let attempt_id = self.begin_direct_attempt(peer_id);
                     let self_clone = self.clone();
                     let endpoint_clone = endpoint.clone();
+                    let events = dial_events.clone();
                     handles.push(spawn_task(async move {
                         self_clone.open_session(peer_id, endpoint_clone).await;
+                        let _ = events.send(ManagerDialEvent::DirectCompleted(peer_id, attempt_id));
                     }));
                 }
                 continue;
@@ -360,16 +486,17 @@ where
                             let peer_id = connection.remote_id();
                             let contact = self.callbacks.get_contact(peer_id.to_vec()).await;
 
-                            if contact.is_none() && !self.is_in_room(&peer_id).await {
+                            if contact.is_none() && !self.is_admitted_room_peer(&peer_id).await? {
                                 warn!(event = "unknown_peer_connected", peer.id = %peer_id);
                                 connection.close(VarInt::from_u32(1), b"unknown peer");
                                 continue;
                             }
 
+                            let candidate_attempt = self.handoff_incoming_candidate(peer_id);
                             let self_clone = self.clone();
                             handles.push(spawn_task(async move {
                                 if let Err(error) = self_clone
-                                    .initialize_session(connection.remote_id(), connection, None)
+                                    .initialize_session(peer_id, connection, None, candidate_attempt)
                                     .await
                                 {
                                     error!(event = "session_init_failed", error = %error);
@@ -382,21 +509,77 @@ where
                         }
                     }
                 }
+                Some(event) = dial_event_receiver.recv() => {
+                    match event {
+                        ManagerDialEvent::Room(event) => room_dials.complete(event, Instant::now()),
+                        ManagerDialEvent::DirectCompleted(peer, attempt_id) => {
+                            direct_dials.remove(&peer);
+                            self.complete_direct_attempt(peer, attempt_id);
+                        }
+                    }
+                    self
+                        .reconcile_room_dials(
+                            &public_identity,
+                            &endpoint,
+                            &dial_events,
+                            &direct_dials,
+                            &mut room_dials,
+                            &mut handles,
+                        )
+                        .await;
+                }
+                _ = self.room_reconcile.notified() => {
+                    self
+                        .reconcile_room_dials(
+                            &public_identity,
+                            &endpoint,
+                            &dial_events,
+                            &direct_dials,
+                            &mut room_dials,
+                            &mut handles,
+                        )
+                        .await;
+                }
+                _ = room_reconcile_timer.tick() => {
+                    self
+                        .reconcile_room_dials(
+                            &public_identity,
+                            &endpoint,
+                            &dial_events,
+                            &direct_dials,
+                            &mut room_dials,
+                            &mut handles,
+                        )
+                        .await;
+                }
                 // start a new session
-                Some(peer_id) = start.recv() => {
+                Some((peer_id, attempt_id)) = start.recv() => {
+                    if !self.is_current_direct_attempt(peer_id, attempt_id) {
+                        debug!(event = "dial_ignored_stale_attempt", peer.id = %peer_id, attempt_id);
+                        continue;
+                    }
                     if peer_id == public_identity {
                         // prevents dialing yourself
                         debug!(event = "dial_ignored_self", peer.id = %peer_id);
+                        self.complete_direct_attempt(peer_id, attempt_id);
                     } else if self.session_states.read().await.get(&peer_id).is_some() {
                         warn!(event = "ignored_redundant_outgoing", peer.id = %peer_id);
+                        self.complete_direct_attempt(peer_id, attempt_id);
+                    } else if room_dials.is_in_flight(peer_id) {
+                        debug!(event = "dial_coalesced_room_in_flight", peer.id = %peer_id);
+                        self.complete_direct_attempt(peer_id, attempt_id);
+                    } else if !direct_dials.insert(peer_id) {
+                        debug!(event = "dial_coalesced_in_flight", peer.id = %peer_id);
                     } else {
                         debug!(event = "dial_initial", peer.id = %peer_id);
                         let self_clone = self.clone();
                         let endpoint_clone = endpoint.clone();
+                        let events = dial_events.clone();
                         handles.push(spawn_task(async move {
                             self_clone
                                 .open_session(peer_id, endpoint_clone)
                                 .await;
+                            let _ = events.send(ManagerDialEvent::DirectCompleted(peer_id, attempt_id));
                         }));
                     }
                 }
@@ -408,6 +591,8 @@ where
         };
 
         debug!(event = "manager_teardown_start");
+        room_dials.cancel_all();
+        self.pending_room_admission.cancel_current();
         self.callbacks.manager_state(ManagerState::Stopped).await;
         self.cancel_outbound_connections.notify_waiters();
         self.outbound_attempts.write().await.clear();
@@ -426,6 +611,125 @@ where
         endpoint.close().await;
         debug!(event = "endpoint_closed");
         Ok(outcome)
+    }
+
+    async fn reconcile_room_dials(
+        &self,
+        local_peer: &PublicKey,
+        endpoint: &Endpoint,
+        events: &UnboundedSender<ManagerDialEvent>,
+        direct_dials: &HashSet<PublicKey>,
+        room_dials: &mut RoomDialScheduler,
+        handles: &mut Vec<JoinHandle<()>>,
+    ) {
+        let desired = self.room_state.read().await.as_ref().and_then(|state| {
+            (!state.cancel.is_cancelled()).then(|| {
+                (
+                    state.generation,
+                    state
+                        .peers
+                        .iter()
+                        .copied()
+                        .filter(|peer| peer != local_peer && local_peer < peer)
+                        .collect::<HashSet<_>>(),
+                )
+            })
+        });
+        let sessions: Vec<_> = self
+            .session_states
+            .read()
+            .await
+            .iter()
+            .map(|(peer, state)| (*peer, Arc::clone(state)))
+            .collect();
+        let active_sessions: HashSet<_> = sessions.iter().map(|(peer, _)| *peer).collect();
+        let admitted_sessions = if let Some((room_generation, peers)) = &desired {
+            let admitted: HashSet<_> = sessions
+                .iter()
+                .filter_map(|(peer, state)| {
+                    (peers.contains(peer) && state.is_admitted_to_room(*room_generation))
+                        .then_some(*peer)
+                })
+                .collect();
+            for (peer, state) in &sessions {
+                if peers.contains(peer)
+                    && !admitted.contains(peer)
+                    && room_dials.rearm(*peer, *room_generation, Instant::now())
+                {
+                    state.notify_room_reconcile(*room_generation);
+                }
+            }
+            admitted
+        } else {
+            HashSet::new()
+        };
+        room_dials.reconcile(
+            desired,
+            &admitted_sessions,
+            &active_sessions,
+            Instant::now(),
+        );
+
+        for launch in room_dials.take_ready(Instant::now(), direct_dials) {
+            let outbound_generation = self.begin_outbound_attempt(launch.peer).await;
+            let self_clone = self.clone();
+            let endpoint_clone = endpoint.clone();
+            let events = events.clone();
+            handles.push(spawn_task(async move {
+                self_clone
+                    .open_room_session(launch, outbound_generation, endpoint_clone, events)
+                    .await;
+            }));
+        }
+    }
+
+    async fn open_room_session(
+        &self,
+        launch: RoomDialLaunch,
+        outbound_generation: u64,
+        endpoint: Endpoint,
+        events: UnboundedSender<ManagerDialEvent>,
+    ) {
+        let peer = launch.peer;
+        self.emit_outbound_status(peer, outbound_generation, SessionStatus::Connecting)
+            .await;
+
+        select! {
+            _ = launch.cancel.cancelled() => {
+                debug!(event = "room_outbound_connection_canceled", peer.id = %peer);
+            }
+            _ = self.cancel_outbound_connections.notified() => {
+                debug!(event = "room_outbound_connection_manager_canceled", peer.id = %peer);
+            }
+            result = endpoint.connect(peer, ALPN) => {
+                match result {
+                    Ok(connection) => {
+                        info!(event = "room_connect_succeeded", peer.id = %peer);
+                        if launch.cancel.is_cancelled()
+                            || !self.is_current_room_dial(&peer, launch.room_generation).await
+                        {
+                            connection.close(VarInt::from_u32(0), b"room dial canceled");
+                        } else if let Err(error) = self
+                            .initialize_session(peer, connection, Some(outbound_generation), None)
+                            .await
+                        {
+                            error!(event = "room_session_init_failed", error = %error);
+                        }
+                    }
+                    Err(error) => {
+                        warn!(event = "room_connect_failed", peer.id = %peer, error = %error);
+                        self.emit_outbound_status(peer, outbound_generation, SessionStatus::Inactive)
+                            .await;
+                    }
+                }
+            }
+        }
+
+        let _ = events.send(ManagerDialEvent::Room(RoomDialEvent {
+            peer,
+            room_generation: launch.room_generation,
+            attempt_id: launch.attempt_id,
+        }));
     }
 
     /// Called by the dialer to open a connection and initialize a session
@@ -478,7 +782,7 @@ where
                 if let Some(connection) = result {
                     info!(event = "connect_succeeded", peer.id = %peer);
                     if let Err(error) = self
-                        .initialize_session(peer, connection, Some(generation))
+                        .initialize_session(peer, connection, Some(generation), None)
                         .await
                     {
                         error!(event = "session_init_failed", error = %error);
@@ -503,6 +807,7 @@ where
         peer: PublicKey,
         connection: Connection,
         outbound_generation: Option<u64>,
+        incoming_candidate: Option<IncomingCandidateLease>,
     ) -> Result<()> {
         let session_generation = match outbound_generation {
             Some(generation) => generation,
@@ -510,23 +815,45 @@ where
         };
 
         let contact_option = self.callbacks.get_contact(peer.to_vec()).await;
+        let contact = contact_option.unwrap_or_else(|| {
+            // there may be no contact for members of a group
+            debug!(event = "group_contact_created", peer.id = %peer);
+            Contact {
+                id: Uuid::new_v4().to_string(),
+                nickname: String::from("GroupContact"),
+                peer_id: peer,
+                output_volume: 0_f32,
+                is_room_only: true,
+            }
+        });
+
+        self.core_state.set_peer_output_volume(&contact)?;
+
         // sends messages to the session from elsewhere in the program
         let message_channel = channel::<ProtocolMessage>(8);
         // create the state and a clone of it for the session
         let state = Arc::new(SessionState::new(&message_channel.0));
         Span::current().record("session.id", state.id.to_string());
         let local_peer = self.peer_id().await;
+        let is_room = self.is_in_room(&peer).await;
         let keep_new_session =
             should_keep_new_session(&local_peer, &peer, connection.side().is_client());
         let mut states = self.session_states.write().await;
+        let mut deferred_candidate = None;
         let old_state_option = if let Some(old_state) = states.get(&peer).cloned() {
             if keep_new_session {
                 states.insert(peer, state.clone());
+                self.publish_session_locked(peer);
+            } else {
+                deferred_candidate = self
+                    .pending_session_candidates
+                    .try_install(peer, old_state.id);
             }
 
             Some(old_state)
         } else {
             states.insert(peer, state.clone());
+            self.publish_session_locked(peer);
             None
         };
         drop(states);
@@ -541,8 +868,53 @@ where
                     old_session.id = %old_state.id,
                     connection.side.client = connection.side().is_client()
                 );
-                old_state.teardown().await;
+                if is_room {
+                    state.defer_room_predecessor(old_state).await;
+                } else {
+                    old_state.teardown().await;
+                }
+            } else if let Some(candidate) = deferred_candidate {
+                drop(incoming_candidate);
+                warn!(
+                    event = "session_collision_deferred_candidate",
+                    peer.id = %peer,
+                    peer.local = %local_peer,
+                    session.id = %state.id,
+                    old_session.id = %old_state.id,
+                    connection.side.client = connection.side().is_client()
+                );
+
+                select! {
+                    biased;
+                    _ = candidate.cancelled() => {
+                        connection.close(VarInt::from_u32(0), b"session candidate canceled");
+                        return Ok(());
+                    }
+                    _ = connection.closed() => return Ok(()),
+                    _ = old_state.finished() => {}
+                }
+
+                let mut states = self.session_states.write().await;
+                if candidate.is_cancelled()
+                    || states
+                        .get(&peer)
+                        .is_none_or(|current| current.id != old_state.id)
+                {
+                    drop(states);
+                    connection.close(VarInt::from_u32(0), b"session predecessor replaced");
+                    return Ok(());
+                }
+                states.insert(peer, state.clone());
+                self.publish_session_locked(peer);
+                drop(states);
+                info!(
+                    event = "session_collision_candidate_promoted",
+                    peer.id = %peer,
+                    session.id = %state.id,
+                    old_session.id = %old_state.id
+                );
             } else {
+                drop(incoming_candidate);
                 warn!(
                     event = "session_collision_kept_existing",
                     peer.id = %peer,
@@ -555,7 +927,11 @@ where
                 connection.close(VarInt::from_u32(0), &[]);
                 return Ok(());
             }
+        } else {
+            drop(incoming_candidate);
         }
+
+        self.request_room_reconcile();
 
         // connection monitor sends SessionStatus::Connected to the frontend
         let state_clone = state.clone();
@@ -567,24 +943,32 @@ where
                 .await;
         });
 
-        let contact = contact_option.unwrap_or_else(|| {
-            // there may be no contact for members of a group
-            debug!(event = "group_contact_created", peer.id = %peer);
-            Contact {
-                id: Uuid::new_v4().to_string(),
-                nickname: String::from("GroupContact"),
-                peer_id: peer,
-                output_volume: 0_f32,
-                is_room_only: true,
-            }
-        });
-
-        // seed the initial per-contact output volume
-        self.core_state.set_peer_output_volume(&contact)?;
-
         let _ = self
             .session_outer(peer, &connection, &state, &contact, message_channel)
             .await;
+        state.mark_finished();
+
+        let restored_room_predecessor =
+            if let Some(predecessor) = state.take_deferred_room_predecessor().await {
+                let mut states = self.session_states.write().await;
+                if predecessor.can_restore_room_predecessor()
+                    && states
+                        .get(&peer)
+                        .is_some_and(|current| current.id == state.id)
+                {
+                    states.insert(peer, predecessor);
+                    true
+                } else {
+                    drop(states);
+                    predecessor.teardown().await;
+                    false
+                }
+            } else {
+                false
+            };
+        if restored_room_predecessor {
+            connection.close(VarInt::from_u32(0), b"replacement aborted");
+        }
 
         // Determine whether this session is still the current map entry for `peer`. If a newer
         // session has already replaced us (collision-loser cleanup, reset_sessions drain, or
@@ -593,6 +977,17 @@ where
         // call-slot state, output volume, or emit Inactive — all of those are owned by the
         // replacement session.
         let mut states = self.session_states.write().await;
+        if states
+            .get(&peer)
+            .is_some_and(|current| current.id == state.id)
+            && let Some(completion) = self
+                .pending_session_candidates
+                .resolution_for(peer, state.id)
+        {
+            drop(states);
+            completion.cancelled().await;
+            states = self.session_states.write().await;
+        }
         let still_current = states.get(&peer).map(|s| s.id == state.id).unwrap_or(false);
         if still_current {
             // this session still owns the connection — close it before tearing down our
@@ -617,6 +1012,9 @@ where
         // avoid sending session statuses for dummy contacts
         if still_current && !contact.is_room_only {
             self.emit_inactive(peer, session_generation).await;
+        }
+        if still_current {
+            self.request_room_reconcile();
         }
 
         info!(event = "session_cleaned_up", session.id = %state.id);
@@ -775,11 +1173,18 @@ where
         io: &mut SessionIo<'_>,
         pending_slot: &mut Option<PendingDirectCallSlot<'_>>,
         call_state: EarlyCallState,
-        is_in_room: bool,
+        expected_room_hash: Option<u64>,
     ) -> Result<HandshakeDispatch> {
-        if is_in_room {
-            self.room_handshake(io.send, io.recv, io.connection, call_state, io.state)
-                .await?;
+        if let Some(expected_room_hash) = expected_room_hash {
+            self.room_handshake(
+                io.send,
+                io.recv,
+                io.connection,
+                call_state,
+                io.state,
+                expected_room_hash,
+            )
+            .await?;
             Ok(HandshakeDispatch::Completed)
         } else if let Some(_slot) = pending_slot.take() {
             match self
@@ -869,7 +1274,7 @@ where
                         io,
                         pending_slot,
                         call_state.clone(),
-                        is_in_room,
+                        args.room_hash,
                     )
                     .await?
                 {
@@ -932,7 +1337,7 @@ where
                                 io,
                                 pending_slot,
                                 call_state.clone(),
-                                is_in_room,
+                                args.room_hash,
                             )
                             .await?
                         {
@@ -1095,6 +1500,24 @@ where
                 match self.setup_call(peer).await {
                     Ok(mut call_state) => {
                         call_state.remote_configuration = args.remote_audio_header;
+                        if args.is_in_room
+                            && !is_session_still_current(
+                                &self.session_states,
+                                peer,
+                                io.state.id,
+                            )
+                            .await
+                        {
+                            abort_negotiation_session_stopped(
+                                &self.session_states,
+                                peer,
+                                io.state.id,
+                                io.send,
+                                &mut pending_slot,
+                            )
+                            .await?;
+                            return Ok(IncomingNegotiationOutcome::SessionStopped);
+                        }
                         write_message(
                             io.send,
                             &ProtocolMessage::HelloAck {
@@ -1108,7 +1531,7 @@ where
                                 io,
                                 &mut pending_slot,
                                 call_state,
-                                args.is_in_room,
+                                args.peer_room_hash,
                             )
                             .await?
                         {
@@ -1401,7 +1824,15 @@ where
                 }
 
                 let room_snapshot = self.room_snapshot_for_peer(&contact.peer_id).await;
-                Span::current().record("room.hash", field::debug(room_snapshot.local_room_hash));
+                let (is_in_room, local_room_hash) = match room_snapshot.local_room_hash {
+                    Some(hash) => (room_snapshot.is_in_room, Some(hash)),
+                    None if peer_room_hash.is_some() => self
+                        .pending_room_negotiation_for_peer(&contact.peer_id)?
+                        .map(|pending| (true, Some(pending.expected_room_hash)))
+                        .unwrap_or((false, None)),
+                    None => (false, None),
+                };
+                Span::current().record("room.hash", field::debug(local_room_hash));
                 Span::current().record("room.generation", room_snapshot.room_generation);
                 let outcome = self
                     .negotiate_incoming_call(
@@ -1411,8 +1842,8 @@ where
                             remote_audio_header,
                             peer_room_hash,
                             other_ringtone,
-                            is_in_room: room_snapshot.is_in_room,
-                            local_room_hash: room_snapshot.local_room_hash,
+                            is_in_room,
+                            local_room_hash,
                         },
                     )
                     .await?;
@@ -1420,6 +1851,37 @@ where
             }
             _ = io.state.start_call.notified() => {
                 let room_snapshot = self.room_snapshot_for_peer(&contact.peer_id).await;
+                Span::current().record("room.hash", field::debug(room_snapshot.local_room_hash));
+                Span::current().record("room.generation", room_snapshot.room_generation);
+                let outcome = self
+                    .negotiate_outgoing_call(
+                        io,
+                        OutgoingCallArgs {
+                            contact,
+                            room_hash: room_snapshot.local_room_hash,
+                        },
+                    )
+                    .await?;
+                Ok(outcome.to_outcome())
+            }
+            _ = io.state.reconcile_room_call.notified() => {
+                let Some(expected_generation) = io.state.take_room_reconcile_generation() else {
+                    debug!(event = "room_reconcile_call_discarded_missing_generation");
+                    return Ok(true);
+                };
+                let room_snapshot = self.room_snapshot_for_peer(&contact.peer_id).await;
+                if room_snapshot.room_generation != expected_generation
+                    || !self
+                        .is_current_room_dial(&contact.peer_id, expected_generation)
+                        .await
+                {
+                    debug!(
+                        event = "room_reconcile_call_discarded_stale_generation",
+                        expected_room_generation = expected_generation,
+                        actual_room_generation = room_snapshot.room_generation
+                    );
+                    return Ok(true);
+                }
                 Span::current().record("room.hash", field::debug(room_snapshot.local_room_hash));
                 Span::current().record("room.generation", room_snapshot.room_generation);
                 let outcome = self
@@ -1834,25 +2296,57 @@ where
         connection: &Connection,
         call_state: EarlyCallState,
         session: &Arc<SessionState>,
+        expected_room_hash: u64,
     ) -> Result<()> {
         let peer_id = call_state.peer;
         let connection_id = connection.stable_id();
-        let (sender, cancel) = self
-            .room_handshake_snapshot()
-            .await
-            .ok_or(ErrorKind::RoomStateMissing)?;
+        let Some((sender, cancel)) = self
+            .await_room_state_for_peer(&session.stop_session, &peer_id, expected_room_hash)
+            .await?
+        else {
+            _ = write_message(send, &ProtocolMessage::goodbye()).await;
+            return Ok(());
+        };
         let (terminal_sender, mut terminal_receiver) = unbounded_channel();
+        let (admission_sender, admission_receiver) = oneshot::channel();
         let mut terminal_controls_open = true;
 
-        sender
-            .send(RoomMessage::Join {
+        let join_sent = select! {
+            biased;
+            _ = session.stop_session.cancelled() => false,
+            _ = cancel.cancelled() => false,
+            result = sender.send(RoomMessage::Join {
                 connection: connection.clone(),
                 state: call_state,
                 session_id: session.id,
                 terminal_sender,
-            })
+                admission_sender,
+            }) => result.is_ok(),
+        };
+        if !join_sent {
+            _ = write_message(send, &ProtocolMessage::goodbye()).await;
+            return Ok(());
+        }
+
+        let admitted = select! {
+            biased;
+            _ = session.stop_session.cancelled() => false,
+            _ = cancel.cancelled() => false,
+            result = admission_receiver => matches!(result, Ok(RoomJoinAdmission::Admitted)),
+        };
+        if !admitted {
+            _ = write_message(send, &ProtocolMessage::goodbye()).await;
+            return Ok(());
+        }
+        session.complete_room_replacement().await;
+        let Some(room_generation) = self
+            .active_room_generation_for_peer(&peer_id, expected_room_hash)
             .await
-            .map_err(|_| ErrorKind::RoomStateMissing)?;
+        else {
+            _ = write_message(send, &ProtocolMessage::goodbye()).await;
+            return Ok(());
+        };
+        session.admit_to_room(room_generation);
 
         loop {
             select! {
@@ -1915,6 +2409,24 @@ where
                 peer.id = %peer_id
             );
         }
+        // Discard any `reconcile_room_call` permit latched on this session
+        // during the handshake. Without this drain, `session_inner` re-launches
+        // `negotiate_outgoing_call` against a peer that has already moved on,
+        // deadlocking both sessions in a hello_ack_timeout loop. Clearing the
+        // generation only on an actual drain avoids dropping a fresh reconcile
+        // that races between the two calls.
+        if timeout(Duration::ZERO, session.reconcile_room_call.notified())
+            .await
+            .is_ok()
+        {
+            debug!(
+                event = "room_handshake_discarded_stale_reconcile",
+                peer.id = %peer_id
+            );
+            session.take_room_reconcile_generation();
+        }
+        session.leave_room(room_generation);
+        self.request_room_reconcile();
 
         // sender may already be closed at this point
         _ = sender
@@ -1934,7 +2446,7 @@ where
     )]
     pub(crate) async fn room_controller(
         &self,
-        mut receiver: Receiver<RoomMessage>,
+        receiver: Receiver<RoomMessage>,
         stop_io: &CancellationToken,
         start: RoomControllerStart,
     ) -> RoomControllerOutcome {
@@ -1947,6 +2459,7 @@ where
             ready_sender,
             publication_receiver,
         } = start;
+        let mut receiver = PendingRoomJoinGuard::new(receiver);
         let room_hash = self.room_hash().await;
         Span::current().record("room.hash", field::debug(room_hash));
         if end_sessions.is_cancelled() || operation.is_cancelled() {
@@ -2245,14 +2758,17 @@ where
                             state,
                             session_id,
                             terminal_sender,
+                            admission_sender,
                         }) => {
                             if let Some(session) = self.session_states.read().await.get(&state.peer) {
                                 if session.id != session_id {
                                     warn!(event = "room_join_stale_session", peer.id = %state.peer);
+                                    let _ = admission_sender.send(RoomJoinAdmission::Aborted);
                                     continue;
                                 }
                             } else {
                                 warn!(event = "room_join_missing_session", peer.id = %state.peer);
+                                let _ = admission_sender.send(RoomJoinAdmission::Aborted);
                                 continue;
                             }
 
@@ -2269,40 +2785,8 @@ where
                                     peer.id = %state.peer,
                                     connection.id = connection_id
                                 );
+                                let _ = admission_sender.send(RoomJoinAdmission::Aborted);
                                 continue;
-                            }
-
-                            if let Some(old_connection_id) = peer_connections.get(&state.peer).copied()
-                                && old_connection_id != connection_id
-                            {
-                                if let Some(old_connection) = connections.remove(&old_connection_id) {
-                                    info!(
-                                        event = "room_duplicate_join_replacing_connection",
-                                        peer.id = %state.peer,
-                                        old.connection.id = old_connection_id,
-                                        new.connection.id = connection_id
-                                    );
-                                    connection_sender.remove(&old_connection.connection);
-                                    old_connection
-                                        .connection
-                                        .close(VarInt::from_u32(0), b"replaced");
-                                    let mut old_handle = old_connection.handle;
-                                    match join_room_task_bounded(
-                                        &mut old_handle,
-                                        "room_output",
-                                        "replacement",
-                                    )
-                                    .await
-                                    {
-                                        RoomTaskOutcome::PeerLocal => {}
-                                        RoomTaskOutcome::Terminal(error) => {
-                                            terminal_error = Some(error);
-                                            outcome = RoomControllerOutcome::generic_terminal();
-                                            break;
-                                        }
-                                    }
-                                }
-                                peer_connections.remove(&state.peer);
                             }
 
                             let setup_output_result = select! {
@@ -2316,16 +2800,19 @@ where
                                 ) => result,
                                 _ = end_sessions.cancelled() => {
                                     info!(event = "room_setup_output_interrupted_end_sessions", peer.id = %state.peer);
+                                    let _ = admission_sender.send(RoomJoinAdmission::Aborted);
                                     break;
                                 }
                                 _ = operation.cancelled() => {
                                     info!(event = "room_setup_output_interrupted_operation", peer.id = %state.peer);
+                                    let _ = admission_sender.send(RoomJoinAdmission::Aborted);
                                     break;
                                 }
                             };
                             let mut helper = match setup_output_result {
                                 Ok(helper) => helper,
                                 Err(error) => {
+                                    let _ = admission_sender.send(RoomJoinAdmission::Aborted);
                                     let reason = GoodbyeReason::AudioDeviceError;
                                     if terminal_sender.send(RoomControl::Goodbye(reason)).is_err() {
                                         warn!(
@@ -2363,6 +2850,7 @@ where
                                     )
                                     .await
                                 {
+                                    let _ = admission_sender.send(RoomJoinAdmission::Aborted);
                                     break;
                                 }
                             }
@@ -2376,7 +2864,8 @@ where
                             let completion_tx = output_completion_tx.clone();
                             let output_sender = helper.sender();
                             let output_connection = connection.clone();
-                            let output_stop_io = stop_io.clone();
+                            let output_stop_io = stop_io.child_token();
+                            let output_cancel = output_stop_io.clone();
                             let output_loss = statistics_state.loss.clone();
                             let output_sample_rate = state.remote_configuration.sample_rate;
                             let handle = spawn_task(async move {
@@ -2392,16 +2881,80 @@ where
                                 Ok(())
                             });
 
-                            peer_connections.insert(state.peer, connection_id);
                             connections.insert(
                                 connection_id,
                                 RoomConnection {
                                     connection,
                                     _output: helper,
                                     handle,
+                                    cancel: output_cancel,
                                     terminal_sender,
                                 },
                             );
+                            let previous_connection_id = peer_connections.insert(state.peer, connection_id);
+                            if admission_sender
+                                .send(RoomJoinAdmission::Admitted)
+                                .is_err()
+                            {
+                                if let Some(previous_connection_id) = previous_connection_id {
+                                    peer_connections.insert(state.peer, previous_connection_id);
+                                } else {
+                                    peer_connections.remove(&state.peer);
+                                }
+                                if let Some(mut installed) = connections.remove(&connection_id) {
+                                    connection_sender.remove(&installed.connection);
+                                    installed.cancel.cancel();
+                                    installed
+                                        .connection
+                                        .close(VarInt::from_u32(0), b"admission canceled");
+                                    match join_room_task_bounded(
+                                        &mut installed.handle,
+                                        "room_output",
+                                        "admission",
+                                    )
+                                    .await
+                                    {
+                                        RoomTaskOutcome::PeerLocal => {}
+                                        RoomTaskOutcome::Terminal(error) => {
+                                            terminal_error = Some(error);
+                                            outcome = RoomControllerOutcome::generic_terminal();
+                                            break;
+                                        }
+                                    }
+                                }
+                                continue;
+                            }
+                            if let Some(old_connection_id) = previous_connection_id
+                                && old_connection_id != connection_id
+                                && let Some(old_connection) = connections.remove(&old_connection_id)
+                            {
+                                info!(
+                                    event = "room_duplicate_join_replacing_connection",
+                                    peer.id = %state.peer,
+                                    old.connection.id = old_connection_id,
+                                    new.connection.id = connection_id
+                                );
+                                connection_sender.remove(&old_connection.connection);
+                                old_connection.cancel.cancel();
+                                old_connection
+                                    .connection
+                                    .close(VarInt::from_u32(0), b"replaced");
+                                let mut old_handle = old_connection.handle;
+                                match join_room_task_bounded(
+                                    &mut old_handle,
+                                    "room_output",
+                                    "replacement",
+                                )
+                                .await
+                                {
+                                    RoomTaskOutcome::PeerLocal => {}
+                                    RoomTaskOutcome::Terminal(error) => {
+                                        terminal_error = Some(error);
+                                        outcome = RoomControllerOutcome::generic_terminal();
+                                        break;
+                                    }
+                                }
+                            }
                             // Frontend callback delivery must not block authoritative
                             // teardown; abandon RoomJoin and break to cleanup.
                             if !self
@@ -2440,6 +2993,7 @@ where
                                     peer_connections.remove(&peer);
                                     if let Some(connection) = connections.remove(&connection_id) {
                                         connection_sender.remove(&connection.connection);
+                                        connection.cancel.cancel();
                                         let mut handle = connection.handle;
                                         match join_room_task_bounded(
                                             &mut handle,
@@ -2568,10 +3122,14 @@ where
             host: self.host.clone(),
             core_state: self.core_state.clone(),
             room_state: Arc::clone(&self.room_state),
+            room_reconcile: Arc::clone(&self.room_reconcile),
+            pending_room_admission: self.pending_room_admission.clone(),
+            pending_session_candidates: self.pending_session_candidates.clone(),
             session_states: Arc::clone(&self.session_states),
             start_session: self.start_session.clone(),
             cancel_outbound_connections: Arc::clone(&self.cancel_outbound_connections),
             outbound_attempts: Arc::clone(&self.outbound_attempts),
+            session_availability: Arc::clone(&self.session_availability),
             overlay: self.overlay.clone(),
             #[cfg(target_family = "wasm")]
             web_input: Arc::clone(&self.web_input),
@@ -2587,6 +3145,7 @@ pub(crate) struct RoomConnection<O> {
     pub(crate) connection: Connection,
     _output: OutputHelper<O>,
     pub(crate) handle: JoinHandle<Result<()>>,
+    cancel: CancellationToken,
     terminal_sender: UnboundedSender<RoomControl>,
 }
 
@@ -2682,6 +3241,127 @@ struct IncomingRoomDecision {
     is_in_room: bool,
     peer_room_hash: Option<u64>,
     local_room_hash: Option<u64>,
+}
+
+#[derive(Clone, Default)]
+struct PendingRoomAdmissionRegistry {
+    inner: Arc<StdMutex<Option<PendingRoomAdmission>>>,
+}
+
+struct PendingRoomAdmission {
+    owner: CallSlotSnapshot,
+    members: HashSet<PublicKey>,
+    expected_room_hash: u64,
+    completion: CancellationToken,
+}
+
+#[derive(Clone)]
+struct PendingRoomNegotiationSnapshot {
+    expected_room_hash: u64,
+    completion: CancellationToken,
+}
+
+impl PendingRoomAdmissionRegistry {
+    fn install(&self, owner: CallSlotSnapshot, members: &[PublicKey]) -> PendingRoomAdmissionLease {
+        let completion = CancellationToken::new();
+        let expected_room_hash = room_hash_for_peers(members);
+        let previous = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .replace(PendingRoomAdmission {
+                owner,
+                members: members.iter().copied().collect(),
+                expected_room_hash,
+                completion: completion.clone(),
+            });
+        if let Some(previous) = previous {
+            previous.completion.cancel();
+        }
+        PendingRoomAdmissionLease {
+            registry: self.clone(),
+            owner,
+            active: true,
+        }
+    }
+
+    fn allows(&self, peer: &PublicKey, owner: CallSlotSnapshot) -> bool {
+        owner.state == CallSlotState::RoomCall
+            && self
+                .inner
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .as_ref()
+                .is_some_and(|pending| pending.owner == owner && pending.members.contains(peer))
+    }
+
+    fn negotiation_for(
+        &self,
+        peer: &PublicKey,
+        owner: CallSlotSnapshot,
+    ) -> Option<PendingRoomNegotiationSnapshot> {
+        if owner.state != CallSlotState::RoomCall {
+            return None;
+        }
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref()
+            .filter(|pending| pending.owner == owner && pending.members.contains(peer))
+            .map(|pending| PendingRoomNegotiationSnapshot {
+                expected_room_hash: pending.expected_room_hash,
+                completion: pending.completion.clone(),
+            })
+    }
+
+    fn finish_if_match(&self, owner: CallSlotSnapshot) {
+        let pending = {
+            let mut guard = self
+                .inner
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if guard.as_ref().is_some_and(|pending| pending.owner == owner) {
+                guard.take()
+            } else {
+                None
+            }
+        };
+        if let Some(pending) = pending {
+            pending.completion.cancel();
+        }
+    }
+
+    fn cancel_current(&self) {
+        let pending = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        if let Some(pending) = pending {
+            pending.completion.cancel();
+        }
+    }
+}
+
+pub(crate) struct PendingRoomAdmissionLease {
+    registry: PendingRoomAdmissionRegistry,
+    owner: CallSlotSnapshot,
+    active: bool,
+}
+
+impl PendingRoomAdmissionLease {
+    pub(crate) fn publish(mut self) {
+        self.registry.finish_if_match(self.owner);
+        self.active = false;
+    }
+}
+
+impl Drop for PendingRoomAdmissionLease {
+    fn drop(&mut self) {
+        if self.active {
+            self.registry.finish_if_match(self.owner);
+        }
+    }
 }
 
 /// Per-call inputs for [`TelepathyCore::negotiate_outgoing_call`].
@@ -2825,6 +3505,536 @@ impl OutgoingNegotiationOutcome {
     }
 }
 
+fn abort_pending_room_joins(receiver: &mut Receiver<RoomMessage>) {
+    while let Ok(message) = receiver.try_recv() {
+        if let RoomMessage::Join {
+            admission_sender, ..
+        } = message
+        {
+            let _ = admission_sender.send(RoomJoinAdmission::Aborted);
+        }
+    }
+}
+
+struct PendingRoomJoinGuard(Receiver<RoomMessage>);
+
+impl PendingRoomJoinGuard {
+    fn new(receiver: Receiver<RoomMessage>) -> Self {
+        Self(receiver)
+    }
+}
+
+impl Drop for PendingRoomJoinGuard {
+    fn drop(&mut self) {
+        abort_pending_room_joins(&mut self.0);
+    }
+}
+
+impl Deref for PendingRoomJoinGuard {
+    type Target = Receiver<RoomMessage>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for PendingRoomJoinGuard {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+#[derive(Default)]
+struct RoomDialScheduler {
+    dials: HashMap<PublicKey, RoomDialState>,
+    rearms: HashMap<PublicKey, RoomRearmState>,
+    next_attempt_id: u64,
+}
+
+struct RoomDialState {
+    room_generation: u64,
+    attempt_id: u64,
+    retries: u32,
+    next_attempt_at: Instant,
+    in_flight: bool,
+    has_session: bool,
+    has_live_session: bool,
+    cancel: CancellationToken,
+}
+
+struct RoomDialLaunch {
+    peer: PublicKey,
+    room_generation: u64,
+    attempt_id: u64,
+    cancel: CancellationToken,
+}
+
+struct RoomRearmState {
+    room_generation: u64,
+    attempts: u32,
+    last_attempt_at: Instant,
+}
+
+struct RoomDialEvent {
+    peer: PublicKey,
+    room_generation: u64,
+    attempt_id: u64,
+}
+
+enum ManagerDialEvent {
+    Room(RoomDialEvent),
+    DirectCompleted(PublicKey, u64),
+}
+
+#[derive(Default)]
+struct SessionAvailability {
+    peers: StdMutex<HashMap<PublicKey, PeerSessionAvailability>>,
+    changed: Notify,
+}
+
+impl SessionAvailability {
+    fn terminalize_all(&self) {
+        let mut peers = self.peers.lock().unwrap();
+        for state in peers.values_mut() {
+            if state.active_attempt.take().is_some() {
+                state.generation = state.generation.wrapping_add(1);
+            }
+        }
+        drop(peers);
+        self.changed.notify_waiters();
+    }
+
+    async fn wait_for_change(&self, peer: PublicKey, generation: u64) {
+        loop {
+            let changed = self.changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            if self
+                .peers
+                .lock()
+                .unwrap()
+                .get(&peer)
+                .map_or(0, |state| state.generation)
+                > generation
+            {
+                return;
+            }
+            changed.await;
+        }
+    }
+
+    fn complete_direct_attempt(&self, peer: PublicKey, attempt_id: u64) {
+        let mut peers = self.peers.lock().unwrap();
+        let Some(state) = peers.get_mut(&peer) else {
+            return;
+        };
+        let Some(attempt) = state.active_attempt.as_mut() else {
+            return;
+        };
+        if attempt.id != attempt_id {
+            return;
+        }
+        attempt.direct_completed = true;
+        if attempt.candidates == 0 {
+            state.active_attempt = None;
+            state.generation = state.generation.wrapping_add(1);
+        }
+        drop(peers);
+        self.changed.notify_waiters();
+    }
+}
+
+#[derive(Default)]
+struct PeerSessionAvailability {
+    next_attempt_id: u64,
+    active_attempt: Option<DirectAttempt>,
+    generation: u64,
+}
+
+struct DirectAttempt {
+    id: u64,
+    direct_completed: bool,
+    candidates: usize,
+}
+
+struct IncomingCandidateLease {
+    availability: Arc<SessionAvailability>,
+    peer: PublicKey,
+    attempt_id: u64,
+}
+
+#[derive(Clone, Default)]
+struct PendingSessionCandidateRegistry {
+    inner: Arc<StdMutex<HashMap<PublicKey, PendingSessionCandidate>>>,
+}
+
+struct PendingSessionCandidate {
+    id: Uuid,
+    predecessor_id: Uuid,
+    cancellation: CancellationToken,
+    completion: CancellationToken,
+}
+
+impl PendingSessionCandidateRegistry {
+    fn try_install(
+        &self,
+        peer: PublicKey,
+        predecessor_id: Uuid,
+    ) -> Option<PendingSessionCandidateLease> {
+        let mut candidates = self.inner.lock().unwrap();
+        if candidates.contains_key(&peer) {
+            return None;
+        }
+        let id = Uuid::new_v4();
+        let cancellation = CancellationToken::new();
+        let completion = CancellationToken::new();
+        candidates.insert(
+            peer,
+            PendingSessionCandidate {
+                id,
+                predecessor_id,
+                cancellation: cancellation.clone(),
+                completion: completion.clone(),
+            },
+        );
+        Some(PendingSessionCandidateLease {
+            registry: self.clone(),
+            peer,
+            id,
+            cancellation,
+            completion,
+        })
+    }
+
+    fn resolution_for(&self, peer: PublicKey, predecessor_id: Uuid) -> Option<CancellationToken> {
+        self.inner.lock().unwrap().get(&peer).and_then(|candidate| {
+            (candidate.predecessor_id == predecessor_id).then(|| candidate.completion.clone())
+        })
+    }
+
+    fn cancel_all(&self) {
+        let candidates = std::mem::take(&mut *self.inner.lock().unwrap());
+        for candidate in candidates.into_values() {
+            candidate.cancellation.cancel();
+        }
+    }
+}
+
+struct PendingSessionCandidateLease {
+    registry: PendingSessionCandidateRegistry,
+    peer: PublicKey,
+    id: Uuid,
+    cancellation: CancellationToken,
+    completion: CancellationToken,
+}
+
+impl PendingSessionCandidateLease {
+    async fn cancelled(&self) {
+        self.cancellation.cancelled().await;
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancellation.is_cancelled()
+    }
+}
+
+impl Drop for PendingSessionCandidateLease {
+    fn drop(&mut self) {
+        let mut candidates = self.registry.inner.lock().unwrap();
+        if candidates
+            .get(&self.peer)
+            .is_some_and(|candidate| candidate.id == self.id)
+        {
+            candidates.remove(&self.peer);
+        }
+        self.completion.cancel();
+    }
+}
+
+impl Drop for IncomingCandidateLease {
+    fn drop(&mut self) {
+        let mut peers = self.availability.peers.lock().unwrap();
+        let Some(state) = peers.get_mut(&self.peer) else {
+            return;
+        };
+        let Some(attempt) = state.active_attempt.as_mut() else {
+            return;
+        };
+        if attempt.id != self.attempt_id {
+            return;
+        }
+        attempt.candidates = attempt.candidates.saturating_sub(1);
+        if attempt.direct_completed && attempt.candidates == 0 {
+            state.active_attempt = None;
+            state.generation = state.generation.wrapping_add(1);
+        }
+        drop(peers);
+        self.availability.changed.notify_waiters();
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct SessionAvailabilitySnapshot {
+    pub(crate) generation: u64,
+    pub(crate) waiting_for_session: bool,
+}
+
+impl<C, S, H, I, O> TelepathyCore<C, S, H, I, O>
+where
+    S: CoreStatisticsCallback + Send + Sync + 'static,
+    C: CoreCallbacks<S> + Send + Sync + 'static,
+    H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
+    I: Send + Sync + 'static,
+    O: Send + Sync + 'static,
+{
+    pub(crate) fn begin_direct_attempt(&self, peer: PublicKey) -> u64 {
+        let mut peers = self.session_availability.peers.lock().unwrap();
+        let state = peers.entry(peer).or_default();
+        if let Some(attempt) = &state.active_attempt {
+            return attempt.id;
+        }
+        state.next_attempt_id = state.next_attempt_id.wrapping_add(1);
+        let attempt_id = state.next_attempt_id;
+        state.active_attempt = Some(DirectAttempt {
+            id: attempt_id,
+            direct_completed: false,
+            candidates: 0,
+        });
+        state.generation = state.generation.wrapping_add(1);
+        drop(peers);
+        self.session_availability.changed.notify_waiters();
+        attempt_id
+    }
+
+    pub(crate) fn clear_session_availability(&self) {
+        self.session_availability.terminalize_all();
+    }
+
+    pub(crate) fn cancel_pending_session_candidates(&self) {
+        self.pending_session_candidates.cancel_all();
+    }
+
+    pub(crate) fn complete_direct_attempt(&self, peer: PublicKey, attempt_id: u64) {
+        self.session_availability
+            .complete_direct_attempt(peer, attempt_id);
+    }
+
+    fn is_current_direct_attempt(&self, peer: PublicKey, attempt_id: u64) -> bool {
+        self.session_availability
+            .peers
+            .lock()
+            .unwrap()
+            .get(&peer)
+            .and_then(|state| state.active_attempt.as_ref())
+            .is_some_and(|attempt| attempt.id == attempt_id)
+    }
+
+    fn handoff_incoming_candidate(&self, peer: PublicKey) -> Option<IncomingCandidateLease> {
+        let mut peers = self.session_availability.peers.lock().unwrap();
+        let state = peers.get_mut(&peer)?;
+        let attempt = state.active_attempt.as_mut()?;
+        let attempt_id = attempt.id;
+        attempt.candidates += 1;
+        state.generation = state.generation.wrapping_add(1);
+        drop(peers);
+        self.session_availability.changed.notify_waiters();
+        Some(IncomingCandidateLease {
+            availability: Arc::clone(&self.session_availability),
+            peer,
+            attempt_id,
+        })
+    }
+
+    fn publish_session_locked(&self, peer: PublicKey) {
+        let mut peers = self.session_availability.peers.lock().unwrap();
+        let state = peers.entry(peer).or_default();
+        state.generation = state.generation.wrapping_add(1);
+        drop(peers);
+        self.session_availability.changed.notify_waiters();
+    }
+
+    pub(crate) fn session_availability_snapshot(
+        &self,
+        peer: PublicKey,
+    ) -> SessionAvailabilitySnapshot {
+        let peers = self.session_availability.peers.lock().unwrap();
+        let state = peers.get(&peer);
+        SessionAvailabilitySnapshot {
+            generation: state.map_or(0, |state| state.generation),
+            waiting_for_session: state.is_some_and(|state| state.active_attempt.is_some()),
+        }
+    }
+
+    pub(crate) async fn wait_for_session_availability_change(
+        &self,
+        peer: PublicKey,
+        generation: u64,
+    ) {
+        self.session_availability
+            .wait_for_change(peer, generation)
+            .await;
+    }
+}
+
+impl RoomDialScheduler {
+    fn reconcile(
+        &mut self,
+        desired: Option<(u64, HashSet<PublicKey>)>,
+        admitted_sessions: &HashSet<PublicKey>,
+        active_sessions: &HashSet<PublicKey>,
+        now: Instant,
+    ) {
+        let Some((room_generation, desired_peers)) = desired else {
+            self.cancel_all();
+            return;
+        };
+
+        self.dials.retain(|peer, dial| {
+            let keep = dial.room_generation == room_generation && desired_peers.contains(peer);
+            if !keep {
+                dial.cancel.cancel();
+            }
+            keep
+        });
+        self.rearms.retain(|peer, rearm| {
+            rearm.room_generation == room_generation && desired_peers.contains(peer)
+        });
+
+        for (peer, dial) in &mut self.dials {
+            let has_session = active_sessions.contains(peer);
+            let has_live_session = admitted_sessions.contains(peer);
+            if dial.has_session && !has_session && !dial.in_flight && dial.retries == 0 {
+                dial.retries = 1;
+                dial.next_attempt_at = now + ROOM_DIAL_EXISTING_SESSION_BACKOFF;
+            }
+            if has_live_session {
+                dial.in_flight = false;
+            }
+            dial.has_session = has_session;
+            dial.has_live_session = has_live_session;
+        }
+
+        for peer in desired_peers {
+            if self.dials.contains_key(&peer) {
+                continue;
+            }
+            self.next_attempt_id = self.next_attempt_id.wrapping_add(1);
+            let has_session = active_sessions.contains(&peer);
+            let has_live_session = admitted_sessions.contains(&peer);
+            self.dials.insert(
+                peer,
+                RoomDialState {
+                    room_generation,
+                    attempt_id: self.next_attempt_id,
+                    retries: 0,
+                    next_attempt_at: now,
+                    in_flight: false,
+                    has_session,
+                    has_live_session,
+                    cancel: CancellationToken::new(),
+                },
+            );
+        }
+    }
+
+    fn take_ready(
+        &mut self,
+        now: Instant,
+        direct_dials: &HashSet<PublicKey>,
+    ) -> Vec<RoomDialLaunch> {
+        let available = ROOM_DIAL_CONCURRENCY.saturating_sub(
+            self.dials
+                .values()
+                .filter(|dial| dial.in_flight && !dial.has_session && !dial.has_live_session)
+                .count(),
+        );
+        if available == 0 {
+            return Vec::new();
+        }
+
+        self.dials
+            .iter_mut()
+            .filter(|(_, dial)| {
+                !dial.in_flight
+                    && !dial.has_session
+                    && !dial.has_live_session
+                    && dial.retries < ROOM_DIAL_MAX_RETRIES
+                    && dial.next_attempt_at <= now
+            })
+            .filter(|(peer, _)| !direct_dials.contains(*peer))
+            .take(available)
+            .map(|(peer, dial)| {
+                dial.in_flight = true;
+                RoomDialLaunch {
+                    peer: *peer,
+                    room_generation: dial.room_generation,
+                    attempt_id: dial.attempt_id,
+                    cancel: dial.cancel.clone(),
+                }
+            })
+            .collect()
+    }
+
+    fn complete(&mut self, event: RoomDialEvent, now: Instant) {
+        let Some(dial) = self.dials.get_mut(&event.peer) else {
+            return;
+        };
+        if dial.room_generation != event.room_generation || dial.attempt_id != event.attempt_id {
+            return;
+        }
+
+        dial.in_flight = false;
+        dial.retries = dial.retries.saturating_add(1);
+        dial.next_attempt_at = now + room_dial_backoff(dial.retries);
+    }
+
+    fn is_in_flight(&self, peer: PublicKey) -> bool {
+        self.dials.get(&peer).is_some_and(|dial| dial.in_flight)
+    }
+
+    /// gates session re-arm notifications for a retained, non-admitted member:
+    /// allowed immediately the first time per room generation, then throttled by
+    /// the room dial backoff curve so a departed member is not re-negotiated
+    /// on every reconcile tick
+    fn rearm(&mut self, peer: PublicKey, room_generation: u64, now: Instant) -> bool {
+        let attempts = match self.rearms.get(&peer) {
+            Some(rearm) if rearm.room_generation == room_generation => {
+                if now < rearm.last_attempt_at + room_dial_backoff(rearm.attempts) {
+                    return false;
+                }
+                rearm.attempts.saturating_add(1)
+            }
+            _ => 1,
+        };
+        self.rearms.insert(
+            peer,
+            RoomRearmState {
+                room_generation,
+                attempts,
+                last_attempt_at: now,
+            },
+        );
+        true
+    }
+
+    fn cancel_all(&mut self) {
+        for dial in self.dials.values() {
+            dial.cancel.cancel();
+        }
+        self.dials.clear();
+        self.rearms.clear();
+    }
+}
+
+fn room_dial_backoff(retries: u32) -> Duration {
+    // 100ms * 2^9 = 51.2s, so the shift limit lets the curve reach the 30s cap
+    let multiplier = 1_u64 << retries.saturating_sub(1).min(9);
+    Duration::from_millis(
+        ROOM_DIAL_BACKOFF_BASE_MS
+            .saturating_mul(multiplier)
+            .min(ROOM_DIAL_BACKOFF_MAX_MS),
+    )
+}
+
 enum ManagerIterationOutcome {
     Continue,
     Shutdown,
@@ -2924,13 +4134,10 @@ fn ringtone_is_within_limit(ringtone: &Option<Vec<u8>>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        MAX_RINGTONE_LENGTH, ProtocolMessage, ringtone_is_within_limit,
-        update_video_negotiation_deadline, wait_for_video_negotiation_deadline,
-    };
+    use super::*;
     use crate::internal::messages::AudioHeader;
+    use iroh::SecretKey;
     use speedy::{Readable, Writable};
-    use std::time::Duration;
 
     #[tokio::test]
     async fn video_negotiation_deadline_survives_non_progress_messages() {
@@ -2994,7 +4201,6 @@ mod tests {
         MANAGER_RETRY_BASE_MS, MANAGER_RETRY_MAX_MS, manager_retry_delay_ms,
         should_keep_new_session,
     };
-    use iroh::SecretKey;
 
     #[test]
     fn manager_retry_delay_schedule_is_bounded_exponential_backoff() {
@@ -3035,5 +4241,351 @@ mod tests {
 
         assert!(!should_keep_new_session(&higher, &lower, true));
         assert!(should_keep_new_session(&higher, &lower, false));
+    }
+
+    #[test]
+    fn incoming_candidate_leases_keep_the_direct_attempt_live_until_all_are_released() {
+        let availability = Arc::new(SessionAvailability::default());
+        let peer = SecretKey::generate().public();
+        availability.peers.lock().unwrap().insert(
+            peer,
+            PeerSessionAvailability {
+                next_attempt_id: 4,
+                active_attempt: Some(DirectAttempt {
+                    id: 4,
+                    direct_completed: true,
+                    candidates: 2,
+                }),
+                generation: 9,
+            },
+        );
+        let first = IncomingCandidateLease {
+            availability: Arc::clone(&availability),
+            peer,
+            attempt_id: 4,
+        };
+        let second = IncomingCandidateLease {
+            availability: Arc::clone(&availability),
+            peer,
+            attempt_id: 4,
+        };
+
+        drop(first);
+        let state = availability.peers.lock().unwrap();
+        let attempt = state
+            .get(&peer)
+            .and_then(|state| state.active_attempt.as_ref())
+            .expect("one candidate lease must preserve the completed direct attempt");
+        assert_eq!(attempt.candidates, 1);
+        drop(state);
+
+        drop(second);
+        let state = availability.peers.lock().unwrap();
+        assert!(
+            state
+                .get(&peer)
+                .expect("peer generation must remain after terminalization")
+                .active_attempt
+                .is_none(),
+            "the final candidate lease must terminalize the completed direct attempt"
+        );
+        assert_eq!(state.get(&peer).unwrap().generation, 10);
+    }
+
+    #[test]
+    fn availability_reset_terminalizes_without_reusing_peer_generation() {
+        let availability = SessionAvailability::default();
+        let peer = SecretKey::generate().public();
+        availability.peers.lock().unwrap().insert(
+            peer,
+            PeerSessionAvailability {
+                next_attempt_id: 7,
+                active_attempt: Some(DirectAttempt {
+                    id: 7,
+                    direct_completed: false,
+                    candidates: 0,
+                }),
+                generation: 12,
+            },
+        );
+
+        availability.terminalize_all();
+        let state = availability.peers.lock().unwrap();
+        let peer_state = state
+            .get(&peer)
+            .expect("reset must retain peer generation state");
+        assert!(peer_state.active_attempt.is_none());
+        assert_eq!(peer_state.generation, 13);
+        assert_eq!(peer_state.next_attempt_id, 7);
+    }
+
+    #[tokio::test]
+    async fn availability_reset_wakes_an_armed_waiter() {
+        let availability = SessionAvailability::default();
+        let peer = SecretKey::generate().public();
+        availability.peers.lock().unwrap().insert(
+            peer,
+            PeerSessionAvailability {
+                next_attempt_id: 1,
+                active_attempt: Some(DirectAttempt {
+                    id: 1,
+                    direct_completed: false,
+                    candidates: 0,
+                }),
+                generation: 4,
+            },
+        );
+        let wait = availability.wait_for_change(peer, 4);
+        tokio::pin!(wait);
+        let first_poll =
+            std::future::poll_fn(|context| std::task::Poll::Ready(wait.as_mut().poll(context)))
+                .await;
+        assert!(matches!(first_poll, std::task::Poll::Pending));
+
+        availability.terminalize_all();
+        wait.await;
+        let state = availability.peers.lock().unwrap();
+        assert!(state.get(&peer).unwrap().active_attempt.is_none());
+        assert_eq!(state.get(&peer).unwrap().generation, 5);
+    }
+
+    #[tokio::test]
+    async fn pending_session_candidates_are_bounded_and_cancel_to_completion() {
+        let registry = PendingSessionCandidateRegistry::default();
+        let peer = SecretKey::generate().public();
+        let predecessor_id = Uuid::new_v4();
+        let first = registry
+            .try_install(peer, predecessor_id)
+            .expect("the first candidate should claim the peer");
+        assert!(
+            registry.try_install(peer, predecessor_id).is_none(),
+            "a peer must retain at most one pending candidate"
+        );
+        let completion = registry
+            .resolution_for(peer, predecessor_id)
+            .expect("the predecessor should observe candidate completion");
+
+        registry.cancel_all();
+        assert!(
+            first.is_cancelled(),
+            "reset must cancel the retained candidate"
+        );
+        drop(first);
+        completion.cancelled().await;
+
+        assert!(
+            registry.try_install(peer, predecessor_id).is_some(),
+            "candidate ownership must be reusable after cancellation completes"
+        );
+    }
+
+    #[test]
+    fn room_dial_in_flight_state_is_peer_scoped() {
+        let peer = SecretKey::generate().public();
+        let other = SecretKey::generate().public();
+        let mut scheduler = RoomDialScheduler::default();
+        scheduler.dials.insert(
+            peer,
+            RoomDialState {
+                room_generation: 1,
+                attempt_id: 1,
+                retries: 0,
+                next_attempt_at: Instant::now(),
+                in_flight: true,
+                has_session: false,
+                has_live_session: false,
+                cancel: CancellationToken::new(),
+            },
+        );
+
+        assert!(scheduler.is_in_flight(peer));
+        assert!(!scheduler.is_in_flight(other));
+    }
+
+    fn peers(count: usize) -> Vec<PublicKey> {
+        (0..count).map(|_| SecretKey::generate().public()).collect()
+    }
+
+    #[test]
+    fn caps_and_coalesces_ready_room_dials() {
+        let peers = peers(ROOM_DIAL_CONCURRENCY + 2);
+        let desired = peers.iter().copied().collect();
+        let mut scheduler = RoomDialScheduler::default();
+        let now = Instant::now();
+
+        scheduler.reconcile(Some((1, desired)), &HashSet::new(), &HashSet::new(), now);
+        let first = scheduler.take_ready(now, &HashSet::new());
+
+        assert_eq!(first.len(), ROOM_DIAL_CONCURRENCY);
+        assert!(scheduler.take_ready(now, &HashSet::new()).is_empty());
+        assert_eq!(
+            first
+                .iter()
+                .map(|launch| launch.peer)
+                .collect::<HashSet<_>>()
+                .len(),
+            ROOM_DIAL_CONCURRENCY
+        );
+    }
+
+    #[test]
+    fn ignores_stale_completion_events() {
+        let peer = peers(1)[0];
+        let mut scheduler = RoomDialScheduler::default();
+        let now = Instant::now();
+        scheduler.reconcile(
+            Some((1, HashSet::from([peer]))),
+            &HashSet::new(),
+            &HashSet::new(),
+            now,
+        );
+        let launch = scheduler.take_ready(now, &HashSet::new()).pop().unwrap();
+
+        scheduler.complete(
+            RoomDialEvent {
+                peer,
+                room_generation: 2,
+                attempt_id: launch.attempt_id,
+            },
+            now,
+        );
+        scheduler.complete(
+            RoomDialEvent {
+                peer,
+                room_generation: launch.room_generation,
+                attempt_id: launch.attempt_id.wrapping_add(1),
+            },
+            now,
+        );
+
+        let dial = scheduler.dials.get(&peer).unwrap();
+        assert!(dial.in_flight);
+        assert_eq!(dial.retries, 0);
+    }
+
+    #[test]
+    fn defers_a_room_dial_while_a_direct_dial_owns_the_peer() {
+        let peer = peers(1)[0];
+        let mut scheduler = RoomDialScheduler::default();
+        let now = Instant::now();
+        scheduler.reconcile(
+            Some((1, HashSet::from([peer]))),
+            &HashSet::new(),
+            &HashSet::new(),
+            now,
+        );
+
+        assert!(scheduler.take_ready(now, &HashSet::from([peer])).is_empty());
+        assert_eq!(scheduler.take_ready(now, &HashSet::new()).len(), 1);
+    }
+
+    #[test]
+    fn cancels_replaced_or_removed_generations() {
+        let peer = peers(1)[0];
+        let mut scheduler = RoomDialScheduler::default();
+        let now = Instant::now();
+        scheduler.reconcile(
+            Some((1, HashSet::from([peer]))),
+            &HashSet::new(),
+            &HashSet::new(),
+            now,
+        );
+        let first_cancel = scheduler.dials[&peer].cancel.clone();
+
+        scheduler.reconcile(
+            Some((2, HashSet::from([peer]))),
+            &HashSet::new(),
+            &HashSet::new(),
+            now,
+        );
+        let second_cancel = scheduler.dials[&peer].cancel.clone();
+        assert!(first_cancel.is_cancelled());
+        assert!(!second_cancel.is_cancelled());
+
+        scheduler.reconcile(None, &HashSet::new(), &HashSet::new(), now);
+        assert!(second_cancel.is_cancelled());
+        assert!(scheduler.dials.is_empty());
+    }
+
+    #[test]
+    fn backs_off_and_rearms_after_an_admitted_session_disappears() {
+        let peer = peers(1)[0];
+        let mut scheduler = RoomDialScheduler::default();
+        let now = Instant::now();
+        let desired = Some((1, HashSet::from([peer])));
+        let active = HashSet::from([peer]);
+
+        scheduler.reconcile(desired.clone(), &active, &active, now);
+        scheduler.reconcile(desired.clone(), &HashSet::new(), &active, now);
+        assert!(scheduler.take_ready(now, &HashSet::new()).is_empty());
+
+        scheduler.reconcile(desired, &HashSet::new(), &HashSet::new(), now);
+        assert!(scheduler.take_ready(now, &HashSet::new()).is_empty());
+        let rearmed =
+            scheduler.take_ready(now + ROOM_DIAL_EXISTING_SESSION_BACKOFF, &HashSet::new());
+        assert_eq!(rearmed.len(), 1);
+        assert_eq!(room_dial_backoff(1), Duration::from_millis(100));
+        assert_eq!(room_dial_backoff(2), Duration::from_millis(200));
+        assert_eq!(
+            room_dial_backoff(99),
+            Duration::from_millis(ROOM_DIAL_BACKOFF_MAX_MS)
+        );
+    }
+
+    #[test]
+    fn throttles_session_rearms_with_backoff_per_room_generation() {
+        let peer = peers(1)[0];
+        let mut scheduler = RoomDialScheduler::default();
+        let now = Instant::now();
+
+        assert!(scheduler.rearm(peer, 1, now));
+        assert!(!scheduler.rearm(peer, 1, now));
+        assert!(scheduler.rearm(peer, 1, now + room_dial_backoff(1)));
+        assert!(!scheduler.rearm(peer, 1, now + room_dial_backoff(1)));
+        assert!(scheduler.rearm(peer, 2, now + room_dial_backoff(1)));
+    }
+
+    #[test]
+    fn stops_redialing_a_peer_after_the_retry_bound() {
+        let peer = peers(1)[0];
+        let mut scheduler = RoomDialScheduler::default();
+        let mut now = Instant::now();
+
+        scheduler.reconcile(
+            Some((1, HashSet::from([peer]))),
+            &HashSet::new(),
+            &HashSet::new(),
+            now,
+        );
+
+        for _ in 0..ROOM_DIAL_MAX_RETRIES {
+            let launch = scheduler.take_ready(now, &HashSet::new()).pop().unwrap();
+            scheduler.complete(
+                RoomDialEvent {
+                    peer,
+                    room_generation: launch.room_generation,
+                    attempt_id: launch.attempt_id,
+                },
+                now,
+            );
+            now += room_dial_backoff(ROOM_DIAL_MAX_RETRIES);
+        }
+
+        assert!(scheduler.take_ready(now, &HashSet::new()).is_empty());
+    }
+
+    #[tokio::test]
+    async fn finished_room_predecessor_cannot_be_restored_after_replacement_aborts() {
+        let (sender, _receiver) = channel(1);
+        let predecessor = Arc::new(SessionState::new(&sender));
+        let replacement = SessionState::new(&sender);
+
+        replacement
+            .defer_room_predecessor(Arc::clone(&predecessor))
+            .await;
+        predecessor.mark_finished();
+
+        let predecessor = replacement.take_deferred_room_predecessor().await.unwrap();
+        assert!(!predecessor.can_restore_room_predecessor());
     }
 }

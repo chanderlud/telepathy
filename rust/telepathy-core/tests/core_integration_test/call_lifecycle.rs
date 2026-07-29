@@ -3,13 +3,12 @@ use super::common::{
     PendingAcceptProbe, TwoClientShutdownGuard, assert_call_slot_idle, assert_no_busy_end,
     assert_no_call_ended_before_connected, build_client, build_client_with_accept_probe,
     build_client_with_call_ended_park, build_client_with_connected_gate, build_client_with_options,
-    call_state_snapshot, init_test_tracing, shared_relay_map, wait_for_active_transport,
-    wait_for_connected, wait_for_sessions, wait_for_slot_idle, wait_for_slot_owned_by,
-    wait_for_stable_session_pair,
+    build_client_with_options_and_initial_contacts, call_state_snapshot, init_test_tracing,
+    shared_relay_map, wait_for_active_transport, wait_for_connected, wait_for_sessions,
+    wait_for_slot_idle, wait_for_slot_owned_by, wait_for_stable_session_pair,
 };
 
 use iroh::SecretKey;
-use std::future::Future;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::{Arc, Mutex};
@@ -18,7 +17,7 @@ use std::time::Duration;
 use telepathy_audio::devices::{MockAudioHost, MockAudioInput, MockAudioOutput};
 use telepathy_core::internal::state::{CallSlotAcquireResult, CallSlotState};
 use telepathy_core::types::Contact;
-use telepathy_core::types::{CallState, CodecConfig};
+use telepathy_core::types::{CallState, CodecConfig, SessionStatus};
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 
@@ -58,6 +57,311 @@ async fn cancelled_start_call_before_acquisition_leaves_slot_idle() {
         "cancelling before direct-call acquisition must leave the slot idle",
     );
     client.telepathy.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn start_call_waits_for_trusted_session_attempt_and_cancellation_leaves_no_call() {
+    init_test_tracing();
+    let key_a = SecretKey::generate();
+    let contact_b = Contact::new(
+        "unavailable peer".to_string(),
+        SecretKey::generate().public().to_string(),
+    )
+    .expect("contact should be valid");
+    let peer_b = contact_b.get_peer_id();
+    let client = build_client(
+        shared_relay_map(),
+        key_a,
+        vec![],
+        &CodecConfig::new(true, true, 5.0),
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        Arc::new(Mutex::new(Vec::new())),
+    )
+    .await;
+
+    client.telepathy.start_session(&contact_b).await;
+    let operation = CancellationToken::new();
+    let call = client
+        .telepathy
+        .start_call_with_operation(&contact_b, &operation);
+    tokio::pin!(call);
+    let first_poll = std::future::poll_fn(|context| Poll::Ready(call.as_mut().poll(context))).await;
+    assert!(
+        matches!(first_poll, Poll::Pending),
+        "a trusted in-flight session attempt must make start_call wait"
+    );
+
+    client
+        .session_status_probe
+        .wait_for(peer_b.as_bytes(), SessionStatus::Connecting)
+        .await;
+
+    let second_poll =
+        std::future::poll_fn(|context| Poll::Ready(call.as_mut().poll(context))).await;
+    assert!(
+        matches!(second_poll, Poll::Pending),
+        "start_call must remain pending while the trusted session attempt is still in flight"
+    );
+
+    operation.cancel();
+    call.await
+        .expect("cancelling while waiting for a session should be a no-op");
+    assert_call_slot_idle(
+        &client,
+        "cancelling while waiting for session availability must not claim a call slot",
+    );
+    client.telepathy.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn shutdown_wakes_waiting_start_call_without_claiming_call_slot() {
+    init_test_tracing();
+    let key_a = SecretKey::generate();
+    let contact_b = Contact::new(
+        "shutdown peer".to_string(),
+        SecretKey::generate().public().to_string(),
+    )
+    .expect("contact should be valid");
+    let peer_b = contact_b.get_peer_id();
+    let client = build_client(
+        shared_relay_map(),
+        key_a,
+        vec![],
+        &CodecConfig::new(true, true, 5.0),
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        Arc::new(Mutex::new(Vec::new())),
+    )
+    .await;
+
+    client.telepathy.start_session(&contact_b).await;
+    client
+        .session_status_probe
+        .wait_for(peer_b.as_bytes(), SessionStatus::Connecting)
+        .await;
+
+    let call = client.telepathy.start_call(&contact_b);
+    tokio::pin!(call);
+    let first_poll = std::future::poll_fn(|context| Poll::Ready(call.as_mut().poll(context))).await;
+    assert!(
+        matches!(first_poll, Poll::Pending),
+        "start_call must wait on an in-flight direct session attempt"
+    );
+    assert_call_slot_idle(
+        &client,
+        "waiting for an unreachable session must not claim the call slot",
+    );
+
+    tokio::time::timeout(Duration::from_secs(5), client.telepathy.shutdown())
+        .await
+        .expect("shutdown should complete promptly while start_call is waiting");
+
+    let shutdown_result = tokio::time::timeout(
+        Duration::from_secs(5),
+        std::future::poll_fn(|context| Poll::Ready(call.as_mut().poll(context))),
+    )
+    .await
+    .expect("shutdown must wake the waiting start_call promptly");
+    let error = match shutdown_result {
+        Poll::Ready(result) => result.expect_err("shutdown must not create a call"),
+        Poll::Pending => panic!("shutdown must not leave start_call pending"),
+    };
+    assert!(
+        error.to_string().contains("Runtime not ready") || error.to_string().contains("No session"),
+        "expected shutdown to end the call attempt cleanly, got {error}"
+    );
+    assert_call_slot_idle(
+        &client,
+        "shutdown must leave the call slot idle after waking start_call",
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn start_call_without_trusted_attempt_returns_no_session_promptly() {
+    init_test_tracing();
+    let client = build_client(
+        shared_relay_map(),
+        SecretKey::generate(),
+        vec![],
+        &CodecConfig::new(true, true, 5.0),
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        Arc::new(Mutex::new(Vec::new())),
+    )
+    .await;
+    let absent = Contact::new(
+        "absent peer".to_string(),
+        SecretKey::generate().public().to_string(),
+    )
+    .expect("contact should be valid");
+
+    let error = tokio::time::timeout(Duration::from_secs(1), client.telepathy.start_call(&absent))
+        .await
+        .expect("an absent peer without a trusted attempt must not wait")
+        .expect_err("absent peer should not start a call");
+    assert!(
+        error.to_string().contains("No session"),
+        "expected NoSessionForContact, got {error}"
+    );
+    assert_call_slot_idle(&client, "absent peer must leave the call slot idle");
+    client.telepathy.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn closed_session_sender_terminalizes_its_attempt() {
+    init_test_tracing();
+    let client = build_client(
+        shared_relay_map(),
+        SecretKey::generate(),
+        vec![],
+        &CodecConfig::new(true, true, 5.0),
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        Arc::new(Mutex::new(Vec::new())),
+    )
+    .await;
+    let contact = Contact::new(
+        "closed sender peer".to_string(),
+        SecretKey::generate().public().to_string(),
+    )
+    .expect("contact should be valid");
+
+    client.telepathy.shutdown().await;
+    assert!(
+        client.telepathy.try_start_session(&contact).await.is_err(),
+        "a closed manager sender must report RuntimeNotReady instead of stranding an attempt"
+    );
+    let error = tokio::time::timeout(
+        Duration::from_secs(1),
+        client.telepathy.start_call(&contact),
+    )
+    .await
+    .expect("terminal closed-sender attempt must not leave start_call waiting")
+    .expect_err("closed sender cannot establish a session");
+    assert!(
+        error.to_string().contains("Runtime not ready") || error.to_string().contains("No session")
+    );
+    assert_call_slot_idle(&client, "closed sender must not leave a latent call slot");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn self_session_request_terminalizes_without_stranding_start_call() {
+    init_test_tracing();
+    let identity = SecretKey::generate();
+    let self_contact = Contact::new("self".to_string(), identity.public().to_string())
+        .expect("self contact should be valid");
+    let client = build_client(
+        shared_relay_map(),
+        identity,
+        vec![],
+        &CodecConfig::new(true, true, 5.0),
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        Arc::new(Mutex::new(Vec::new())),
+    )
+    .await;
+
+    client.telepathy.start_session(&self_contact).await;
+    let error = tokio::time::timeout(
+        Duration::from_secs(1),
+        client.telepathy.start_call(&self_contact),
+    )
+    .await
+    .expect("self-dial terminalization must wake start_call")
+    .expect_err("self dial must not create a session");
+    assert!(error.to_string().contains("No session"));
+    assert_call_slot_idle(&client, "self dial must leave no call slot");
+    client.telepathy.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn public_start_session_then_start_call_waits_for_publication_and_connects() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+    let codec = CodecConfig::new(true, true, 5.0);
+    let key_a = SecretKey::generate();
+    let key_b = SecretKey::generate();
+    let contact_a = Contact::new("publication-a".to_string(), key_a.public().to_string())
+        .expect("contact a should be valid");
+    let contact_b = Contact::new("publication-b".to_string(), key_b.public().to_string())
+        .expect("contact b should be valid");
+    let states_a = Arc::new(Mutex::new(Vec::new()));
+    let states_b = Arc::new(Mutex::new(Vec::new()));
+    let accept_probe = PendingAcceptProbe::default();
+    let client_a = build_client_with_options_and_initial_contacts(
+        relay_map,
+        key_a,
+        vec![contact_b.clone()],
+        vec![],
+        &codec,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        states_a.clone(),
+        None,
+        ManagerLifecycle::Single,
+    )
+    .await;
+    let client_b = build_client_with_options_and_initial_contacts(
+        relay_map,
+        key_b,
+        vec![contact_a.clone()],
+        vec![],
+        &codec,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        states_b.clone(),
+        Some(accept_probe.clone()),
+        ManagerLifecycle::Single,
+    )
+    .await;
+
+    client_a.telepathy.start_session(&contact_b).await;
+    client_a
+        .telepathy
+        .start_call(&contact_b)
+        .await
+        .expect("start_call must wait for the public session attempt to publish");
+    accept_probe.wait_opened().await;
+    client_b
+        .telepathy
+        .start_call(&contact_a)
+        .await
+        .expect("callee should accept the published session call");
+    wait_for_connected(&states_a, "publication caller").await;
+    wait_for_connected(&states_b, "publication callee").await;
+
+    client_a.telepathy.end_call().await;
+    client_a.telepathy.shutdown().await;
+    client_b.telepathy.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

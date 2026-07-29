@@ -777,13 +777,16 @@ where
 
     /// Atomic snapshot of `(sender, cancel)` for the current `room_state`,
     /// or `None` if no room is currently active.
-    pub(crate) async fn room_handshake_snapshot(
+    pub(crate) async fn room_handshake_snapshot_for_peer(
         &self,
+        peer: &PublicKey,
+        expected_room_hash: u64,
     ) -> Option<(Sender<RoomMessage>, CancellationToken)> {
         self.room_state
             .read()
             .await
             .as_ref()
+            .filter(|state| state.peers.contains(peer) && state.room_hash() == expected_room_hash)
             .map(|s| (s.sender.clone(), s.cancel.clone()))
     }
 
@@ -907,6 +910,8 @@ where
             states.drain().map(|(_, session)| session).collect()
         };
 
+        self.cancel_pending_session_candidates();
+
         for session in &sessions {
             session.teardown().await;
         }
@@ -928,6 +933,7 @@ where
         }
 
         self.outbound_attempts.write().await.clear();
+        self.clear_session_availability();
     }
 
     pub(crate) async fn cleanup_room_controller(
@@ -947,6 +953,7 @@ where
         } = cleanup;
 
         debug!(event = "room_processing_teardown_start");
+        end_sessions.cancel();
         #[cfg(target_os = "ios")]
         deactivate_audio_session();
         #[cfg(target_family = "wasm")]
@@ -987,12 +994,12 @@ where
                 );
             }
         }
+        self.request_room_reconcile();
         // Release the slot only against the exact `room_owner` snapshot.
         if let Err(error) = self.core_state.call_slot.release_if_match(room_owner) {
             warn!(event = "room_call_slot_release_failed_on_teardown", ?error);
             record_room_terminal_error(&mut terminal_error, error);
         }
-        end_sessions.cancel();
         if let Some(mut statistics_handle) = statistics_handle {
             match timeout(ROOM_TASK_JOIN_TIMEOUT, &mut statistics_handle).await {
                 Ok(Ok(())) => {}
@@ -1101,13 +1108,16 @@ where
 
 /// Bounded join classification for room tasks.
 ///
-/// `PeerLocal` covers expected connection closure: the task completed cleanly
-/// or returned an `Err` from a peer-side condition (e.g. socket close). Such
-/// outcomes propagate as ordinary room events.
+/// `PeerLocal` covers expected connection closure: the task completed cleanly,
+/// returned an `Err` from a peer-side condition (e.g. socket close), or was
+/// aborted after exceeding [`ROOM_TASK_JOIN_TIMEOUT`]. The owning connection
+/// is already removed by the caller and the task itself is aborted before
+/// this verdict is returned, so a slow peer-output shutdown stays scoped to
+/// that peer and never tears down the rest of the room.
 ///
-/// `Terminal` covers unexpected failures: a panic, a join error, or a timeout
-/// exceeding [`ROOM_TASK_JOIN_TIMEOUT`]. These propagate as terminal room
-/// errors and trigger user-visible notification.
+/// `Terminal` covers genuinely unexpected failures: a panic or `JoinError`
+/// observed while awaiting the handle. These can indicate corrupted shared
+/// state and propagate as terminal room errors with user-visible notification.
 pub(crate) enum RoomTaskOutcome {
     PeerLocal,
     Terminal(Error),
@@ -1163,7 +1173,7 @@ pub(crate) async fn join_room_task_bounded(
         Err(error) => {
             abort_room_task(handle);
             warn!(event = %format!("{task_kind}_timed_out_on_{event_kind}"), ?error);
-            RoomTaskOutcome::Terminal(error.into())
+            RoomTaskOutcome::PeerLocal
         }
     }
 }
