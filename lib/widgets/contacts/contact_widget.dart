@@ -29,9 +29,7 @@ class ContactWidgetState extends State<ContactWidget> {
   void initState() {
     super.initState();
     _nicknameInput = TextEditingController(text: widget.contact.nickname());
-    _directConnInput = TextEditingController(
-      text: widget.contact.directConnectionString() ?? '',
-    );
+    _directConnInput = TextEditingController();
   }
 
   @override
@@ -39,7 +37,7 @@ class ContactWidgetState extends State<ContactWidget> {
     super.didUpdateWidget(oldWidget);
     if (widget.contact != oldWidget.contact) {
       _nicknameInput.text = widget.contact.nickname();
-      _directConnInput.text = widget.contact.directConnectionString() ?? '';
+      _directConnInput.clear();
     }
   }
 
@@ -179,36 +177,62 @@ class ContactWidgetState extends State<ContactWidget> {
                         }),
                     const SizedBox(height: 12),
                     StatefulBuilder(builder: (context, setLocalState) {
-                      bool isDirect = widget.contact.isDirect();
+                      final bool isDirect = widget.contact.isDirect();
                       return Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Row(
-                            children: [
-                              const Text('Direct Connection'),
-                              const SizedBox(width: 8),
-                              CustomSwitch(
-                                value: isDirect,
-                                onChanged: (v) {
-                                  widget.contact.setDirect(isDirect: v);
-                                  setLocalState(() {});
-                                  setDialogState(() {});
-                                },
-                              ),
-                            ],
+                          Text(
+                            isDirect
+                                ? 'Direct connection is enabled'
+                                : 'Use a direct invitation to enable direct connection.',
                           ),
-                          if (isDirect) ...[
-                            const SizedBox(height: 12),
+                          const SizedBox(height: 12),
+                          if (!isDirect) ...[
                             TextInput(
                               controller: _directConnInput,
-                              labelText: 'Connection String',
-                              onChanged: (value) {
-                                widget.contact.setDirectConnectionString(
-                                    connectionString:
-                                        value.isNotEmpty ? value : null);
+                              labelText: 'Direct invitation',
+                              hintText: 'Paste a tp1: invitation',
+                            ),
+                            const SizedBox(height: 8),
+                            Button(
+                              text: 'Use invitation',
+                              onPressed: () {
+                                final invitation = _directConnInput.text.trim();
+                                if (invitation.isEmpty) {
+                                  showErrorDialog(
+                                    context,
+                                    'Direct invitation required',
+                                    'Paste a tp1: invitation to enable direct connection.',
+                                  );
+                                  return;
+                                }
+                                try {
+                                  widget.contact.setDirectInvitation(
+                                    invitation: invitation,
+                                  );
+                                  widget.contact.setDirect(isDirect: true);
+                                  _directConnInput.clear();
+                                  setLocalState(() {});
+                                  setDialogState(() {});
+                                } on DartError catch (_) {
+                                  showErrorDialog(
+                                    context,
+                                    'Invalid direct invitation',
+                                    'This invitation is invalid or belongs to a different contact. Paste a valid tp1: invitation.',
+                                  );
+                                }
                               },
                             ),
-                          ],
+                          ] else
+                            Button(
+                              text: 'Remove direct invitation',
+                              onPressed: () {
+                                widget.contact.setDirectInvitation();
+                                widget.contact.setDirect(isDirect: false);
+                                setLocalState(() {});
+                                setDialogState(() {});
+                              },
+                            ),
                         ],
                       );
                     }),

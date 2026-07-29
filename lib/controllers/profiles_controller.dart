@@ -165,13 +165,21 @@ class ProfilesController with ChangeNotifier {
 
   /// This can still throw when the peer id is invalid because the historical API
   /// returns a non-null [Contact]. Use [tryAddContact] when taking user input.
-  Contact addContact(String nickname, String peerId) {
+  Contact addContact(
+    String nickname,
+    String peerId, {
+    String? directInvitation,
+  }) {
     final Profile profile = _currentProfile();
 
     late final Contact contact;
     late final String contactId;
     try {
       contact = Contact(nickname: nickname, peerId: peerId);
+      if (directInvitation != null) {
+        contact.setDirectInvitation(invitation: directInvitation);
+        contact.setDirect(isDirect: true);
+      }
       contactId = contact.id();
     } catch (error, stackTrace) {
       DebugConsole.warn('invalid contact: $error\n$stackTrace');
@@ -184,9 +192,17 @@ class ProfilesController with ChangeNotifier {
     return contact;
   }
 
-  Contact? tryAddContact(String nickname, String peerId) {
+  Contact? tryAddContact(
+    String nickname,
+    String peerId, {
+    String? directInvitation,
+  }) {
     try {
-      return addContact(nickname, peerId);
+      return addContact(
+        nickname,
+        peerId,
+        directInvitation: directInvitation,
+      );
     } catch (error) {
       DebugConsole.warn('contact was not added: $error');
       return null;
@@ -460,6 +476,7 @@ class ProfilesController with ChangeNotifier {
 
   Future<Map<String, Contact>> loadContacts(String id) async {
     final Map<String, Contact> contacts = <String, Contact>{};
+    bool needsDirectInvitationMigration = false;
     final String? contactsStr = await _readStorage('$id-contacts');
 
     if (contactsStr == null || contactsStr.trim().isEmpty) {
@@ -492,20 +509,45 @@ class ProfilesController with ChangeNotifier {
       }
 
       final bool isDirect = contactMap['isDirect'] == true;
-      final String? directConnectionString =
-          contactMap['directConnectionString'] as String?;
+      final bool hasLegacyInvitationKey =
+          contactMap.containsKey('directConnectionString');
+      final Object? persistedInvitation =
+          contactMap.containsKey('directInvitation')
+              ? contactMap['directInvitation']
+              : contactMap['directConnectionString'];
+      final String? directInvitation =
+          persistedInvitation is String ? persistedInvitation : null;
 
       try {
-        contacts[entry.key] = Contact.fromParts(
+        final Contact contact = Contact.fromParts(
           id: entry.key,
           nickname: nickname,
           peerId: peerId,
           outputVolume: outputVolume,
           isDirect: isDirect,
-          directConnectionString: directConnectionString,
+          directInvitation: directInvitation,
         );
+        contacts[entry.key] = contact;
+        needsDirectInvitationMigration |= hasLegacyInvitationKey ||
+            (persistedInvitation != null && persistedInvitation is! String) ||
+            directInvitation != contact.directInvitation() ||
+            isDirect != contact.isDirect();
       } catch (error) {
         DebugConsole.warn('invalid contact format for ${entry.key}: $error');
+      }
+    }
+
+    if (needsDirectInvitationMigration) {
+      try {
+        await _writeStorage(
+          key: '$id-contacts',
+          value: jsonEncode(_serializeContacts(contacts)),
+        );
+      } catch (error) {
+        DebugConsole.warn(
+          'failed to persist direct invitation migration for profile $id: '
+          '$error',
+        );
       }
     }
 
@@ -599,34 +641,36 @@ class ProfilesController with ChangeNotifier {
       _safeNotifyListeners();
     }
 
+    await _writeStorage(
+      key: '$profileId-contacts',
+      value: jsonEncode(_serializeContacts(profile.contacts)),
+    );
+  }
+
+  Map<String, Map<String, dynamic>> _serializeContacts(
+    Map<String, Contact> contacts,
+  ) {
     final Map<String, Map<String, dynamic>> contactsMap =
         <String, Map<String, dynamic>>{};
 
-    for (final MapEntry<String, Contact> entry in profile.contacts.entries) {
+    for (final MapEntry<String, Contact> entry in contacts.entries) {
       try {
-        String? directStr;
-        try {
-          directStr = entry.value.directConnectionString();
-        } catch (_) {
-          // ignore errors for contacts saved before this field existed
-        }
-
+        final String? directInvitation = entry.value.directInvitation();
+        final bool hasCanonicalInvitation =
+            directInvitation?.startsWith('tp1:') == true;
         contactsMap[entry.key] = <String, dynamic>{
           'nickname': entry.value.nickname(),
           'peerId': entry.value.peerId(),
           'outputVolume': entry.value.outputVolume(),
-          'isDirect': entry.value.isDirect(),
-          if (directStr != null) 'directConnectionString': directStr,
+          'isDirect': hasCanonicalInvitation && entry.value.isDirect(),
+          if (hasCanonicalInvitation) 'directInvitation': directInvitation,
         };
       } catch (error) {
         DebugConsole.warn('skipping contact ${entry.key} during save: $error');
       }
     }
 
-    await _writeStorage(
-      key: '$profileId-contacts',
-      value: jsonEncode(contactsMap),
-    );
+    return contactsMap;
   }
 
   Future<void> _saveRoomsFor(String profileId, {bool notify = true}) async {

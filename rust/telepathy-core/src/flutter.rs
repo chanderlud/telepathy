@@ -291,10 +291,8 @@ impl Telepathy {
         self.handle.set_model(model).await.map_err(DartError::from)
     }
 
-    /// Returns a JSON-serialized [`EndpointAddr`] of the local endpoint, or
-    /// `None` if the session manager is not active. The frontend displays
-    /// this in the networking settings so users can share their direct
-    /// addresses with contacts.
+    /// Returns the local endpoint's opaque `tp1:` direct invitation, or
+    /// `None` if the session manager is not active.
     pub async fn node_addr(&self) -> Option<String> {
         self.handle.node_addr().await
     }

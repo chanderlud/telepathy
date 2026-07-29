@@ -74,7 +74,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => 236467155;
+  int get rustContentHash => 1001975318;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -130,7 +130,7 @@ abstract class RustLibApi extends BaseApi {
   (bool, bool, double) crateTypesCodecConfigToValues(
       {required CodecConfig that});
 
-  String? crateTypesContactDirectConnectionString({required Contact that});
+  String? crateTypesContactDirectInvitation({required Contact that});
 
   Contact crateTypesContactFromParts(
       {required String id,
@@ -138,7 +138,7 @@ abstract class RustLibApi extends BaseApi {
       required String peerId,
       required double outputVolume,
       required bool isDirect,
-      String? directConnectionString});
+      String? directInvitation});
 
   PublicKey crateTypesContactGetPeerId({required Contact that});
 
@@ -162,8 +162,8 @@ abstract class RustLibApi extends BaseApi {
   void crateTypesContactSetDirect(
       {required Contact that, required bool isDirect});
 
-  void crateTypesContactSetDirectConnectionString(
-      {required Contact that, String? connectionString});
+  void crateTypesContactSetDirectInvitation(
+      {required Contact that, String? invitation});
 
   void crateTypesContactSetNickname(
       {required Contact that, required String nickname});
@@ -1025,7 +1025,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  String? crateTypesContactDirectConnectionString({required Contact that}) {
+  String? crateTypesContactDirectInvitation({required Contact that}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -1037,15 +1037,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeSuccessData: sse_decode_opt_String,
         decodeErrorData: null,
       ),
-      constMeta: kCrateTypesContactDirectConnectionStringConstMeta,
+      constMeta: kCrateTypesContactDirectInvitationConstMeta,
       argValues: [that],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateTypesContactDirectConnectionStringConstMeta =>
+  TaskConstMeta get kCrateTypesContactDirectInvitationConstMeta =>
       const TaskConstMeta(
-        debugName: 'Contact_direct_connection_string',
+        debugName: 'Contact_direct_invitation',
         argNames: ['that'],
       );
 
@@ -1056,7 +1056,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       required String peerId,
       required double outputVolume,
       required bool isDirect,
-      String? directConnectionString}) {
+      String? directInvitation}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -1065,7 +1065,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_String(peerId, serializer);
         sse_encode_f_32(outputVolume, serializer);
         sse_encode_bool(isDirect, serializer);
-        sse_encode_opt_String(directConnectionString, serializer);
+        sse_encode_opt_String(directInvitation, serializer);
         return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 19)!;
       },
       codec: SseCodec(
@@ -1080,7 +1080,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         peerId,
         outputVolume,
         isDirect,
-        directConnectionString
+        directInvitation
       ],
       apiImpl: this,
     ));
@@ -1094,7 +1094,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           'peerId',
           'outputVolume',
           'isDirect',
-          'directConnectionString'
+          'directInvitation'
         ],
       );
 
@@ -1347,30 +1347,30 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  void crateTypesContactSetDirectConnectionString(
-      {required Contact that, String? connectionString}) {
+  void crateTypesContactSetDirectInvitation(
+      {required Contact that, String? invitation}) {
     return handler.executeSync(SyncTask(
       callFfi: () {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerContact(
             that, serializer);
-        sse_encode_opt_String(connectionString, serializer);
+        sse_encode_opt_String(invitation, serializer);
         return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 30)!;
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
-        decodeErrorData: null,
+        decodeErrorData: sse_decode_dart_error,
       ),
-      constMeta: kCrateTypesContactSetDirectConnectionStringConstMeta,
-      argValues: [that, connectionString],
+      constMeta: kCrateTypesContactSetDirectInvitationConstMeta,
+      argValues: [that, invitation],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateTypesContactSetDirectConnectionStringConstMeta =>
+  TaskConstMeta get kCrateTypesContactSetDirectInvitationConstMeta =>
       const TaskConstMeta(
-        debugName: 'Contact_set_direct_connection_string',
-        argNames: ['that', 'connectionString'],
+        debugName: 'Contact_set_direct_invitation',
+        argNames: ['that', 'invitation'],
       );
 
   @override
@@ -7155,8 +7155,8 @@ class ContactImpl extends RustOpaque implements Contact {
         RustLib.instance.api.rust_arc_decrement_strong_count_ContactPtr,
   );
 
-  String? directConnectionString() =>
-      RustLib.instance.api.crateTypesContactDirectConnectionString(
+  String? directInvitation() =>
+      RustLib.instance.api.crateTypesContactDirectInvitation(
         that: this,
       );
 
@@ -7194,9 +7194,10 @@ class ContactImpl extends RustOpaque implements Contact {
   void setDirect({required bool isDirect}) => RustLib.instance.api
       .crateTypesContactSetDirect(that: this, isDirect: isDirect);
 
-  void setDirectConnectionString({String? connectionString}) =>
-      RustLib.instance.api.crateTypesContactSetDirectConnectionString(
-          that: this, connectionString: connectionString);
+  /// Strictly validates interactive invitation input before changing state.
+  /// Passing `None` removes the current invitation and disables direct mode.
+  void setDirectInvitation({String? invitation}) => RustLib.instance.api
+      .crateTypesContactSetDirectInvitation(that: this, invitation: invitation);
 
   void setNickname({required String nickname}) => RustLib.instance.api
       .crateTypesContactSetNickname(that: this, nickname: nickname);
@@ -7718,10 +7719,8 @@ class TelepathyImpl extends RustOpaque implements Telepathy {
         that: this,
       );
 
-  /// Returns a JSON-serialized [`EndpointAddr`] of the local endpoint, or
-  /// `None` if the session manager is not active. The frontend displays
-  /// this in the networking settings so users can share their direct
-  /// addresses with contacts.
+  /// Returns the local endpoint's opaque `tp1:` direct invitation, or
+  /// `None` if the session manager is not active.
   Future<String?> nodeAddr() =>
       RustLib.instance.api.crateFlutterTelepathyNodeAddr(
         that: this,

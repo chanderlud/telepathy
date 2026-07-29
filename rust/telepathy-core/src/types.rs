@@ -1,3 +1,4 @@
+use crate::direct_invitation::{canonicalize_for_peer, decode_for_peer};
 use crate::internal::error::{Error, ErrorKind};
 use crate::internal::messages::Attachment;
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
@@ -67,12 +68,10 @@ pub struct Contact {
     /// In rooms, some contacts are dummy representing unknown peers
     pub(crate) is_room_only: bool,
 
-    /// When true, sessions for this contact try a direct Iroh connection
-    /// (bypassing relay / address discovery) using `direct_connection_string`.
+    /// When true, sessions for this contact use the direct invitation only.
     pub(crate) is_direct: bool,
 
-    /// A serialized [`Vec<TransportAddr>`] (JSON) conveying the peer's direct addresses
-    /// Parsed and passed to `Endpoint::connect` when `is_direct` is true.
+    /// An opaque `tp1:` direct invitation conveying the peer's direct addresses.
     pub(crate) direct_connection_string: Option<String>,
 }
 
@@ -92,18 +91,26 @@ impl Contact {
 
     #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
     #[allow(clippy::too_many_arguments)]
+    /// Reconstructs persisted contact data, discarding invalid invitation state
+    /// without discarding the contact's valid identity and preferences.
     pub fn from_parts(
         id: String,
         nickname: String,
         peer_id: String,
         output_volume: f32,
         is_direct: bool,
-        direct_connection_string: Option<String>,
+        direct_invitation: Option<String>,
     ) -> Result<Contact, DartError> {
+        let peer_id = PublicKey::from_str(&peer_id).map_err(|_| ErrorKind::InvalidContactFormat)?;
+        let direct_connection_string = direct_invitation
+            .as_deref()
+            .and_then(|invitation| canonicalize_for_peer(invitation, peer_id));
+        let is_direct = is_direct && direct_connection_string.is_some();
+
         Ok(Self {
             id,
             nickname,
-            peer_id: PublicKey::from_str(&peer_id).map_err(|_| ErrorKind::InvalidContactFormat)?,
+            peer_id,
             output_volume: contact_output_volume_from_parts(output_volume),
             is_room_only: false,
             is_direct,
@@ -163,17 +170,32 @@ impl Contact {
 
     #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
     pub fn set_direct(&mut self, is_direct: bool) {
-        self.is_direct = is_direct;
+        self.is_direct = is_direct
+            && self
+                .direct_connection_string
+                .as_deref()
+                .is_some_and(|invitation| decode_for_peer(invitation, self.peer_id).is_ok());
     }
 
     #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
-    pub fn direct_connection_string(&self) -> Option<String> {
+    pub fn direct_invitation(&self) -> Option<String> {
         self.direct_connection_string.clone()
     }
 
     #[cfg_attr(feature = "flutter", flutter_rust_bridge::frb(sync))]
-    pub fn set_direct_connection_string(&mut self, connection_string: Option<String>) {
-        self.direct_connection_string = connection_string;
+    /// Strictly validates interactive invitation input before changing state.
+    /// Passing `None` removes the current invitation and disables direct mode.
+    pub fn set_direct_invitation(&mut self, invitation: Option<String>) -> Result<(), DartError> {
+        let Some(invitation) = invitation else {
+            self.is_direct = false;
+            self.direct_connection_string = None;
+            return Ok(());
+        };
+
+        decode_for_peer(&invitation, self.peer_id)
+            .map_err(|error| DartError::from(error.to_string()))?;
+        self.direct_connection_string = Some(invitation);
+        Ok(())
     }
 
     pub(crate) fn group_contact(peer_id: PublicKey) -> Self {
@@ -941,7 +963,13 @@ fn poison_field_error(
 
 #[cfg(test)]
 mod tests {
-    use super::{NetworkConfig, NetworkConfigField};
+    use super::{Contact, NetworkConfig, NetworkConfigField};
+    use crate::direct_invitation::encode;
+    use base64::Engine;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use iroh::{RelayUrl, SecretKey, TransportAddr};
+    use std::net::{Ipv4Addr, SocketAddr};
+    use std::str::FromStr;
 
     const VALID_RELAY_A: &str = "https://relay-us.iroh.example/";
     const VALID_RELAY_B: &str = "https://relay-eu.iroh.example/";
@@ -951,6 +979,166 @@ mod tests {
 
     fn vec_of(items: &[&str]) -> Vec<String> {
         items.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn direct_invitation(peer: iroh::PublicKey) -> String {
+        encode(
+            peer,
+            vec![TransportAddr::Ip(SocketAddr::from((
+                Ipv4Addr::LOCALHOST,
+                40142,
+            )))],
+        )
+        .expect("test invitation has an address")
+    }
+
+    fn unsupported_direct_invitation(peer: iroh::PublicKey) -> String {
+        let invitation = direct_invitation(peer);
+        let encoded = invitation
+            .strip_prefix("tp1:")
+            .expect("test invitation has canonical prefix");
+        let bytes = URL_SAFE_NO_PAD
+            .decode(encoded)
+            .expect("test invitation has valid base64");
+        let mut payload: serde_json::Value =
+            serde_json::from_slice(&bytes).expect("test invitation has valid JSON");
+        payload["version"] = serde_json::json!(2);
+        format!(
+            "tp1:{}",
+            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).expect("test JSON serializes"))
+        )
+    }
+
+    fn relay_direct_invitation(peer: iroh::PublicKey) -> String {
+        let invitation = direct_invitation(peer);
+        let encoded = invitation
+            .strip_prefix("tp1:")
+            .expect("test invitation has canonical prefix");
+        let bytes = URL_SAFE_NO_PAD
+            .decode(encoded)
+            .expect("test invitation has valid base64");
+        let mut payload: serde_json::Value =
+            serde_json::from_slice(&bytes).expect("test invitation has valid JSON");
+        payload["addresses"] = serde_json::json!([serde_json::to_value(TransportAddr::Relay(
+            RelayUrl::from_str("https://relay.example/").expect("test relay URL should parse")
+        ))
+        .expect("relay address should serialize")]);
+        format!(
+            "tp1:{}",
+            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).expect("test JSON serializes"))
+        )
+    }
+
+    fn legacy_relay_invitation() -> String {
+        serde_json::to_string(&vec![TransportAddr::Relay(
+            RelayUrl::from_str("https://relay.example/").expect("test relay URL should parse"),
+        )])
+        .expect("legacy invitation should serialize")
+    }
+
+    #[test]
+    fn direct_contact_requires_a_valid_peer_bound_invitation() {
+        let peer = SecretKey::generate().public();
+        let invitation = direct_invitation(peer);
+
+        let contact = Contact::from_parts(
+            "contact-alice".to_string(),
+            "Alice".to_string(),
+            peer.to_string(),
+            0.0,
+            true,
+            Some(invitation.clone()),
+        )
+        .expect("valid direct contact should load");
+
+        assert!(contact.is_direct());
+        assert_eq!(contact.direct_invitation(), Some(invitation));
+    }
+
+    #[test]
+    fn invalid_direct_state_is_disabled_without_losing_contact_data() {
+        let peer = SecretKey::generate().public();
+        let other_peer = SecretKey::generate().public();
+
+        for invitation in [
+            None,
+            Some("tp1:not-valid-base64".to_string()),
+            Some(direct_invitation(other_peer)),
+            Some(relay_direct_invitation(peer)),
+            Some(legacy_relay_invitation()),
+        ] {
+            let contact = Contact::from_parts(
+                "contact-bob".to_string(),
+                "Bob Rivera".to_string(),
+                peer.to_string(),
+                -6.5,
+                true,
+                invitation,
+            )
+            .expect("invalid invitation state must not discard a valid contact");
+
+            assert_eq!(contact.id(), "contact-bob");
+            assert_eq!(contact.nickname(), "Bob Rivera");
+            assert_eq!(contact.output_volume(), -6.5);
+            assert!(!contact.is_direct());
+            assert_eq!(contact.direct_invitation(), None);
+        }
+    }
+
+    #[test]
+    fn interactive_invitation_import_is_strict_and_atomic() {
+        let peer = SecretKey::generate().public();
+        let other_peer = SecretKey::generate().public();
+        let mut contact = Contact::new("Carol".to_string(), peer.to_string())
+            .expect("valid peer should create contact");
+
+        contact.set_direct(true);
+        assert!(!contact.is_direct());
+
+        let valid_invitation = direct_invitation(peer);
+        contact
+            .set_direct_invitation(Some(valid_invitation.clone()))
+            .expect("matching canonical invitation should be accepted");
+        contact.set_direct(true);
+        assert!(contact.is_direct());
+
+        for invalid_invitation in [
+            "tp1:broken".to_string(),
+            direct_invitation(other_peer),
+            unsupported_direct_invitation(peer),
+            relay_direct_invitation(peer),
+        ] {
+            assert!(
+                contact
+                    .set_direct_invitation(Some(invalid_invitation))
+                    .is_err()
+            );
+            assert_eq!(contact.direct_invitation(), Some(valid_invitation.clone()));
+            assert!(contact.is_direct());
+        }
+
+        contact
+            .set_direct_invitation(None)
+            .expect("removing an invitation should succeed");
+        assert_eq!(contact.direct_invitation(), None);
+        assert!(!contact.is_direct());
+    }
+
+    #[test]
+    fn normal_contact_does_not_require_an_invitation() {
+        let peer = SecretKey::generate().public();
+        let contact = Contact::from_parts(
+            "contact-dana".to_string(),
+            "Dana".to_string(),
+            peer.to_string(),
+            0.0,
+            false,
+            None,
+        )
+        .expect("ordinary contact should not require an invitation");
+
+        assert!(!contact.is_direct());
+        assert_eq!(contact.direct_invitation(), None);
     }
 
     #[test]

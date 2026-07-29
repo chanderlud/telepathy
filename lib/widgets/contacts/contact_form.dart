@@ -28,11 +28,13 @@ class ContactFormState extends State<ContactForm> {
   final FocusNode _nicknameFocusNode = FocusNode();
   String? selectedPeer;
   bool? addContact;
-  bool _directEnabled = false;
 
   @override
   void dispose() {
     _nicknameFocusNode.dispose();
+    _nicknameInput.dispose();
+    _peerIdInput.dispose();
+    _directConnInput.dispose();
     super.dispose();
   }
 
@@ -101,24 +103,16 @@ class ContactFormState extends State<ContactForm> {
                 hintText: 'string encoded peer ID',
                 obscureText: true),
             const SizedBox(height: 12),
-            Row(
-              children: [
-                const Text('Direct Connection'),
-                const SizedBox(width: 8),
-                Switch(
-                  value: _directEnabled,
-                  onChanged: (v) => setState(() => _directEnabled = v),
-                ),
-              ],
+            TextInput(
+              controller: _directConnInput,
+              labelText: 'Direct invitation (optional)',
+              hintText: 'Paste a tp1: invitation',
             ),
-            if (_directEnabled) ...[
-              const SizedBox(height: 12),
-              TextInput(
-                controller: _directConnInput,
-                labelText: 'Connection String',
-                hintText: '{"relay_url": "...", "direct_addresses": [...]}',
-              ),
-            ],
+            const SizedBox(height: 6),
+            const Text(
+              'Paste an invitation to enable direct connection for this contact.',
+              style: TextStyle(fontSize: 12, color: Colors.grey),
+            ),
             const SizedBox(height: 26),
             Center(
               child: Button(
@@ -143,28 +137,28 @@ class ContactFormState extends State<ContactForm> {
                   }
 
                   try {
-                    Contact contact =
-                        profilesController.addContact(nickname, peerId);
-
-                    if (_directEnabled) {
-                      final connStr = _directConnInput.text.trim();
-                      if (connStr.isNotEmpty) {
-                        contact.setDirectConnectionString(
-                            connectionString: connStr);
-                        contact.setDirect(isDirect: true);
-                      }
-                    }
+                    final invitation = _directConnInput.text.trim();
+                    Contact contact = profilesController.addContact(
+                      nickname,
+                      peerId,
+                      directInvitation: invitation.isEmpty ? null : invitation,
+                    );
 
                     telepathy.startSession(contact: contact);
 
                     _nicknameInput.clear();
                     _peerIdInput.clear();
                     _directConnInput.clear();
-                    setState(() => _directEnabled = false);
                     Navigator.pop(context);
-                  } on DartError catch (_) {
+                  } on DartError {
+                    final invitation = _directConnInput.text.trim();
                     showErrorDialog(
-                        context, 'Failed to add contact', 'Invalid peer ID');
+                      context,
+                      'Failed to add contact',
+                      invitation.isEmpty
+                          ? 'Invalid peer ID'
+                          : 'The direct invitation is invalid or belongs to a different contact. Paste a valid tp1: invitation.',
+                    );
                   }
                 },
               ),

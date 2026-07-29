@@ -141,14 +141,26 @@ class NetworkSettingsState extends State<NetworkSettings> {
   }
 
   Future<void> _fetchNodeAddr() async {
-    setState(() => _nodeAddrLoading = true);
+    if (mounted) setState(() => _nodeAddrLoading = true);
     try {
       final telepathy = context.read<Telepathy>();
-      _nodeAddr = await telepathy.nodeAddr();
+      final nodeAddr = await telepathy.nodeAddr();
+      if (mounted) setState(() => _nodeAddr = nodeAddr);
     } catch (_) {
-      _nodeAddr = null;
+      // A missing manager is an expected inactive state. Keep any existing
+      // invitation visible if a later refresh fails.
     }
     if (mounted) setState(() => _nodeAddrLoading = false);
+  }
+
+  Future<void> _refreshNodeAddrAfterRestart() async {
+    if (mounted) setState(() => _nodeAddrLoading = true);
+    try {
+      final nodeAddr = await context.read<Telepathy>().nodeAddr();
+      if (mounted) setState(() => _nodeAddr = nodeAddr);
+    } finally {
+      if (mounted) setState(() => _nodeAddrLoading = false);
+    }
   }
 
   @override
@@ -264,7 +276,7 @@ class NetworkSettingsState extends State<NetworkSettings> {
             if (!kIsWeb) const SizedBox(height: 8),
             _buildPkarrSection(width, isRestartSafe),
             const SizedBox(height: 16),
-            _buildConnectionStringsSection(),
+            _buildDirectInvitationSection(),
             if (unsavedChanges || _saveSucceeded) const SizedBox(height: 20),
             if (unsavedChanges)
               Button(
@@ -492,16 +504,16 @@ class NetworkSettingsState extends State<NetworkSettings> {
     );
   }
 
-  Widget _buildConnectionStringsSection() {
+  Widget _buildDirectInvitationSection() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        const Text('Your Connection Strings',
+        const Text('Direct invitation',
             style: TextStyle(fontWeight: FontWeight.w600)),
         const SizedBox(height: 4),
         const Text(
-          'Set a fixed, non-zero listen port if you want peers to set up direct contacts for you.',
+          'Copy this invitation and ask recipients to paste it into Add direct contact.',
           style: TextStyle(color: Colors.grey),
         ),
         const SizedBox(height: 8),
@@ -512,30 +524,13 @@ class NetworkSettingsState extends State<NetworkSettings> {
             child: CircularProgressIndicator(strokeWidth: 3),
           )
         else if (_nodeAddr != null)
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                _nodeAddr!,
-                style: const TextStyle(
-                  fontSize: 11,
-                  fontFamily: 'monospace',
-                ),
-              ),
-              const SizedBox(height: 6),
-              Button(
-                text: 'Copy',
-                onPressed: () {
-                  _copyToClipboard();
-                },
-                width: 80,
-              ),
-            ],
+          Button(
+            text: 'Copy invitation',
+            onPressed: _copyToClipboard,
           )
         else
           const Text(
-            'Start a session to see your connection strings.',
+            'Direct invitations are unavailable until the session manager is active.',
             style: TextStyle(color: Colors.grey),
           ),
       ],
@@ -547,7 +542,7 @@ class NetworkSettingsState extends State<NetworkSettings> {
     await Clipboard.setData(ClipboardData(text: _nodeAddr!));
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Connection string copied to clipboard')),
+      const SnackBar(content: Text('Direct invitation copied to clipboard')),
     );
   }
 
@@ -933,6 +928,8 @@ class NetworkSettingsState extends State<NetworkSettings> {
     try {
       await networkSettingsController.saveNetworkConfig();
       await telepathy.restartManager();
+      if (!mounted) return;
+      await _refreshNodeAddrAfterRestart();
     } catch (error) {
       // Persistence or restart failed. The atomic `update` above
       // already mutated `networkConfig` in memory, so the visible

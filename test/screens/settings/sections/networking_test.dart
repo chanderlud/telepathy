@@ -15,8 +15,8 @@ import 'package:telepathy/screens/settings/sections/networking.dart';
 import 'package:telepathy/widgets/common/index.dart';
 
 void main() {
-  const connectionStringsPortNote =
-      'Set a fixed, non-zero listen port if you want peers to set up direct contacts for you.';
+  const directInvitationNote =
+      'Copy this invitation and ask recipients to paste it into Add direct contact.';
 
   setUp(() {
     SharedPreferencesAsyncPlatform.instance =
@@ -28,7 +28,7 @@ void main() {
   });
 
   testWidgets(
-      'connection strings note stays visible while loading, populated, and empty',
+      'direct invitation stays copy-only while loading, available, and inactive',
       (WidgetTester tester) async {
     final loadingNodeAddr = Completer<String?>();
     final loadingRecorder = _NetworkConfigRecorder(
@@ -42,14 +42,23 @@ void main() {
       telepathy: _FakeTelepathy(nodeAddrFuture: loadingNodeAddr.future),
     );
 
-    expect(find.text(connectionStringsPortNote), findsOneWidget);
+    expect(find.text(directInvitationNote), findsOneWidget);
     expect(find.byType(CircularProgressIndicator), findsOneWidget);
 
     loadingNodeAddr.complete('node-address-with-fixed-port');
     await tester.pumpAndSettle();
 
-    expect(find.text(connectionStringsPortNote), findsOneWidget);
-    expect(find.text('node-address-with-fixed-port'), findsOneWidget);
+    expect(find.text(directInvitationNote), findsOneWidget);
+    expect(find.text('Copy invitation'), findsOneWidget);
+    expect(find.text('node-address-with-fixed-port'), findsNothing);
+    expect(
+      tester
+          .widget<Button>(find.ancestor(
+              of: find.widgetWithText(ElevatedButton, 'Copy invitation'),
+              matching: find.byType(Button)))
+          .disabled,
+      isFalse,
+    );
 
     await tester.pumpWidget(const SizedBox.shrink());
 
@@ -65,11 +74,45 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text(connectionStringsPortNote), findsOneWidget);
+    expect(find.text(directInvitationNote), findsOneWidget);
     expect(
-      find.text('Start a session to see your connection strings.'),
+      find.text(
+          'Direct invitations are unavailable until the session manager is active.'),
       findsOneWidget,
     );
+    expect(find.textContaining('JSON'), findsNothing);
+  });
+
+  testWidgets('refreshes the copyable direct invitation after restart',
+      (WidgetTester tester) async {
+    final recorder = _NetworkConfigRecorder(
+      listenPort: 40142,
+      bindAddresses: const ['0.0.0.0', '::'],
+    );
+    final telepathy = _FakeTelepathy(
+      nodeAddrs: const ['tp1:before-restart', 'tp1:after-restart'],
+    );
+
+    await tester.pumpNetworkSettings(
+      controller: _FakeNetworkSettingsController(recorder),
+      stateController: StateController(),
+      telepathy: telepathy,
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Copy invitation'), findsOneWidget);
+
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Listen Port'),
+      '40143',
+    );
+    await tester.pump();
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Save Changes'));
+    await tester.pumpAndSettle();
+
+    expect(telepathy.restartManagerCalls, 1);
+    expect(telepathy.nodeAddrCalls, 2);
+    expect(find.text('Copy invitation'), findsOneWidget);
+    await tester.pump(const Duration(seconds: 2));
   });
 
   testWidgets(
@@ -432,6 +475,9 @@ class _FakeNetworkSettingsController extends NetworkSettingsController {
 
   @override
   NetworkConfig get networkConfig => _recorder.buildLatest();
+
+  @override
+  Future<void> saveNetworkConfig() async {}
 }
 
 class _NetworkConfigRecorder {
@@ -593,10 +639,14 @@ bool _isValidIpLiteral(String value) {
 }
 
 class _FakeTelepathy implements Telepathy {
-  _FakeTelepathy({Future<String?>? nodeAddrFuture})
-      : _nodeAddrFuture = nodeAddrFuture;
+  _FakeTelepathy({Future<String?>? nodeAddrFuture, List<String?>? nodeAddrs})
+      : _nodeAddrFuture = nodeAddrFuture,
+        _nodeAddrs = nodeAddrs;
 
   final Future<String?>? _nodeAddrFuture;
+  final List<String?>? _nodeAddrs;
+  int nodeAddrCalls = 0;
+  int restartManagerCalls = 0;
 
   @override
   bool get isDisposed => false;
@@ -636,7 +686,9 @@ class _FakeTelepathy implements Telepathy {
   void pauseStatistics() {}
 
   @override
-  Future<void> restartManager() async {}
+  Future<void> restartManager() async {
+    restartManagerCalls += 1;
+  }
 
   @override
   Future<PreparedIdentitySwitch> prepareIdentitySwitch({
@@ -679,9 +731,14 @@ class _FakeTelepathy implements Telepathy {
   void setMuted({required bool muted}) {}
 
   @override
-  Future<String?> nodeAddr() async => _nodeAddrFuture == null
-      ? null
-      : await _nodeAddrFuture;
+  Future<String?> nodeAddr() async {
+    final int call = nodeAddrCalls++;
+    final List<String?>? nodeAddrs = _nodeAddrs;
+    if (nodeAddrs != null) {
+      return nodeAddrs[call < nodeAddrs.length ? call : nodeAddrs.length - 1];
+    }
+    return _nodeAddrFuture == null ? null : await _nodeAddrFuture;
+  }
 
   @override
   Future<void> setOutputDevice({String? deviceId}) async {}

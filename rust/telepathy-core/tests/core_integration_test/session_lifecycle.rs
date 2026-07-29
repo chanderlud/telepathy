@@ -1,6 +1,7 @@
 use super::common::{
-    DEFAULT_SAMPLE_RATE, PendingAcceptProbe, TwoClientShutdownGuard, assert_no_busy_end,
-    assert_no_call_ended_before_connected, build_client, build_client_with_accept_probe,
+    ContactLookupGate, DEFAULT_SAMPLE_RATE, ManagerLifecycle, PendingAcceptProbe,
+    TwoClientShutdownGuard, assert_no_busy_end, assert_no_call_ended_before_connected,
+    build_client, build_client_with_accept_probe, build_client_with_contact_lookup_gate,
     build_client_with_lookup_contacts, call_state_snapshot, init_test_tracing,
     shared_address_lookup, shared_relay_map, wait_for_active_transport, wait_for_connected,
     wait_for_sessions,
@@ -14,7 +15,7 @@ use telepathy_audio::devices::{MockAudioHost, MockAudioInput, MockAudioOutput};
 use telepathy_core::internal::state::SessionState;
 use telepathy_core::types::Contact;
 use telepathy_core::types::{CallState, CodecConfig, SessionStatus};
-use tokio::time::sleep;
+use tokio::time::{sleep, timeout};
 use tracing::info;
 
 #[tokio::test(flavor = "multi_thread")]
@@ -103,6 +104,109 @@ async fn session_collision_doesnt_fail() {
 
     client_a.telepathy.shutdown().await;
     client_b.telepathy.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn profile_switch_cancels_dial_blocked_after_connect_and_refreshes_invitation() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+    let codec_config = CodecConfig::new(true, true, 5.0);
+    let key_a = SecretKey::generate();
+    let key_b = SecretKey::generate();
+    let contact_a = Contact::new("switch-client-a".to_string(), key_a.public().to_string())
+        .expect("contact a invalid");
+    let contact_b = Contact::new("switch-client-b".to_string(), key_b.public().to_string())
+        .expect("contact b invalid");
+    let gate = ContactLookupGate::new(contact_b.get_peer_id().to_vec(), 2);
+
+    let client_a = build_client_with_contact_lookup_gate(
+        relay_map,
+        key_a,
+        vec![contact_b.clone()],
+        Vec::new(),
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        Arc::new(Mutex::new(Vec::new())),
+        ManagerLifecycle::Restartable,
+        gate.clone(),
+    )
+    .await;
+    let client_b = build_client(
+        relay_map,
+        key_b,
+        vec![contact_a],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        Arc::new(Mutex::new(Vec::new())),
+    )
+    .await;
+    let initial_invitation = client_a
+        .telepathy
+        .node_addr()
+        .await
+        .expect("active manager should expose an invitation");
+
+    client_a.telepathy.start_session(&contact_b).await;
+    gate.wait_blocked().await;
+
+    let prepared = client_a
+        .telepathy
+        .prepare_identity_switch(SecretKey::generate().to_bytes(), Vec::new())
+        .await
+        .expect("identity switch should prepare");
+    timeout(Duration::from_secs(5), prepared.commit())
+        .await
+        .expect("profile switch must cancel the delayed old dial")
+        .expect("profile switch should succeed");
+
+    assert!(
+        client_a
+            .telepathy
+            .inner
+            .session_states
+            .read()
+            .await
+            .is_empty(),
+        "the canceled old connection must not initialize a stale session"
+    );
+    let restarted_invitation = client_a
+        .telepathy
+        .node_addr()
+        .await
+        .expect("restarted manager should expose its current invitation");
+    assert_ne!(
+        restarted_invitation, initial_invitation,
+        "the restarted invitation must use the switched identity"
+    );
+    timeout(Duration::from_secs(5), client_a.telepathy.restart_manager())
+        .await
+        .expect("explicit manager restart should be bounded")
+        .expect("explicit manager restart should succeed");
+    assert!(
+        client_a.telepathy.node_addr().await.is_some(),
+        "active manager should expose its current invitation after restart"
+    );
+
+    gate.release();
+    client_b.telepathy.shutdown().await;
+    timeout(Duration::from_secs(5), client_a.telepathy.shutdown())
+        .await
+        .expect("shutdown must not wait for the canceled dial");
+    assert_eq!(
+        client_a.telepathy.node_addr().await,
+        None,
+        "inactive manager must not expose a direct invitation"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

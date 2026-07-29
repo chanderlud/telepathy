@@ -89,10 +89,8 @@ abstract class Telepathy implements RustOpaqueInterface {
   /// Creates an operation token that can cancel one pending call or room start.
   StartOperation newStartOperation();
 
-  /// Returns a JSON-serialized [`EndpointAddr`] of the local endpoint, or
-  /// `None` if the session manager is not active. The frontend displays
-  /// this in the networking settings so users can share their direct
-  /// addresses with contacts.
+  /// Returns the local endpoint's opaque `tp1:` direct invitation, or
+  /// `None` if the session manager is not active.
   Future<String?> nodeAddr();
 
   void pauseStatistics();

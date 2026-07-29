@@ -43,7 +43,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 236467155;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1001975318;
 
 // Section: executor
 
@@ -828,14 +828,14 @@ fn wire__crate__types__CodecConfig_to_values_impl(
         },
     )
 }
-fn wire__crate__types__Contact_direct_connection_string_impl(
+fn wire__crate__types__Contact_direct_invitation_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
 ) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
     FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
         flutter_rust_bridge::for_generated::TaskInfo {
-            debug_name: "Contact_direct_connection_string",
+            debug_name: "Contact_direct_invitation",
             port: None,
             mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
         },
@@ -868,9 +868,9 @@ fn wire__crate__types__Contact_direct_connection_string_impl(
                     }
                 }
                 let api_that_guard = api_that_guard.unwrap();
-                let output_ok = Result::<_, ()>::Ok(
-                    crate::types::Contact::direct_connection_string(&*api_that_guard),
-                )?;
+                let output_ok = Result::<_, ()>::Ok(crate::types::Contact::direct_invitation(
+                    &*api_that_guard,
+                ))?;
                 Ok(output_ok)
             })())
         },
@@ -902,7 +902,7 @@ fn wire__crate__types__Contact_from_parts_impl(
             let api_peer_id = <String>::sse_decode(&mut deserializer);
             let api_output_volume = <f32>::sse_decode(&mut deserializer);
             let api_is_direct = <bool>::sse_decode(&mut deserializer);
-            let api_direct_connection_string = <Option<String>>::sse_decode(&mut deserializer);
+            let api_direct_invitation = <Option<String>>::sse_decode(&mut deserializer);
             deserializer.end();
             transform_result_sse::<_, crate::types::DartError>((move || {
                 let output_ok = crate::types::Contact::from_parts(
@@ -911,7 +911,7 @@ fn wire__crate__types__Contact_from_parts_impl(
                     api_peer_id,
                     api_output_volume,
                     api_is_direct,
-                    api_direct_connection_string,
+                    api_direct_invitation,
                 )?;
                 Ok(output_ok)
             })())
@@ -1374,14 +1374,14 @@ fn wire__crate__types__Contact_set_direct_impl(
         },
     )
 }
-fn wire__crate__types__Contact_set_direct_connection_string_impl(
+fn wire__crate__types__Contact_set_direct_invitation_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
 ) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
     FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
         flutter_rust_bridge::for_generated::TaskInfo {
-            debug_name: "Contact_set_direct_connection_string",
+            debug_name: "Contact_set_direct_invitation",
             port: None,
             mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
         },
@@ -1398,9 +1398,9 @@ fn wire__crate__types__Contact_set_direct_connection_string_impl(
             let api_that = <RustOpaqueMoi<
                 flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Contact>,
             >>::sse_decode(&mut deserializer);
-            let api_connection_string = <Option<String>>::sse_decode(&mut deserializer);
+            let api_invitation = <Option<String>>::sse_decode(&mut deserializer);
             deserializer.end();
-            transform_result_sse::<_, ()>((move || {
+            transform_result_sse::<_, crate::types::DartError>((move || {
                 let mut api_that_guard = None;
                 let decode_indices_ =
                     flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
@@ -1415,12 +1415,10 @@ fn wire__crate__types__Contact_set_direct_connection_string_impl(
                     }
                 }
                 let mut api_that_guard = api_that_guard.unwrap();
-                let output_ok = Result::<_, ()>::Ok({
-                    crate::types::Contact::set_direct_connection_string(
-                        &mut *api_that_guard,
-                        api_connection_string,
-                    );
-                })?;
+                let output_ok = crate::types::Contact::set_direct_invitation(
+                    &mut *api_that_guard,
+                    api_invitation,
+                )?;
                 Ok(output_ok)
             })())
         },
@@ -7083,9 +7081,7 @@ fn pde_ffi_dispatcher_sync_impl(
         15 => wire__crate__types__CodecConfig_set_residual_bits_impl(ptr, rust_vec_len, data_len),
         16 => wire__crate__types__CodecConfig_set_vbr_impl(ptr, rust_vec_len, data_len),
         17 => wire__crate__types__CodecConfig_to_values_impl(ptr, rust_vec_len, data_len),
-        18 => {
-            wire__crate__types__Contact_direct_connection_string_impl(ptr, rust_vec_len, data_len)
-        }
+        18 => wire__crate__types__Contact_direct_invitation_impl(ptr, rust_vec_len, data_len),
         19 => wire__crate__types__Contact_from_parts_impl(ptr, rust_vec_len, data_len),
         20 => wire__crate__types__Contact_get_peer_id_impl(ptr, rust_vec_len, data_len),
         21 => wire__crate__types__Contact_id_impl(ptr, rust_vec_len, data_len),
@@ -7097,11 +7093,7 @@ fn pde_ffi_dispatcher_sync_impl(
         27 => wire__crate__types__Contact_peer_id_impl(ptr, rust_vec_len, data_len),
         28 => wire__crate__types__Contact_pub_clone_impl(ptr, rust_vec_len, data_len),
         29 => wire__crate__types__Contact_set_direct_impl(ptr, rust_vec_len, data_len),
-        30 => wire__crate__types__Contact_set_direct_connection_string_impl(
-            ptr,
-            rust_vec_len,
-            data_len,
-        ),
+        30 => wire__crate__types__Contact_set_direct_invitation_impl(ptr, rust_vec_len, data_len),
         31 => wire__crate__types__Contact_set_nickname_impl(ptr, rust_vec_len, data_len),
         32 => wire__crate__types__Contact_set_output_volume_impl(ptr, rust_vec_len, data_len),
         33 => wire__crate__flutter__FlutterCallbacks_new_impl(ptr, rust_vec_len, data_len),

@@ -4380,6 +4380,7 @@ version = "2.8.1"
 dependencies = [
  "async-trait",
  "atomic_float",
+ "base64",
  "bytes",
  "cfg-if",
  "chrono",
