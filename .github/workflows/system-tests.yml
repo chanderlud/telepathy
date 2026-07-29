@@ -3,9 +3,9 @@ name: System Tests
 on:
   workflow_call:
     inputs:
-      sweep-count:
-        description: "Number of seeded system-test sweeps to run"
-        type: number
+      sweep_indices:
+        description: "JSON array of seeded system-test sweep indices"
+        type: string
         required: true
 
 permissions:
@@ -23,9 +23,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        sweep_index: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
-
-    if: matrix.sweep_index < inputs['sweep-count']
+        sweep_index: ${{ fromJSON(inputs.sweep_indices) }}
 
     env:
       SYSTEM_TEST_ORDER_SEED: ${{ format('{0}-{1}', github.run_id, matrix.sweep_index) }}

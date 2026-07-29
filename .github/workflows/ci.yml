@@ -203,7 +203,7 @@ jobs:
     needs: lint_rust
     uses: ./.github/workflows/system-tests.yml
     with:
-      sweep-count: 3
+      sweep_indices: '[0,1,2]'
 
   build_flutter:
     needs: [lint_rust, lint_flutter]
