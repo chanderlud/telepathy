@@ -248,16 +248,26 @@ where
             .add_desired_contact_infallible(contact.clone());
         self.await_runtime_applied(&CancellationToken::new())
             .await?;
-        self.dial_session(contact).await;
+        let attempt_id = self.inner.begin_direct_attempt(contact.peer_id);
+        self.dial_session(contact, attempt_id).await?;
         Ok(())
     }
 
-    async fn dial_session(&self, contact: &Contact) {
+    async fn dial_session(&self, contact: &Contact, attempt_id: u64) -> Result<()> {
         if let Some(ref sender) = self.inner.start_session
-            && sender.send(contact.peer_id).await.is_err()
+            && sender.send((contact.peer_id, attempt_id)).await.is_err()
         {
             error!("start_session channel is closed");
+            self.inner
+                .complete_direct_attempt(contact.peer_id, attempt_id);
+            return Err(ErrorKind::RuntimeNotReady.into());
         }
+        if self.inner.start_session.is_none() {
+            self.inner
+                .complete_direct_attempt(contact.peer_id, attempt_id);
+            return Err(ErrorKind::RuntimeNotReady.into());
+        }
+        Ok(())
     }
 
     /// Waits for the manager to apply the current runtime revision, bounded by
@@ -302,6 +312,33 @@ where
             return Ok(());
         }
         self.await_runtime_applied(operation).await?;
+        if operation.is_cancelled() {
+            return Ok(());
+        }
+
+        loop {
+            let availability = self.inner.session_availability_snapshot(contact.peer_id);
+            if self
+                .inner
+                .session_states
+                .read()
+                .await
+                .contains_key(&contact.peer_id)
+            {
+                break;
+            }
+            if !availability.waiting_for_session {
+                if operation.is_cancelled() {
+                    return Ok(());
+                }
+                return Err(ErrorKind::NoSessionForContact.into());
+            }
+            tokio::select! {
+                biased;
+                _ = operation.cancelled() => return Ok(()),
+                _ = self.inner.wait_for_session_availability_change(contact.peer_id, availability.generation) => {}
+            }
+        }
 
         // Acquire the slot and capture its ownership snapshot atomically: both
         // happen under a single mutex hold inside `try_acquire_or_match_with_owner`,
@@ -467,16 +504,25 @@ where
         }
         self.await_runtime_applied(operation).await?;
 
-        if !self
+        // Parse the exact authorized member set before claiming RoomCall ownership.
+        let members: Vec<_> = member_strings
+            .into_iter()
+            .filter_map(|member| member.parse().ok())
+            .collect();
+
+        let Some(room_owner) = self
             .inner
             .core_state
             .call_slot
-            .try_acquire(CallSlotState::RoomCall, None)?
-        {
+            .try_acquire_with_snapshot(CallSlotState::RoomCall)?
+        else {
             return Err(ErrorKind::CallAlreadyActive.into());
-        }
-
-        let room_owner = self.inner.core_state.call_slot.snapshot()?;
+        };
+        // No await/yield is allowed between slot acquisition and admission publication.
+        let mut pending_admission = Some(
+            self.inner
+                .install_pending_room_admission(room_owner, &members),
+        );
 
         if operation.is_cancelled() {
             let _ = self
@@ -507,11 +553,6 @@ where
             }
         }
 
-        // parse members
-        let members: Vec<_> = member_strings
-            .into_iter()
-            .filter_map(|m| m.parse().ok())
-            .collect();
         // delivers messages from each session to the room controller
         let (sender, receiver) = channel(32);
         // cancels all processing threads
@@ -609,6 +650,7 @@ where
                 Err(_) => return Ok(()),
             },
             _ = operation.cancelled() => {
+                drop(pending_admission.take());
                 abort_room_generation(&cancel, &end_call, &mut controller_completion_receiver)
                     .await;
                 return Ok(());
@@ -619,6 +661,7 @@ where
         let mut room_guard = tokio::select! {
             guard = self.inner.room_state.write() => guard,
             _ = operation.cancelled() => {
+                drop(pending_admission.take());
                 abort_room_generation(&cancel, &end_call, &mut controller_completion_receiver)
                     .await;
                 return Ok(());
@@ -626,6 +669,7 @@ where
         };
         if operation.is_cancelled() {
             drop(room_guard);
+            drop(pending_admission.take());
             abort_room_generation(&cancel, &end_call, &mut controller_completion_receiver).await;
             return Ok(());
         }
@@ -638,6 +682,10 @@ where
             generation: room_generation,
         });
         drop(room_guard);
+        if let Some(pending_admission) = pending_admission.take() {
+            pending_admission.publish();
+        }
+        self.inner.request_room_reconcile();
         if operation.is_cancelled() {
             drop(publication_sender);
             abort_room_generation(&cancel, &end_call, &mut controller_completion_receiver).await;
@@ -671,20 +719,6 @@ where
             };
             if let Some(state) = read_guard.get(&member) {
                 state.start_call.notify_one();
-            } else if let Some(sender) = &self.inner.start_session {
-                let cancelled_during_send = tokio::select! {
-                    _ = operation.cancelled() => true,
-                    send_result = sender.send(member) => {
-                        let _ = send_result;
-                        false
-                    }
-                };
-                if cancelled_during_send {
-                    drop(read_guard);
-                    abort_room_generation(&cancel, &end_call, &mut controller_completion_receiver)
-                        .await;
-                    return Ok(());
-                }
             }
         }
         Ok(())
@@ -784,6 +818,7 @@ where
         if let Some(state) = removed_state {
             state.stop_session.cancel();
         }
+        self.inner.request_room_reconcile();
     }
 
     /// Blocks while an audio test is running

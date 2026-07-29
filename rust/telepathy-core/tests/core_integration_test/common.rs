@@ -1,5 +1,6 @@
 use iroh::address_lookup::memory::MemoryLookup;
 use iroh::{PublicKey, RelayMap, SecretKey};
+use std::collections::HashMap;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::{Arc, Condvar, Mutex, Once, OnceLock};
@@ -18,7 +19,7 @@ use telepathy_core::types::Contact;
 use telepathy_core::types::{
     CallState, CodecConfig, ManagerState, NetworkConfig, ScreenshareConfig, SessionStatus,
 };
-use tokio::sync::Notify;
+use tokio::sync::{Notify, watch};
 use tokio::time::{interval, sleep};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -54,6 +55,8 @@ where
 {
     pub(super) telepathy: MockTelepathyHandle<H, I, O>,
     pub(super) is_active: Arc<AtomicBool>,
+    pub(super) contact_lookup_probe: ContactLookupProbe,
+    pub(super) session_status_probe: SessionStatusProbe,
 }
 
 impl<H, I, O> ClientHarness<H, I, O>
@@ -68,6 +71,181 @@ where
         runtime_applied.as_mut().enable();
         self.telepathy.stop_session(contact).await;
         runtime_applied.await;
+    }
+}
+
+#[derive(Clone, Default)]
+pub(super) struct ContactLookupProbe {
+    counts: Arc<Mutex<HashMap<Vec<u8>, usize>>>,
+    changed: Arc<Notify>,
+}
+
+impl ContactLookupProbe {
+    fn record(&self, peer_id: &[u8]) {
+        *self
+            .counts
+            .lock()
+            .unwrap()
+            .entry(peer_id.to_vec())
+            .or_default() += 1;
+        self.changed.notify_waiters();
+    }
+
+    pub(super) async fn wait_for(&self, peer_id: &[u8], expected: usize) {
+        let wait = async {
+            loop {
+                let changed = self.changed.notified();
+                tokio::pin!(changed);
+                changed.as_mut().enable();
+                if self
+                    .counts
+                    .lock()
+                    .unwrap()
+                    .get(peer_id)
+                    .copied()
+                    .unwrap_or_default()
+                    >= expected
+                {
+                    return;
+                }
+                changed.await;
+            }
+        };
+        if tokio::time::timeout(Duration::from_secs(60), wait)
+            .await
+            .is_err()
+        {
+            let observed = self
+                .counts
+                .lock()
+                .unwrap()
+                .get(peer_id)
+                .copied()
+                .unwrap_or_default();
+            panic!(
+                "timed out waiting for {expected} contact lookups for {peer_id:?}, got {observed}"
+            );
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct SessionStatusProbe {
+    statuses: Arc<Mutex<HashMap<Vec<u8>, SessionStatus>>>,
+    connected_counts: Arc<Mutex<HashMap<Vec<u8>, usize>>>,
+    changed: Arc<Notify>,
+    park_connecting: Arc<AtomicBool>,
+    connecting_released: watch::Sender<bool>,
+}
+
+impl Default for SessionStatusProbe {
+    fn default() -> Self {
+        let (connecting_released, _) = watch::channel(false);
+        Self {
+            statuses: Arc::default(),
+            connected_counts: Arc::default(),
+            changed: Arc::new(Notify::new()),
+            park_connecting: Arc::new(AtomicBool::new(false)),
+            connecting_released,
+        }
+    }
+}
+
+impl SessionStatusProbe {
+    fn record(&self, peer_id: &[u8], status: SessionStatus) -> bool {
+        let is_connecting = matches!(status, SessionStatus::Connecting);
+        if matches!(status, SessionStatus::Connected { .. }) {
+            *self
+                .connected_counts
+                .lock()
+                .unwrap()
+                .entry(peer_id.to_vec())
+                .or_default() += 1;
+        }
+        self.statuses
+            .lock()
+            .unwrap()
+            .insert(peer_id.to_vec(), status);
+        self.changed.notify_waiters();
+        is_connecting && self.park_connecting.load(Relaxed)
+    }
+
+    pub(super) fn connected_count(&self, peer_id: &[u8]) -> usize {
+        self.connected_counts
+            .lock()
+            .unwrap()
+            .get(peer_id)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    pub(super) async fn wait_for_connected_after(&self, peer_id: &[u8], previous: usize) {
+        let wait = async {
+            loop {
+                let changed = self.changed.notified();
+                tokio::pin!(changed);
+                changed.as_mut().enable();
+                if self.connected_count(peer_id) > previous {
+                    return;
+                }
+                changed.await;
+            }
+        };
+        tokio::time::timeout(Duration::from_secs(60), wait)
+            .await
+            .unwrap_or_else(|_| {
+                panic!(
+                    "timed out waiting for a new Connected session status for {peer_id:?}; previous={previous}, current={}",
+                    self.connected_count(peer_id)
+                )
+            });
+    }
+
+    pub(super) fn park_connecting(&self) {
+        self.park_connecting.store(true, Relaxed);
+        let _ = self.connecting_released.send(true);
+    }
+
+    pub(super) fn release_connecting(&self) {
+        self.park_connecting.store(false, Relaxed);
+        let _ = self.connecting_released.send(false);
+    }
+
+    async fn wait_for_connecting_release(&self) {
+        let mut released = self.connecting_released.subscribe();
+        loop {
+            if !self.park_connecting.load(Relaxed) || !*released.borrow() {
+                return;
+            }
+            if released.changed().await.is_err() {
+                return;
+            }
+        }
+    }
+
+    pub(super) async fn wait_for(&self, peer_id: &[u8], expected: SessionStatus) {
+        let wait = async {
+            loop {
+                let changed = self.changed.notified();
+                tokio::pin!(changed);
+                changed.as_mut().enable();
+                if let Some(status) = self.statuses.lock().unwrap().get(peer_id) {
+                    if std::mem::discriminant(status) == std::mem::discriminant(&expected) {
+                        return;
+                    }
+                }
+                changed.await;
+            }
+        };
+        if tokio::time::timeout(Duration::from_secs(60), wait)
+            .await
+            .is_err()
+        {
+            let observed = self.statuses.lock().unwrap().get(peer_id).cloned();
+            panic!(
+                "timed out waiting for {expected:?} session status for {peer_id:?}, got {observed:?}"
+            );
+        }
     }
 }
 
@@ -778,6 +956,33 @@ where
     .await
 }
 
+pub(super) async fn build_client_with_lookup_contacts<H, I, O>(
+    relay_map: &RelayMap,
+    identity: SecretKey,
+    contacts: Vec<Contact>,
+    codec_config: &CodecConfig,
+    host: H,
+    call_states: Arc<Mutex<Vec<CallState>>>,
+) -> ClientHarness<H, I, O>
+where
+    H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
+    I: Send + Sync + 'static,
+    O: Send + Sync + 'static,
+{
+    build_client_with_options_and_initial_contacts(
+        relay_map,
+        identity,
+        contacts,
+        vec![],
+        codec_config,
+        host,
+        call_states,
+        None,
+        ManagerLifecycle::Single,
+    )
+    .await
+}
+
 pub(super) async fn build_client_with_accept_probe<H, I, O>(
     relay_map: &RelayMap,
     identity: SecretKey,
@@ -837,6 +1042,7 @@ where
 
     let is_active = Arc::new(AtomicBool::new(false));
     let is_relayed = Arc::new(AtomicBool::new(false));
+    let session_status_probe = SessionStatusProbe::default();
     let mock = construct_mock_callbacks(
         contacts,
         is_active.clone(),
@@ -847,6 +1053,7 @@ where
         Some(waiting_gate),
         None,
         None,
+        Some(session_status_probe.clone()),
     );
 
     let mut telepathy: MockTelepathyHandle<H, I, O> = TelepathyHandle::new(
@@ -864,6 +1071,8 @@ where
     ClientHarness {
         telepathy,
         is_active,
+        contact_lookup_probe: Default::default(),
+        session_status_probe,
     }
 }
 
@@ -899,6 +1108,7 @@ where
 
     let is_active = Arc::new(AtomicBool::new(false));
     let is_relayed = Arc::new(AtomicBool::new(false));
+    let session_status_probe = SessionStatusProbe::default();
     let mock = construct_mock_callbacks(
         contacts,
         is_active.clone(),
@@ -909,6 +1119,7 @@ where
         None,
         Some(connected_gate),
         None,
+        Some(session_status_probe.clone()),
     );
 
     let mut telepathy: MockTelepathyHandle<H, I, O> = TelepathyHandle::new(
@@ -926,6 +1137,8 @@ where
     ClientHarness {
         telepathy,
         is_active,
+        contact_lookup_probe: Default::default(),
+        session_status_probe,
     }
 }
 
@@ -961,6 +1174,7 @@ where
 
     let is_active = Arc::new(AtomicBool::new(false));
     let is_relayed = Arc::new(AtomicBool::new(false));
+    let session_status_probe = SessionStatusProbe::default();
     let mock = construct_mock_callbacks(
         contacts,
         is_active.clone(),
@@ -971,6 +1185,7 @@ where
         None,
         None,
         Some(call_ended_park),
+        Some(session_status_probe.clone()),
     );
 
     let mut telepathy: MockTelepathyHandle<H, I, O> = TelepathyHandle::new(
@@ -988,6 +1203,8 @@ where
     ClientHarness {
         telepathy,
         is_active,
+        contact_lookup_probe: Default::default(),
+        session_status_probe,
     }
 }
 
@@ -996,6 +1213,37 @@ pub(super) async fn build_client_with_options<H, I, O>(
     relay_map: &RelayMap,
     identity: SecretKey,
     contacts: Vec<Contact>,
+    codec_config: &CodecConfig,
+    host: H,
+    call_states: Arc<Mutex<Vec<CallState>>>,
+    accept_probe: Option<PendingAcceptProbe>,
+    lifecycle: ManagerLifecycle,
+) -> ClientHarness<H, I, O>
+where
+    H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
+    I: Send + Sync + 'static,
+    O: Send + Sync + 'static,
+{
+    build_client_with_options_and_initial_contacts(
+        relay_map,
+        identity,
+        contacts.clone(),
+        contacts,
+        codec_config,
+        host,
+        call_states,
+        accept_probe,
+        lifecycle,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn build_client_with_options_and_initial_contacts<H, I, O>(
+    relay_map: &RelayMap,
+    identity: SecretKey,
+    contacts: Vec<Contact>,
+    initial_contacts: Vec<Contact>,
     codec_config: &CodecConfig,
     host: H,
     call_states: Arc<Mutex<Vec<CallState>>>,
@@ -1020,8 +1268,11 @@ where
 
     let is_active = Arc::new(AtomicBool::new(false));
     let is_relayed = Arc::new(AtomicBool::new(false));
-    let mock = construct_mock_callbacks(
+    let contact_lookup_probe = ContactLookupProbe::default();
+    let session_status_probe = SessionStatusProbe::default();
+    let mock = construct_mock_callbacks_with_contact_lookup(
         contacts,
+        initial_contacts,
         is_active.clone(),
         is_relayed.clone(),
         call_states,
@@ -1030,6 +1281,8 @@ where
         None,
         None,
         None,
+        Some(contact_lookup_probe.clone()),
+        Some(session_status_probe.clone()),
     );
 
     let mut telepathy: MockTelepathyHandle<H, I, O> = TelepathyHandle::new(
@@ -1047,6 +1300,8 @@ where
     ClientHarness {
         telepathy,
         is_active,
+        contact_lookup_probe,
+        session_status_probe,
     }
 }
 
@@ -1068,22 +1323,63 @@ pub(super) fn construct_mock_callbacks(
     waiting_gate: Option<WaitingCallbackGate>,
     connected_gate: Option<ConnectedCallbackGate>,
     call_ended_park: Option<CallEndedPark>,
+    session_status_probe: Option<SessionStatusProbe>,
+) -> MockCoreCallbacks<MockCoreStatisticsCallback> {
+    let initial_contacts = contacts.clone();
+    construct_mock_callbacks_with_contact_lookup(
+        contacts,
+        initial_contacts,
+        is_active,
+        is_relayed,
+        call_states,
+        accept_probe,
+        lifecycle,
+        waiting_gate,
+        connected_gate,
+        call_ended_park,
+        None,
+        session_status_probe,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn construct_mock_callbacks_with_contact_lookup(
+    contacts: Vec<Contact>,
+    initial_contacts: Vec<Contact>,
+    is_active: Arc<AtomicBool>,
+    is_relayed: Arc<AtomicBool>,
+    call_states: Arc<Mutex<Vec<CallState>>>,
+    accept_probe: Option<PendingAcceptProbe>,
+    lifecycle: ManagerLifecycle,
+    waiting_gate: Option<WaitingCallbackGate>,
+    connected_gate: Option<ConnectedCallbackGate>,
+    call_ended_park: Option<CallEndedPark>,
+    contact_lookup_probe: Option<ContactLookupProbe>,
+    session_status_probe: Option<SessionStatusProbe>,
 ) -> MockCoreCallbacks<MockCoreStatisticsCallback> {
     let mut mock: MockCoreCallbacks<MockCoreStatisticsCallback> = MockCoreCallbacks::new();
 
-    mock.expect_session_status().returning(move |status, peer| {
-        info!("session status got called {status:?} {peer}");
-        let is_active_clone = is_active.clone();
-        let is_relayed_clone = is_relayed.clone();
-        Box::pin(async move {
-            if let SessionStatus::Connected { relayed, .. } = status {
-                is_active_clone.store(true, Relaxed);
-                is_relayed_clone.store(relayed, Relaxed);
-            } else if matches!(status, SessionStatus::Inactive) {
-                is_active_clone.store(false, Relaxed);
-            }
-        })
-    });
+    mock.expect_session_status()
+        .returning(move |status, _peer| {
+            info!("session status got called {status:?} {_peer}");
+            let park_connecting = session_status_probe
+                .as_ref()
+                .is_some_and(|probe| probe.record(_peer.as_bytes(), status.clone()));
+            let session_status_probe = session_status_probe.clone();
+            let is_active_clone = is_active.clone();
+            let is_relayed_clone = is_relayed.clone();
+            Box::pin(async move {
+                if park_connecting && let Some(probe) = session_status_probe {
+                    probe.wait_for_connecting_release().await;
+                }
+                if let SessionStatus::Connected { relayed, .. } = status {
+                    is_active_clone.store(true, Relaxed);
+                    is_relayed_clone.store(relayed, Relaxed);
+                } else if matches!(status, SessionStatus::Inactive) {
+                    is_active_clone.store(false, Relaxed);
+                }
+            })
+        });
 
     match lifecycle {
         ManagerLifecycle::Single | ManagerLifecycle::RevisionCycles(_) => {
@@ -1175,7 +1471,7 @@ pub(super) fn construct_mock_callbacks(
         }
     }
 
-    let contacts_clone = contacts.clone();
+    let contacts_clone = initial_contacts.clone();
     mock.expect_get_contacts().returning(move || {
         let contacts_clone = contacts_clone.clone();
         Box::pin(async move { contacts_clone })
@@ -1183,7 +1479,11 @@ pub(super) fn construct_mock_callbacks(
 
     mock.expect_get_contact().returning(move |peer_id| {
         let contacts_clone = contacts.clone();
+        let contact_lookup_probe = contact_lookup_probe.clone();
         Box::pin(async move {
+            if let Some(probe) = contact_lookup_probe {
+                probe.record(&peer_id);
+            }
             for contact in contacts_clone.iter() {
                 if contact.get_peer_id().to_vec() == peer_id {
                     return Some(contact.clone());

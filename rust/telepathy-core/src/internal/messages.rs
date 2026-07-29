@@ -5,6 +5,7 @@ use iroh::endpoint::Connection;
 use serde::Serialize;
 use speedy::{Readable, Writable};
 use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::oneshot;
 use uuid::Uuid;
 
 /// Canonical reasons for a [`ProtocolMessage::Goodbye`]. Wire vocabulary
@@ -109,6 +110,8 @@ pub(crate) enum RoomMessage {
         session_id: Uuid,
 
         terminal_sender: UnboundedSender<RoomControl>,
+
+        admission_sender: oneshot::Sender<RoomJoinAdmission>,
     },
     Leave {
         peer: PublicKey,
@@ -119,6 +122,12 @@ pub(crate) enum RoomMessage {
 
 pub(crate) enum RoomControl {
     Goodbye(GoodbyeReason),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RoomJoinAdmission {
+    Admitted,
+    Aborted,
 }
 
 #[derive(Debug)]

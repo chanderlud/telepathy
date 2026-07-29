@@ -35,6 +35,7 @@ fn mock_handle(network_config: &NetworkConfig, lifecycle: ManagerLifecycle) -> M
         None,
         None,
         None,
+        None,
     );
     TelepathyHandle::new(
         MockAudioHost::new(
@@ -80,6 +81,7 @@ async fn fresh_handle_rejects_all_runtime_dependent_starts() {
         Arc::new(Mutex::new(Vec::<CallState>::new())),
         None,
         ManagerLifecycle::Restartable,
+        None,
         None,
         None,
         None,
