@@ -1,128 +1,36 @@
-// allow: SIZE_OK - target-specific FFmpeg configuration and process adapter must compile together.
-#[cfg(feature = "integration-testing")]
-use super::CommandDescription;
 use super::{
     CapabilityProbe, Result, VideoAvailability, VideoCapabilities, VideoSourceCapability,
     VideoUnavailable,
 };
-use crate::internal::video::{VideoCodec, VideoMediaDescriptor, VideoMediaFormat, VideoSource};
+use super::{CommandDescription, forward_capture_chunks};
+use crate::internal::video::{
+    VideoCodec, VideoMediaDescriptor, VideoMediaFormat, VideoSource, VideoWorkerStartup,
+};
 use crate::types::{Capabilities, RecordingConfig};
 use bytes::Bytes;
-#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+
 use regex::Regex;
 use speedy::{Readable, Writable};
 use std::fmt::Display;
-#[cfg(not(target_family = "wasm"))]
+
 use std::process::Stdio;
-#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+
 use std::process::{ExitStatus, Output};
 use std::str::FromStr;
-#[cfg(not(target_family = "wasm"))]
-#[cfg(not(target_family = "wasm"))]
+
 use tokio::process::Command;
-#[cfg(not(target_family = "wasm"))]
+
 use tokio::select;
-#[cfg(not(target_family = "wasm"))]
+
 use tokio_util::sync::CancellationToken;
-#[cfg(not(target_family = "wasm"))]
+
 use tracing::{info, instrument};
 
-#[cfg(not(target_family = "wasm"))]
 use crate::internal::error::ErrorKind;
 
-#[cfg(not(target_family = "wasm"))]
 const BUFFER_SIZE: usize = 512;
 #[cfg(target_os = "windows")]
 const CREATION_FLAGS: u32 = 0x08000000;
-
-pub(crate) async fn probe_capabilities() -> CapabilityProbe {
-    let codec_regex = Regex::new("V....[D.] ([^= ]+)\\s+(.+)").unwrap();
-
-    let mut command = Command::new("ffmpeg");
-    command.arg("-hide_banner").arg("-encoders");
-
-    #[cfg(target_os = "windows")]
-    {
-        command.creation_flags(CREATION_FLAGS);
-    }
-
-    let encoders_result = command.output().await;
-
-    let mut command = Command::new("ffplay");
-    command.arg("-hide_banner").arg("-decoders");
-
-    #[cfg(target_os = "windows")]
-    {
-        command.creation_flags(CREATION_FLAGS);
-    }
-
-    let decoders_result = command.output().await;
-
-    let encoders = encoders_result.ok().map(|output| {
-        parse_codecs(output, &codec_regex)
-            .into_iter()
-            .filter_map(|codec| Encoder::from_str(&codec).ok())
-            .collect::<Vec<_>>()
-    });
-    let decoders = decoders_result.ok().map(|output| {
-        parse_codecs(output, &codec_regex)
-            .into_iter()
-            .filter_map(|codec| Decoder::from_str(&codec).ok())
-            .collect::<Vec<_>>()
-    });
-    let devices = Device::devices();
-    let video = video_capabilities(encoders.as_deref(), decoders.as_deref(), devices.as_slice());
-    let compatibility = Capabilities {
-        _available: encoders.is_some() && decoders.is_some(),
-        encoders: encoders.unwrap_or_default(),
-        _decoders: decoders.unwrap_or_default(),
-        devices,
-    };
-    CapabilityProbe::new(compatibility, video)
-}
-
-pub(crate) const fn initial_video_capabilities() -> VideoCapabilities {
-    VideoCapabilities::unavailable(VideoUnavailable::RuntimeUnavailable)
-}
-
-fn video_capabilities(
-    encoders: Option<&[Encoder]>,
-    decoders: Option<&[Decoder]>,
-    devices: &[Device],
-) -> VideoCapabilities {
-    let send = match encoders {
-        Some(encoders) => {
-            let mut formats = Vec::new();
-            for encoder in encoders {
-                let format = VideoMediaFormat::MpegTs(encoder.codec());
-                if !formats.contains(&format) {
-                    formats.push(format);
-                }
-            }
-            let sources = if devices.is_empty() || formats.is_empty() {
-                Vec::new()
-            } else {
-                vec![VideoSourceCapability::new(VideoSource::Display, formats)]
-            };
-            VideoAvailability::Available(sources)
-        }
-        None => VideoAvailability::Unavailable(VideoUnavailable::RuntimeUnavailable),
-    };
-    let receive = match decoders {
-        Some(decoders) => {
-            let mut formats = Vec::new();
-            for decoder in decoders {
-                let format = VideoMediaFormat::MpegTs(decoder.codec());
-                if !formats.contains(&format) {
-                    formats.push(format);
-                }
-            }
-            VideoAvailability::Available(formats)
-        }
-        None => VideoAvailability::Unavailable(VideoUnavailable::RuntimeUnavailable),
-    };
-    VideoCapabilities::new(send, receive)
-}
 
 #[derive(Clone, Debug, PartialEq, Eq, Readable, Writable)]
 pub(crate) enum Device {
@@ -162,7 +70,6 @@ impl Device {
         vec![Self::X11Grab]
     }
 
-    #[cfg(not(target_family = "wasm"))]
     fn to_args(&self, encoder: Encoder) -> Vec<&str> {
         // TODO figure out a way to only add the video size for encoders if needed
         match self {
@@ -296,12 +203,6 @@ impl FromStr for Encoder {
     }
 }
 
-#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-pub(crate) fn encoder_from_str(value: &str) -> std::result::Result<Encoder, ()> {
-    Encoder::from_str(value)
-}
-
-#[cfg(not(target_family = "wasm"))]
 impl Encoder {
     /// returns the valid decoders for this encoder in preferred order
     fn decoders(&self) -> Vec<Decoder> {
@@ -328,39 +229,6 @@ impl Encoder {
             }
             Self::Av1Nvenc | Self::Av1Amf | Self::Av1Qsv | Self::Av1Vaapi => VideoCodec::Av1,
         }
-    }
-}
-
-pub(crate) fn prepare_sender(
-    config: &RecordingConfig,
-    width: u32,
-    height: u32,
-    capabilities: &Capabilities,
-    video_capabilities: &VideoCapabilities,
-) -> std::result::Result<VideoMediaDescriptor, VideoUnavailable> {
-    prepare_sender_from_capabilities(config, width, height, capabilities, video_capabilities)
-}
-
-fn prepare_sender_from_capabilities(
-    config: &RecordingConfig,
-    width: u32,
-    height: u32,
-    capabilities: &Capabilities,
-    generic: &VideoCapabilities,
-) -> std::result::Result<VideoMediaDescriptor, VideoUnavailable> {
-    let available = generic.formats(VideoSource::Display)?;
-    if !capabilities.encoders.contains(&config.encoder)
-        || !capabilities.devices.contains(&config.device)
-    {
-        return Err(VideoUnavailable::ConfigurationUnavailable);
-    }
-
-    let descriptor = VideoMediaDescriptor::display(config.encoder.codec(), width, height);
-    let format = VideoMediaFormat::MpegTs(config.encoder.codec());
-    if available.contains(&format) {
-        Ok(descriptor)
-    } else {
-        Err(VideoUnavailable::FormatUnavailable(format))
     }
 }
 
@@ -419,7 +287,6 @@ impl Decoder {
     }
 }
 impl RecordingConfig {
-    #[cfg(not(target_family = "wasm"))]
     fn make_command(&self, test: bool) -> Command {
         let mut command = Command::new("ffmpeg");
         command.args(self.device.to_args(self.encoder));
@@ -452,7 +319,6 @@ impl RecordingConfig {
         command
     }
 
-    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
     pub(crate) async fn test_config(&self) -> Result<ExitStatus> {
         let mut command = self.make_command(true);
         command
@@ -512,12 +378,10 @@ pub fn recording_command_for_test(
     Some(CommandDescription::from_command(config.make_command(false)))
 }
 
-#[cfg(not(target_family = "wasm"))]
 struct PlaybackConfig {
     decoder: Decoder,
 }
 
-#[cfg(not(target_family = "wasm"))]
 impl PlaybackConfig {
     fn make_command(&self) -> Command {
         let mut command = Command::new("ffplay");
@@ -561,11 +425,11 @@ pub(crate) async fn run_sender<S>(
     transport: &mut S,
     stop: &CancellationToken,
     config: RecordingConfig,
-    startup: tokio::sync::oneshot::Sender<crate::internal::video::VideoWorkerStartup>,
+    startup: tokio::sync::oneshot::Sender<VideoWorkerStartup>,
 ) -> Result<()>
 where
     S: futures_util::Sink<Bytes> + Unpin,
-    S::Error: std::fmt::Display,
+    S::Error: Display,
 {
     info!(event = "screenshare_record_start", ?config);
 
@@ -588,16 +452,16 @@ where
     })();
     let (mut child, mut stdout) = match startup_result {
         Ok(state) => {
-            let _ = startup.send(crate::internal::video::VideoWorkerStartup::Ready);
+            let _ = startup.send(VideoWorkerStartup::Ready);
             state
         }
         Err(error) => {
-            let _ = startup.send(crate::internal::video::VideoWorkerStartup::Failed);
+            let _ = startup.send(VideoWorkerStartup::Failed);
             return Err(error);
         }
     };
 
-    let future = super::forward_capture_chunks(&mut stdout, transport);
+    let future = forward_capture_chunks(&mut stdout, transport);
 
     select! {
         _ = future => {
@@ -618,7 +482,7 @@ pub(crate) async fn run_receiver<S, E>(
     transport: &mut S,
     stop: &CancellationToken,
     descriptor: VideoMediaDescriptor,
-    startup: tokio::sync::oneshot::Sender<crate::internal::video::VideoWorkerStartup>,
+    startup: tokio::sync::oneshot::Sender<VideoWorkerStartup>,
 ) -> Result<()>
 where
     S: futures_util::Stream<Item = std::result::Result<bytes::BytesMut, E>> + Unpin,
@@ -667,11 +531,11 @@ where
     })();
     let (mut child, mut stdin) = match startup_result {
         Ok(state) => {
-            let _ = startup.send(crate::internal::video::VideoWorkerStartup::Ready);
+            let _ = startup.send(VideoWorkerStartup::Ready);
             state
         }
         Err(error) => {
-            let _ = startup.send(crate::internal::video::VideoWorkerStartup::Failed);
+            let _ = startup.send(VideoWorkerStartup::Failed);
             return Err(error);
         }
     };
@@ -692,6 +556,93 @@ where
     Ok(())
 }
 
+pub(crate) fn encoder_from_str(value: &str) -> std::result::Result<Encoder, ()> {
+    Encoder::from_str(value)
+}
+
+pub(crate) async fn probe_capabilities() -> CapabilityProbe {
+    let codec_regex = Regex::new("V....[D.] ([^= ]+)\\s+(.+)").unwrap();
+
+    let mut command = Command::new("ffmpeg");
+    command.arg("-hide_banner").arg("-encoders");
+
+    #[cfg(target_os = "windows")]
+    {
+        command.creation_flags(CREATION_FLAGS);
+    }
+
+    let encoders_result = command.output().await;
+
+    let mut command = Command::new("ffplay");
+    command.arg("-hide_banner").arg("-decoders");
+
+    #[cfg(target_os = "windows")]
+    {
+        command.creation_flags(CREATION_FLAGS);
+    }
+
+    let decoders_result = command.output().await;
+
+    let encoders = encoders_result.ok().map(|output| {
+        parse_codecs(output, &codec_regex)
+            .into_iter()
+            .filter_map(|codec| Encoder::from_str(&codec).ok())
+            .collect::<Vec<_>>()
+    });
+    let decoders = decoders_result.ok().map(|output| {
+        parse_codecs(output, &codec_regex)
+            .into_iter()
+            .filter_map(|codec| Decoder::from_str(&codec).ok())
+            .collect::<Vec<_>>()
+    });
+    let devices = Device::devices();
+    let video = video_capabilities(encoders.as_deref(), decoders.as_deref(), devices.as_slice());
+    let compatibility = Capabilities {
+        _available: encoders.is_some() && decoders.is_some(),
+        encoders: encoders.unwrap_or_default(),
+        _decoders: decoders.unwrap_or_default(),
+        devices,
+    };
+    CapabilityProbe::new(compatibility, video)
+}
+
+pub(crate) const fn initial_video_capabilities() -> VideoCapabilities {
+    VideoCapabilities::unavailable(VideoUnavailable::RuntimeUnavailable)
+}
+
+pub(crate) fn prepare_sender(
+    config: &RecordingConfig,
+    width: u32,
+    height: u32,
+    capabilities: &Capabilities,
+    video_capabilities: &VideoCapabilities,
+) -> std::result::Result<VideoMediaDescriptor, VideoUnavailable> {
+    prepare_sender_from_capabilities(config, width, height, capabilities, video_capabilities)
+}
+
+fn prepare_sender_from_capabilities(
+    config: &RecordingConfig,
+    width: u32,
+    height: u32,
+    capabilities: &Capabilities,
+    generic: &VideoCapabilities,
+) -> std::result::Result<VideoMediaDescriptor, VideoUnavailable> {
+    let available = generic.formats(VideoSource::Display)?;
+    if !capabilities.encoders.contains(&config.encoder)
+        || !capabilities.devices.contains(&config.device)
+    {
+        return Err(VideoUnavailable::ConfigurationUnavailable);
+    }
+
+    let descriptor = VideoMediaDescriptor::display(config.encoder.codec(), width, height);
+    let format = VideoMediaFormat::MpegTs(config.encoder.codec());
+    if available.contains(&format) {
+        Ok(descriptor)
+    } else {
+        Err(VideoUnavailable::FormatUnavailable(format))
+    }
+}
+
 async fn terminate_and_reap(child: &mut tokio::process::Child) {
     if tokio::time::timeout(std::time::Duration::from_secs(1), child.wait())
         .await
@@ -703,7 +654,6 @@ async fn terminate_and_reap(child: &mut tokio::process::Child) {
     let _ = child.wait().await;
 }
 
-#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 fn parse_codecs(output: Output, regex: &Regex) -> Vec<String> {
     let output_str = String::from_utf8_lossy(&output.stdout);
 
@@ -712,6 +662,45 @@ fn parse_codecs(output: Output, regex: &Regex) -> Vec<String> {
         .filter_map(|cap| cap.get(1))
         .map(|cap| cap.as_str().to_string())
         .collect()
+}
+
+fn video_capabilities(
+    encoders: Option<&[Encoder]>,
+    decoders: Option<&[Decoder]>,
+    devices: &[Device],
+) -> VideoCapabilities {
+    let send = match encoders {
+        Some(encoders) => {
+            let mut formats = Vec::new();
+            for encoder in encoders {
+                let format = VideoMediaFormat::MpegTs(encoder.codec());
+                if !formats.contains(&format) {
+                    formats.push(format);
+                }
+            }
+            let sources = if devices.is_empty() || formats.is_empty() {
+                Vec::new()
+            } else {
+                vec![VideoSourceCapability::new(VideoSource::Display, formats)]
+            };
+            VideoAvailability::Available(sources)
+        }
+        None => VideoAvailability::Unavailable(VideoUnavailable::RuntimeUnavailable),
+    };
+    let receive = match decoders {
+        Some(decoders) => {
+            let mut formats = Vec::new();
+            for decoder in decoders {
+                let format = VideoMediaFormat::MpegTs(decoder.codec());
+                if !formats.contains(&format) {
+                    formats.push(format);
+                }
+            }
+            VideoAvailability::Available(formats)
+        }
+        None => VideoAvailability::Unavailable(VideoUnavailable::RuntimeUnavailable),
+    };
+    VideoCapabilities::new(send, receive)
 }
 
 #[cfg(test)]

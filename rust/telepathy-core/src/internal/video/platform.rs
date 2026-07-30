@@ -14,9 +14,7 @@ mod selected;
 mod unsupported_contract {
     include!("platform/unsupported.rs");
 }
-#[cfg(not(feature = "integration-testing"))]
-pub(crate) use selected::*;
-#[cfg(feature = "integration-testing")]
+
 pub(crate) use selected::{
     Decoder, Device, Encoder, initial_video_capabilities, prepare_sender, probe_capabilities,
     run_receiver, run_sender,

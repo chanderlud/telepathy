@@ -1,16 +1,5 @@
-#![allow(
-    dead_code,
-    reason = "U2 defines the U3/U9 domain and framing seam before its lifecycle and transport owners exist"
-)]
-
-#[cfg(feature = "integration-testing")]
 pub mod platform;
-#[cfg(not(feature = "integration-testing"))]
-pub(crate) mod platform;
-#[cfg(feature = "integration-testing")]
 pub mod transport;
-#[cfg(not(feature = "integration-testing"))]
-pub(crate) mod transport;
 
 use crate::internal::utils::JoinHandle;
 use speedy::{Readable, Writable};
