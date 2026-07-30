@@ -2,22 +2,19 @@
 #[cfg(feature = "integration-testing")]
 use super::CommandDescription;
 use super::{
-    CapabilityProbe, Result, VideoAvailability, VideoCapabilities, VideoSourceCapability,
-    VideoUnavailable,
+    CapabilityProbe, Decoder, Device, Encoder, Result, VideoAvailability, VideoCapabilities,
+    VideoSourceCapability, VideoUnavailable,
 };
-use crate::internal::video::{VideoCodec, VideoMediaDescriptor, VideoMediaFormat, VideoSource};
+use crate::internal::video::{VideoMediaDescriptor, VideoMediaFormat, VideoSource};
 use crate::types::{Capabilities, RecordingConfig};
 use bytes::Bytes;
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 use regex::Regex;
-use speedy::{Readable, Writable};
-use std::fmt::Display;
 #[cfg(not(target_family = "wasm"))]
 use std::process::Stdio;
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 use std::process::{ExitStatus, Output};
 use std::str::FromStr;
-#[cfg(not(target_family = "wasm"))]
 #[cfg(not(target_family = "wasm"))]
 use tokio::process::Command;
 #[cfg(not(target_family = "wasm"))]
@@ -124,48 +121,10 @@ fn video_capabilities(
     VideoCapabilities::new(send, receive)
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Readable, Writable)]
-pub(crate) enum Device {
-    DirectShow,
-    GdiGrab,
-    DesktopDuplication,
-    AVFoundation(Vec<String>),
-    X11Grab,
-}
-
 impl Device {
-    #[cfg(target_os = "windows")]
-    fn devices() -> Vec<Self> {
-        vec![Self::DesktopDuplication, Self::GdiGrab, Self::DirectShow]
-    }
-
-    #[cfg(target_os = "macos")]
-    fn devices() -> Vec<Self> {
-        // let devices_output = Command::new("ffmpeg")
-        //     .arg("-hide_banner")
-        //     .arg("-f")
-        //     .arg("avfoundation")
-        //     .arg("-list_devices")
-        //     .arg("true")
-        //     .arg("-i")
-        //     .arg("\"\"")
-        //     .output()
-        //     .await;
-
-        // TODO parse the output and use it for devices
-
-        vec![Self::AVFoundation(vec![])]
-    }
-
-    #[cfg(target_os = "linux")]
-    fn devices() -> Vec<Self> {
-        vec![Self::X11Grab]
-    }
-
     #[cfg(not(target_family = "wasm"))]
-    fn to_args(&self, encoder: Encoder) -> Vec<&str> {
-        // TODO figure out a way to only add the video size for encoders if needed
-        match self {
+    fn to_args(&self, encoder: Encoder) -> std::result::Result<Vec<&str>, ErrorKind> {
+        let arguments = match self {
             Self::DesktopDuplication => match encoder {
                 Encoder::H264Nvenc | Encoder::H264Qsv => vec![
                     "-init_hw_device",
@@ -196,139 +155,15 @@ impl Device {
                 ],
                 _ => vec!["-f", "gdigrab", "-framerate", "30", "-i", "desktop"],
             },
-            _ => todo!(),
-        }
-    }
-}
-
-impl Display for Device {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::DirectShow => write!(f, "DirectShow"),
-            Self::GdiGrab => write!(f, "GDI Grab"),
-            Self::DesktopDuplication => write!(f, "Desktop Duplication"),
-            Self::AVFoundation(devices) => write!(f, "AVFoundation: {:?}", devices),
-            Self::X11Grab => write!(f, "X11 Grab"),
-        }
-    }
-}
-
-impl FromStr for Device {
-    type Err = ();
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        Ok(match s {
-            "DirectShow" => Self::DirectShow,
-            "GDI Grab" => Self::GdiGrab,
-            "Desktop Duplication" => Self::DesktopDuplication,
-            "X11 Grab" => Self::X11Grab,
-            _ => Self::AVFoundation(Vec::new()), // TODO handle the devices
-        })
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Readable, Writable)]
-pub(crate) enum Encoder {
-    Libx264,
-    H264Nvenc,
-    H264Amf,
-    H264Qsv,
-    H264Vaapi,
-    Libx265,
-    HevcNvenc,
-    HevcAmf,
-    HevcQsv,
-    HevcVaapi,
-    Av1Nvenc,
-    Av1Amf,
-    Av1Qsv,
-    Av1Vaapi,
-}
-
-impl From<Encoder> for &'static str {
-    fn from(val: Encoder) -> Self {
-        match val {
-            Encoder::Libx264 => "libx264",
-            Encoder::H264Nvenc => "h264_nvenc",
-            Encoder::H264Amf => "h264_amf",
-            Encoder::H264Qsv => "h264_qsv",
-            Encoder::H264Vaapi => "h264_vaapi",
-            Encoder::Libx265 => "libx265",
-            Encoder::HevcNvenc => "hevc_nvenc",
-            Encoder::HevcAmf => "hevc_amf",
-            Encoder::HevcQsv => "hevc_qsv",
-            Encoder::HevcVaapi => "hevc_vaapi",
-            Encoder::Av1Nvenc => "av1_nvenc",
-            Encoder::Av1Amf => "av1_amf",
-            Encoder::Av1Qsv => "av1_qsv",
-            Encoder::Av1Vaapi => "av1_vaapi",
-        }
-    }
-}
-
-impl Display for Encoder {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", Into::<&'static str>::into(*self))
-    }
-}
-
-impl FromStr for Encoder {
-    type Err = ();
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        match s {
-            "libx264" => Ok(Self::Libx264),
-            "h264_nvenc" => Ok(Self::H264Nvenc),
-            "h264_amf" => Ok(Self::H264Amf),
-            "h264_qsv" => Ok(Self::H264Qsv),
-            "h264_vaapi" => Ok(Self::H264Vaapi),
-            "libx265" => Ok(Self::Libx265),
-            "hevc_nvenc" => Ok(Self::HevcNvenc),
-            "hevc_amf" => Ok(Self::HevcAmf),
-            "hevc_qsv" => Ok(Self::HevcQsv),
-            "hevc_vaapi" => Ok(Self::HevcVaapi),
-            "av1_nvenc" => Ok(Self::Av1Nvenc),
-            "av1_amf" => Ok(Self::Av1Amf),
-            "av1_qsv" => Ok(Self::Av1Qsv),
-            "av1_vaapi" => Ok(Self::Av1Vaapi),
-            _ => Err(()),
-        }
+            _ => return Err(ErrorKind::PlatformUnavailable),
+        };
+        Ok(arguments)
     }
 }
 
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 pub(crate) fn encoder_from_str(value: &str) -> std::result::Result<Encoder, ()> {
     Encoder::from_str(value)
-}
-
-#[cfg(not(target_family = "wasm"))]
-impl Encoder {
-    /// returns the valid decoders for this encoder in preferred order
-    fn decoders(&self) -> Vec<Decoder> {
-        match self {
-            Self::Libx264 | Self::H264Nvenc | Self::H264Amf | Self::H264Qsv | Self::H264Vaapi => {
-                vec![Decoder::H264Cuvid, Decoder::H264Qsv, Decoder::H264]
-            }
-            Self::Libx265 | Self::HevcNvenc | Self::HevcAmf | Self::HevcQsv | Self::HevcVaapi => {
-                vec![Decoder::HevcCuvid, Decoder::HevcQsv, Decoder::Hevc]
-            }
-            Self::Av1Nvenc | Self::Av1Amf | Self::Av1Qsv | Self::Av1Vaapi => {
-                vec![Decoder::Av1Cuvid, Decoder::Av1Qsv]
-            }
-        }
-    }
-
-    const fn codec(self) -> VideoCodec {
-        match self {
-            Self::Libx264 | Self::H264Nvenc | Self::H264Amf | Self::H264Qsv | Self::H264Vaapi => {
-                VideoCodec::H264
-            }
-            Self::Libx265 | Self::HevcNvenc | Self::HevcAmf | Self::HevcQsv | Self::HevcVaapi => {
-                VideoCodec::Hevc
-            }
-            Self::Av1Nvenc | Self::Av1Amf | Self::Av1Qsv | Self::Av1Vaapi => VideoCodec::Av1,
-        }
-    }
 }
 
 pub(crate) fn prepare_sender(
@@ -364,65 +199,11 @@ fn prepare_sender_from_capabilities(
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Decoder {
-    H264,
-    H264Cuvid,
-    H264Qsv,
-    Hevc,
-    HevcCuvid,
-    HevcQsv,
-    Av1Cuvid,
-    Av1Qsv,
-}
-
-impl From<Decoder> for &'static str {
-    fn from(val: Decoder) -> Self {
-        match val {
-            Decoder::H264 => "h264",
-            Decoder::H264Cuvid => "h264_cuvid",
-            Decoder::Hevc => "hevc",
-            Decoder::HevcCuvid => "hevc_cuvid",
-            Decoder::H264Qsv => "h264_qsv",
-            Decoder::HevcQsv => "hevc_qsv",
-            Decoder::Av1Cuvid => "av1_cuvid",
-            Decoder::Av1Qsv => "av1_qsv",
-        }
-    }
-}
-
-impl FromStr for Decoder {
-    type Err = ();
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        match s {
-            "h264" => Ok(Self::H264),
-            "h264_cuvid" => Ok(Self::H264Cuvid),
-            "h264_qsv" => Ok(Self::H264Qsv),
-            "hevc" => Ok(Self::Hevc),
-            "hevc_cuvid" => Ok(Self::HevcCuvid),
-            "hevc_qsv" => Ok(Self::HevcQsv),
-            "av1_cuvid" => Ok(Self::Av1Cuvid),
-            "av1_qsv" => Ok(Self::Av1Qsv),
-            _ => Err(()),
-        }
-    }
-}
-
-impl Decoder {
-    const fn codec(self) -> VideoCodec {
-        match self {
-            Self::H264 | Self::H264Cuvid | Self::H264Qsv => VideoCodec::H264,
-            Self::Hevc | Self::HevcCuvid | Self::HevcQsv => VideoCodec::Hevc,
-            Self::Av1Cuvid | Self::Av1Qsv => VideoCodec::Av1,
-        }
-    }
-}
 impl RecordingConfig {
     #[cfg(not(target_family = "wasm"))]
-    fn make_command(&self, test: bool) -> Command {
+    fn make_command(&self, test: bool) -> Result<Command> {
         let mut command = Command::new("ffmpeg");
-        command.args(self.device.to_args(self.encoder));
+        command.args(self.device.to_args(self.encoder)?);
 
         // sets the video size if specified
         if let Some(height) = self.height {
@@ -449,12 +230,12 @@ impl RecordingConfig {
             "-",
         ]);
 
-        command
+        Ok(command)
     }
 
     #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
     pub(crate) async fn test_config(&self) -> Result<ExitStatus> {
-        let mut command = self.make_command(true);
+        let mut command = self.make_command(true)?;
         command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -509,7 +290,10 @@ pub fn recording_command_for_test(
         framerate,
         height,
     };
-    Some(CommandDescription::from_command(config.make_command(false)))
+    config
+        .make_command(false)
+        .ok()
+        .map(CommandDescription::from_command)
 }
 
 #[cfg(not(target_family = "wasm"))]
@@ -537,8 +321,19 @@ pub fn playback_command_for_test(
     let Ok(encoder) = Encoder::from_str(encoder) else {
         return None;
     };
+    let descriptor = VideoMediaDescriptor::display(encoder.codec(), width, height);
+    let decoders = [
+        Decoder::H264Cuvid,
+        Decoder::H264Qsv,
+        Decoder::H264,
+        Decoder::HevcCuvid,
+        Decoder::HevcQsv,
+        Decoder::Hevc,
+        Decoder::Av1Cuvid,
+        Decoder::Av1Qsv,
+    ];
     let mut command = PlaybackConfig {
-        decoder: encoder.decoders()[0],
+        decoder: select_decoder(&decoders, descriptor).ok()?,
     }
     .make_command();
     command.args([
@@ -556,6 +351,17 @@ pub fn playback_command_for_test(
     Some(CommandDescription::from_command(command))
 }
 
+fn select_decoder(
+    decoders: &[Decoder],
+    descriptor: VideoMediaDescriptor,
+) -> std::result::Result<Decoder, ErrorKind> {
+    decoders
+        .iter()
+        .copied()
+        .find(|decoder| decoder.codec() == descriptor.codec())
+        .ok_or(ErrorKind::NoEncoderAvailable)
+}
+
 #[instrument(name = "screenshare.record", skip_all)]
 pub(crate) async fn run_sender<S>(
     transport: &mut S,
@@ -569,16 +375,13 @@ where
 {
     info!(event = "screenshare_record_start", ?config);
 
-    let mut command = config.make_command(false);
-
-    command.stdout(Stdio::piped()).stderr(Stdio::null());
-
-    #[cfg(target_os = "windows")]
-    {
-        command.creation_flags(CREATION_FLAGS);
-    }
-
     let startup_result: Result<_> = (|| {
+        let mut command = config.make_command(false)?;
+        command.stdout(Stdio::piped()).stderr(Stdio::null());
+
+        #[cfg(target_os = "windows")]
+        command.creation_flags(CREATION_FLAGS);
+
         let mut child = command.spawn()?;
         let stdout = child
             .stdout
@@ -624,19 +427,10 @@ where
     S: futures_util::Stream<Item = std::result::Result<bytes::BytesMut, E>> + Unpin,
 {
     info!("Starting screen playback");
+    let (capabilities, _) = probe_capabilities().await.into_parts();
     let startup_result: Result<_> = (|| {
-        let encoder = match descriptor.codec() {
-            VideoCodec::H264 => Encoder::Libx264,
-            VideoCodec::Hevc => Encoder::Libx265,
-            VideoCodec::Av1 => Encoder::Av1Nvenc,
-        };
-        // TODO intelligently chose a decoder instead of using the first one
         let config = PlaybackConfig {
-            decoder: encoder
-                .decoders()
-                .into_iter()
-                .next()
-                .ok_or(ErrorKind::NoEncoderAvailable)?,
+            decoder: select_decoder(&capabilities._decoders, descriptor)?,
         };
         let mut command = config.make_command();
         command
@@ -716,8 +510,10 @@ fn parse_codecs(output: Output, regex: &Regex) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Device, Encoder, prepare_sender_from_capabilities};
-    use crate::internal::video::platform::VideoUnavailable;
+    use super::{Device, Encoder, prepare_sender_from_capabilities, select_decoder};
+    use crate::internal::error::ErrorKind;
+    use crate::internal::video::platform::{Decoder, VideoUnavailable};
+    use crate::internal::video::{VideoCodec, VideoMediaDescriptor};
     use crate::types::{Capabilities, RecordingConfig};
 
     fn recording_config() -> RecordingConfig {
@@ -728,6 +524,77 @@ mod tests {
             framerate: 60,
             height: Some(720),
         }
+    }
+
+    #[test]
+    fn implemented_devices_preserve_command_arguments() {
+        assert_eq!(
+            Device::DesktopDuplication
+                .to_args(Encoder::H264Nvenc)
+                .unwrap(),
+            [
+                "-init_hw_device",
+                "d3d11va",
+                "-filter_complex",
+                "ddagrab=video_size=1920x1080",
+            ]
+        );
+        assert_eq!(
+            Device::GdiGrab.to_args(Encoder::H264Nvenc).unwrap(),
+            [
+                "-f",
+                "gdigrab",
+                "-framerate",
+                "30",
+                "-video_size",
+                "1920x1080",
+                "-i",
+                "desktop",
+            ]
+        );
+        assert!(
+            Device::devices()
+                .iter()
+                .all(|device| device.to_args(Encoder::Libx264).is_ok())
+        );
+        #[cfg(target_os = "windows")]
+        assert_eq!(
+            Device::devices(),
+            [Device::DesktopDuplication, Device::GdiGrab]
+        );
+        #[cfg(not(target_os = "windows"))]
+        assert!(Device::devices().is_empty());
+    }
+
+    #[test]
+    fn unimplemented_device_returns_typed_error_without_panicking() {
+        assert!(matches!(
+            recording_config().make_command(false),
+            Err(crate::internal::error::Error {
+                kind: ErrorKind::PlatformUnavailable
+            })
+        ));
+    }
+
+    #[test]
+    fn decoder_selection_uses_first_compatible_local_decoder() {
+        let descriptor = VideoMediaDescriptor::display(VideoCodec::H264, 1_280, 720);
+        let decoders = [Decoder::Hevc, Decoder::H264Qsv, Decoder::H264];
+
+        assert!(matches!(
+            select_decoder(&decoders, descriptor),
+            Ok(Decoder::H264Qsv)
+        ));
+    }
+
+    #[test]
+    fn decoder_selection_fails_when_local_probe_has_no_compatible_decoder() {
+        let descriptor = VideoMediaDescriptor::display(VideoCodec::Av1, 1_280, 720);
+
+        assert!(matches!(
+            select_decoder(&[Decoder::H264, Decoder::Hevc], descriptor),
+            Err(ErrorKind::NoEncoderAvailable)
+        ));
     }
 
     #[test]

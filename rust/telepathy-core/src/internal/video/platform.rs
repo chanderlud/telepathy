@@ -2,6 +2,9 @@ use crate::internal::error::Error;
 use crate::types::{Capabilities, VideoMediaFormat, VideoSource, VideoUnavailable};
 use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
+use speedy::{Readable, Writable};
+use std::fmt::Display;
+use std::str::FromStr;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
@@ -18,14 +21,200 @@ mod unsupported_contract {
 pub(crate) use selected::*;
 #[cfg(feature = "integration-testing")]
 pub(crate) use selected::{
-    Decoder, Device, Encoder, initial_video_capabilities, prepare_sender, probe_capabilities,
-    run_receiver, run_sender,
+    initial_video_capabilities, prepare_sender, probe_capabilities, run_receiver, run_sender,
 };
 #[cfg(feature = "integration-testing")]
 pub use selected::{playback_command_for_test, recording_command_for_test};
 
 type Result<T> = std::result::Result<T, Error>;
 const BUFFER_SIZE: usize = 512;
+
+#[derive(Clone, Debug, PartialEq, Eq, Readable, Writable)]
+pub(crate) enum Device {
+    DirectShow,
+    GdiGrab,
+    DesktopDuplication,
+    AVFoundation(Vec<String>),
+    X11Grab,
+}
+
+impl Device {
+    #[cfg(target_os = "windows")]
+    fn devices() -> Vec<Self> {
+        vec![Self::DesktopDuplication, Self::GdiGrab]
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn devices() -> Vec<Self> {
+        Vec::new()
+    }
+}
+
+impl Display for Device {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DirectShow => formatter.write_str("DirectShow"),
+            Self::GdiGrab => formatter.write_str("GDI Grab"),
+            Self::DesktopDuplication => formatter.write_str("Desktop Duplication"),
+            Self::AVFoundation(devices) => write!(formatter, "AVFoundation: {devices:?}"),
+            Self::X11Grab => formatter.write_str("X11 Grab"),
+        }
+    }
+}
+
+impl FromStr for Device {
+    type Err = ();
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value {
+            "DirectShow" => Ok(Self::DirectShow),
+            "GDI Grab" => Ok(Self::GdiGrab),
+            "Desktop Duplication" => Ok(Self::DesktopDuplication),
+            "X11 Grab" => Ok(Self::X11Grab),
+            _ => Err(()),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Readable, Writable)]
+pub(crate) enum Encoder {
+    Libx264,
+    H264Nvenc,
+    H264Amf,
+    H264Qsv,
+    H264Vaapi,
+    Libx265,
+    HevcNvenc,
+    HevcAmf,
+    HevcQsv,
+    HevcVaapi,
+    Av1Nvenc,
+    Av1Amf,
+    Av1Qsv,
+    Av1Vaapi,
+}
+
+impl Encoder {
+    const fn codec(self) -> crate::internal::video::VideoCodec {
+        use crate::internal::video::VideoCodec;
+        match self {
+            Self::Libx264 | Self::H264Nvenc | Self::H264Amf | Self::H264Qsv | Self::H264Vaapi => {
+                VideoCodec::H264
+            }
+            Self::Libx265 | Self::HevcNvenc | Self::HevcAmf | Self::HevcQsv | Self::HevcVaapi => {
+                VideoCodec::Hevc
+            }
+            Self::Av1Nvenc | Self::Av1Amf | Self::Av1Qsv | Self::Av1Vaapi => VideoCodec::Av1,
+        }
+    }
+}
+
+impl From<Encoder> for &'static str {
+    fn from(encoder: Encoder) -> Self {
+        match encoder {
+            Encoder::Libx264 => "libx264",
+            Encoder::H264Nvenc => "h264_nvenc",
+            Encoder::H264Amf => "h264_amf",
+            Encoder::H264Qsv => "h264_qsv",
+            Encoder::H264Vaapi => "h264_vaapi",
+            Encoder::Libx265 => "libx265",
+            Encoder::HevcNvenc => "hevc_nvenc",
+            Encoder::HevcAmf => "hevc_amf",
+            Encoder::HevcQsv => "hevc_qsv",
+            Encoder::HevcVaapi => "hevc_vaapi",
+            Encoder::Av1Nvenc => "av1_nvenc",
+            Encoder::Av1Amf => "av1_amf",
+            Encoder::Av1Qsv => "av1_qsv",
+            Encoder::Av1Vaapi => "av1_vaapi",
+        }
+    }
+}
+
+impl Display for Encoder {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str((*self).into())
+    }
+}
+
+impl FromStr for Encoder {
+    type Err = ();
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value {
+            "libx264" => Ok(Self::Libx264),
+            "h264_nvenc" => Ok(Self::H264Nvenc),
+            "h264_amf" => Ok(Self::H264Amf),
+            "h264_qsv" => Ok(Self::H264Qsv),
+            "h264_vaapi" => Ok(Self::H264Vaapi),
+            "libx265" => Ok(Self::Libx265),
+            "hevc_nvenc" => Ok(Self::HevcNvenc),
+            "hevc_amf" => Ok(Self::HevcAmf),
+            "hevc_qsv" => Ok(Self::HevcQsv),
+            "hevc_vaapi" => Ok(Self::HevcVaapi),
+            "av1_nvenc" => Ok(Self::Av1Nvenc),
+            "av1_amf" => Ok(Self::Av1Amf),
+            "av1_qsv" => Ok(Self::Av1Qsv),
+            "av1_vaapi" => Ok(Self::Av1Vaapi),
+            _ => Err(()),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Decoder {
+    H264,
+    H264Cuvid,
+    H264Qsv,
+    Hevc,
+    HevcCuvid,
+    HevcQsv,
+    Av1Cuvid,
+    Av1Qsv,
+}
+
+impl Decoder {
+    const fn codec(self) -> crate::internal::video::VideoCodec {
+        use crate::internal::video::VideoCodec;
+        match self {
+            Self::H264 | Self::H264Cuvid | Self::H264Qsv => VideoCodec::H264,
+            Self::Hevc | Self::HevcCuvid | Self::HevcQsv => VideoCodec::Hevc,
+            Self::Av1Cuvid | Self::Av1Qsv => VideoCodec::Av1,
+        }
+    }
+}
+
+impl From<Decoder> for &'static str {
+    fn from(decoder: Decoder) -> Self {
+        match decoder {
+            Decoder::H264 => "h264",
+            Decoder::H264Cuvid => "h264_cuvid",
+            Decoder::H264Qsv => "h264_qsv",
+            Decoder::Hevc => "hevc",
+            Decoder::HevcCuvid => "hevc_cuvid",
+            Decoder::HevcQsv => "hevc_qsv",
+            Decoder::Av1Cuvid => "av1_cuvid",
+            Decoder::Av1Qsv => "av1_qsv",
+        }
+    }
+}
+
+impl FromStr for Decoder {
+    type Err = ();
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value {
+            "h264" => Ok(Self::H264),
+            "h264_cuvid" => Ok(Self::H264Cuvid),
+            "h264_qsv" => Ok(Self::H264Qsv),
+            "hevc" => Ok(Self::Hevc),
+            "hevc_cuvid" => Ok(Self::HevcCuvid),
+            "hevc_qsv" => Ok(Self::HevcQsv),
+            "av1_cuvid" => Ok(Self::Av1Cuvid),
+            "av1_qsv" => Ok(Self::Av1Qsv),
+            _ => Err(()),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum VideoAvailability<T> {
