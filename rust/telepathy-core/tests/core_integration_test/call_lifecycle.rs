@@ -576,6 +576,187 @@ async fn call_simultaneous_dial_matches_pending_incoming_and_connects() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn stale_collision_loser_cleanup_preserves_replacement_pending_outgoing() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+    let codec_config = CodecConfig::new(true, true, 5.0);
+
+    let (key_a, key_b) = loop {
+        let key_a = SecretKey::generate();
+        let key_b = SecretKey::generate();
+        if key_a.public() > key_b.public() {
+            break (key_a, key_b);
+        }
+    };
+    let replacement_key_b = key_b.clone();
+    let contact_a = Contact::new(
+        "collision-cleanup-client-a".to_string(),
+        key_a.public().to_string(),
+    )
+    .expect("contact a invalid");
+    let contact_b = Contact::new(
+        "collision-cleanup-client-b".to_string(),
+        key_b.public().to_string(),
+    )
+    .expect("contact b invalid");
+    let peer_a = contact_a.get_peer_id();
+    let peer_b = contact_b.get_peer_id();
+    let call_states_a = Arc::new(Mutex::new(Vec::new()));
+    let call_states_replacement_b = Arc::new(Mutex::new(Vec::new()));
+    let predecessor_accept_probe = PendingAcceptProbe::default();
+    let replacement_accept_probe = PendingAcceptProbe::default();
+
+    let client_a = build_client(
+        relay_map,
+        key_a,
+        vec![contact_b.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_a.clone(),
+    )
+    .await;
+    let predecessor_client_b = build_client_with_accept_probe(
+        relay_map,
+        key_b,
+        vec![contact_a.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        Arc::new(Mutex::new(Vec::new())),
+        predecessor_accept_probe.clone(),
+    )
+    .await;
+
+    client_a.telepathy.start_session(&contact_b).await;
+    predecessor_client_b
+        .telepathy
+        .start_session(&contact_a)
+        .await;
+    wait_for_sessions(&client_a, &contact_b, &predecessor_client_b, &contact_a).await;
+
+    let predecessor_id = client_a
+        .telepathy
+        .inner
+        .session_states
+        .read()
+        .await
+        .get(&peer_b)
+        .map(|state| state.id())
+        .expect("client a should register the predecessor session");
+
+    client_a
+        .telepathy
+        .start_call(&contact_b)
+        .await
+        .expect("client a should start the pending outgoing call");
+    predecessor_accept_probe.wait_opened().await;
+    let pending_owner = client_a
+        .telepathy
+        .inner
+        .core_state
+        .call_slot
+        .snapshot()
+        .expect("pending outgoing call slot snapshot should succeed");
+    assert_eq!(pending_owner.state, CallSlotState::PendingOutgoing);
+    assert_eq!(pending_owner.direct_peer, Some(peer_b));
+
+    let session_lock = client_a.telepathy.inner.session_states.write().await;
+    let replacement_client_b = build_client_with_accept_probe(
+        relay_map,
+        replacement_key_b,
+        vec![contact_a.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_replacement_b.clone(),
+        replacement_accept_probe.clone(),
+    )
+    .await;
+    replacement_client_b
+        .telepathy
+        .start_session(&contact_a)
+        .await;
+    replacement_client_b
+        .session_status_probe
+        .wait_for(
+            peer_a.as_bytes(),
+            SessionStatus::Connected {
+                relayed: false,
+                remote_address: String::new(),
+            },
+        )
+        .await;
+
+    predecessor_client_b.telepathy.shutdown().await;
+    drop(session_lock);
+
+    wait_for_stable_session_pair(
+        &client_a,
+        &peer_b,
+        &replacement_client_b,
+        &peer_a,
+        Some(predecessor_id),
+    )
+    .await;
+    let replacement_owner = client_a
+        .telepathy
+        .inner
+        .core_state
+        .call_slot
+        .snapshot()
+        .expect("replacement call slot snapshot should succeed");
+    if replacement_owner != pending_owner {
+        replacement_client_b.telepathy.shutdown().await;
+        client_a.telepathy.shutdown().await;
+    }
+    assert_eq!(
+        replacement_owner, pending_owner,
+        "stale collision-loser cleanup must preserve the replacement session's exact pending call ownership"
+    );
+
+    replacement_accept_probe.wait_opened().await;
+    replacement_client_b
+        .telepathy
+        .start_call(&contact_a)
+        .await
+        .expect("replacement should match the retained pending call");
+    wait_for_connected(&call_states_a, "client a replacement call").await;
+    wait_for_connected(
+        &call_states_replacement_b,
+        "replacement client b matched call",
+    )
+    .await;
+
+    let connected_owner = client_a
+        .telepathy
+        .inner
+        .core_state
+        .call_slot
+        .snapshot()
+        .expect("connected replacement call slot snapshot should succeed");
+    assert_eq!(connected_owner.state, CallSlotState::ActiveDirect);
+    assert_eq!(connected_owner.direct_peer, pending_owner.direct_peer);
+    assert_eq!(connected_owner.generation, pending_owner.generation);
+
+    client_a.telepathy.end_call().await;
+    replacement_client_b.telepathy.shutdown().await;
+    client_a.telepathy.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn repeated_start_call_same_outgoing_does_not_queue_stale_permit() {
     init_test_tracing();
     let relay_map = shared_relay_map();

@@ -11,9 +11,14 @@ use std::future::Future;
 use std::sync::Arc;
 use tokio::sync::Notify;
 
-#[cfg_attr(feature = "integration-testing", automock)]
+#[cfg_attr(
+    feature = "integration-testing",
+    automock(type StatisticsCallback = MockCoreStatisticsCallback;)
+)]
 #[cfg_attr(feature = "integration-testing", async_trait)]
-pub trait CoreCallbacks<S: CoreStatisticsCallback> {
+pub trait CoreCallbacks {
+    type StatisticsCallback: CoreStatisticsCallback + Send + Sync + 'static;
+
     fn session_status(
         &self,
         status: SessionStatus,
@@ -39,7 +44,7 @@ pub trait CoreCallbacks<S: CoreStatisticsCallback> {
 
     fn message_received(&self, chat_message: ChatMessage) -> impl Future<Output = ()> + Send;
 
-    fn statistics_callback(&self) -> S;
+    fn statistics_callback(&self) -> Self::StatisticsCallback;
 }
 
 #[cfg_attr(feature = "integration-testing", automock)]

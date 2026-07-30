@@ -9,7 +9,9 @@ use iroh::PublicKey;
 use std::sync::Arc;
 use tokio::sync::Notify;
 
-impl CoreCallbacks<FlutterStatisticsCallback> for FlutterCallbacks {
+impl CoreCallbacks for FlutterCallbacks {
+    type StatisticsCallback = FlutterStatisticsCallback;
+
     fn session_status(
         &self,
         status: SessionStatus,

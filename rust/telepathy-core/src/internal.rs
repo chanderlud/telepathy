@@ -16,7 +16,7 @@ pub mod video;
 pub(crate) mod video;
 
 use crate::AudioDevice;
-use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
+use crate::internal::callbacks::CoreCallbacks;
 use crate::internal::core::{RoomControllerStart, TelepathyCore};
 use crate::internal::error::{Error, ErrorKind};
 use crate::internal::messages::{Attachment, ProtocolMessage};
@@ -148,15 +148,12 @@ fn chat_message_fits_frame(text: &str, attachments: &[Attachment]) -> bool {
         .is_ok()
 }
 
-pub struct TelepathyHandle<C, S, H, I, O>
+pub struct TelepathyHandle<C, H>
 where
-    C: CoreCallbacks<S> + Send + Sync + 'static,
-    S: CoreStatisticsCallback + Send + Sync + 'static,
-    H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
-    I: Send + Sync + 'static,
-    O: Send + Sync + 'static,
+    C: CoreCallbacks + Send + Sync + 'static,
+    H: AudioHost + Send + Sync + Clone + 'static,
 {
-    pub inner: TelepathyCore<C, S, H, I, O>,
+    pub inner: TelepathyCore<C, H>,
 
     /// contains handles to the manager thread & room managers
     handles: Arc<Mutex<Vec<JoinHandle<()>>>>,
@@ -177,13 +174,10 @@ async fn abort_room_generation(
     let _ = completion.await;
 }
 
-impl<C, S, H, I, O> TelepathyHandle<C, S, H, I, O>
+impl<C, H> TelepathyHandle<C, H>
 where
-    C: CoreCallbacks<S> + Send + Sync + 'static,
-    S: CoreStatisticsCallback + Send + Sync + 'static,
-    H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
-    I: Send + Sync + 'static,
-    O: Send + Sync + 'static,
+    C: CoreCallbacks + Send + Sync + 'static,
+    H: AudioHost + Send + Sync + Clone + 'static,
 {
     /// Builds a new handle around a fresh `TelepathyCore`.
     pub fn new(

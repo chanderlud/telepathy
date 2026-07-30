@@ -85,31 +85,21 @@ impl ProcessBoundaryProbe {
     }
 }
 
-pub(super) type MockTelepathyHandle<H, I, O> = TelepathyHandle<
-    MockCoreCallbacks<MockCoreStatisticsCallback>,
-    MockCoreStatisticsCallback,
-    H,
-    I,
-    O,
->;
+pub(super) type MockTelepathyHandle<H> = TelepathyHandle<MockCoreCallbacks, H>;
 
-pub(super) struct ClientHarness<H, I, O>
+pub(super) struct ClientHarness<H>
 where
-    H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
-    I: Send + Sync + 'static,
-    O: Send + Sync + 'static,
+    H: AudioHost + Send + Sync + Clone + 'static,
 {
-    pub(super) telepathy: MockTelepathyHandle<H, I, O>,
+    pub(super) telepathy: MockTelepathyHandle<H>,
     pub(super) is_active: Arc<AtomicBool>,
     pub(super) contact_lookup_probe: ContactLookupProbe,
     pub(super) session_status_probe: SessionStatusProbe,
 }
 
-impl<H, I, O> ClientHarness<H, I, O>
+impl<H> ClientHarness<H>
 where
-    H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
-    I: Send + Sync + 'static,
-    O: Send + Sync + 'static,
+    H: AudioHost + Send + Sync + Clone + 'static,
 {
     pub(super) async fn stop_session_and_wait_for_runtime(&self, contact: &Contact) {
         let runtime_applied = self.telepathy.inner.core_state.manager_active.notified();
@@ -976,18 +966,16 @@ pub(super) fn shared_address_lookup() -> &'static MemoryLookup {
         .expect("shared_address_lookup called before shared_relay_map initialisation")
 }
 
-pub(super) async fn build_client<H, I, O>(
+pub(super) async fn build_client<H>(
     relay_map: &RelayMap,
     identity: SecretKey,
     contacts: Vec<Contact>,
     codec_config: &CodecConfig,
     host: H,
     call_states: Arc<Mutex<Vec<CallState>>>,
-) -> ClientHarness<H, I, O>
+) -> ClientHarness<H>
 where
-    H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
-    I: Send + Sync + 'static,
-    O: Send + Sync + 'static,
+    H: AudioHost + Send + Sync + Clone + 'static,
 {
     build_client_with_options(
         relay_map,
@@ -1002,18 +990,16 @@ where
     .await
 }
 
-pub(super) async fn build_client_with_lookup_contacts<H, I, O>(
+pub(super) async fn build_client_with_lookup_contacts<H>(
     relay_map: &RelayMap,
     identity: SecretKey,
     contacts: Vec<Contact>,
     codec_config: &CodecConfig,
     host: H,
     call_states: Arc<Mutex<Vec<CallState>>>,
-) -> ClientHarness<H, I, O>
+) -> ClientHarness<H>
 where
-    H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
-    I: Send + Sync + 'static,
-    O: Send + Sync + 'static,
+    H: AudioHost + Send + Sync + Clone + 'static,
 {
     build_client_with_options_and_initial_contacts(
         relay_map,
@@ -1029,7 +1015,7 @@ where
     .await
 }
 
-pub(super) async fn build_client_with_accept_probe<H, I, O>(
+pub(super) async fn build_client_with_accept_probe<H>(
     relay_map: &RelayMap,
     identity: SecretKey,
     contacts: Vec<Contact>,
@@ -1037,11 +1023,9 @@ pub(super) async fn build_client_with_accept_probe<H, I, O>(
     host: H,
     call_states: Arc<Mutex<Vec<CallState>>>,
     accept_probe: PendingAcceptProbe,
-) -> ClientHarness<H, I, O>
+) -> ClientHarness<H>
 where
-    H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
-    I: Send + Sync + 'static,
-    O: Send + Sync + 'static,
+    H: AudioHost + Send + Sync + Clone + 'static,
 {
     build_client_with_options(
         relay_map,
@@ -1061,7 +1045,7 @@ where
 /// hangup race where `end_call` arrives while the controller is still
 /// mid-Waiting.
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn build_client_with_waiting_gate<H, I, O>(
+pub(super) async fn build_client_with_waiting_gate<H>(
     relay_map: &RelayMap,
     identity: SecretKey,
     contacts: Vec<Contact>,
@@ -1069,11 +1053,9 @@ pub(super) async fn build_client_with_waiting_gate<H, I, O>(
     host: H,
     call_states: Arc<Mutex<Vec<CallState>>>,
     waiting_gate: WaitingCallbackGate,
-) -> ClientHarness<H, I, O>
+) -> ClientHarness<H>
 where
-    H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
-    I: Send + Sync + 'static,
-    O: Send + Sync + 'static,
+    H: AudioHost + Send + Sync + Clone + 'static,
 {
     let network_config = NetworkConfig::mock(
         0,
@@ -1102,7 +1084,7 @@ where
         Some(session_status_probe.clone()),
     );
 
-    let mut telepathy: MockTelepathyHandle<H, I, O> = TelepathyHandle::new(
+    let mut telepathy: MockTelepathyHandle<H> = TelepathyHandle::new(
         host,
         &network_config,
         &screenshare,
@@ -1127,7 +1109,7 @@ where
 /// direct-call deadlock where `end_call` arrives while the controller is still
 /// mid-`Connected` delivery.
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn build_client_with_connected_gate<H, I, O>(
+pub(super) async fn build_client_with_connected_gate<H>(
     relay_map: &RelayMap,
     identity: SecretKey,
     contacts: Vec<Contact>,
@@ -1135,11 +1117,9 @@ pub(super) async fn build_client_with_connected_gate<H, I, O>(
     host: H,
     call_states: Arc<Mutex<Vec<CallState>>>,
     connected_gate: ConnectedCallbackGate,
-) -> ClientHarness<H, I, O>
+) -> ClientHarness<H>
 where
-    H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
-    I: Send + Sync + 'static,
-    O: Send + Sync + 'static,
+    H: AudioHost + Send + Sync + Clone + 'static,
 {
     let network_config = NetworkConfig::mock(
         0,
@@ -1168,7 +1148,7 @@ where
         Some(session_status_probe.clone()),
     );
 
-    let mut telepathy: MockTelepathyHandle<H, I, O> = TelepathyHandle::new(
+    let mut telepathy: MockTelepathyHandle<H> = TelepathyHandle::new(
         host,
         &network_config,
         &screenshare,
@@ -1193,7 +1173,7 @@ where
 /// verify the call slot and room state are released while the frontend
 /// callback is still parked.
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn build_client_with_call_ended_park<H, I, O>(
+pub(super) async fn build_client_with_call_ended_park<H>(
     relay_map: &RelayMap,
     identity: SecretKey,
     contacts: Vec<Contact>,
@@ -1201,11 +1181,9 @@ pub(super) async fn build_client_with_call_ended_park<H, I, O>(
     host: H,
     call_states: Arc<Mutex<Vec<CallState>>>,
     call_ended_park: CallEndedPark,
-) -> ClientHarness<H, I, O>
+) -> ClientHarness<H>
 where
-    H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
-    I: Send + Sync + 'static,
-    O: Send + Sync + 'static,
+    H: AudioHost + Send + Sync + Clone + 'static,
 {
     let network_config = NetworkConfig::mock(
         0,
@@ -1234,7 +1212,7 @@ where
         Some(session_status_probe.clone()),
     );
 
-    let mut telepathy: MockTelepathyHandle<H, I, O> = TelepathyHandle::new(
+    let mut telepathy: MockTelepathyHandle<H> = TelepathyHandle::new(
         host,
         &network_config,
         &screenshare,
@@ -1255,7 +1233,7 @@ where
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn build_client_with_options<H, I, O>(
+pub(super) async fn build_client_with_options<H>(
     relay_map: &RelayMap,
     identity: SecretKey,
     contacts: Vec<Contact>,
@@ -1264,11 +1242,9 @@ pub(super) async fn build_client_with_options<H, I, O>(
     call_states: Arc<Mutex<Vec<CallState>>>,
     accept_probe: Option<PendingAcceptProbe>,
     lifecycle: ManagerLifecycle,
-) -> ClientHarness<H, I, O>
+) -> ClientHarness<H>
 where
-    H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
-    I: Send + Sync + 'static,
-    O: Send + Sync + 'static,
+    H: AudioHost + Send + Sync + Clone + 'static,
 {
     build_client_with_options_and_initial_contacts(
         relay_map,
@@ -1285,7 +1261,7 @@ where
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn build_client_with_options_and_initial_contacts<H, I, O>(
+pub(super) async fn build_client_with_options_and_initial_contacts<H>(
     relay_map: &RelayMap,
     identity: SecretKey,
     contacts: Vec<Contact>,
@@ -1295,11 +1271,9 @@ pub(super) async fn build_client_with_options_and_initial_contacts<H, I, O>(
     call_states: Arc<Mutex<Vec<CallState>>>,
     accept_probe: Option<PendingAcceptProbe>,
     lifecycle: ManagerLifecycle,
-) -> ClientHarness<H, I, O>
+) -> ClientHarness<H>
 where
-    H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
-    I: Send + Sync + 'static,
-    O: Send + Sync + 'static,
+    H: AudioHost + Send + Sync + Clone + 'static,
 {
     let network_config = NetworkConfig::mock(
         0,
@@ -1331,7 +1305,7 @@ where
         Some(session_status_probe.clone()),
     );
 
-    let mut telepathy: MockTelepathyHandle<H, I, O> = TelepathyHandle::new(
+    let mut telepathy: MockTelepathyHandle<H> = TelepathyHandle::new(
         host,
         &network_config,
         &screenshare,
@@ -1370,7 +1344,7 @@ pub(super) fn construct_mock_callbacks(
     connected_gate: Option<ConnectedCallbackGate>,
     call_ended_park: Option<CallEndedPark>,
     session_status_probe: Option<SessionStatusProbe>,
-) -> MockCoreCallbacks<MockCoreStatisticsCallback> {
+) -> MockCoreCallbacks {
     let initial_contacts = contacts.clone();
     construct_mock_callbacks_with_contact_lookup(
         contacts,
@@ -1402,8 +1376,8 @@ fn construct_mock_callbacks_with_contact_lookup(
     call_ended_park: Option<CallEndedPark>,
     contact_lookup_probe: Option<ContactLookupProbe>,
     session_status_probe: Option<SessionStatusProbe>,
-) -> MockCoreCallbacks<MockCoreStatisticsCallback> {
-    let mut mock: MockCoreCallbacks<MockCoreStatisticsCallback> = MockCoreCallbacks::new();
+) -> MockCoreCallbacks {
+    let mut mock = MockCoreCallbacks::new();
 
     mock.expect_session_status()
         .returning(move |status, _peer| {
@@ -1681,11 +1655,9 @@ pub(super) fn stream_error_scenario<'a>(
     }
 }
 
-pub(super) fn assert_call_slot_idle<H, I, O>(client: &ClientHarness<H, I, O>, message: &str)
+pub(super) fn assert_call_slot_idle<H>(client: &ClientHarness<H>, message: &str)
 where
-    H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
-    I: Send + Sync + 'static,
-    O: Send + Sync + 'static,
+    H: AudioHost + Send + Sync + Clone + 'static,
 {
     let snapshot = client
         .telepathy
@@ -1787,11 +1759,9 @@ pub(super) async fn wait_for_connected(call_states: &Arc<Mutex<Vec<CallState>>>,
 /// `ClientHarness::is_active` is flipped to `true` on the first
 /// `SessionStatus::Connected` callback, so this confirms the QUIC/relay path is
 /// warm and not still doing first-packet setup.
-pub(super) async fn wait_for_active_transport<H, I, O>(client: &ClientHarness<H, I, O>, label: &str)
+pub(super) async fn wait_for_active_transport<H>(client: &ClientHarness<H>, label: &str)
 where
-    H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
-    I: Send + Sync + 'static,
-    O: Send + Sync + 'static,
+    H: AudioHost + Send + Sync + Clone + 'static,
 {
     let mut poll = interval(Duration::from_millis(100));
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
@@ -1894,18 +1864,14 @@ pub(super) async fn wait_for_no_extra_room_leave(
     );
 }
 
-pub(super) async fn wait_for_sessions<HA, IA, OA, HB, IB, OB>(
-    a: &ClientHarness<HA, IA, OA>,
+pub(super) async fn wait_for_sessions<HA, HB>(
+    a: &ClientHarness<HA>,
     a_peer: &Contact,
-    b: &ClientHarness<HB, IB, OB>,
+    b: &ClientHarness<HB>,
     b_peer: &Contact,
 ) where
-    HA: AudioHost<InputStream = IA, OutputStream = OA> + Send + Sync + Clone + 'static,
-    IA: Send + Sync + 'static,
-    OA: Send + Sync + 'static,
-    HB: AudioHost<InputStream = IB, OutputStream = OB> + Send + Sync + Clone + 'static,
-    IB: Send + Sync + 'static,
-    OB: Send + Sync + 'static,
+    HA: AudioHost + Send + Sync + Clone + 'static,
+    HB: AudioHost + Send + Sync + Clone + 'static,
 {
     // Two-phase wait: confirm both sides have a session entry, then re-check after
     // a poll interval that the SessionState::id is unchanged. Guards against
@@ -1966,19 +1932,15 @@ pub(super) async fn wait_for_sessions<HA, IA, OA, HB, IB, OB>(
 /// peer AND session ids remain stable across at least one polling interval.
 /// Optionally asserts the resulting id differs from a previous id (e.g. to confirm
 /// `restart_manager` re-spawned the session).
-pub(super) async fn wait_for_stable_session_pair<HA, IA, OA, HB, IB, OB>(
-    a: &ClientHarness<HA, IA, OA>,
+pub(super) async fn wait_for_stable_session_pair<HA, HB>(
+    a: &ClientHarness<HA>,
     a_peer: &PublicKey,
-    b: &ClientHarness<HB, IB, OB>,
+    b: &ClientHarness<HB>,
     b_peer: &PublicKey,
     require_a_id_change: Option<Uuid>,
 ) where
-    HA: AudioHost<InputStream = IA, OutputStream = OA> + Send + Sync + Clone + 'static,
-    IA: Send + Sync + 'static,
-    OA: Send + Sync + 'static,
-    HB: AudioHost<InputStream = IB, OutputStream = OB> + Send + Sync + Clone + 'static,
-    IB: Send + Sync + 'static,
-    OB: Send + Sync + 'static,
+    HA: AudioHost + Send + Sync + Clone + 'static,
+    HB: AudioHost + Send + Sync + Clone + 'static,
 {
     let mut poll = interval(Duration::from_millis(100));
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
@@ -2040,11 +2002,9 @@ pub(super) async fn wait_for_stable_session_pair<HA, IA, OA, HB, IB, OB>(
     }
 }
 
-pub(super) async fn wait_for_slot_idle<H, I, O>(client: &ClientHarness<H, I, O>, peer: &str)
+pub(super) async fn wait_for_slot_idle<H>(client: &ClientHarness<H>, peer: &str)
 where
-    H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
-    I: Send + Sync + 'static,
-    O: Send + Sync + 'static,
+    H: AudioHost + Send + Sync + Clone + 'static,
 {
     let mut poll = interval(Duration::from_millis(50));
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
@@ -2071,15 +2031,13 @@ where
 /// into `PendingOutgoing` or `ActiveDirect` for `peer`. Post-room-teardown guard for
 /// the stale-start race: a `start_call` permit latched on a session must be discarded
 /// by `room_handshake` before returning control to `session_inner`.
-pub(super) async fn assert_slot_remains_outside_direct_call_states<H, I, O>(
-    client: &ClientHarness<H, I, O>,
+pub(super) async fn assert_slot_remains_outside_direct_call_states<H>(
+    client: &ClientHarness<H>,
     peer: &PublicKey,
     label: &str,
     window: Duration,
 ) where
-    H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
-    I: Send + Sync + 'static,
-    O: Send + Sync + 'static,
+    H: AudioHost + Send + Sync + Clone + 'static,
 {
     let mut poll = interval(Duration::from_millis(20));
     let deadline = tokio::time::Instant::now() + window;
@@ -2111,11 +2069,9 @@ pub(super) async fn assert_slot_remains_outside_direct_call_states<H, I, O>(
 
 /// Waits until the call slot is in `RoomCall` state, indicating `join_room` has
 /// installed a `RoomState` and acquired the slot for the room.
-pub(super) async fn wait_for_slot_room_call<H, I, O>(client: &ClientHarness<H, I, O>, label: &str)
+pub(super) async fn wait_for_slot_room_call<H>(client: &ClientHarness<H>, label: &str)
 where
-    H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
-    I: Send + Sync + 'static,
-    O: Send + Sync + 'static,
+    H: AudioHost + Send + Sync + Clone + 'static,
 {
     let mut poll = interval(Duration::from_millis(50));
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
@@ -2142,13 +2098,9 @@ where
 /// active call state, then re-checks across one more poll interval to confirm it
 /// does not flip to `Idle` (which would indicate a phantom second negotiation or
 /// stale-state leak).
-pub(super) async fn wait_for_slot_owned_by<H, I, O>(
-    client: &ClientHarness<H, I, O>,
-    peer: &PublicKey,
-) where
-    H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
-    I: Send + Sync + 'static,
-    O: Send + Sync + 'static,
+pub(super) async fn wait_for_slot_owned_by<H>(client: &ClientHarness<H>, peer: &PublicKey)
+where
+    H: AudioHost + Send + Sync + Clone + 'static,
 {
     let mut poll = interval(Duration::from_millis(50));
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
@@ -2201,26 +2153,18 @@ pub(super) async fn wait_for_slot_owned_by<H, I, O>(
 /// without cloning the `ClientHarness`.
 pub(super) struct TwoClientShutdownGuard<
     'a,
-    HA: AudioHost<InputStream = IA, OutputStream = OA> + Send + Sync + Clone + 'static,
-    IA: Send + Sync + 'static,
-    OA: Send + Sync + 'static,
-    HB: AudioHost<InputStream = IB, OutputStream = OB> + Send + Sync + Clone + 'static,
-    IB: Send + Sync + 'static,
-    OB: Send + Sync + 'static,
+    HA: AudioHost + Send + Sync + Clone + 'static,
+    HB: AudioHost + Send + Sync + Clone + 'static,
 > {
-    pub(super) a: &'a ClientHarness<HA, IA, OA>,
-    pub(super) b: &'a ClientHarness<HB, IB, OB>,
+    pub(super) a: &'a ClientHarness<HA>,
+    pub(super) b: &'a ClientHarness<HB>,
     pub(super) dropped: AtomicBool,
 }
 
-impl<HA, IA, OA, HB, IB, OB> TwoClientShutdownGuard<'_, HA, IA, OA, HB, IB, OB>
+impl<HA, HB> TwoClientShutdownGuard<'_, HA, HB>
 where
-    HA: AudioHost<InputStream = IA, OutputStream = OA> + Send + Sync + Clone + 'static,
-    IA: Send + Sync + 'static,
-    OA: Send + Sync + 'static,
-    HB: AudioHost<InputStream = IB, OutputStream = OB> + Send + Sync + Clone + 'static,
-    IB: Send + Sync + 'static,
-    OB: Send + Sync + 'static,
+    HA: AudioHost + Send + Sync + Clone + 'static,
+    HB: AudioHost + Send + Sync + Clone + 'static,
 {
     /// Marks the guard as already-handled so its `Drop` becomes a no-op. The
     /// success path calls this immediately before `drop(shutdown_guard)` so the
@@ -2231,14 +2175,10 @@ where
     }
 }
 
-impl<HA, IA, OA, HB, IB, OB> Drop for TwoClientShutdownGuard<'_, HA, IA, OA, HB, IB, OB>
+impl<HA, HB> Drop for TwoClientShutdownGuard<'_, HA, HB>
 where
-    HA: AudioHost<InputStream = IA, OutputStream = OA> + Send + Sync + Clone + 'static,
-    IA: Send + Sync + 'static,
-    OA: Send + Sync + 'static,
-    HB: AudioHost<InputStream = IB, OutputStream = OB> + Send + Sync + Clone + 'static,
-    IB: Send + Sync + 'static,
-    OB: Send + Sync + 'static,
+    HA: AudioHost + Send + Sync + Clone + 'static,
+    HB: AudioHost + Send + Sync + Clone + 'static,
 {
     fn drop(&mut self) {
         // Success path sets `dropped` so this is a no-op. On panic the

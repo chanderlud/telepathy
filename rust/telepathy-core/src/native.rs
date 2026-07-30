@@ -12,13 +12,9 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 #[cfg(not(feature = "integration-testing"))]
-use telepathy_audio::Stream;
-#[cfg(not(feature = "integration-testing"))]
 use telepathy_audio::devices::CpalAudioHost;
 #[cfg(feature = "integration-testing")]
 use telepathy_audio::devices::MockAudioHost;
-#[cfg(not(feature = "integration-testing"))]
-use telepathy_audio::io::SendStream;
 use tokio::sync::{Notify, oneshot, watch};
 
 type NativeFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
@@ -29,18 +25,14 @@ type NativeAcceptCall = Arc<
 >;
 
 #[cfg(not(feature = "integration-testing"))]
-type NativeHandle =
-    TelepathyHandle<NativeCallbacks, NativeStatisticsCallback, CpalAudioHost, Stream, SendStream>;
+type NativeHandle = TelepathyHandle<NativeCallbacks, CpalAudioHost>;
 #[cfg(feature = "integration-testing")]
 type NativeHandle = TelepathyHandle<
     NativeCallbacks,
-    NativeStatisticsCallback,
     MockAudioHost<
         telepathy_audio::devices::MockAudioInput,
         telepathy_audio::devices::MockAudioOutput,
     >,
-    (),
-    (),
 >;
 
 /// Rust-native runtime client for `telepathy-core`.
@@ -300,7 +292,9 @@ impl NativeCallbacks {
     }
 }
 
-impl CoreCallbacks<NativeStatisticsCallback> for NativeCallbacks {
+impl CoreCallbacks for NativeCallbacks {
+    type StatisticsCallback = NativeStatisticsCallback;
+
     async fn session_status(&self, status: SessionStatus, peer: PublicKey) {
         (self.session_status)((peer.to_string(), status)).await
     }
