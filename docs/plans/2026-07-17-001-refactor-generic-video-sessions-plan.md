@@ -10,7 +10,7 @@ deepened: 2026-07-17
 
 ## Summary
 
-Replace screenshare-specific lifecycle, signaling, transport, and bridge contracts with one typed video-session architecture. Preserve current desktop FFmpeg capture/playback behavior as the first statically selected platform adapter, while making future source and platform additions local to domain/configuration and adapter boundaries.
+Replace screenshare-specific lifecycle, signaling, transport, and bridge contracts with one typed video-session architecture. Preserve the implemented Windows FFmpeg capture/playback behavior as the first statically selected platform adapter, while making future source and platform additions local to domain/configuration and adapter boundaries.
 
 ---
 
@@ -24,16 +24,16 @@ The current flow also has no direct screenshare tests and represents ownership w
 
 ## Requirements
 
-- R1. Existing Windows, macOS, and Linux screensharing must continue using FFmpeg/ffplay with the same supported devices, encoders, command behavior, framed byte path, settings, and user interaction.
+- R1. Preserve the implemented Windows FFmpeg capture/playback command behavior, framed byte path, settings, and user interaction. The desktop adapter may compile on Windows, macOS, and Linux, but a capture mode is advertised only where that target has an implemented command path and fresh runtime capability result. macOS and Linux capture are unavailable until implemented and tested command paths exist.
 - R2. Core lifecycle, signaling, transport framing, session identity, roles, phases, and terminal reasons must use generic video-session vocabulary rather than screenshare or FFmpeg concepts.
 - R3. A single per-peer coordinator must own video-session state and Iroh stream orchestration; platform adapters must not own signaling or transport negotiation.
-- R4. Platform implementation selection must be compile-time and narrow. Runtime checks determine capabilities and availability, not which backend type is loaded.
-- R5. Adding a future platform implementation must be limited to a target adapter, static selection, and any source-neutral capability/configuration representation it genuinely needs; it must not require coordinator, transport, wire lifecycle, or Flutter event redesign.
+- R4. Platform implementation selection must be compile-time and narrow: the build selects either the desktop FFmpeg adapter or the unsupported adapter. Runtime checks determine only truthful capabilities and availability, never which backend type is loaded.
+- R5. Adding a future platform implementation must be limited to a target adapter, static selection, implemented command paths, fresh capability probing, and any source-neutral capability/configuration representation it genuinely needs. It must not require coordinator, transport, wire lifecycle, or Flutter event redesign.
 - R6. Adding a future video source must be limited to an explicit source/configuration variant, wire serialization coverage, and adapter support; it must not require a parallel lifecycle or transport path.
 - R7. Start, ready, active, stop, rejection, failure, teardown, and restart behavior must be typed, idempotent, generation-safe, and observable on both peers.
 - R8. Video wire messages and media preambles must be source-neutral, versioned, identity-checked, and explicitly framed. Control fields, preambles, and media payloads must have distinct inbound/outbound limits enforced before allocation or adapter delivery.
 - R9. FFmpeg processes, pipes, Iroh streams, and worker tasks must follow one deadlock-safe cleanup order on every terminal path and finish cleanup before the per-peer slot returns to idle.
-- R10. Rust-native and Flutter-facing APIs must expose the same unconditional typed video contract on every target; platform unavailability is returned as data or a typed outcome.
+- R10. Rust-native and Flutter-facing APIs must expose the same unconditional typed video contract on every target. Persisted or user-selected modes that are unavailable at start return a typed outcome, never a panic; platform unavailability is returned as data or a typed outcome.
 - R11. Existing Flutter screenshare controls and sending/receiving state must preserve their behavior while consuming generic video events.
 - R12. Characterization, domain, transport, two-peer integration, Flutter state, and repeated teardown tests must protect the architecture and existing call/session behavior.
 - R13. Media flow must preserve end-to-end backpressure and complete byte delivery with bounded in-flight memory, no unbounded per-frame queues/tasks, and lifecycle-level rather than frame-rate tracing.
@@ -63,8 +63,10 @@ The current flow also has no direct screenshare tests and represents ownership w
 
 ### Relevant Code and Patterns
 
-- `rust/telepathy-core/src/internal/helpers.rs`: current sender/receiver branch combines callback, signaling, Iroh stream setup, config lookup, and FFmpeg invocation.
-- `rust/telepathy-core/src/internal/screenshare.rs`: current FFmpeg capability discovery, command construction, capture, playback, framing, and process cleanup baseline.
+- `rust/telepathy-core/src/internal/video.rs`: generic coordinator, negotiation, lifecycle, and adapter startup boundary.
+- `rust/telepathy-core/src/internal/video/platform.rs`: canonical internal device/encoder/decoder vocabulary and compile-time selected adapter boundary.
+- `rust/telepathy-core/src/internal/video/platform/desktop_ffmpeg.rs`: fresh FFmpeg capability probing, implemented Windows capture commands, local decoder selection, playback, and process cleanup.
+- `rust/telepathy-core/src/internal/video/platform/unsupported.rs`: typed unavailable implementation for unsupported targets.
 - `rust/telepathy-core/src/internal/state.rs`: peer-owned `SessionState` and teardown ownership; the new video slot belongs here.
 - `rust/telepathy-core/src/internal/messages.rs`: current `ScreenshareHeader` wire contract and control-message serialization.
 - `rust/telepathy-core/src/internal/core.rs`: peer session map, incoming control dispatch, and generation-safe session patterns.
@@ -76,7 +78,7 @@ The current flow also has no direct screenshare tests and represents ownership w
 
 ### Institutional Learnings
 
-- No `docs/solutions/` or `STRATEGY.md` exists. Repository guidance instead requires narrow platform code, source-driven Flutter Rust Bridge generation, real integration coverage, and stress validation for session/network teardown.
+- Repository guidance identifies `docs/solutions/` and `docs/CONCEPTS.md` as searchable project knowledge. It also requires narrow platform code, source-driven Flutter Rust Bridge generation, real integration coverage, and stress validation for session/network teardown.
 - Public `telepathy-core` changes require running exactly `flutter_rust_bridge_codegen generate`; generated bridge files must never be edited manually.
 - Core session/call/network/teardown work requires the main Rust pass and repeated core integration stress coverage before handoff. System tests must be run manually in WSL.
 
@@ -97,7 +99,7 @@ The current flow also has no direct screenshare tests and represents ownership w
 |---|---|
 | Ownership boundary | A generic per-peer video coordinator owns lifecycle, signaling, Iroh stream setup, framing, cancellation, task joining, and the active resource bundle. Platform adapters own preparation, capture/playback, and exclusively clean up their child processes and pipes through their adapter session. |
 | Adapter granularity | Use a session adapter rather than raw source/sink callbacks. FFmpeg preparation determines negotiated format and owns a child process, pipes, and cleanup as one unit. |
-| Platform selection | Compile exactly one private adapter type with target `cfg`; probe binaries, devices, encoders, decoders, and permissions at runtime. Avoid dynamic registries and boxed async backends. |
+| Platform selection | Compile exactly one private adapter with target `cfg`: the desktop FFmpeg adapter on Windows, macOS, and Linux, or the unsupported adapter elsewhere. Runtime probing reports capabilities only. A desktop build must not advertise a display capture mode unless its target has an implemented command path and the fresh probe confirms it. Avoid dynamic registries and boxed async backends. |
 | Extensibility model | Use closed, typed source/configuration and lifecycle variants. Future additions become compiler-visible and cannot silently fall through string matching. |
 | Active-session cardinality | Keep one video slot per peer for this scope. Its active resource bundle contains the matching identity and generation, role, phase, cancellation, adapter session, and every transport-worker handle, including `open_uni` and `accept_uni`; neither worker may be detached. Resources install only while the slot still matches that identity and generation. A stale installer immediately cancels and joins its uninstalled bundle. |
 | Negotiation | Use typed offer, ready, reject, and stop controls. Existing screenshare remains automatically accepted when locally supported; readiness is protocol-internal and creates no new UX. |
@@ -110,10 +112,10 @@ The current flow also has no direct screenshare tests and represents ownership w
 | Stream termination | One transport I/O owner resolves cancellation. Clean EOF intentionally finishes; stop, protocol failure, or interrupted framing resets/abandons the stream. A partially written preamble/frame is never resumed or reused. |
 | Backpressure | Preserve the current direct read-then-send pressure chain with bounded in-flight media memory. No unbounded media channel, per-frame task spawning, or ignored partial child-stdin write is permitted. |
 | Frontend contract | Core owns stopping and cleanup. Flutter receives typed lifecycle observations and issues identity-aware stop requests; callbacks never own correctness. |
-| Public parity | Native and Flutter surfaces share lifecycle request/stop/events and generic capabilities. Platform configuration ownership may differ internally, but cannot change those public session semantics. |
+| Public parity | Native and Flutter surfaces share lifecycle request/stop/events and generic capabilities. Platform configuration ownership may differ internally, but cannot change those public session semantics or turn unavailable persisted/user-selected configuration into a panic. |
 | Terminal observations | Each peer emits exactly one terminal observation for each resolved wire session identity, only after `cancel_and_join` finishes its matching resources. Explicit control is best-effort; absent peer control maps to a local transport-ended reason with deterministic precedence and identity-based deduplication. Stale completion or installation cleans up its own resources without observing or clearing a newer slot. |
 | Failure scope | Video failures end only the affected video session unless the underlying peer/call transport itself has ended. |
-| Configuration | Coordinator accepts only a source request and generic capability result. Selected adapter reads validated source-scoped local settings through the facade; unavailable, receive-only, and send-capable states remain generic, and FFmpeg data never enters coordinator or wire types. |
+| Configuration | Coordinator accepts only a source request and generic capability result. The internal `Device`, `Encoder`, and `Decoder` vocabulary remains canonical and serializable for adapter-owned settings and probes. Selected adapters read validated source-scoped local settings through the facade; capabilities come from a fresh runtime probe, not persistence. A receiver selects the first locally probed decoder compatible with the negotiated format. Unavailable, receive-only, and send-capable states remain generic, and FFmpeg data never enters coordinator or wire types. |
 
 ---
 
@@ -173,7 +175,7 @@ flowchart TB
     Coordinator --> Adapter
 ```
 
-On desktop targets the selected adapter is FFmpeg-backed; on unsupported targets it is the unavailable implementation. Both are never runtime alternatives in one build.
+On desktop targets the selected adapter is FFmpeg-backed; on unsupported targets it is the unavailable implementation. Both are never runtime alternatives in one build. The desktop implementation advertises display capture only for targets with an implemented capture command path, so compiling the adapter does not claim that macOS or Linux capture works.
 
 ```mermaid
 stateDiagram-v2
@@ -196,7 +198,7 @@ Control and transport sequencing:
 
 1. Local start atomically reserves the peer's idle slot and generation.
 2. Sender adapter preparation produces a source-neutral media descriptor without opening Iroh media transport.
-3. Offer is validated and auto-accepted by the receiver only when its selected adapter reports support; ready or typed rejection returns over control signaling.
+3. Offer is validated and auto-accepted by the receiver only when its selected adapter reports fresh receive support for the negotiated format. Receiver startup selects the first compatible decoder in fresh local probe order; ready or typed rejection returns over control signaling.
 4. Receiver arms one cancellation-aware `accept_uni` only for the accepted offer. Sender opens one uni-stream and immediately writes the versioned identity preamble before media bytes.
 5. Receiver validates the wire session identity before adapter startup. Local generation never crosses the wire.
 6. Coordinator installs the adapter session and every `open_uni` or `accept_uni` worker only if the slot still matches its identity and generation; stale completions cancel and join their own resources without touching a newer slot.
@@ -441,7 +443,7 @@ flowchart TB
 
 ### U4. Extract Statically Selected Platform Session Adapters
 
-**Goal:** Move current FFmpeg capture/playback into the desktop adapter while preserving U1 behavior and providing an unconditional unsupported-target implementation.
+**Goal:** Move current FFmpeg capture/playback into the desktop adapter while preserving implemented Windows behavior, truthful runtime capabilities, and an unconditional unsupported-target implementation.
 
 **Requirements:** R1, R3, R4, R5, R9, R13
 
@@ -460,7 +462,9 @@ flowchart TB
 **Approach:**
 - Implement the U2 statically dispatched session-adapter boundary with distinct sender preparation and sender/receiver run responsibilities. Preparation returns generic negotiated format; active runs consume bounded coordinator-owned media I/O and cancellation.
 - Compile the desktop FFmpeg implementation only for Windows, macOS, and Linux. Compile an unsupported adapter elsewhere while retaining identical higher-level APIs.
-- Move existing capability probing, command generation, stdout capture, stdin playback, decoder choice, and OS-specific flags without changing their resulting behavior.
+- Keep one canonical internal `Device`, `Encoder`, and `Decoder` vocabulary in `platform.rs`. Move capability probing, command generation, stdout capture, stdin playback, decoder choice, and OS-specific flags behind the selected adapter.
+- Advertise display capture only when the selected target has a real command implementation and the current runtime probe returns the required device and encoder. Do not infer capture support from a serializable `RecordingConfig` or from the desktop adapter compiling.
+- At receiver startup, re-probe local decoders and select the first locally reported decoder compatible with the negotiated descriptor format. Do not treat a persisted sender encoder or a fixed cross-platform preference as receiver capability.
 - Make active desktop sessions solely own child process and all pipe handles. Close input before graceful wait, concurrently drain every piped output, keep unused outputs null, then use bounded termination/escalation and reap on every terminal path.
 - Preserve complete child-stdin delivery under partial writes and current direct capture backpressure; no media-rate queue or task is introduced inside the adapter.
 - Keep Iroh connection/control types out of platform modules.
@@ -470,18 +474,19 @@ flowchart TB
 - U1 characterization tests as the authoritative desktop behavior baseline.
 
 **Test scenarios:**
-- Happy path: desktop adapter preparation yields the expected generic media format and U1 command/byte tests remain green.
-- Validation: runtime-missing FFmpeg, encoder, decoder, or capture device returns typed unavailable/unsupported output before active state.
+- Happy path: an implemented Windows capture mode yields the expected generic media format and U1 command/byte tests remain green.
+- Validation: runtime-missing FFmpeg, encoder, decoder, or capture device returns typed unavailable/unsupported output before active state; a persisted or user-selected unavailable mode returns the same typed outcome without panicking.
 - Error path: spawn failure, early exit, broken stdin/stdout, and cancellation all terminate and reap the child once.
 - Edge case: cancellation during blocked media I/O cannot orphan the child or adapter worker.
 - Backpressure: partial child-stdin writes preserve the complete framed payload; sustained stdout with a slow transport stays bounded.
 - Cleanup: a child blocked on stdin, a child producing sustained stdout, and stream reset during blocked I/O each close pipes and reap exactly once.
-- Platform: unsupported adapter builds behind the same coordinator contract, reports no send/receive capability, and starts no process.
+- Platform: desktop builds with no implemented capture command path report no display-capture mode, and unsupported adapter builds behind the same coordinator contract report no send/receive capability and start no process.
 - Platform: unsupported constructor/configuration update/start paths have explicit typed outcomes rather than silently accepting unusable settings.
 - Architecture: adapter tests prove no Iroh control or stream negotiation is required to exercise platform behavior.
 
 **Verification:**
-- Desktop output matches characterization baseline.
+- Implemented Windows desktop output matches the characterization baseline; macOS and Linux capture remain unavailable until their command paths and target coverage exist.
+- The receiver decoder is chosen from fresh local probe results in local probe order and must be compatible with the negotiated format.
 - Adding a target adapter does not require edits to coordinator or transport behavior beyond static module selection.
 
 ### U5. Generalize Video Capabilities and Configuration
@@ -504,24 +509,24 @@ flowchart TB
 **Approach:**
 - Replace top-level screenshare naming with a generic video configuration facade and source-neutral capabilities: send/receive support, supported current source, formats, and typed unavailability.
 - Keep encoder/device/bitrate/framerate/height persistence as desktop adapter-owned screen configuration. Preserve current serialized values unless an unavoidable public rename requires a documented one-time migration.
-- Validate capabilities again at start, not only during Flutter preflight, because binaries/devices can disappear after discovery.
+- Validate capabilities again at start, not only during Flutter preflight, because binaries/devices can disappear after discovery. Treat persistence as configuration only: it cannot advertise a source mode that the fresh probe does not support.
 - Keep platform availability as runtime data under one unconditional API shape.
 
 **Patterns to follow:**
 - Current `ScreenshareConfig`, `Capabilities`, `RecordingConfig`, and disk serialization in `rust/telepathy-core/src/types.rs` and `rust/telepathy-core/src/internal/screenshare.rs`.
 
 **Test scenarios:**
-- Happy path: existing desktop persisted settings load into equivalent adapter configuration and produce the same selected command.
+- Happy path: existing Windows persisted settings load into equivalent adapter configuration and produce the same selected command when the fresh probe supports that mode.
 - Compatibility: current serialized screenshare settings retain values across the rename/migration decision without silent reset.
 - Compatibility: old-format bytes load and round-trip recording configuration, width, and height exactly before any optional schema migration.
-- Validation: stale/missing encoder or device is rejected at start with a typed outcome rather than relying on UI preflight.
-- Platform: unsupported target exposes the same capability query and reports unavailable without constructing FFmpeg state.
+- Validation: stale/missing encoder or device is rejected at start with a typed outcome rather than relying on UI preflight; persisted or user-selected unavailable modes never panic.
+- Platform: a desktop target without an implemented capture command path exposes no display-capture mode. An unsupported target exposes the same capability query and reports unavailable without constructing FFmpeg state.
 - Platform: unsupported constructor, configuration update, and start semantics remain internally consistent and cannot report success for an unusable sender.
 - Edge case: empty capability lists and receive-only/send-only results remain representable without boolean ambiguity.
 
 **Verification:**
 - Generic session/wire types never contain FFmpeg configuration.
-- Existing desktop settings remain usable and future platform configuration can stay adapter-local.
+- Existing Windows settings remain usable when supported by the fresh probe, and future platform configuration can stay adapter-local without becoming a runtime capability claim.
 
 ### U6. Migrate Native and Flutter-Rust Public APIs
 
@@ -647,7 +652,7 @@ Lifecycle mapping preserves current interaction:
 - Edge case: local/remote simultaneous stop, immediate restart, session replacement, manager restart, shutdown, and call end during every nonterminal phase ignore stale completions.
 - Stress: repeated start/stop and teardown leave no active video slot, orphan task, unreaped child, duplicate callback, or audio/session regression.
 - Performance: slow sender/receiver paths retain bounded in-flight media and complete stop without frame-rate tracing or per-frame task growth.
-- Platform: desktop and CI-covered Android/iOS/web targets compile the same public API; unsupported targets return defined constructor/capability/update/start outcomes.
+- Platform: desktop and CI-covered Android/iOS/web targets compile the same public API. Windows capture is covered through implemented command paths; macOS/Linux capture is not advertised without implemented and tested paths; unsupported targets return defined constructor/capability/update/start outcomes.
 - Observability: one start and terminal cleanup summary is emitted per local generation with no event per media frame.
 - Regression: U1 command/byte behavior and existing session/call/audio/room suites remain green.
 
@@ -719,6 +724,8 @@ flowchart TB
 | Child cleanup deadlocks on retained pipes | Medium | High | Adapter exclusively owns pipes, closes stdin, drains piped output, then performs bounded terminate/escalate/reap before resolving. |
 | Callback delay/reentrancy strands core state | Medium | Medium | Callbacks observe state only; coordinator owns cancellation and terminal cleanup; stale event tests in Rust and Dart. |
 | Platform API differs after `cfg` | Medium | High | Keep public types and methods unconditional; select private adapter modules statically; run codegen and target builds. |
+| A compiled adapter advertises an unimplemented capture path | Medium | High | Keep capture-mode advertisement tied to a real target command implementation and fresh runtime probe. Test that unsupported or unimplemented paths produce typed unavailability, never a process launch or panic. |
+| Persisted configuration is mistaken for current capability | Medium | High | Preserve serializable configuration, but re-probe at start and reject unavailable device, encoder, or mode with a typed outcome. |
 | Persisted settings are silently lost | Medium | Medium | Preserve serialized values or provide explicit one-time migration with round-trip tests before renaming storage. |
 | Iroh patch behavior differs from researched docs | Low | Medium | Verify resolved lockfile APIs and stream semantics during implementation; preserve explicit framing and cleanup regardless. |
 | Refactor regresses audio call/session teardown | Medium | High | Keep video slot separate from call slot; run existing suites plus call/session stress scenarios. |
@@ -754,6 +761,8 @@ flowchart TB
 - Current desktop screenshare command construction, encoded byte forwarding, playback, settings, and user controls remain behaviorally equivalent.
 - Generic coordinator, transport, domain, and public API contain no FFmpeg-specific or screenshare-specific lifecycle assumptions.
 - Unsupported targets compile the same public video API and return typed unavailability.
+- A desktop target advertises a capture mode only when its command path is implemented and the fresh runtime probe supports it; persisted configuration never substitutes for that capability.
+- Receiver playback uses the first compatible decoder from fresh local probe order for the negotiated format.
 - Every accepted or rejected start reaches one identity-matched terminal outcome on both peers; stop and teardown are idempotent.
 - Repeated start/stop, call end, session replacement, restart, and shutdown await joined cleanup and leave no stale slot, worker, stream, or child process.
 - An adapter session and every `open_uni` or `accept_uni` worker install only into their matching identity/generation bundle; stale resources clean up without clearing or observing a newer session.
@@ -768,15 +777,17 @@ flowchart TB
 - Update `docs/TRACING.md` with generic video lifecycle fields and terminal reason taxonomy.
 - Regenerate bridge output only after public Rust contract stabilizes; never edit generated files manually.
 - Treat protocol migration as coordinated: all peers in a test/deployment set must use the new wire version.
-- Verify desktop FFmpeg behavior on Windows, macOS, and Linux where available. Unsupported mobile/web targets must still build and expose capability results.
+- Verify implemented Windows FFmpeg capture/playback behavior through its command and adapter tests. Do not claim macOS or Linux capture validation or availability until those targets have implemented and tested command paths. Unsupported mobile/web targets must still build and expose capability results.
 - Developer must run system tests manually in WSL after automated Rust/Flutter validation.
 
 ---
 
 ## Sources & References
 
-- Related code: `rust/telepathy-core/src/internal/screenshare.rs`
-- Related code: `rust/telepathy-core/src/internal/helpers.rs`
+- Related code: `rust/telepathy-core/src/internal/video.rs`
+- Related code: `rust/telepathy-core/src/internal/video/platform.rs`
+- Related code: `rust/telepathy-core/src/internal/video/platform/desktop_ffmpeg.rs`
+- Related code: `rust/telepathy-core/src/internal/video/platform/unsupported.rs`
 - Related code: `rust/telepathy-core/src/internal/state.rs`
 - Related code: `rust/telepathy-core/src/internal/messages.rs`
 - Related code: `rust/telepathy-core/src/internal/core.rs`

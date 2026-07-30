@@ -44,6 +44,9 @@ The per-peer lifecycle boundary that admits at most one Video Attempt and remain
 ### Joined Teardown
 The terminal process that keeps a Video Slot unavailable until all work for its current Video Attempt has finished.
 
+### Runtime Video Capability
+The current adapter-probed set of video sources and media formats that the running target can send or receive. It is distinct from serializable video configuration, which may name a device or encoder that is no longer available or has no implemented command path.
+
 ## Relationships
 
 A Video Slot owns one Video Attempt at a time. Joined Teardown preserves that ownership until the attempt has fully finished, after which the slot may admit a replacement attempt.
