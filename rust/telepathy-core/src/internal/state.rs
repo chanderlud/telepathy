@@ -1,5 +1,5 @@
 use crate::internal::Result;
-use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
+use crate::internal::callbacks::CoreCallbacks;
 use crate::internal::error::ErrorKind;
 use crate::internal::messages::{AudioHeader, ProtocolMessage, RoomMessage};
 use crate::types::{CodecConfig, Contact, NetworkConfig, ScreenshareConfig, SessionStatus};
@@ -1136,14 +1136,13 @@ impl SessionState {
     }
 
     /// monitors the session connection to update bandwidth, latency, and push session statuses
-    pub(crate) async fn connection_monitor<S, C>(
+    pub(crate) async fn connection_monitor<C>(
         &self,
         connection: Connection,
         callbacks: Arc<C>,
         peer: PublicKey,
     ) where
-        S: CoreStatisticsCallback + Send + Sync + 'static,
-        C: CoreCallbacks<S> + Send + Sync + 'static,
+        C: CoreCallbacks + Send + Sync + 'static,
     {
         let mut interval = interval(Duration::from_secs(1));
         interval.tick().await;

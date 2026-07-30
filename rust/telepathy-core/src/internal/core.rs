@@ -2,7 +2,7 @@
 //! negotiates incoming or outgoing calls, then transitions into direct [`call_handshake`]
 //! or room [`room_handshake`] handling.
 
-use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
+use crate::internal::callbacks::CoreCallbacks;
 use crate::internal::connections::{
     ConstConnection, DynamicConnection, SharedConnections, audio_input, audio_output,
 };
@@ -41,7 +41,6 @@ use iroh::endpoint::{
 };
 use iroh::{Endpoint, PublicKey};
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::{Arc, Mutex as StdMutex};
@@ -78,10 +77,9 @@ const ROOM_DIAL_BACKOFF_MAX_MS: u64 = 30_000;
 const ROOM_DIAL_MAX_RETRIES: u32 = 10;
 const ROOM_DIAL_EXISTING_SESSION_BACKOFF: Duration = Duration::from_secs(5);
 
-pub struct TelepathyCore<C, S, H, I, O>
+pub struct TelepathyCore<C, H>
 where
-    S: CoreStatisticsCallback + Send + Sync + 'static,
-    C: CoreCallbacks<S> + Send + Sync + 'static,
+    C: CoreCallbacks + Send + Sync + 'static,
     H: AudioHost + Send + Sync + Clone + 'static,
 {
     /// The audio host
@@ -121,19 +119,12 @@ where
 
     /// callback methods provided by the flutter frontend
     pub(crate) callbacks: Arc<C>,
-
-    phantom_statistics: PhantomData<Arc<S>>,
-    phantom_input: PhantomData<Arc<I>>,
-    phantom_output: PhantomData<Arc<O>>,
 }
 
-impl<C, S, H, I, O> TelepathyCore<C, S, H, I, O>
+impl<C, H> TelepathyCore<C, H>
 where
-    S: CoreStatisticsCallback + Send + Sync + 'static,
-    C: CoreCallbacks<S> + Send + Sync + 'static,
-    H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
-    I: Send + Sync + 'static,
-    O: Send + Sync + 'static,
+    C: CoreCallbacks + Send + Sync + 'static,
+    H: AudioHost + Send + Sync + Clone + 'static,
 {
     pub(crate) fn install_pending_room_admission(
         &self,
@@ -237,7 +228,7 @@ where
         overlay: &Overlay,
         codec_config: &CodecConfig,
         callbacks: C,
-    ) -> TelepathyCore<C, S, H, I, O> {
+    ) -> TelepathyCore<C, H> {
         Self {
             host,
             core_state: CoreState::new(network_config, screenshare_config, codec_config),
@@ -254,9 +245,6 @@ where
             #[cfg(target_family = "wasm")]
             web_input: Default::default(),
             callbacks: Arc::new(callbacks),
-            phantom_statistics: Default::default(),
-            phantom_input: Default::default(),
-            phantom_output: Default::default(),
         }
     }
 
@@ -2470,7 +2458,7 @@ where
         // shared statistics
         let statistics_state = StatisticsCollectorState::new(None);
         // tracks connection state for peers keyed by transport stable id
-        let mut connections: HashMap<usize, RoomConnection<O>> = HashMap::new();
+        let mut connections: HashMap<usize, RoomConnection<H::OutputStream>> = HashMap::new();
         let mut peer_connections: HashMap<PublicKey, usize> = HashMap::new();
         let (stream_error_sender, mut stream_error_receiver) = unbounded_channel();
         let mut stream_errors_open = true;
@@ -3092,10 +3080,9 @@ where
     }
 }
 
-impl<C, S, H, I, O> Clone for TelepathyCore<C, S, H, I, O>
+impl<C, H> Clone for TelepathyCore<C, H>
 where
-    S: CoreStatisticsCallback + Send + Sync + 'static,
-    C: CoreCallbacks<S> + Send + Sync + 'static,
+    C: CoreCallbacks + Send + Sync + 'static,
     H: AudioHost + Send + Sync + Clone + 'static,
 {
     fn clone(&self) -> Self {
@@ -3115,9 +3102,6 @@ where
             #[cfg(target_family = "wasm")]
             web_input: Arc::clone(&self.web_input),
             callbacks: Arc::clone(&self.callbacks),
-            phantom_statistics: self.phantom_statistics,
-            phantom_input: self.phantom_input,
-            phantom_output: self.phantom_output,
         }
     }
 }
@@ -3759,13 +3743,10 @@ pub(crate) struct SessionAvailabilitySnapshot {
     pub(crate) waiting_for_session: bool,
 }
 
-impl<C, S, H, I, O> TelepathyCore<C, S, H, I, O>
+impl<C, H> TelepathyCore<C, H>
 where
-    S: CoreStatisticsCallback + Send + Sync + 'static,
-    C: CoreCallbacks<S> + Send + Sync + 'static,
-    H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
-    I: Send + Sync + 'static,
-    O: Send + Sync + 'static,
+    C: CoreCallbacks + Send + Sync + 'static,
+    H: AudioHost + Send + Sync + Clone + 'static,
 {
     pub(crate) fn begin_direct_attempt(&self, peer: PublicKey) -> u64 {
         let mut peers = self.session_availability.peers.lock().unwrap();

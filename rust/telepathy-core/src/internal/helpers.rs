@@ -1,4 +1,4 @@
-use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
+use crate::internal::callbacks::CoreCallbacks;
 use crate::internal::core::{
     OutgoingSlotDecision, PendingDirectCallSlot, RoomControllerCleanup, RoomControllerOutcome,
     TelepathyCore,
@@ -53,13 +53,10 @@ use wasmtimer::tokio::timeout;
 
 const ROOM_TASK_JOIN_TIMEOUT: Duration = Duration::from_secs(5);
 
-impl<C, S, H, I, O> TelepathyCore<C, S, H, I, O>
+impl<C, H> TelepathyCore<C, H>
 where
-    S: CoreStatisticsCallback + Send + Sync + 'static,
-    C: CoreCallbacks<S> + Send + Sync + 'static,
-    H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
-    I: Send + Sync + 'static,
-    O: Send + Sync + 'static,
+    C: CoreCallbacks + Send + Sync + 'static,
+    H: AudioHost + Send + Sync + Clone + 'static,
 {
     #[instrument(name = "manager.setup_endpoint", skip_all)]
     pub(crate) async fn setup_endpoint(
@@ -323,7 +320,7 @@ where
         statistics_state: &StatisticsCollectorState,
         end_call: &Arc<Notify>,
         stream_error: UnboundedSender<AudioStreamError>,
-    ) -> Result<InputHelper<I>> {
+    ) -> Result<InputHelper<H::InputStream>> {
         let (codec_enabled, vbr, residual_bits) = codec_options;
         // Channel for receiving processed audio data
         let (sender, receiver) = kanal::unbounded_async();
@@ -386,7 +383,7 @@ where
         statistics_state: &StatisticsCollectorState,
         end_call: Arc<Notify>,
         stream_error: UnboundedSender<AudioStreamError>,
-    ) -> Result<OutputHelper<O>> {
+    ) -> Result<OutputHelper<H::OutputStream>> {
         let device_id = self.core_state.output_device.lock().await.clone();
         // Create the input channel
         let (sender, receiver) = kanal::unbounded();
@@ -714,7 +711,7 @@ where
     pub(crate) async fn cleanup_room_controller(
         &self,
         stop_io: &CancellationToken,
-        cleanup: RoomControllerCleanup<O>,
+        cleanup: RoomControllerCleanup<H::OutputStream>,
     ) -> RoomControllerOutcome {
         let RoomControllerCleanup {
             end_sessions,

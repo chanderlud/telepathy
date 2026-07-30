@@ -10,9 +10,7 @@ pub use crate::types::*;
 use flutter_rust_bridge::{DartFnFuture, frb};
 use std::sync::Arc;
 pub use telepathy_audio::Host;
-use telepathy_audio::Stream;
 use telepathy_audio::devices::CpalAudioHost;
-use telepathy_audio::io::SendStream;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
@@ -53,13 +51,7 @@ impl PreparedIdentitySwitch {
 /// forward to `impl TelepathyHandle`.
 #[frb(opaque)]
 pub struct Telepathy {
-    handle: TelepathyHandle<
-        FlutterCallbacks,
-        FlutterStatisticsCallback,
-        CpalAudioHost,
-        Stream,
-        SendStream,
-    >,
+    handle: TelepathyHandle<FlutterCallbacks, CpalAudioHost>,
 }
 
 impl Telepathy {
@@ -351,7 +343,8 @@ impl FlutterCallbacks {
     }
 }
 
-pub(crate) struct FlutterStatisticsCallback {
+#[frb(ignore)]
+pub struct FlutterStatisticsCallback {
     inner: DartVoid<Statistics>,
 }
 
