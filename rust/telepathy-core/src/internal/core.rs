@@ -1086,32 +1086,48 @@ where
                 (Err(error), room_only) => {
                     let peer = contact.peer_id;
                     let call_slot = &self.core_state.call_slot;
+                    let in_room = self.is_in_room(&peer).await;
                     // Snapshot state + owning peer in one lock acquisition; a split read could
                     // observe a newer call's slot between the two checks and incorrectly release it.
-                    let snapshot = call_slot.snapshot()?;
-                    if !room_only
-                        && !self.is_in_room(&peer).await
-                        && snapshot.direct_peer == Some(peer)
-                        && let Some((message, remote, event)) = match snapshot.state {
-                            CallSlotState::ActiveDirect => Some((
-                                CallEndMessage::from_error(&error),
-                                false,
-                                "session_error_while_call_active",
-                            )),
-                            CallSlotState::PendingOutgoing if error.is_session_critical() => {
-                                Some((
-                                    CallEndMessage::from_text(peer_goodbye_reason_message(
-                                        &contact.nickname,
-                                        GoodbyeReason::SessionStopped,
-                                    )),
-                                    true,
-                                    "session_error_while_call_pending",
-                                ))
+                    let call_ended = {
+                        let session_states = self.session_states.read().await;
+                        let snapshot = call_slot.snapshot()?;
+                        if session_states
+                            .get(&peer)
+                            .map(|session| session.id == state.id)
+                            .unwrap_or(false)
+                            && !room_only
+                            && !in_room
+                            && snapshot.direct_peer == Some(peer)
+                        {
+                            if let Some(payload) = match snapshot.state {
+                                CallSlotState::ActiveDirect => Some((
+                                    CallEndMessage::from_error(&error),
+                                    false,
+                                    "session_error_while_call_active",
+                                )),
+                                CallSlotState::PendingOutgoing if error.is_session_critical() => {
+                                    Some((
+                                        CallEndMessage::from_text(peer_goodbye_reason_message(
+                                            &contact.nickname,
+                                            GoodbyeReason::SessionStopped,
+                                        )),
+                                        true,
+                                        "session_error_while_call_pending",
+                                    ))
+                                }
+                                _ => None,
+                            } && call_slot.release_if_match(snapshot)?
+                            {
+                                Some(payload)
+                            } else {
+                                None
                             }
-                            _ => None,
+                        } else {
+                            None
                         }
-                        && call_slot.release_if_match(snapshot)?
-                    {
+                    };
+                    if let Some((message, remote, event)) = call_ended {
                         warn!(event, ?error);
                         self.callbacks
                             .call_state(CallState::CallEnded(message.into_string(), remote))
