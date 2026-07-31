@@ -6,6 +6,16 @@ class AppTheme {
     required int primaryColor,
     required int secondaryColor,
   }) {
+    final colorScheme = ColorScheme.dark(
+      primary: Color(primaryColor),
+      secondary: Color(secondaryColor),
+      brightness: Brightness.dark,
+      surface: const Color(0xFF222425),
+      secondaryContainer: const Color(0xFF191919),
+      tertiaryContainer: const Color(0xFF27292A),
+      surfaceDim: const Color(0xFF121212),
+    );
+
     return ThemeData(
       dialogTheme: const DialogThemeData(
         surfaceTintColor: Color(0xFF27292A),
@@ -18,21 +28,20 @@ class AppTheme {
         activeTrackColor: Color(primaryColor),
         mouseCursor: WidgetStateMouseCursor.clickable,
       ),
-      colorScheme: ColorScheme.dark(
-        primary: Color(primaryColor),
-        secondary: Color(secondaryColor),
-        brightness: Brightness.dark,
-        surface: const Color(0xFF222425),
-        secondaryContainer: const Color(0xFF191919),
-        tertiaryContainer: const Color(0xFF27292A),
-        surfaceDim: const Color(0xFF121212),
-      ),
+      colorScheme: colorScheme,
       switchTheme: SwitchThemeData(
         trackOutlineWidth: WidgetStateProperty.all(0),
         trackOutlineColor: WidgetStateProperty.all(Colors.transparent),
         overlayColor: WidgetStateProperty.all(Colors.transparent),
-        thumbColor: WidgetStateProperty.all(
-            Theme.of(context).tabBarTheme.indicatorColor),
+        thumbColor: WidgetStateProperty.resolveWith((states) {
+          if (!states.contains(WidgetState.disabled) &&
+              states.contains(WidgetState.selected) &&
+              states.contains(WidgetState.hovered)) {
+            return colorScheme.tertiaryContainer;
+          }
+
+          return Theme.of(context).tabBarTheme.indicatorColor;
+        }),
         mouseCursor: WidgetStateMouseCursor.clickable,
       ),
       iconButtonTheme: const IconButtonThemeData(
