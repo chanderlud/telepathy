@@ -14,12 +14,12 @@ Download Telepathy from [GitHub Releases](https://github.com/chanderlud/telepath
 - Lossless 16 bit raw audio and [SEA codec](https://github.com/Daninet/sea-codec) support.
 - [nnnoiseless](https://github.com/jneem/nnnoiseless) noise suppression.
 - Built-in text chat with media and file attachments.
-- Efficient use of CPU and memory resources.
-- Low end-to-end latency.
+- Efficient use of CPU and memory resources, more than 10x lower than Discord.
+- Low end-to-end latency enabled by direct connectivity and low processing delay.
 
 ### Work in Progress
 
-- Screensharing for Windows, macOS, and Linux.
+- ffmpeg based screensharing for Windows, macOS, and Linux.
 - Game overlay for Windows.
 - Telepathy rooms (group calls).
 
