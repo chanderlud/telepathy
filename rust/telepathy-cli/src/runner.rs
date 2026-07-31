@@ -308,6 +308,9 @@ async fn handle_command(
             telepathy.set_output_device(id).await;
             CommandOutcome::AckOk
         }
+        Command::DrainAudioFrameIndices => CommandOutcome::Result(json!({
+            "indices": telepathy.drain_audio_frame_indices()
+        })),
         Command::ListDevices => CommandOutcome::Result(json!({
             "supported": false,
             "reason": "NativeTelepathy does not currently expose list device APIs"

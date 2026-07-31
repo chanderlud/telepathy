@@ -1108,6 +1108,45 @@ async def test_call_repeated_without_restart_keeps_remote_audio(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("profile", NETWORK_PROFILES, ids=lambda profile: profile.name)
+async def test_call_drain_audio_frame_indices_strictly_increasing(
+    cli_pair: dict[str, CliProcess],
+    profile: NetworkProfile,
+) -> None:
+    alice = cli_pair["alice"]
+    bob = cli_pair["bob"]
+
+    await _start_call_and_wait_connected(
+        alice,
+        bob,
+        caller_contact_id="bob",
+        callee_contact_id="alice",
+    )
+
+    await asyncio.sleep(3.0)
+
+    response = await bob.send({"cmd": "drain_audio_frame_indices", "args": {}})
+    data = response.get("data")
+    indices = data.get("indices") if isinstance(data, dict) else None
+    assert response.get("kind") == "result", (
+        f"profile={profile.name}, observed_indices={indices}, response={response}"
+    )
+
+    assert isinstance(indices, list), (
+        f"profile={profile.name} drain_audio_frame_indices returned non-list indices: {response}"
+    )
+    assert 1 < len(indices) <= 512, (
+        f"profile={profile.name}, observed_indices={indices}"
+    )
+    assert all(isinstance(index, int) for index in indices), (
+        f"profile={profile.name}, observed_indices={indices}"
+    )
+    assert all(right > left for left, right in zip(indices, indices[1:])), (
+        f"profile={profile.name}, observed_indices={indices}"
+    )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "profile",
     NETWORK_PROFILES,

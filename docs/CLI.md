@@ -63,6 +63,7 @@ For unit variants, `args` may be `{}` or may be omitted.
 | `set_play_custom_ringtones` | `value: bool` |
 | `set_input_device` | `id: string \| null` |
 | `set_output_device` | `id: string \| null` |
+| `drain_audio_frame_indices` | _(none; integration-test audio capture only)_ |
 | `list_devices` | _(none)_ |
 
 ## Output Format
@@ -88,12 +89,19 @@ Notes:
 - `error` is omitted on successful `ack` lines.
 - `id` is the request id from the input envelope.
 - Most commands emit an `ack` line.
-- `list_devices` currently emits only a `result` line (no `ack`).
+- `list_devices` and `drain_audio_frame_indices` emit only a `result` line (no `ack`).
 
-Currently, the only command that returns `kind:"result"` is `list_devices`:
+`list_devices` returns:
 
 ```json
 {"kind":"result","id":"<string>","data":{"supported":false,"reason":"<string>"}}
+```
+
+`drain_audio_frame_indices` is available in the integration-testing CLI build. It atomically
+returns and clears up to 512 frame indices decoded from samples written to mock audio output:
+
+```json
+{"kind":"result","id":"<string>","data":{"indices":[1,2,4]}}
 ```
 
 ### Events
@@ -223,7 +231,7 @@ Expected high-level interaction:
 1. Host starts `telepathy-cli`.
 2. CLI initializes and emits `ready`.
 3. Host sends commands with unique `id` values.
-4. CLI emits an `ack` for most requests; `list_devices` emits only `result`.
+4. CLI emits an `ack` for most requests; `list_devices` and `drain_audio_frame_indices` emit only `result`.
 5. CLI emits asynchronous `event` lines at any time.
 6. On fatal startup failure, CLI emits one `error` event and exits.
 

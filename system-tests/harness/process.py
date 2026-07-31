@@ -13,6 +13,7 @@ _UNIT_COMMANDS = {
     "shutdown",
     "end_call",
     "audio_test",
+    "drain_audio_frame_indices",
     "list_devices",
 }
 _SUBPROCESS_STREAM_LIMIT = 1024 * 1024

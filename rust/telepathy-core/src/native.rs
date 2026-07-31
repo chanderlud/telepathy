@@ -12,7 +12,9 @@ use std::sync::Arc;
 #[cfg(not(feature = "integration-testing"))]
 use telepathy_audio::devices::CpalAudioHost;
 #[cfg(feature = "integration-testing")]
-use telepathy_audio::devices::MockAudioHost;
+use telepathy_audio::devices::{
+    AudioFrameIndexCapture, MockAudioHost, RecordingAudioOutput, SequencedAudioInput,
+};
 use tokio::sync::{Notify, oneshot, watch};
 
 type NativeFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
@@ -25,13 +27,8 @@ type NativeAcceptCall = Arc<
 #[cfg(not(feature = "integration-testing"))]
 type NativeHandle = TelepathyHandle<NativeCallbacks, CpalAudioHost>;
 #[cfg(feature = "integration-testing")]
-type NativeHandle = TelepathyHandle<
-    NativeCallbacks,
-    MockAudioHost<
-        telepathy_audio::devices::MockAudioInput,
-        telepathy_audio::devices::MockAudioOutput,
-    >,
->;
+type NativeHandle =
+    TelepathyHandle<NativeCallbacks, MockAudioHost<SequencedAudioInput, RecordingAudioOutput>>;
 
 /// Rust-native runtime client for `telepathy-core`.
 ///
@@ -39,6 +36,8 @@ type NativeHandle = TelepathyHandle<
 /// not depend on FRB runtime semantics.
 pub struct NativeTelepathy {
     handle: NativeHandle,
+    #[cfg(feature = "integration-testing")]
+    audio_frame_indices: AudioFrameIndexCapture,
 }
 
 impl NativeTelepathy {
@@ -47,15 +46,29 @@ impl NativeTelepathy {
         codec_config: &crate::types::CodecConfig,
         callbacks: NativeCallbacks,
     ) -> Self {
+        #[cfg(feature = "integration-testing")]
+        let audio_frame_indices = AudioFrameIndexCapture::default();
+        #[cfg(feature = "integration-testing")]
+        let audio_host = MockAudioHost::new(
+            SequencedAudioInput::new(48_000),
+            48_000,
+            RecordingAudioOutput::new(audio_frame_indices.clone()),
+            48_000,
+        );
+        #[cfg(not(feature = "integration-testing"))]
+        let audio_host = CpalAudioHost::default();
+
         Self {
             handle: TelepathyHandle::new(
-                Default::default(),
+                audio_host,
                 network_config,
                 &Default::default(),
                 &Default::default(),
                 codec_config,
                 callbacks,
             ),
+            #[cfg(feature = "integration-testing")]
+            audio_frame_indices,
         }
     }
 
@@ -202,6 +215,11 @@ impl NativeTelepathy {
 
     pub fn list_devices(&self) -> Result<(Vec<AudioDevice>, Vec<AudioDevice>), String> {
         self.handle.list_devices().map_err(|e| e.to_string())
+    }
+
+    #[cfg(feature = "integration-testing")]
+    pub fn drain_audio_frame_indices(&self) -> Vec<usize> {
+        self.audio_frame_indices.drain()
     }
 
     pub async fn set_model(&self, model: Option<Vec<u8>>) -> Result<(), String> {
