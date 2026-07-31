@@ -10,7 +10,7 @@ Download Telepathy from [GitHub Releases](https://github.com/chanderlud/telepath
 ## Features
 
 - [Flutter](https://flutter.dev/) UI with Windows, Linux, macOS, iOS, Android, and web support.
-- [iroh](https://www.iroh.computer/) networking, direct p2p connectivity with QUIC and TLS 1.3, with post-quantum cryptography by default.
+- [iroh](https://www.iroh.computer/) networking, direct p2p connectivity with QUIC, TLS 1.3, and post-quantum cryptography by default.
 - Lossless 16 bit raw audio and [SEA codec](https://github.com/Daninet/sea-codec) support.
 - [nnnoiseless](https://github.com/jneem/nnnoiseless) noise suppression.
 - Built-in text chat with media and file attachments.
