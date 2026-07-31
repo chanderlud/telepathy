@@ -1,12 +1,18 @@
 use super::{CapabilityProbe, Encoder, Result, VideoCapabilities, VideoUnavailable};
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 use crate::internal::error::ErrorKind;
 use crate::internal::video::VideoMediaDescriptor;
 use crate::types::{Capabilities, RecordingConfig};
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 use bytes::Bytes;
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 use std::fmt::Display;
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 use std::str::FromStr;
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 use tokio_util::sync::CancellationToken;
 
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 pub(crate) fn encoder_from_str(value: &str) -> std::result::Result<Encoder, ()> {
     Encoder::from_str(value)
 }
@@ -25,6 +31,7 @@ pub(crate) fn prepare_sender(
 ) -> std::result::Result<VideoMediaDescriptor, VideoUnavailable> {
     Err(VideoUnavailable::PlatformUnsupported)
 }
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 pub(crate) async fn run_sender<S>(
     _: &mut S,
     _: &CancellationToken,
@@ -38,6 +45,7 @@ where
     let _ = startup.send(crate::internal::video::VideoWorkerStartup::Failed);
     Err(ErrorKind::PlatformUnavailable.into())
 }
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 pub(crate) async fn run_receiver<S, E>(
     _: &mut S,
     _: &CancellationToken,
@@ -51,7 +59,10 @@ where
     Err(ErrorKind::PlatformUnavailable.into())
 }
 
-#[cfg(feature = "integration-testing")]
+#[cfg(all(
+    feature = "integration-testing",
+    not(any(target_os = "windows", target_os = "macos", target_os = "linux"))
+))]
 pub fn recording_command_for_test(
     _: &str,
     _: &str,
@@ -61,7 +72,10 @@ pub fn recording_command_for_test(
 ) -> Option<super::CommandDescription> {
     None
 }
-#[cfg(feature = "integration-testing")]
+#[cfg(all(
+    feature = "integration-testing",
+    not(any(target_os = "windows", target_os = "macos", target_os = "linux"))
+))]
 pub fn playback_command_for_test(_: &str, _: u32, _: u32) -> Option<super::CommandDescription> {
     None
 }
