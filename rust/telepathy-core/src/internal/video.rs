@@ -56,10 +56,6 @@ impl VideoAttempt {
         self.session_id == control.session_id()
     }
 
-    pub(crate) const fn is_current(self, generation: LocalVideoGeneration) -> bool {
-        self.generation.0 == generation.0
-    }
-
     pub const fn session_id(self) -> VideoSessionId {
         self.session_id
     }
@@ -542,12 +538,6 @@ pub struct VideoOffer {
     descriptor: VideoMediaDescriptor,
 }
 
-impl VideoOffer {
-    pub(crate) const fn descriptor(self) -> VideoMediaDescriptor {
-        self.descriptor
-    }
-}
-
 #[derive(Readable, Writable, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VideoControl {
     Offer(VideoOffer),
@@ -606,24 +596,6 @@ impl VideoControl {
             | Self::Reject { session_id, .. }
             | Self::Stop { session_id, .. } => session_id,
         }
-    }
-
-    pub(crate) const fn source(self) -> Option<VideoSource> {
-        match self {
-            Self::Offer(offer) => Some(offer.descriptor.source()),
-            Self::Ready { .. } | Self::Reject { .. } | Self::Stop { .. } => None,
-        }
-    }
-
-    pub(crate) const fn offer_descriptor(self) -> Option<VideoMediaDescriptor> {
-        match self {
-            Self::Offer(offer) => Some(offer.descriptor),
-            Self::Ready { .. } | Self::Reject { .. } | Self::Stop { .. } => None,
-        }
-    }
-
-    pub(crate) fn is_idempotent_with(self, other: &Self) -> bool {
-        self == *other
     }
 
     pub(crate) const fn validate(self) -> Result<(), VideoProtocolError> {
@@ -728,16 +700,12 @@ pub(crate) const fn validate_media_frame(length: usize) -> Result<(), VideoProto
     }
 }
 
-pub(crate) fn canonical_offer_wins(local: &[u8], remote: &[u8]) -> bool {
-    local < remote
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
         LocalVideoGeneration, VideoAttempt, VideoCodec, VideoControl, VideoMediaDescriptor,
-        VideoPreamble, VideoProtocolError, VideoSessionId, VideoSource, canonical_offer_wins,
-        decode_preamble, encode_preamble, validate_media_frame,
+        VideoPreamble, VideoProtocolError, VideoSessionId, decode_preamble, encode_preamble,
+        validate_media_frame,
     };
     use speedy::Writable;
 
@@ -800,7 +768,7 @@ mod tests {
     }
 
     #[test]
-    fn controls_preserve_identity_and_are_idempotent_per_generation() {
+    fn controls_preserve_identity_and_distinguish_sessions() {
         let session_id = VideoSessionId::new();
         let offer = VideoControl::offer(
             session_id,
@@ -808,7 +776,6 @@ mod tests {
         );
 
         assert_eq!(offer.session_id(), session_id);
-        assert!(offer.is_idempotent_with(&offer));
         assert_ne!(
             offer,
             VideoControl::offer(
@@ -816,22 +783,17 @@ mod tests {
                 VideoMediaDescriptor::display(VideoCodec::H264, 1920, 1080)
             )
         );
-        assert_eq!(VideoSource::Display, offer.source().expect("offer source"));
     }
 
     #[test]
-    fn crossed_offers_choose_the_same_canonical_peer_and_advance_locally() {
-        let peer_a = [1_u8; 32];
-        let peer_b = [2_u8; 32];
+    fn local_generation_advances() {
         let generation = LocalVideoGeneration::initial();
 
-        assert!(canonical_offer_wins(&peer_a, &peer_b));
-        assert!(!canonical_offer_wins(&peer_b, &peer_a));
         assert_ne!(generation, generation.next());
     }
 
     #[test]
-    fn attempt_accepts_duplicate_control_but_not_replaced_identity_or_generation() {
+    fn attempt_accepts_duplicate_control_but_not_replaced_identity() {
         let session_id = VideoSessionId::new();
         let generation = LocalVideoGeneration::initial();
         let attempt = VideoAttempt::new(session_id, generation);
@@ -840,8 +802,6 @@ mod tests {
 
         assert!(attempt.accepts(duplicate));
         assert!(!attempt.accepts(replacement));
-        assert!(attempt.is_current(generation));
-        assert!(!attempt.is_current(generation.next()));
     }
 
     #[tokio::test]

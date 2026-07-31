@@ -27,8 +27,6 @@ use tracing::{info, instrument};
 #[cfg(not(target_family = "wasm"))]
 use crate::internal::error::ErrorKind;
 
-#[cfg(not(target_family = "wasm"))]
-const BUFFER_SIZE: usize = 512;
 #[cfg(target_os = "windows")]
 const CREATION_FLAGS: u32 = 0x08000000;
 
@@ -512,7 +510,7 @@ fn parse_codecs(output: Output, regex: &Regex) -> Vec<String> {
 mod tests {
     use super::{Device, Encoder, prepare_sender_from_capabilities, select_decoder};
     use crate::internal::error::ErrorKind;
-    use crate::internal::video::platform::{Decoder, VideoUnavailable};
+    use crate::internal::video::platform::{Decoder, VideoAvailability, VideoUnavailable};
     use crate::internal::video::{VideoCodec, VideoMediaDescriptor};
     use crate::types::{Capabilities, RecordingConfig};
 
@@ -667,6 +665,9 @@ mod tests {
         );
 
         assert!(result.is_ok());
-        assert_eq!(generic.receive(), Err(VideoUnavailable::RuntimeUnavailable));
+        assert_eq!(
+            generic.into_availability().1,
+            VideoAvailability::Unavailable(VideoUnavailable::RuntimeUnavailable)
+        );
     }
 }

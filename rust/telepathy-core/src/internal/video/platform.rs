@@ -288,10 +288,6 @@ impl VideoCapabilities {
         self.send.as_result().map(Vec::as_slice)
     }
 
-    pub(crate) fn receive(&self) -> std::result::Result<&[VideoMediaFormat], VideoUnavailable> {
-        self.receive.as_result().map(Vec::as_slice)
-    }
-
     pub(crate) fn into_availability(
         self,
     ) -> (
@@ -382,8 +378,8 @@ mod tests {
             Ok(&[format][..])
         );
         assert_eq!(
-            capabilities.receive(),
-            Err(VideoUnavailable::RuntimeUnavailable)
+            capabilities.into_availability().1,
+            VideoAvailability::Unavailable(VideoUnavailable::RuntimeUnavailable)
         );
     }
 
@@ -396,12 +392,12 @@ mod tests {
             Err(VideoUnavailable::PlatformUnsupported)
         );
         assert_eq!(
-            capabilities.receive(),
+            capabilities.formats(VideoSource::Display),
             Err(VideoUnavailable::PlatformUnsupported)
         );
         assert_eq!(
-            capabilities.formats(VideoSource::Display),
-            Err(VideoUnavailable::PlatformUnsupported)
+            capabilities.into_availability().1,
+            VideoAvailability::Unavailable(VideoUnavailable::PlatformUnsupported)
         );
     }
 
@@ -413,10 +409,13 @@ mod tests {
         );
 
         assert_eq!(capabilities.send(), Ok(&[][..]));
-        assert_eq!(capabilities.receive(), Ok(&[][..]));
         assert_eq!(
             capabilities.formats(VideoSource::Display),
             Err(VideoUnavailable::SourceUnavailable(VideoSource::Display))
+        );
+        assert_eq!(
+            capabilities.into_availability().1,
+            VideoAvailability::Available(Vec::new())
         );
     }
 
