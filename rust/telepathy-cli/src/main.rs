@@ -16,6 +16,7 @@ mod commands;
 mod events;
 mod output;
 mod runner;
+mod test_audio;
 
 use anyhow::{Result, anyhow};
 use runner::RunOptions;
@@ -54,6 +55,7 @@ fn parse_args(args: Vec<String>) -> Result<RunOptions> {
     let mut dns_endpoint = std::env::var("TELEPATHY_DNS_ENDPOINT").ok();
     let mut dns_origin_domain = std::env::var("TELEPATHY_DNS_ORIGIN_DOMAIN").ok();
     let mut pkarr_relay = std::env::var("TELEPATHY_PKARR_RELAY").ok();
+    let mut system_test_audio = false;
 
     let mut idx = 1usize;
     while idx < args.len() {
@@ -106,6 +108,7 @@ fn parse_args(args: Vec<String>) -> Result<RunOptions> {
                         .ok_or_else(|| startup_failure("missing value for --pkarr-relay"))?,
                 );
             }
+            "--system-test-audio" => system_test_audio = true,
             other => {
                 return Err(startup_failure(format!("unknown argument: {other}")));
             }
@@ -123,6 +126,7 @@ fn parse_args(args: Vec<String>) -> Result<RunOptions> {
         dns_endpoint,
         dns_origin_domain,
         pkarr_relay,
+        system_test_audio,
     })
 }
 
@@ -276,6 +280,20 @@ mod tests {
         ])
         .expect("valid flag listen port should succeed");
         assert_eq!(from_flag.listen_port, 7777);
+    }
+
+    #[test]
+    fn system_test_audio_flag_is_explicit() {
+        let _guard = EnvVarGuard::clear("TELEPATHY_LISTEN_PORT");
+        assert!(!parse_args(base_args()).unwrap().system_test_audio);
+        assert!(
+            parse_args(vec![
+                "telepathy-cli".to_string(),
+                "--system-test-audio".to_string(),
+            ])
+            .unwrap()
+            .system_test_audio
+        );
     }
 
     #[test]

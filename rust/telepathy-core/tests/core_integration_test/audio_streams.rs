@@ -1,7 +1,7 @@
 use super::common::{
     CallbackCapturingAudioHost, DEFAULT_SAMPLE_RATE, ManagerLifecycle, PendingAcceptProbe,
-    RoomEventKind, StreamErrorProbe, TwoClientShutdownGuard, assert_call_slot_idle,
-    assert_no_call_ended_contains, assert_room_event_sequence, build_client,
+    RecordingOutput, RoomEventKind, SequencedInput, StreamErrorProbe, TwoClientShutdownGuard,
+    assert_call_slot_idle, assert_no_call_ended_contains, assert_room_event_sequence, build_client,
     build_client_with_accept_probe, build_client_with_options, call_state_snapshot,
     init_test_tracing, shared_relay_map, simulated_stream_error, sorted_room_members,
     stream_error_scenario, wait_for_call_ended_contains, wait_for_connected,
@@ -13,10 +13,7 @@ use iroh::SecretKey;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use telepathy_audio::devices::{
-    AudioFrameIndexCapture, MockAudioHost, MockAudioInput, MockAudioOutput, RecordingAudioOutput,
-    SequencedAudioInput,
-};
+use telepathy_audio::devices::{MockAudioHost, MockAudioInput, MockAudioOutput};
 use telepathy_core::types::Contact;
 use telepathy_core::types::{CallState, CodecConfig};
 
@@ -34,7 +31,7 @@ async fn audio_frames_play_in_order() {
     let contact_b = Contact::new("client-b".to_string(), key_b.public().to_string())
         .expect("contact b invalid");
 
-    let playback_capture = AudioFrameIndexCapture::new(512);
+    let playback_log = Arc::new(Mutex::new(Vec::new()));
 
     let client_a = build_client(
         relay_map,
@@ -42,7 +39,7 @@ async fn audio_frames_play_in_order() {
         vec![contact_b.clone()],
         &codec_config,
         MockAudioHost::new(
-            SequencedAudioInput::new(DEFAULT_SAMPLE_RATE),
+            SequencedInput::new(DEFAULT_SAMPLE_RATE),
             DEFAULT_SAMPLE_RATE,
             MockAudioOutput,
             DEFAULT_SAMPLE_RATE,
@@ -59,7 +56,7 @@ async fn audio_frames_play_in_order() {
         MockAudioHost::new(
             MockAudioInput::default(),
             DEFAULT_SAMPLE_RATE,
-            RecordingAudioOutput::new(playback_capture.clone()),
+            RecordingOutput::new(playback_log.clone()),
             DEFAULT_SAMPLE_RATE,
         ),
         Default::default(),
@@ -89,7 +86,7 @@ async fn audio_frames_play_in_order() {
     client_a.telepathy.shutdown().await;
     client_b.telepathy.shutdown().await;
 
-    let log = playback_capture.drain();
+    let log = playback_log.lock().unwrap();
     assert!(
         log.len() >= 30,
         "expected at least 30 playback frames, got {}",

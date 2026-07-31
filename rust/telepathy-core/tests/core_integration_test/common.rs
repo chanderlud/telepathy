@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::{Arc, Condvar, Mutex, Once, OnceLock};
+use std::thread;
 use std::time::Duration;
 use telepathy_audio::devices::{AudioHost, DeviceDirection, DeviceError};
 use telepathy_audio::devices::{MockAudioInput, MockAudioOutput};
@@ -32,6 +33,7 @@ pub(super) static RELAY_DETAILS: OnceLock<RelayMap> = OnceLock::new();
 /// others from the same map.
 pub(super) static SHARED_ADDRESS_LOOKUP: OnceLock<MemoryLookup> = OnceLock::new();
 
+pub(super) const SEQUENCED_STEP: f32 = 1.0 / 4096.0;
 pub(super) const DEFAULT_SAMPLE_RATE: u32 = 48_000;
 pub(super) const MOCK_DEVICE_ID: &str = "mock";
 pub(super) const STALE_INPUT_DEVICE_ID: &str = "stale-input";
@@ -234,6 +236,57 @@ impl SessionStatusProbe {
                 "timed out waiting for {expected:?} session status for {peer_id:?}, got {observed:?}"
             );
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct SequencedInput {
+    counter: Arc<AtomicUsize>,
+    sample_rate: u32,
+}
+
+impl SequencedInput {
+    pub(super) fn new(sample_rate: u32) -> Self {
+        Self {
+            counter: Arc::new(AtomicUsize::new(1)),
+            sample_rate,
+        }
+    }
+}
+
+impl AudioInput for SequencedInput {
+    fn read_into(&mut self, dst: &mut [f32]) -> Result<usize, telepathy_audio::Error> {
+        let frame_seconds = dst.len() as f64 / self.sample_rate as f64;
+        if frame_seconds.is_normal() || frame_seconds > 0.0 {
+            thread::sleep(Duration::from_secs_f64(frame_seconds));
+        }
+        let idx = self.counter.fetch_add(1, Relaxed);
+        let dc = idx as f32 * SEQUENCED_STEP;
+        dst.fill(dc);
+        Ok(dst.len())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct RecordingOutput {
+    log: Arc<Mutex<Vec<usize>>>,
+}
+
+impl RecordingOutput {
+    pub(super) fn new(log: Arc<Mutex<Vec<usize>>>) -> Self {
+        Self { log }
+    }
+}
+
+impl AudioOutput for RecordingOutput {
+    fn is_full(&self) -> bool {
+        false
+    }
+
+    fn write_samples(&mut self, samples: &[f32]) -> Result<usize, telepathy_audio::Error> {
+        let idx = (samples[0] / SEQUENCED_STEP).round() as usize;
+        self.log.lock().unwrap().push(idx);
+        Ok(0)
     }
 }
 

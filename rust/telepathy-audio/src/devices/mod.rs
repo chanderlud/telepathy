@@ -17,8 +17,6 @@ use cpal::traits::DeviceTrait;
 pub use cpal_host::CpalAudioHost;
 pub use direction::DeviceDirection;
 pub use error::DeviceError;
-#[cfg(any(test, feature = "test-internals"))]
-pub use mock_host::{AudioFrameIndexCapture, RecordingAudioOutput, SequencedAudioInput};
 pub use mock_host::{MockAudioHost, MockAudioInput, MockAudioOutput};
 
 /// Host abstraction for device enumeration, selection, and stream lifecycle.

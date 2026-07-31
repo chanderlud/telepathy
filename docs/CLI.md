@@ -17,6 +17,9 @@ Startup networking configuration can be provided in two ways:
 
 Discovery flags configure the iroh relay, DNS address lookup, and pkarr publisher used for endpoint discovery. `--relay-url` / `TELEPATHY_RELAY_URL` is an HTTP relay URL (for example `http://10.0.10.1:3340`). `--dns-endpoint` / `TELEPATHY_DNS_ENDPOINT` is a host:port DNS resolver address (for example `10.0.10.1:5300`). `--pkarr-relay` / `TELEPATHY_PKARR_RELAY` is an HTTP pkarr relay URL (for example `http://10.0.10.1:8080/pkarr`). Omit any discovery flag to leave that setting unset.
 
+Ordinary startup uses the Cpal audio host. `--system-test-audio` is a test-only option for the
+system-test harness; it substitutes deterministic mock input and capture output for physical audio.
+
 Precedence:
 
 - If both flags and env vars are provided, flags win.
@@ -63,7 +66,7 @@ For unit variants, `args` may be `{}` or may be omitted.
 | `set_play_custom_ringtones` | `value: bool` |
 | `set_input_device` | `id: string \| null` |
 | `set_output_device` | `id: string \| null` |
-| `drain_audio_frame_indices` | _(none; integration-test audio capture only)_ |
+| `drain_audio_frame_indices` | _(none; system-test audio capture only)_ |
 | `list_devices` | _(none)_ |
 
 ## Output Format
@@ -89,7 +92,9 @@ Notes:
 - `error` is omitted on successful `ack` lines.
 - `id` is the request id from the input envelope.
 - Most commands emit an `ack` line.
-- `list_devices` and `drain_audio_frame_indices` emit only a `result` line (no `ack`).
+- `list_devices` emits only a `result` line (no `ack`).
+- `drain_audio_frame_indices` emits a `result` when test audio capture is enabled; otherwise it
+  emits a failed `ack` explaining that `--system-test-audio` is required.
 
 `list_devices` returns:
 
@@ -97,7 +102,7 @@ Notes:
 {"kind":"result","id":"<string>","data":{"supported":false,"reason":"<string>"}}
 ```
 
-`drain_audio_frame_indices` is available in the integration-testing CLI build. It atomically
+`drain_audio_frame_indices` is a test-only command used with `--system-test-audio`. It atomically
 returns and clears up to 512 frame indices decoded from samples written to mock audio output:
 
 ```json
@@ -231,7 +236,7 @@ Expected high-level interaction:
 1. Host starts `telepathy-cli`.
 2. CLI initializes and emits `ready`.
 3. Host sends commands with unique `id` values.
-4. CLI emits an `ack` for most requests; `list_devices` and `drain_audio_frame_indices` emit only `result`.
+4. CLI emits an `ack` for most requests; `list_devices` and enabled test-audio capture emit `result`.
 5. CLI emits asynchronous `event` lines at any time.
 6. On fatal startup failure, CLI emits one `error` event and exits.
 
