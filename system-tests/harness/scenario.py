@@ -243,6 +243,8 @@ class ScenarioRunner:
                     if item not in actual:
                         return False
                 return True
+            if isinstance(actual, dict):
+                return any(self._matches_subset(item, actual) for item in expected)
             if len(expected) == 1:
                 return expected[0] == actual
             if isinstance(actual, str):
