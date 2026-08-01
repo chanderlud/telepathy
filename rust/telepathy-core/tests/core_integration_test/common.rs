@@ -117,6 +117,15 @@ impl ContactLookupProbe {
             );
         }
     }
+
+    pub(super) fn count(&self, peer_id: &[u8]) -> usize {
+        self.counts
+            .lock()
+            .unwrap()
+            .get(peer_id)
+            .copied()
+            .unwrap_or_default()
+    }
 }
 
 #[derive(Clone)]
@@ -1455,16 +1464,14 @@ fn construct_mock_callbacks_with_contact_lookup(
         let contacts_clone = contacts.clone();
         let contact_lookup_probe = contact_lookup_probe.clone();
         Box::pin(async move {
+            let contact = contacts_clone
+                .iter()
+                .find(|contact| contact.get_peer_id().as_bytes() == peer_id.as_slice())
+                .cloned();
             if let Some(probe) = contact_lookup_probe {
                 probe.record(&peer_id);
             }
-            for contact in contacts_clone.iter() {
-                if contact.get_peer_id().to_vec() == peer_id {
-                    return Some(contact.clone());
-                }
-            }
-
-            None
+            contact
         })
     });
 

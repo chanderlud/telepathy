@@ -42,7 +42,7 @@ use iroh::endpoint::{
 use iroh::{Endpoint, PublicKey};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ops::{Deref, DerefMut};
-use std::sync::atomic::Ordering::Relaxed;
+use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 #[cfg(target_family = "wasm")]
@@ -872,6 +872,7 @@ where
                 }
                 states.insert(peer, state.clone());
                 self.publish_session_locked(peer);
+                candidate.promote();
                 drop(states);
                 info!(
                     event = "session_collision_candidate_promoted",
@@ -943,18 +944,57 @@ where
         // call-slot state, output volume, or emit Inactive — all of those are owned by the
         // replacement session.
         let mut states = self.session_states.write().await;
-        if states
+        let mut candidate_resolution = states
             .get(&peer)
             .is_some_and(|current| current.id == state.id)
-            && let Some(completion) = self
-                .pending_session_candidates
-                .resolution_for(peer, state.id)
-        {
+            .then(|| {
+                self.pending_session_candidates
+                    .resolution_for(peer, state.id)
+            })
+            .flatten();
+        let mut candidate_aborted_with_terminal = false;
+        while let Some(resolution) = candidate_resolution {
             drop(states);
-            completion.cancelled().await;
+            resolution.completed().await;
             states = self.session_states.write().await;
+            if states
+                .get(&peer)
+                .is_none_or(|current| current.id != state.id)
+            {
+                break;
+            }
+            match self
+                .pending_session_candidates
+                .resolve_completed(peer, state.id, resolution.id)
+            {
+                PendingSessionCandidateResolutionOutcome::Final {
+                    aborted_with_terminal,
+                } => {
+                    candidate_aborted_with_terminal = aborted_with_terminal;
+                    break;
+                }
+                PendingSessionCandidateResolutionOutcome::Superseded(resolution) => {
+                    candidate_resolution = Some(resolution);
+                }
+            }
         }
         let still_current = states.get(&peer).map(|s| s.id == state.id).unwrap_or(false);
+        let deferred_pending_call_ended = if still_current && candidate_aborted_with_terminal {
+            let snapshot = self.core_state.call_slot.snapshot()?;
+            if snapshot.state == CallSlotState::PendingOutgoing
+                && snapshot.direct_peer == Some(peer)
+                && self.core_state.call_slot.release_if_match(snapshot)?
+            {
+                Some(CallEndMessage::from_text(peer_goodbye_reason_message(
+                    &contact.nickname,
+                    GoodbyeReason::SessionStopped,
+                )))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         if still_current {
             // this session still owns the connection — close it before tearing down our
             // per-session state
@@ -974,6 +1014,13 @@ where
             );
         }
         drop(states);
+
+        if let Some(message) = deferred_pending_call_ended {
+            warn!(event = "session_error_while_call_pending_candidate_aborted");
+            self.callbacks
+                .call_state(CallState::CallEnded(message.into_string(), true))
+                .await;
+        }
 
         // avoid sending session statuses for dummy contacts
         if still_current && !contact.is_room_only {
@@ -1092,6 +1139,12 @@ where
                     let call_ended = {
                         let session_states = self.session_states.read().await;
                         let snapshot = call_slot.snapshot()?;
+                        let replacement_pending = snapshot.state == CallSlotState::PendingOutgoing
+                            && error.is_session_critical()
+                            && self
+                                .pending_session_candidates
+                                .claim_terminal_resolution(peer, state.id)
+                                .is_some();
                         if session_states
                             .get(&peer)
                             .map(|session| session.id == state.id)
@@ -1106,7 +1159,9 @@ where
                                     false,
                                     "session_error_while_call_active",
                                 )),
-                                CallSlotState::PendingOutgoing if error.is_session_critical() => {
+                                CallSlotState::PendingOutgoing
+                                    if error.is_session_critical() && !replacement_pending =>
+                                {
                                     Some((
                                         CallEndMessage::from_text(peer_goodbye_reason_message(
                                             &contact.nickname,
@@ -1442,9 +1497,6 @@ where
         select! {
             _ = io.state.stop_session.cancelled() => {
                 info!(event = "session_stopped_during_accept_prompt");
-                if let Some(cancel) = cancel_prompt {
-                    cancel.notify_one();
-                }
                 abort_negotiation_session_stopped(
                     &self.session_states,
                     peer,
@@ -1453,6 +1505,9 @@ where
                     &mut pending_slot,
                 )
                 .await?;
+                if let Some(cancel) = cancel_prompt {
+                    cancel.notify_one();
+                }
                 Ok(IncomingNegotiationOutcome::SessionStopped)
             }
             accept_result = accept_future => {
@@ -1555,9 +1610,6 @@ where
             result = read_message(io.recv) => {
                 // Receiving any message during the accept prompt means the caller hung up (Goodbye)
                 // or sent something out-of-protocol; abort negotiation but keep the session alive.
-                if let Some(cancel) = cancel_prompt {
-                    cancel.notify_one();
-                }
                 release_pending(
                     &self.session_states,
                     peer,
@@ -1565,6 +1617,9 @@ where
                     &mut pending_slot,
                 )
                 .await?;
+                if let Some(cancel) = cancel_prompt {
+                    cancel.notify_one();
+                }
                 let message = result?;
                 warn!(event = "accept_prompt_interrupted_by_message", ?message);
                 Ok(IncomingNegotiationOutcome::ContinueSession)
@@ -3652,7 +3707,34 @@ struct PendingSessionCandidate {
     id: Uuid,
     predecessor_id: Uuid,
     cancellation: CancellationToken,
+    resolution: PendingSessionCandidateResolution,
+}
+
+#[derive(Clone)]
+struct PendingSessionCandidateResolution {
+    id: Uuid,
     completion: CancellationToken,
+    promoted: Arc<AtomicBool>,
+    terminal_pending: Arc<AtomicBool>,
+}
+
+enum PendingSessionCandidateResolutionOutcome {
+    Final { aborted_with_terminal: bool },
+    Superseded(PendingSessionCandidateResolution),
+}
+
+impl PendingSessionCandidateResolution {
+    async fn completed(&self) {
+        self.completion.cancelled().await;
+    }
+
+    fn aborted(&self) -> bool {
+        self.completion.is_cancelled() && !self.promoted.load(Relaxed)
+    }
+
+    fn aborted_with_terminal(&self) -> bool {
+        self.aborted() && self.terminal_pending.load(Relaxed)
+    }
 }
 
 impl PendingSessionCandidateRegistry {
@@ -3662,19 +3744,33 @@ impl PendingSessionCandidateRegistry {
         predecessor_id: Uuid,
     ) -> Option<PendingSessionCandidateLease> {
         let mut candidates = self.inner.lock().unwrap();
-        if candidates.contains_key(&peer) {
-            return None;
-        }
+        let terminal_pending = if let Some(candidate) = candidates.get(&peer) {
+            if candidate.resolution.aborted() {
+                let terminal_pending = candidate.predecessor_id == predecessor_id
+                    && candidate.resolution.terminal_pending.load(Relaxed);
+                candidates.remove(&peer);
+                terminal_pending
+            } else {
+                return None;
+            }
+        } else {
+            false
+        };
         let id = Uuid::new_v4();
         let cancellation = CancellationToken::new();
-        let completion = CancellationToken::new();
+        let resolution = PendingSessionCandidateResolution {
+            id,
+            completion: CancellationToken::new(),
+            promoted: Arc::new(AtomicBool::new(false)),
+            terminal_pending: Arc::new(AtomicBool::new(terminal_pending)),
+        };
         candidates.insert(
             peer,
             PendingSessionCandidate {
                 id,
                 predecessor_id,
                 cancellation: cancellation.clone(),
-                completion: completion.clone(),
+                resolution: resolution.clone(),
             },
         );
         Some(PendingSessionCandidateLease {
@@ -3682,19 +3778,64 @@ impl PendingSessionCandidateRegistry {
             peer,
             id,
             cancellation,
-            completion,
+            resolution,
         })
     }
 
-    fn resolution_for(&self, peer: PublicKey, predecessor_id: Uuid) -> Option<CancellationToken> {
+    fn resolution_for(
+        &self,
+        peer: PublicKey,
+        predecessor_id: Uuid,
+    ) -> Option<PendingSessionCandidateResolution> {
         self.inner.lock().unwrap().get(&peer).and_then(|candidate| {
-            (candidate.predecessor_id == predecessor_id).then(|| candidate.completion.clone())
+            (candidate.predecessor_id == predecessor_id).then(|| candidate.resolution.clone())
         })
+    }
+
+    fn claim_terminal_resolution(
+        &self,
+        peer: PublicKey,
+        predecessor_id: Uuid,
+    ) -> Option<PendingSessionCandidateResolution> {
+        let candidates = self.inner.lock().unwrap();
+        let candidate = candidates.get(&peer)?;
+        if candidate.predecessor_id != predecessor_id {
+            return None;
+        }
+        candidate.resolution.terminal_pending.store(true, Relaxed);
+        Some(candidate.resolution.clone())
+    }
+
+    fn resolve_completed(
+        &self,
+        peer: PublicKey,
+        predecessor_id: Uuid,
+        resolution_id: Uuid,
+    ) -> PendingSessionCandidateResolutionOutcome {
+        let mut candidates = self.inner.lock().unwrap();
+        let Some(candidate) = candidates.get(&peer) else {
+            return PendingSessionCandidateResolutionOutcome::Final {
+                aborted_with_terminal: false,
+            };
+        };
+        if candidate.id == resolution_id {
+            let aborted_with_terminal = candidate.resolution.aborted_with_terminal();
+            candidates.remove(&peer);
+            PendingSessionCandidateResolutionOutcome::Final {
+                aborted_with_terminal,
+            }
+        } else if candidate.predecessor_id == predecessor_id {
+            PendingSessionCandidateResolutionOutcome::Superseded(candidate.resolution.clone())
+        } else {
+            PendingSessionCandidateResolutionOutcome::Final {
+                aborted_with_terminal: false,
+            }
+        }
     }
 
     fn cancel_all(&self) {
-        let candidates = std::mem::take(&mut *self.inner.lock().unwrap());
-        for candidate in candidates.into_values() {
+        let candidates = self.inner.lock().unwrap();
+        for candidate in candidates.values() {
             candidate.cancellation.cancel();
         }
     }
@@ -3705,7 +3846,7 @@ struct PendingSessionCandidateLease {
     peer: PublicKey,
     id: Uuid,
     cancellation: CancellationToken,
-    completion: CancellationToken,
+    resolution: PendingSessionCandidateResolution,
 }
 
 impl PendingSessionCandidateLease {
@@ -3716,18 +3857,29 @@ impl PendingSessionCandidateLease {
     fn is_cancelled(&self) -> bool {
         self.cancellation.is_cancelled()
     }
-}
 
-impl Drop for PendingSessionCandidateLease {
-    fn drop(&mut self) {
+    fn promote(&self) {
         let mut candidates = self.registry.inner.lock().unwrap();
         if candidates
             .get(&self.peer)
             .is_some_and(|candidate| candidate.id == self.id)
         {
+            self.resolution.promoted.store(true, Relaxed);
+            self.resolution.completion.cancel();
             candidates.remove(&self.peer);
         }
-        self.completion.cancel();
+    }
+}
+
+impl Drop for PendingSessionCandidateLease {
+    fn drop(&mut self) {
+        let candidates = self.registry.inner.lock().unwrap();
+        if candidates
+            .get(&self.peer)
+            .is_some_and(|candidate| candidate.id == self.id)
+        {
+            self.resolution.completion.cancel();
+        }
     }
 }
 
@@ -4312,11 +4464,114 @@ mod tests {
             "reset must cancel the retained candidate"
         );
         drop(first);
-        completion.cancelled().await;
+        completion.completed().await;
 
         assert!(
             registry.try_install(peer, predecessor_id).is_some(),
             "candidate ownership must be reusable after cancellation completes"
+        );
+    }
+
+    #[tokio::test]
+    async fn terminal_resolution_survives_sequential_aborted_candidates() {
+        let registry = PendingSessionCandidateRegistry::default();
+        let peer = SecretKey::generate().public();
+        let predecessor_id = Uuid::new_v4();
+        let first = registry
+            .try_install(peer, predecessor_id)
+            .expect("the first candidate should claim the peer");
+        let first_resolution = registry
+            .claim_terminal_resolution(peer, predecessor_id)
+            .expect("the predecessor should defer its terminal outcome");
+
+        drop(first);
+        first_resolution.completed().await;
+
+        let second = registry
+            .try_install(peer, predecessor_id)
+            .expect("an aborted candidate should be replaceable");
+        let second_resolution = registry
+            .resolution_for(peer, predecessor_id)
+            .expect("the replacement candidate should inherit predecessor resolution");
+        let PendingSessionCandidateResolutionOutcome::Superseded(observed_second) =
+            registry.resolve_completed(peer, predecessor_id, first_resolution.id)
+        else {
+            panic!("the stale first resolution must defer to the current candidate");
+        };
+        assert_eq!(observed_second.id, second_resolution.id);
+
+        drop(second);
+        second_resolution.completed().await;
+
+        assert!(matches!(
+            registry.resolve_completed(peer, predecessor_id, second_resolution.id),
+            PendingSessionCandidateResolutionOutcome::Final {
+                aborted_with_terminal: true
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn stale_aborted_resolution_waits_for_viable_successor() {
+        let registry = PendingSessionCandidateRegistry::default();
+        let peer = SecretKey::generate().public();
+        let predecessor_id = Uuid::new_v4();
+        let first = registry
+            .try_install(peer, predecessor_id)
+            .expect("the first candidate should claim the peer");
+        let first_resolution = registry
+            .claim_terminal_resolution(peer, predecessor_id)
+            .expect("the predecessor should defer its terminal outcome");
+
+        drop(first);
+        first_resolution.completed().await;
+
+        let second = registry
+            .try_install(peer, predecessor_id)
+            .expect("the viable successor should replace the aborted candidate");
+        let second_resolution = registry
+            .resolution_for(peer, predecessor_id)
+            .expect("the predecessor should observe the viable successor");
+        let PendingSessionCandidateResolutionOutcome::Superseded(observed_second) =
+            registry.resolve_completed(peer, predecessor_id, first_resolution.id)
+        else {
+            panic!("stale completion must not resolve while a successor remains viable");
+        };
+        assert_eq!(observed_second.id, second_resolution.id);
+
+        second.promote();
+        observed_second.completed().await;
+
+        assert!(matches!(
+            registry.resolve_completed(peer, predecessor_id, observed_second.id),
+            PendingSessionCandidateResolutionOutcome::Final {
+                aborted_with_terminal: false
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn promoted_candidate_does_not_inherit_abort_outcome() {
+        let registry = PendingSessionCandidateRegistry::default();
+        let peer = SecretKey::generate().public();
+        let predecessor_id = Uuid::new_v4();
+        let candidate = registry
+            .try_install(peer, predecessor_id)
+            .expect("the candidate should claim the peer");
+        let resolution = registry
+            .claim_terminal_resolution(peer, predecessor_id)
+            .expect("the predecessor should defer its terminal outcome");
+
+        candidate.promote();
+        resolution.completed().await;
+
+        assert!(
+            !resolution.aborted_with_terminal(),
+            "promotion must preserve the pending call instead of terminalizing it"
+        );
+        assert!(
+            registry.resolution_for(peer, predecessor_id).is_none(),
+            "promotion must remove the resolved candidate"
         );
     }
 
