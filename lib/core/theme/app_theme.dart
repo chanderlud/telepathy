@@ -37,7 +37,7 @@ class AppTheme {
           if (!states.contains(WidgetState.disabled) &&
               states.contains(WidgetState.selected) &&
               states.contains(WidgetState.hovered)) {
-            return colorScheme.tertiaryContainer;
+            return colorScheme.surfaceDim;
           }
 
           return Theme.of(context).tabBarTheme.indicatorColor;
