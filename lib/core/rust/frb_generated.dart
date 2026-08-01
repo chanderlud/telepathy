@@ -340,7 +340,7 @@ abstract class RustLibApi extends BaseApi {
   Future<VideoStartOutcome> crateFlutterTelepathyRequestVideoSource(
       {required Telepathy that,
       required Contact contact,
-      required VideoSourceRequest request});
+      required VideoSource source});
 
   Future<void> crateFlutterTelepathyRestartManager({required Telepathy that});
 
@@ -2866,7 +2866,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   Future<VideoStartOutcome> crateFlutterTelepathyRequestVideoSource(
       {required Telepathy that,
       required Contact contact,
-      required VideoSourceRequest request}) {
+      required VideoSource source}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
@@ -2874,7 +2874,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that, serializer);
         sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerContact(
             contact, serializer);
-        sse_encode_box_autoadd_video_source_request(request, serializer);
+        sse_encode_video_source(source, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
             funcId: 81, port: port_);
       },
@@ -2883,7 +2883,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeErrorData: null,
       ),
       constMeta: kCrateFlutterTelepathyRequestVideoSourceConstMeta,
-      argValues: [that, contact, request],
+      argValues: [that, contact, source],
       apiImpl: this,
     ));
   }
@@ -2891,7 +2891,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateFlutterTelepathyRequestVideoSourceConstMeta =>
       const TaskConstMeta(
         debugName: 'Telepathy_request_video_source',
-        argNames: ['that', 'contact', 'request'],
+        argNames: ['that', 'contact', 'source'],
       );
 
   @override
@@ -4748,12 +4748,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  VideoSourceRequest dco_decode_box_autoadd_video_source_request(dynamic raw) {
-    // Codec=Dco (DartCObject based), see doc to use other codecs
-    return dco_decode_video_source_request(raw);
-  }
-
-  @protected
   VideoTerminalReason dco_decode_box_autoadd_video_terminal_reason(
       dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
@@ -5233,17 +5227,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     return VideoSourceCapability(
       source: dco_decode_video_source(arr[0]),
       formats: dco_decode_list_video_media_format(arr[1]),
-    );
-  }
-
-  @protected
-  VideoSourceRequest dco_decode_video_source_request(dynamic raw) {
-    // Codec=Dco (DartCObject based), see doc to use other codecs
-    final arr = raw as List<dynamic>;
-    if (arr.length != 1)
-      throw Exception('unexpected arr length: expect 1 but see ${arr.length}');
-    return VideoSourceRequest(
-      source: dco_decode_video_source(arr[0]),
     );
   }
 
@@ -5847,13 +5830,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  VideoSourceRequest sse_decode_box_autoadd_video_source_request(
-      SseDeserializer deserializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    return (sse_decode_video_source_request(deserializer));
-  }
-
-  @protected
   VideoTerminalReason sse_decode_box_autoadd_video_terminal_reason(
       SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
@@ -6371,14 +6347,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_source = sse_decode_video_source(deserializer);
     var var_formats = sse_decode_list_video_media_format(deserializer);
     return VideoSourceCapability(source: var_source, formats: var_formats);
-  }
-
-  @protected
-  VideoSourceRequest sse_decode_video_source_request(
-      SseDeserializer deserializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    var var_source = sse_decode_video_source(deserializer);
-    return VideoSourceRequest(source: var_source);
   }
 
   @protected
@@ -7120,13 +7088,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_box_autoadd_video_source_request(
-      VideoSourceRequest self, SseSerializer serializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_video_source_request(self, serializer);
-  }
-
-  @protected
   void sse_encode_box_autoadd_video_terminal_reason(
       VideoTerminalReason self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
@@ -7571,13 +7532,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_video_source(self.source, serializer);
     sse_encode_list_video_media_format(self.formats, serializer);
-  }
-
-  @protected
-  void sse_encode_video_source_request(
-      VideoSourceRequest self, SseSerializer serializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_video_source(self.source, serializer);
   }
 
   @protected
@@ -8033,7 +7987,7 @@ class OverlayImpl extends RustOpaque implements Overlay {
       RustLib.instance.api.crateOverlayOverlayMoveOverlay(
           that: this, x: x, y: y, width: width, height: height);
 
-  /// access the screen resolution for overlay positioning in the front end
+  /// non-windows platforms don't have an overlay
   (int, int) screenResolution() =>
       RustLib.instance.api.crateOverlayOverlayScreenResolution(
         that: this,
@@ -8358,9 +8312,9 @@ class TelepathyImpl extends RustOpaque implements Telepathy {
           that: this, targetKey: targetKey, targetContacts: targetContacts);
 
   Future<VideoStartOutcome> requestVideoSource(
-          {required Contact contact, required VideoSourceRequest request}) =>
+          {required Contact contact, required VideoSource source}) =>
       RustLib.instance.api.crateFlutterTelepathyRequestVideoSource(
-          that: this, contact: contact, request: request);
+          that: this, contact: contact, source: source);
 
   /// Restarts the session manager
   Future<void> restartManager() =>
@@ -8434,7 +8388,10 @@ class TelepathyImpl extends RustOpaque implements Telepathy {
           that: this, contact: contact, operation: operation);
 
   /// Non-blocking: spawns the manager task and returns. The Dart side observes
-  /// the eventual `Active` transition via the `managerActive` callback.
+  /// the eventual `Active` transition via the `managerActive` callback. The
+  /// non-blocking contract is validated by the CLI system test
+  /// `test_start_manager_ack_precedes_active_event`; the `()` return type
+  /// prevents silent reintroduction of blocking semantics.
   Future<void> startManager() =>
       RustLib.instance.api.crateFlutterTelepathyStartManager(
         that: this,

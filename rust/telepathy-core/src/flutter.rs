@@ -199,11 +199,9 @@ impl Telepathy {
     pub async fn request_video_source(
         &self,
         contact: &Contact,
-        request: VideoSourceRequest,
+        source: VideoSource,
     ) -> VideoStartOutcome {
-        self.handle
-            .request_video_source(contact, request.source)
-            .await
+        self.handle.request_video_source(contact, source).await
     }
 
     pub async fn stop_video_source(&self, identity: VideoSessionIdentity) -> VideoStopOutcome {

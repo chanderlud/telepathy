@@ -234,6 +234,111 @@ where
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::read_message;
+    use crate::internal::messages::ProtocolMessage;
+    use crate::internal::video::{
+        VIDEO_CONTROL_MAX_FRAME_LENGTH, VideoCodec, VideoControl, VideoMediaDescriptor,
+        VideoSessionId,
+    };
+    use bytes::Bytes;
+    use futures_util::SinkExt;
+    use iroh::endpoint::{Connection, presets};
+    use speedy::Writable;
+    use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
+
+    async fn iroh_pair() -> (iroh::Endpoint, iroh::Endpoint, Connection, Connection) {
+        let server = iroh::Endpoint::builder(presets::N0)
+            .relay_mode(iroh::RelayMode::Disabled)
+            .alpns(vec![crate::internal::ALPN.to_vec()])
+            .bind()
+            .await
+            .expect("server endpoint binds");
+        let client = iroh::Endpoint::builder(presets::N0)
+            .relay_mode(iroh::RelayMode::Disabled)
+            .bind()
+            .await
+            .expect("client endpoint binds");
+        let server_addr = server.addr();
+        let (outbound, inbound) =
+            tokio::join!(client.connect(server_addr, crate::internal::ALPN), async {
+                server
+                    .accept()
+                    .await
+                    .expect("server receives connection")
+                    .await
+            });
+        (
+            client,
+            server,
+            outbound.expect("client connects"),
+            inbound.expect("server accepts"),
+        )
+    }
+
+    async fn send_control_bytes(connection: &Connection, bytes: Vec<u8>) {
+        let stream = connection.open_uni().await.expect("stream opens");
+        let codec = LengthDelimitedCodec::builder()
+            .max_frame_length(VIDEO_CONTROL_MAX_FRAME_LENGTH + 1)
+            .new_codec();
+        let mut framed = FramedWrite::new(stream, codec);
+        framed.send(Bytes::from(bytes)).await.expect("frame writes");
+        framed.into_inner().finish().expect("stream finishes");
+    }
+
+    async fn receive_control(connection: &Connection) -> super::Result<ProtocolMessage> {
+        let stream = connection.accept_uni().await.expect("stream accepted");
+        let codec = LengthDelimitedCodec::builder()
+            .max_frame_length(VIDEO_CONTROL_MAX_FRAME_LENGTH + 1)
+            .new_codec();
+        read_message(&mut FramedRead::new(stream, codec)).await
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn read_message_validates_video_controls_on_real_iroh_streams() {
+        let (client, server, outbound, inbound) = iroh_pair().await;
+        let session_id = VideoSessionId::new();
+        let valid = ProtocolMessage::Video {
+            control: VideoControl::offer(
+                session_id,
+                VideoMediaDescriptor::display(VideoCodec::H264, 1_280, 720),
+            ),
+        };
+        send_control_bytes(
+            &outbound,
+            valid.write_to_vec().expect("valid control encodes"),
+        )
+        .await;
+        assert!(matches!(
+            receive_control(&inbound).await.expect("valid control reads"),
+            ProtocolMessage::Video { control } if control.session_id() == session_id
+        ));
+
+        send_control_bytes(&outbound, vec![0xFF]).await;
+        assert!(receive_control(&inbound).await.is_err());
+
+        let invalid = ProtocolMessage::Video {
+            control: VideoControl::offer(
+                VideoSessionId::new(),
+                VideoMediaDescriptor::display(VideoCodec::H264, 0, 720),
+            ),
+        };
+        send_control_bytes(
+            &outbound,
+            invalid.write_to_vec().expect("invalid control encodes"),
+        )
+        .await;
+        assert!(receive_control(&inbound).await.is_err());
+
+        send_control_bytes(&outbound, vec![0; VIDEO_CONTROL_MAX_FRAME_LENGTH + 1]).await;
+        assert!(receive_control(&inbound).await.is_err());
+
+        client.close().await;
+        server.close().await;
+    }
+}
+
 #[cfg(target_os = "ios")]
 pub(crate) fn configure_audio_session() {
     use objc2::runtime::{AnyObject, Bool};

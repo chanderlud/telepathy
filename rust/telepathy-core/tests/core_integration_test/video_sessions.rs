@@ -13,10 +13,7 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 use telepathy_audio::devices::{MockAudioHost, MockAudioInput, MockAudioOutput};
 use telepathy_core::internal::state::CallSlotState;
-use telepathy_core::internal::video::platform::{
-    forward_capture_chunks, forward_playback_frames, playback_command_for_test,
-    recording_command_for_test,
-};
+use telepathy_core::internal::video::platform::{forward_capture_chunks, forward_playback_frames};
 use telepathy_core::types::{
     CallState, CodecConfig, Contact, VideoSource, VideoStartOutcome, VideoUnavailable,
 };
@@ -29,69 +26,6 @@ use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 mod lifecycle;
 #[path = "video_sessions/protocol.rs"]
 mod protocol;
-
-#[test]
-fn desktop_sender_command_preserves_current_ffmpeg_arguments() {
-    let command = recording_command_for_test("h264_nvenc", "GDI Grab", 4_000_000, 60, Some(720))
-        .expect("configured desktop sender command");
-
-    assert_eq!(command.program, "ffmpeg");
-    assert_eq!(
-        command.arguments,
-        [
-            "-f",
-            "gdigrab",
-            "-framerate",
-            "30",
-            "-video_size",
-            "1920x1080",
-            "-i",
-            "desktop",
-            "-vf",
-            "trunc(oh*a/2)*2:720",
-            "-c:v",
-            "h264_nvenc",
-            "-delay",
-            "0",
-            "-b:v",
-            "4000000",
-            "-bufsize",
-            "1M",
-            "-f",
-            "mpegts",
-            "-",
-        ]
-    );
-}
-
-#[test]
-fn desktop_receiver_command_preserves_current_ffplay_arguments() {
-    let command = playback_command_for_test("libx264", 1280, 720)
-        .expect("configured desktop receiver command");
-
-    assert_eq!(command.program, "ffplay");
-    assert_eq!(
-        command.arguments,
-        [
-            "-vcodec",
-            "h264_cuvid",
-            "-f",
-            "mpegts",
-            "-i",
-            "-",
-            "-x",
-            "1280",
-            "-y",
-            "720",
-            "-flags",
-            "low_delay",
-            "-analyzeduration",
-            "1",
-            "-window_title",
-            "Telepathy Screenshare",
-        ]
-    );
-}
 
 #[tokio::test]
 async fn capture_preserves_512_byte_chunk_boundaries_in_length_frames() {

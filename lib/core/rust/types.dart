@@ -9,9 +9,9 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'types.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `clamp_contact_output_volume`, `contact_output_volume_from_parts`, `contact_output_volume_in_range`, `field_error`, `new`, `new`, `parse_bind_addresses`, `poison_field_error`, `prepare_video_sender`, `probe_video_capabilities`, `relay_map_from_urls`, `serialize_timestamp_rfc3339_utc`
+// These functions are ignored because they are not marked as `pub`: `clamp_contact_output_volume`, `contact_output_volume_from_parts`, `contact_output_volume_in_range`, `field_error`, `formats`, `new`, `new`, `parse_bind_addresses`, `poison_field_error`, `prepare_video_sender`, `probe_video_capabilities`, `relay_map_from_urls`, `serialize_timestamp_rfc3339_utc`, `unavailable`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `ScreenshareConfigDisk`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `hash`, `minimum_bytes_needed`, `minimum_bytes_needed`, `minimum_bytes_needed`, `minimum_bytes_needed`, `minimum_bytes_needed`, `minimum_bytes_needed`, `minimum_bytes_needed`, `minimum_bytes_needed`, `read_from`, `read_from`, `read_from`, `read_from`, `read_from`, `read_from`, `read_from`, `read_from`, `speedy_convert_slice_endianness`, `speedy_convert_slice_endianness`, `speedy_flip_endianness`, `speedy_flip_endianness`, `speedy_is_primitive`, `speedy_is_primitive`, `speedy_is_primitive`, `speedy_is_primitive`, `speedy_slice_as_bytes`, `speedy_slice_as_bytes`, `speedy_slice_from_bytes`, `speedy_slice_from_bytes`, `write_to`, `write_to`, `write_to`, `write_to`, `write_to`, `write_to`, `write_to`, `write_to`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `hash`, `minimum_bytes_needed`, `minimum_bytes_needed`, `minimum_bytes_needed`, `minimum_bytes_needed`, `minimum_bytes_needed`, `minimum_bytes_needed`, `minimum_bytes_needed`, `minimum_bytes_needed`, `read_from`, `read_from`, `read_from`, `read_from`, `read_from`, `read_from`, `read_from`, `read_from`, `speedy_convert_slice_endianness`, `speedy_convert_slice_endianness`, `speedy_flip_endianness`, `speedy_flip_endianness`, `speedy_is_primitive`, `speedy_is_primitive`, `speedy_is_primitive`, `speedy_is_primitive`, `speedy_slice_as_bytes`, `speedy_slice_as_bytes`, `speedy_slice_from_bytes`, `speedy_slice_from_bytes`, `write_to`, `write_to`, `write_to`, `write_to`, `write_to`, `write_to`, `write_to`, `write_to`
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Capabilities>>
 abstract class Capabilities implements RustOpaqueInterface {
@@ -555,24 +555,6 @@ class VideoSourceCapability {
           runtimeType == other.runtimeType &&
           source == other.source &&
           formats == other.formats;
-}
-
-class VideoSourceRequest {
-  final VideoSource source;
-
-  const VideoSourceRequest({
-    required this.source,
-  });
-
-  @override
-  int get hashCode => source.hashCode;
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is VideoSourceRequest &&
-          runtimeType == other.runtimeType &&
-          source == other.source;
 }
 
 @freezed

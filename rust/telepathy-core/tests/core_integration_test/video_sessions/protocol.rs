@@ -1,13 +1,11 @@
 use super::lifecycle::IrohPair;
-use speedy::Writable;
-use telepathy_core::internal::video::transport::{read_media_frame, read_preamble};
-use telepathy_core::internal::video::{
-    VIDEO_CONTROL_MAX_FRAME_LENGTH, VIDEO_MEDIA_MAX_FRAME_LENGTH, VIDEO_PREAMBLE_MAX_LENGTH,
-    VideoMediaDescriptor, VideoProtocolError, VideoSlot, decode_video_control,
-};
-use telepathy_core::types::VideoCodec;
+use bytes::Bytes;
+use futures_util::SinkExt;
+use telepathy_core::internal::video::transport::read_preamble;
+use telepathy_core::internal::video::{VIDEO_MEDIA_MAX_FRAME_LENGTH, VIDEO_PREAMBLE_MAX_LENGTH};
 use tokio::io::AsyncWriteExt;
 use tokio::time::{Duration, timeout};
+use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 use tokio_util::sync::CancellationToken;
 
 #[tokio::test(flavor = "multi_thread")]
@@ -41,36 +39,19 @@ async fn malformed_preamble_and_over_limit_frame_fail_on_real_iroh_streams() {
             .expect("length writes");
         stream.finish().expect("stream finishes");
     });
-    let mut oversized_stream = pair.inbound.accept_uni().await.expect("stream accepted");
-    assert_eq!(
-        read_media_frame(&mut oversized_stream)
+    let oversized_stream = pair.inbound.accept_uni().await.expect("stream accepted");
+    let codec = LengthDelimitedCodec::builder()
+        .max_frame_length(VIDEO_MEDIA_MAX_FRAME_LENGTH)
+        .new_codec();
+    let mut framed = FramedRead::new(oversized_stream, codec);
+    assert!(
+        futures_util::StreamExt::next(&mut framed)
             .await
-            .expect_err("oversized frame fails")
-            .kind(),
-        std::io::ErrorKind::InvalidData
+            .expect("oversized frame is observed")
+            .is_err()
     );
     oversized.await.expect("oversized sender joins");
     pair.close().await;
-}
-
-#[tokio::test]
-async fn malformed_and_over_limit_controls_are_rejected_before_negotiation() {
-    assert_eq!(
-        decode_video_control(&[0xFF]),
-        Err(VideoProtocolError::Malformed)
-    );
-    assert_eq!(
-        decode_video_control(&vec![0; VIDEO_CONTROL_MAX_FRAME_LENGTH + 1]),
-        Err(VideoProtocolError::FrameTooLarge)
-    );
-    let invalid_offer = VideoSlot::default()
-        .start_local(VideoMediaDescriptor::display(VideoCodec::H264, 0, 720))
-        .await
-        .expect("invalid descriptor still reaches wire validation");
-    assert_eq!(
-        decode_video_control(&invalid_offer.write_to_vec().expect("control encodes")),
-        Err(VideoProtocolError::InvalidDimensions)
-    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -80,20 +61,23 @@ async fn slow_real_iroh_receiver_applies_bounded_backpressure_and_stop_joins_sen
     let worker_cancellation = cancellation.clone();
     let sender_connection = pair.outbound.clone();
     let sender = tokio::spawn(async move {
-        let mut stream = sender_connection.open_uni().await.expect("stream opens");
+        let stream = sender_connection.open_uni().await.expect("stream opens");
+        let codec = LengthDelimitedCodec::builder()
+            .max_frame_length(VIDEO_MEDIA_MAX_FRAME_LENGTH)
+            .new_codec();
+        let mut framed = FramedWrite::new(stream, codec);
         let frame = vec![0x5A; VIDEO_MEDIA_MAX_FRAME_LENGTH];
         let mut sent = 0_usize;
         loop {
             tokio::select! {
                 biased;
                 _ = worker_cancellation.cancelled() => {
-                    let _ = stream.reset(iroh::endpoint::VarInt::from_u32(1));
+                    let _ = framed
+                        .get_mut()
+                        .reset(iroh::endpoint::VarInt::from_u32(1));
                     return sent;
                 }
-                result = telepathy_core::internal::video::transport::write_media_frame(
-                    &mut stream,
-                    &frame,
-                ) => {
+                result = framed.send(Bytes::copy_from_slice(&frame)) => {
                     result.expect("frame writes until cancellation");
                     sent += 1;
                     assert!(sent < 2_048, "sender bypassed transport backpressure");

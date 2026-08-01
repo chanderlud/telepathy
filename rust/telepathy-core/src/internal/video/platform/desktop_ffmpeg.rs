@@ -1,30 +1,20 @@
 // allow: SIZE_OK - target-specific FFmpeg configuration and process adapter must compile together.
-#[cfg(feature = "integration-testing")]
-use super::CommandDescription;
-use super::{
-    CapabilityProbe, Decoder, Device, Encoder, Result, VideoAvailability, VideoCapabilities,
+use super::{CapabilityProbe, Decoder, Device, Encoder, Result};
+use crate::internal::video::{VideoMediaDescriptor, VideoMediaFormat, VideoSource};
+use crate::types::{
+    Capabilities, RecordingConfig, VideoCapabilities, VideoCapabilityAvailability,
     VideoSourceCapability, VideoUnavailable,
 };
-use crate::internal::video::{VideoMediaDescriptor, VideoMediaFormat, VideoSource};
-use crate::types::{Capabilities, RecordingConfig};
 use bytes::Bytes;
-#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 use regex::Regex;
-#[cfg(not(target_family = "wasm"))]
 use std::process::Stdio;
-#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 use std::process::{ExitStatus, Output};
 use std::str::FromStr;
-#[cfg(not(target_family = "wasm"))]
 use tokio::process::Command;
-#[cfg(not(target_family = "wasm"))]
 use tokio::select;
-#[cfg(not(target_family = "wasm"))]
 use tokio_util::sync::CancellationToken;
-#[cfg(not(target_family = "wasm"))]
 use tracing::{info, instrument};
 
-#[cfg(not(target_family = "wasm"))]
 use crate::internal::error::ErrorKind;
 
 #[cfg(target_os = "windows")]
@@ -76,16 +66,12 @@ pub(crate) async fn probe_capabilities() -> CapabilityProbe {
     CapabilityProbe::new(compatibility, video)
 }
 
-pub(crate) const fn initial_video_capabilities() -> VideoCapabilities {
-    VideoCapabilities::unavailable(VideoUnavailable::RuntimeUnavailable)
-}
-
 fn video_capabilities(
     encoders: Option<&[Encoder]>,
     decoders: Option<&[Decoder]>,
     devices: &[Device],
 ) -> VideoCapabilities {
-    let send = match encoders {
+    let (send, send_sources) = match encoders {
         Some(encoders) => {
             let mut formats = Vec::new();
             for encoder in encoders {
@@ -97,13 +83,19 @@ fn video_capabilities(
             let sources = if devices.is_empty() || formats.is_empty() {
                 Vec::new()
             } else {
-                vec![VideoSourceCapability::new(VideoSource::Display, formats)]
+                vec![VideoSourceCapability {
+                    source: VideoSource::Display,
+                    formats,
+                }]
             };
-            VideoAvailability::Available(sources)
+            (VideoCapabilityAvailability::Available, sources)
         }
-        None => VideoAvailability::Unavailable(VideoUnavailable::RuntimeUnavailable),
+        None => (
+            VideoCapabilityAvailability::Unavailable(VideoUnavailable::RuntimeUnavailable),
+            Vec::new(),
+        ),
     };
-    let receive = match decoders {
+    let (receive, receive_formats) = match decoders {
         Some(decoders) => {
             let mut formats = Vec::new();
             for decoder in decoders {
@@ -112,15 +104,22 @@ fn video_capabilities(
                     formats.push(format);
                 }
             }
-            VideoAvailability::Available(formats)
+            (VideoCapabilityAvailability::Available, formats)
         }
-        None => VideoAvailability::Unavailable(VideoUnavailable::RuntimeUnavailable),
+        None => (
+            VideoCapabilityAvailability::Unavailable(VideoUnavailable::RuntimeUnavailable),
+            Vec::new(),
+        ),
     };
-    VideoCapabilities::new(send, receive)
+    VideoCapabilities {
+        send,
+        receive,
+        send_sources,
+        receive_formats,
+    }
 }
 
 impl Device {
-    #[cfg(not(target_family = "wasm"))]
     fn to_args(&self, encoder: Encoder) -> std::result::Result<Vec<&str>, ErrorKind> {
         let arguments = match self {
             Self::DesktopDuplication => match encoder {
@@ -159,7 +158,6 @@ impl Device {
     }
 }
 
-#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 pub(crate) fn encoder_from_str(value: &str) -> std::result::Result<Encoder, ()> {
     Encoder::from_str(value)
 }
@@ -198,7 +196,6 @@ fn prepare_sender_from_capabilities(
 }
 
 impl RecordingConfig {
-    #[cfg(not(target_family = "wasm"))]
     fn make_command(&self, test: bool) -> Result<Command> {
         let mut command = Command::new("ffmpeg");
         command.args(self.device.to_args(self.encoder)?);
@@ -231,7 +228,6 @@ impl RecordingConfig {
         Ok(command)
     }
 
-    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
     pub(crate) async fn test_config(&self) -> Result<ExitStatus> {
         let mut command = self.make_command(true)?;
         command
@@ -249,57 +245,10 @@ impl RecordingConfig {
     }
 }
 
-#[cfg(feature = "integration-testing")]
-impl CommandDescription {
-    pub(super) fn from_command(command: Command) -> Self {
-        Self {
-            program: command
-                .as_std()
-                .get_program()
-                .to_string_lossy()
-                .into_owned(),
-            arguments: command
-                .as_std()
-                .get_args()
-                .map(|argument| argument.to_string_lossy().into_owned())
-                .collect(),
-        }
-    }
-}
-
-#[cfg(feature = "integration-testing")]
-pub fn recording_command_for_test(
-    encoder: &str,
-    device: &str,
-    bitrate: u32,
-    framerate: u32,
-    height: Option<u32>,
-) -> Option<CommandDescription> {
-    let Ok(encoder) = Encoder::from_str(encoder) else {
-        return None;
-    };
-    let Ok(device) = Device::from_str(device) else {
-        return None;
-    };
-    let config = RecordingConfig {
-        encoder,
-        device,
-        bitrate,
-        framerate,
-        height,
-    };
-    config
-        .make_command(false)
-        .ok()
-        .map(CommandDescription::from_command)
-}
-
-#[cfg(not(target_family = "wasm"))]
 struct PlaybackConfig {
     decoder: Decoder,
 }
 
-#[cfg(not(target_family = "wasm"))]
 impl PlaybackConfig {
     fn make_command(&self) -> Command {
         let mut command = Command::new("ffplay");
@@ -310,35 +259,19 @@ impl PlaybackConfig {
     }
 }
 
-#[cfg(feature = "integration-testing")]
-pub fn playback_command_for_test(
-    encoder: &str,
-    width: u32,
-    height: u32,
-) -> Option<CommandDescription> {
-    let Ok(encoder) = Encoder::from_str(encoder) else {
-        return None;
+fn make_playback_command(
+    descriptor: VideoMediaDescriptor,
+    decoders: &[Decoder],
+) -> std::result::Result<Command, ErrorKind> {
+    let config = PlaybackConfig {
+        decoder: select_decoder(decoders, descriptor)?,
     };
-    let descriptor = VideoMediaDescriptor::display(encoder.codec(), width, height);
-    let decoders = [
-        Decoder::H264Cuvid,
-        Decoder::H264Qsv,
-        Decoder::H264,
-        Decoder::HevcCuvid,
-        Decoder::HevcQsv,
-        Decoder::Hevc,
-        Decoder::Av1Cuvid,
-        Decoder::Av1Qsv,
-    ];
-    let mut command = PlaybackConfig {
-        decoder: select_decoder(&decoders, descriptor).ok()?,
-    }
-    .make_command();
+    let mut command = config.make_command();
     command.args([
         "-x",
-        &width.to_string(),
+        &descriptor.dimensions().0.to_string(),
         "-y",
-        &height.to_string(),
+        &descriptor.dimensions().1.to_string(),
         "-flags",
         "low_delay",
         "-analyzeduration",
@@ -346,7 +279,7 @@ pub fn playback_command_for_test(
         "-window_title",
         "Telepathy Screenshare",
     ]);
-    Some(CommandDescription::from_command(command))
+    Ok(command)
 }
 
 fn select_decoder(
@@ -427,24 +360,8 @@ where
     info!("Starting screen playback");
     let (capabilities, _) = probe_capabilities().await.into_parts();
     let startup_result: Result<_> = (|| {
-        let config = PlaybackConfig {
-            decoder: select_decoder(&capabilities._decoders, descriptor)?,
-        };
-        let mut command = config.make_command();
+        let mut command = make_playback_command(descriptor, &capabilities._decoders)?;
         command
-            .args([
-                "-x",
-                &descriptor.dimensions().0.to_string(),
-                "-y",
-                &descriptor.dimensions().1.to_string(),
-                "-flags",
-                "low_delay",
-                "-analyzeduration",
-                "1",
-                // TODO -framedrop
-                "-window_title",
-                "Telepathy Screenshare",
-            ])
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
@@ -495,7 +412,6 @@ async fn terminate_and_reap(child: &mut tokio::process::Child) {
     let _ = child.wait().await;
 }
 
-#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 fn parse_codecs(output: Output, regex: &Regex) -> Vec<String> {
     let output_str = String::from_utf8_lossy(&output.stdout);
 
@@ -508,11 +424,13 @@ fn parse_codecs(output: Output, regex: &Regex) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Device, Encoder, prepare_sender_from_capabilities, select_decoder};
+    use super::{
+        Device, Encoder, make_playback_command, prepare_sender_from_capabilities, select_decoder,
+    };
     use crate::internal::error::ErrorKind;
-    use crate::internal::video::platform::{Decoder, VideoAvailability, VideoUnavailable};
+    use crate::internal::video::platform::Decoder;
     use crate::internal::video::{VideoCodec, VideoMediaDescriptor};
-    use crate::types::{Capabilities, RecordingConfig};
+    use crate::types::{Capabilities, RecordingConfig, VideoUnavailable};
 
     fn recording_config() -> RecordingConfig {
         RecordingConfig {
@@ -522,6 +440,92 @@ mod tests {
             framerate: 60,
             height: Some(720),
         }
+    }
+
+    fn command_parts(command: &tokio::process::Command) -> (String, Vec<String>) {
+        let command = command.as_std();
+        (
+            command.get_program().to_string_lossy().into_owned(),
+            command
+                .get_args()
+                .map(|argument| argument.to_string_lossy().into_owned())
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn sender_command_preserves_current_ffmpeg_arguments() {
+        let config = RecordingConfig {
+            encoder: Encoder::H264Nvenc,
+            device: Device::GdiGrab,
+            bitrate: 4_000_000,
+            framerate: 60,
+            height: Some(720),
+        };
+        let command = config.make_command(false).unwrap();
+        let (program, arguments) = command_parts(&command);
+
+        assert_eq!(program, "ffmpeg");
+        assert_eq!(
+            arguments,
+            [
+                "-f",
+                "gdigrab",
+                "-framerate",
+                "30",
+                "-video_size",
+                "1920x1080",
+                "-i",
+                "desktop",
+                "-vf",
+                "trunc(oh*a/2)*2:720",
+                "-c:v",
+                "h264_nvenc",
+                "-delay",
+                "0",
+                "-b:v",
+                "4000000",
+                "-bufsize",
+                "1M",
+                "-f",
+                "mpegts",
+                "-",
+            ]
+        );
+    }
+
+    #[test]
+    fn receiver_command_preserves_current_ffplay_arguments() {
+        let descriptor = VideoMediaDescriptor::display(VideoCodec::H264, 1280, 720);
+        let command = make_playback_command(
+            descriptor,
+            &[Decoder::H264Cuvid, Decoder::H264Qsv, Decoder::H264],
+        )
+        .unwrap();
+        let (program, arguments) = command_parts(&command);
+
+        assert_eq!(program, "ffplay");
+        assert_eq!(
+            arguments,
+            [
+                "-vcodec",
+                "h264_cuvid",
+                "-f",
+                "mpegts",
+                "-i",
+                "-",
+                "-x",
+                "1280",
+                "-y",
+                "720",
+                "-flags",
+                "low_delay",
+                "-analyzeduration",
+                "1",
+                "-window_title",
+                "Telepathy Screenshare",
+            ]
+        );
     }
 
     #[test]
@@ -666,8 +670,10 @@ mod tests {
 
         assert!(result.is_ok());
         assert_eq!(
-            generic.into_availability().1,
-            VideoAvailability::Unavailable(VideoUnavailable::RuntimeUnavailable)
+            generic.receive,
+            crate::types::VideoCapabilityAvailability::Unavailable(
+                VideoUnavailable::RuntimeUnavailable
+            )
         );
     }
 }

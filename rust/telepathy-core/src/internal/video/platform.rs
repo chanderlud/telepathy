@@ -1,10 +1,13 @@
 use crate::internal::error::Error;
-use crate::types::{Capabilities, VideoMediaFormat, VideoSource, VideoUnavailable};
+use crate::types::{Capabilities, VideoCapabilities};
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 use bytes::Bytes;
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 use futures_util::{SinkExt, StreamExt};
 use speedy::{Readable, Writable};
 use std::fmt::Display;
 use std::str::FromStr;
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
@@ -13,18 +16,10 @@ mod selected;
 #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 #[path = "platform/unsupported.rs"]
 mod selected;
-#[cfg(test)]
-mod unsupported_contract {
-    include!("platform/unsupported.rs");
-}
-
-pub(crate) use selected::{
-    initial_video_capabilities, prepare_sender, probe_capabilities, run_receiver, run_sender,
-};
-#[cfg(feature = "integration-testing")]
-pub use selected::{playback_command_for_test, recording_command_for_test};
+pub(crate) use selected::{prepare_sender, probe_capabilities, run_receiver, run_sender};
 
 type Result<T> = std::result::Result<T, Error>;
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 const BUFFER_SIZE: usize = 512;
 
 #[derive(Clone, Debug, PartialEq, Eq, Readable, Writable)]
@@ -36,6 +31,7 @@ pub(crate) enum Device {
     X11Grab,
 }
 
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 impl Device {
     #[cfg(target_os = "windows")]
     fn devices() -> Vec<Self> {
@@ -92,6 +88,7 @@ pub(crate) enum Encoder {
     Av1Vaapi,
 }
 
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 impl Encoder {
     const fn codec(self) -> crate::internal::video::VideoCodec {
         use crate::internal::video::VideoCodec;
@@ -170,6 +167,7 @@ pub(crate) enum Decoder {
     Av1Qsv,
 }
 
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 impl Decoder {
     const fn codec(self) -> crate::internal::video::VideoCodec {
         use crate::internal::video::VideoCodec;
@@ -214,43 +212,6 @@ impl FromStr for Decoder {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum VideoAvailability<T> {
-    Available(T),
-    Unavailable(VideoUnavailable),
-}
-
-impl<T> VideoAvailability<T> {
-    const fn as_result(&self) -> std::result::Result<&T, VideoUnavailable> {
-        match self {
-            Self::Available(value) => Ok(value),
-            Self::Unavailable(reason) => Err(*reason),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct VideoSourceCapability {
-    source: VideoSource,
-    formats: Vec<VideoMediaFormat>,
-}
-
-impl VideoSourceCapability {
-    pub(crate) const fn new(source: VideoSource, formats: Vec<VideoMediaFormat>) -> Self {
-        Self { source, formats }
-    }
-
-    pub(crate) fn into_parts(self) -> (VideoSource, Vec<VideoMediaFormat>) {
-        (self.source, self.formats)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct VideoCapabilities {
-    send: VideoAvailability<Vec<VideoSourceCapability>>,
-    receive: VideoAvailability<Vec<VideoMediaFormat>>,
-}
-
 pub(crate) struct CapabilityProbe {
     compatibility: Capabilities,
     video: VideoCapabilities,
@@ -269,57 +230,12 @@ impl CapabilityProbe {
     }
 }
 
-impl VideoCapabilities {
-    pub(crate) const fn new(
-        send: VideoAvailability<Vec<VideoSourceCapability>>,
-        receive: VideoAvailability<Vec<VideoMediaFormat>>,
-    ) -> Self {
-        Self { send, receive }
-    }
-
-    pub(crate) const fn unavailable(reason: VideoUnavailable) -> Self {
-        Self {
-            send: VideoAvailability::Unavailable(reason),
-            receive: VideoAvailability::Unavailable(reason),
-        }
-    }
-
-    pub(crate) fn send(&self) -> std::result::Result<&[VideoSourceCapability], VideoUnavailable> {
-        self.send.as_result().map(Vec::as_slice)
-    }
-
-    pub(crate) fn into_availability(
-        self,
-    ) -> (
-        VideoAvailability<Vec<VideoSourceCapability>>,
-        VideoAvailability<Vec<VideoMediaFormat>>,
-    ) {
-        (self.send, self.receive)
-    }
-
-    pub(crate) fn formats(
-        &self,
-        source: VideoSource,
-    ) -> std::result::Result<&[VideoMediaFormat], VideoUnavailable> {
-        self.send()?
-            .iter()
-            .find(|capability| capability.source == source)
-            .map(|capability| capability.formats.as_slice())
-            .ok_or(VideoUnavailable::SourceUnavailable(source))
-    }
-}
-
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 pub(crate) fn encoder_from_str(value: &str) -> std::result::Result<Encoder, ()> {
     selected::encoder_from_str(value)
 }
 
-#[cfg(feature = "integration-testing")]
-#[derive(Debug, PartialEq, Eq)]
-pub struct CommandDescription {
-    pub program: String,
-    pub arguments: Vec<String>,
-}
-
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 pub async fn forward_capture_chunks<R, S>(stdout: &mut R, transport: &mut S)
 where
     R: AsyncRead + Unpin,
@@ -341,6 +257,7 @@ where
     }
 }
 
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 pub async fn forward_playback_frames<S, W, E>(transport: &mut S, stdin: &mut W)
 where
     S: futures_util::Stream<Item = std::result::Result<bytes::BytesMut, E>> + Unpin,
@@ -355,75 +272,80 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        Device, Encoder, VideoAvailability, VideoCapabilities, VideoSourceCapability,
-        VideoUnavailable,
-    };
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    use super::{Device, Encoder};
     use crate::internal::video::{VideoCodec, VideoMediaFormat, VideoSource};
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     use crate::types::RecordingConfig;
+    use crate::types::{
+        VideoCapabilities, VideoCapabilityAvailability, VideoSourceCapability, VideoUnavailable,
+    };
 
     #[test]
     fn capabilities_represent_send_only_source_formats_without_boolean_ambiguity() {
         let format = VideoMediaFormat::MpegTs(VideoCodec::H264);
-        let capabilities = VideoCapabilities::new(
-            VideoAvailability::Available(vec![VideoSourceCapability::new(
-                VideoSource::Display,
-                vec![format],
-            )]),
-            VideoAvailability::Unavailable(VideoUnavailable::RuntimeUnavailable),
-        );
+        let capabilities = VideoCapabilities {
+            send: VideoCapabilityAvailability::Available,
+            receive: VideoCapabilityAvailability::Unavailable(VideoUnavailable::RuntimeUnavailable),
+            send_sources: vec![VideoSourceCapability {
+                source: VideoSource::Display,
+                formats: vec![format],
+            }],
+            receive_formats: Vec::new(),
+        };
 
         assert_eq!(
             capabilities.formats(VideoSource::Display),
             Ok(&[format][..])
         );
         assert_eq!(
-            capabilities.into_availability().1,
-            VideoAvailability::Unavailable(VideoUnavailable::RuntimeUnavailable)
+            capabilities.receive,
+            VideoCapabilityAvailability::Unavailable(VideoUnavailable::RuntimeUnavailable)
         );
     }
 
     #[test]
     fn unsupported_capabilities_use_the_same_typed_shape() {
-        let capabilities = VideoCapabilities::unavailable(VideoUnavailable::PlatformUnsupported);
+        let capabilities = VideoCapabilities {
+            send: VideoCapabilityAvailability::Unavailable(VideoUnavailable::PlatformUnsupported),
+            receive: VideoCapabilityAvailability::Unavailable(
+                VideoUnavailable::PlatformUnsupported,
+            ),
+            send_sources: Vec::new(),
+            receive_formats: Vec::new(),
+        };
 
-        assert_eq!(
-            capabilities.send(),
-            Err(VideoUnavailable::PlatformUnsupported)
-        );
         assert_eq!(
             capabilities.formats(VideoSource::Display),
             Err(VideoUnavailable::PlatformUnsupported)
         );
         assert_eq!(
-            capabilities.into_availability().1,
-            VideoAvailability::Unavailable(VideoUnavailable::PlatformUnsupported)
+            capabilities.receive,
+            VideoCapabilityAvailability::Unavailable(VideoUnavailable::PlatformUnsupported)
         );
     }
 
     #[test]
     fn available_empty_capabilities_remain_distinct_from_unavailable() {
-        let capabilities = VideoCapabilities::new(
-            VideoAvailability::Available(Vec::new()),
-            VideoAvailability::Available(Vec::new()),
-        );
+        let capabilities = VideoCapabilities {
+            send: VideoCapabilityAvailability::Available,
+            receive: VideoCapabilityAvailability::Available,
+            send_sources: Vec::new(),
+            receive_formats: Vec::new(),
+        };
 
-        assert_eq!(capabilities.send(), Ok(&[][..]));
         assert_eq!(
             capabilities.formats(VideoSource::Display),
             Err(VideoUnavailable::SourceUnavailable(VideoSource::Display))
         );
-        assert_eq!(
-            capabilities.into_availability().1,
-            VideoAvailability::Available(Vec::new())
-        );
+        assert_eq!(capabilities.receive, VideoCapabilityAvailability::Available);
     }
 
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     #[tokio::test]
     async fn unsupported_adapter_query_and_start_report_typed_unavailable() {
-        let (compatibility, capabilities) = super::unsupported_contract::probe_capabilities()
-            .await
-            .into_parts();
+        let (compatibility, capabilities) =
+            super::selected::probe_capabilities().await.into_parts();
         let config = RecordingConfig {
             encoder: Encoder::H264Nvenc,
             device: Device::X11Grab,
@@ -437,13 +359,7 @@ mod tests {
             Err(VideoUnavailable::PlatformUnsupported)
         );
         assert_eq!(
-            super::unsupported_contract::prepare_sender(
-                &config,
-                1_280,
-                720,
-                &compatibility,
-                &capabilities,
-            ),
+            super::selected::prepare_sender(&config, 1_280, 720, &compatibility, &capabilities,),
             Err(VideoUnavailable::PlatformUnsupported)
         );
     }

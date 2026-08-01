@@ -2196,28 +2196,28 @@ fn wire__crate__overlay__Overlay_new_impl(
             };
             let mut deserializer =
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
-            let api_enabled = <bool>::sse_decode(&mut deserializer);
-            let api_x = <i32>::sse_decode(&mut deserializer);
-            let api_y = <i32>::sse_decode(&mut deserializer);
-            let api_width = <i32>::sse_decode(&mut deserializer);
-            let api_height = <i32>::sse_decode(&mut deserializer);
-            let api_font_height = <i32>::sse_decode(&mut deserializer);
-            let api_background_color = <u32>::sse_decode(&mut deserializer);
-            let api_font_color = <u32>::sse_decode(&mut deserializer);
+            let api__enabled = <bool>::sse_decode(&mut deserializer);
+            let api__x = <i32>::sse_decode(&mut deserializer);
+            let api__y = <i32>::sse_decode(&mut deserializer);
+            let api__width = <i32>::sse_decode(&mut deserializer);
+            let api__height = <i32>::sse_decode(&mut deserializer);
+            let api__font_height = <i32>::sse_decode(&mut deserializer);
+            let api__background_color = <u32>::sse_decode(&mut deserializer);
+            let api__font_color = <u32>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, ()>(
                     (move || async move {
                         let output_ok = Result::<_, ()>::Ok(
                             crate::overlay::Overlay::new(
-                                api_enabled,
-                                api_x,
-                                api_y,
-                                api_width,
-                                api_height,
-                                api_font_height,
-                                api_background_color,
-                                api_font_color,
+                                api__enabled,
+                                api__x,
+                                api__y,
+                                api__width,
+                                api__height,
+                                api__font_height,
+                                api__background_color,
+                                api__font_color,
                             )
                             .await,
                         )?;
@@ -4020,7 +4020,7 @@ fn wire__crate__flutter__Telepathy_request_video_source_impl(
             let api_contact = <RustOpaqueMoi<
                 flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Contact>,
             >>::sse_decode(&mut deserializer);
-            let api_request = <crate::types::VideoSourceRequest>::sse_decode(&mut deserializer);
+            let api_source = <crate::types::VideoSource>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, ()>(
@@ -4059,7 +4059,7 @@ fn wire__crate__flutter__Telepathy_request_video_source_impl(
                             crate::flutter::Telepathy::request_video_source(
                                 &*api_that_guard,
                                 &*api_contact_guard,
-                                api_request,
+                                api_source,
                             )
                             .await,
                         )?;
@@ -7053,14 +7053,6 @@ impl SseDecode for crate::types::VideoSourceCapability {
     }
 }
 
-impl SseDecode for crate::types::VideoSourceRequest {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
-        let mut var_source = <crate::types::VideoSource>::sse_decode(deserializer);
-        return crate::types::VideoSourceRequest { source: var_source };
-    }
-}
-
 impl SseDecode for crate::types::VideoStartOutcome {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -8045,23 +8037,6 @@ impl flutter_rust_bridge::IntoIntoDart<crate::types::VideoSourceCapability>
     for crate::types::VideoSourceCapability
 {
     fn into_into_dart(self) -> crate::types::VideoSourceCapability {
-        self
-    }
-}
-// Codec=Dco (DartCObject based), see doc to use other codecs
-impl flutter_rust_bridge::IntoDart for crate::types::VideoSourceRequest {
-    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
-        [self.source.into_into_dart().into_dart()].into_dart()
-    }
-}
-impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
-    for crate::types::VideoSourceRequest
-{
-}
-impl flutter_rust_bridge::IntoIntoDart<crate::types::VideoSourceRequest>
-    for crate::types::VideoSourceRequest
-{
-    fn into_into_dart(self) -> crate::types::VideoSourceRequest {
         self
     }
 }
@@ -9054,13 +9029,6 @@ impl SseEncode for crate::types::VideoSourceCapability {
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <crate::types::VideoSource>::sse_encode(self.source, serializer);
         <Vec<crate::types::VideoMediaFormat>>::sse_encode(self.formats, serializer);
-    }
-}
-
-impl SseEncode for crate::types::VideoSourceRequest {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
-        <crate::types::VideoSource>::sse_encode(self.source, serializer);
     }
 }
 

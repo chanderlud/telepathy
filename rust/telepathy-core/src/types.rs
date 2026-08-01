@@ -297,11 +297,6 @@ pub enum VideoUnavailable {
     ConfigurationUnavailable,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub struct VideoSourceRequest {
-    pub source: VideoSource,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct VideoSessionIdentity {
     pub peer_id: String,
@@ -352,38 +347,19 @@ pub struct VideoCapabilities {
     pub receive_formats: Vec<VideoMediaFormat>,
 }
 
-impl From<platform::VideoCapabilities> for VideoCapabilities {
-    fn from(value: platform::VideoCapabilities) -> Self {
-        let (send, receive) = value.into_availability();
-        let (send, send_sources) = match send {
-            platform::VideoAvailability::Available(sources) => (
-                VideoCapabilityAvailability::Available,
-                sources
-                    .into_iter()
-                    .map(|source| {
-                        let (source, formats) = source.into_parts();
-                        VideoSourceCapability { source, formats }
-                    })
-                    .collect(),
-            ),
-            platform::VideoAvailability::Unavailable(reason) => {
-                (VideoCapabilityAvailability::Unavailable(reason), Vec::new())
-            }
-        };
-        let (receive, receive_formats) = match receive {
-            platform::VideoAvailability::Available(formats) => {
-                (VideoCapabilityAvailability::Available, formats)
-            }
-            platform::VideoAvailability::Unavailable(reason) => {
-                (VideoCapabilityAvailability::Unavailable(reason), Vec::new())
-            }
-        };
-        Self {
-            send,
-            receive,
-            send_sources,
-            receive_formats,
+impl VideoCapabilities {
+    pub(crate) fn formats(
+        &self,
+        source: VideoSource,
+    ) -> std::result::Result<&[VideoMediaFormat], VideoUnavailable> {
+        if let VideoCapabilityAvailability::Unavailable(reason) = self.send {
+            return Err(reason);
         }
+        self.send_sources
+            .iter()
+            .find(|capability| capability.source == source)
+            .map(|capability| capability.formats.as_slice())
+            .ok_or(VideoUnavailable::SourceUnavailable(source))
     }
 }
 
@@ -665,8 +641,6 @@ pub struct ScreenshareConfig {
     /// the screenshare capabilities. default until loaded
     capabilities: Arc<RwLock<Capabilities>>,
 
-    video_capabilities: Arc<RwLock<platform::VideoCapabilities>>,
-
     /// a validated recording configuration
     pub(crate) recording_config: Arc<RwLock<Option<RecordingConfig>>>,
 
@@ -698,7 +672,6 @@ impl Default for ScreenshareConfig {
     fn default() -> Self {
         Self {
             capabilities: Default::default(),
-            video_capabilities: Arc::new(RwLock::new(platform::initial_video_capabilities())),
             recording_config: Default::default(),
             width: Arc::new(AtomicU32::new(1280)),
             height: Arc::new(AtomicU32::new(720)),
@@ -714,10 +687,8 @@ impl ScreenshareConfig {
         let config = disk_config.map(ScreenshareConfig::from).unwrap_or_default();
 
         let capabilities_clone = Arc::clone(&config.capabilities);
-        let video_capabilities_clone = Arc::clone(&config.video_capabilities);
         spawn_task(async move {
-            let (compatibility, video) = platform::probe_capabilities().await.into_parts();
-            *video_capabilities_clone.write().await = video;
+            let (compatibility, _) = platform::probe_capabilities().await.into_parts();
             *capabilities_clone.write().await = compatibility;
         });
 
@@ -736,13 +707,12 @@ impl ScreenshareConfig {
     }
 
     pub async fn video_capabilities(&self) -> VideoCapabilities {
-        self.probe_video_capabilities().await.into()
+        self.probe_video_capabilities().await
     }
 
-    async fn probe_video_capabilities(&self) -> platform::VideoCapabilities {
+    async fn probe_video_capabilities(&self) -> VideoCapabilities {
         let (compatibility, capabilities) = platform::probe_capabilities().await.into_parts();
         *self.capabilities.write().await = compatibility;
-        *self.video_capabilities.write().await = capabilities.clone();
         capabilities
     }
 
@@ -830,7 +800,6 @@ impl From<ScreenshareConfigDisk> for ScreenshareConfig {
     fn from(d: ScreenshareConfigDisk) -> Self {
         Self {
             capabilities: Arc::new(RwLock::new(Capabilities::default())),
-            video_capabilities: Arc::new(RwLock::new(platform::initial_video_capabilities())),
             recording_config: Arc::new(RwLock::new(d.recording_config)),
             width: Arc::new(AtomicU32::new(d.width)),
             height: Arc::new(AtomicU32::new(d.height)),

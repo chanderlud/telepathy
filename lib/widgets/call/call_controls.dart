@@ -57,7 +57,7 @@ class _CallControlsState extends State<CallControls> {
               .isVideoSourceConfigured(source),
           requestDisplay: (contact) => telepathy.requestVideoSource(
             contact: contact,
-            request: const VideoSourceRequest(source: VideoSource.display),
+            source: VideoSource.display,
           ),
           stop: (identity) => telepathy.stopVideoSource(identity: identity),
         );

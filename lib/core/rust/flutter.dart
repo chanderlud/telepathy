@@ -95,7 +95,7 @@ abstract class Telepathy implements RustOpaqueInterface {
       {required List<int> targetKey, required List<Contact> targetContacts});
 
   Future<VideoStartOutcome> requestVideoSource(
-      {required Contact contact, required VideoSourceRequest request});
+      {required Contact contact, required VideoSource source});
 
   /// Restarts the session manager
   Future<void> restartManager();
@@ -143,7 +143,10 @@ abstract class Telepathy implements RustOpaqueInterface {
       {required Contact contact, required StartOperation operation});
 
   /// Non-blocking: spawns the manager task and returns. The Dart side observes
-  /// the eventual `Active` transition via the `managerActive` callback.
+  /// the eventual `Active` transition via the `managerActive` callback. The
+  /// non-blocking contract is validated by the CLI system test
+  /// `test_start_manager_ack_precedes_active_event`; the `()` return type
+  /// prevents silent reintroduction of blocking semantics.
   Future<void> startManager();
 
   /// Tries to start a session for a contact

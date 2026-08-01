@@ -4,8 +4,8 @@ use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::{JoinHandle, spawn_task};
 use crate::types::{
     CallState, ChatMessage, Contact, ManagerState, ScreenshareConfig, SessionStatus, Statistics,
-    VideoCapabilities, VideoLifecycleEvent, VideoSessionIdentity, VideoSourceRequest,
-    VideoStartOutcome, VideoStopOutcome,
+    VideoCapabilities, VideoLifecycleEvent, VideoSessionIdentity, VideoSource, VideoStartOutcome,
+    VideoStopOutcome,
 };
 use iroh::PublicKey;
 use std::future::Future;
@@ -142,11 +142,9 @@ impl NativeTelepathy {
     pub async fn request_video_source(
         &self,
         contact: &Contact,
-        request: VideoSourceRequest,
+        source: VideoSource,
     ) -> VideoStartOutcome {
-        self.handle
-            .request_video_source(contact, request.source)
-            .await
+        self.handle.request_video_source(contact, source).await
     }
 
     pub async fn stop_video_source(&self, identity: VideoSessionIdentity) -> VideoStopOutcome {

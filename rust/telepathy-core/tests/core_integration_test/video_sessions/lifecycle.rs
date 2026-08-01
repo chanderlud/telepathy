@@ -2,10 +2,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use bytes::Bytes;
+use futures_util::{SinkExt, StreamExt};
 use iroh::endpoint::{Connection, presets};
-use telepathy_core::internal::video::transport::{
-    read_media_frame, read_preamble, write_media_frame, write_preamble,
-};
+use telepathy_core::internal::video::transport::{read_preamble, write_preamble};
 use telepathy_core::internal::video::{
     VideoControl, VideoMediaDescriptor, VideoPreamble, VideoRejectReason, VideoSlot,
     VideoSlotEffect, VideoWorkerStartup,
@@ -14,6 +14,7 @@ use telepathy_core::types::{
     VideoCodec, VideoMediaFormat, VideoPhase, VideoRole, VideoTerminalReason,
 };
 use tokio::time::timeout;
+use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
 pub(super) struct IrohPair {
     pub(super) client: iroh::Endpoint,
@@ -86,7 +87,11 @@ async fn incoming_offer_admission_rejects_incompatible_format_before_reserving_r
             ..
         })
     ));
-    assert!(!slot.is_reserved().await);
+    assert!(
+        slot.current_event("peer".to_string(), VideoPhase::Terminal, None)
+            .await
+            .is_none()
+    );
 
     let compatible_session_id = VideoSlot::default()
         .start_local(VideoMediaDescriptor::display(VideoCodec::H264, 1280, 720))
@@ -109,7 +114,11 @@ async fn incoming_offer_admission_rejects_incompatible_format_before_reserving_r
         .await,
         VideoSlotEffect::SendAndLaunch(_, _)
     ));
-    assert!(slot.is_reserved().await);
+    assert!(
+        slot.current_event("peer".to_string(), VideoPhase::Starting, None)
+            .await
+            .is_some()
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -152,11 +161,16 @@ async fn two_real_peers_negotiate_activate_stop_and_restart_from_both_sides() {
             write_preamble(&mut stream, VideoPreamble::new(session_id, descriptor))
                 .await
                 .expect("preamble writes");
-            write_media_frame(&mut stream, b"bounded-video-frame")
+            let codec = LengthDelimitedCodec::builder()
+                .max_frame_length(telepathy_core::internal::video::VIDEO_MEDIA_MAX_FRAME_LENGTH)
+                .new_codec();
+            let mut framed = FramedWrite::new(stream, codec);
+            framed
+                .send(Bytes::from_static(b"bounded-video-frame"))
                 .await
                 .expect("media frame writes");
             sender_cancel.cancelled().await;
-            let _ = stream.finish();
+            let _ = framed.into_inner().finish();
             sender_done.store(true, Ordering::Relaxed);
         });
         let receiver_cancel = receiver_launch.cancellation().clone();
@@ -171,9 +185,15 @@ async fn two_real_peers_negotiate_activate_stop_and_restart_from_both_sides() {
                 read_preamble(&mut stream).await.expect("preamble reads"),
                 VideoPreamble::new(session_id, descriptor)
             );
+            let codec = LengthDelimitedCodec::builder()
+                .max_frame_length(telepathy_core::internal::video::VIDEO_MEDIA_MAX_FRAME_LENGTH)
+                .new_codec();
+            let mut framed = FramedRead::new(stream, codec);
             assert_eq!(
-                read_media_frame(&mut stream)
+                framed
+                    .next()
                     .await
+                    .expect("media frame arrives")
                     .expect("media frame reads")
                     .as_ref(),
                 b"bounded-video-frame"
@@ -237,8 +257,18 @@ async fn two_real_peers_negotiate_activate_stop_and_restart_from_both_sides() {
         assert_eq!(receiver_result, Some(VideoTerminalReason::Stopped));
         assert!(sender_exited.load(Ordering::Relaxed));
         assert!(receiver_exited.load(Ordering::Relaxed));
-        assert!(!sender_slot.is_reserved().await);
-        assert!(!receiver_slot.is_reserved().await);
+        assert!(
+            sender_slot
+                .current_event("sender".to_string(), VideoPhase::Terminal, None)
+                .await
+                .is_none()
+        );
+        assert!(
+            receiver_slot
+                .current_event("receiver".to_string(), VideoPhase::Terminal, None)
+                .await
+                .is_none()
+        );
     }
 
     pair.close().await;
@@ -273,7 +303,11 @@ async fn failed_worker_startup_never_activates_and_still_joins_on_terminal_clean
             .await,
         Some(VideoTerminalReason::Failed)
     );
-    assert!(!slot.is_reserved().await);
+    assert!(
+        slot.current_event("sender".to_string(), VideoPhase::Terminal, None)
+            .await
+            .is_none()
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -336,7 +370,11 @@ async fn crossed_starts_and_stale_completions_preserve_replacement_generation_un
         )
         .await
         .expect("replacement cleanup is bounded");
-        assert!(!slot.is_reserved().await);
+        assert!(
+            slot.current_event("peer".to_string(), VideoPhase::Terminal, None)
+                .await
+                .is_none()
+        );
     }
 }
 
@@ -376,7 +414,11 @@ async fn teardown_does_not_publish_idle_before_blocked_worker_joins() {
     while !cancelled.load(Ordering::Relaxed) {
         tokio::task::yield_now().await;
     }
-    assert!(slot.is_reserved().await);
+    assert!(
+        slot.current_event("peer".to_string(), VideoPhase::Stopping, None)
+            .await
+            .is_some()
+    );
     assert!(!cleanup.is_finished());
     release.notify_one();
     assert_eq!(
@@ -386,5 +428,9 @@ async fn teardown_does_not_publish_idle_before_blocked_worker_joins() {
             .expect("cleanup task joins"),
         Some(VideoTerminalReason::Teardown)
     );
-    assert!(!slot.is_reserved().await);
+    assert!(
+        slot.current_event("peer".to_string(), VideoPhase::Terminal, None)
+            .await
+            .is_none()
+    );
 }

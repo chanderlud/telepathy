@@ -428,9 +428,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       dynamic raw);
 
   @protected
-  VideoSourceRequest dco_decode_box_autoadd_video_source_request(dynamic raw);
-
-  @protected
   VideoTerminalReason dco_decode_box_autoadd_video_terminal_reason(dynamic raw);
 
   @protected
@@ -596,9 +593,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   VideoSourceCapability dco_decode_video_source_capability(dynamic raw);
-
-  @protected
-  VideoSourceRequest dco_decode_video_source_request(dynamic raw);
 
   @protected
   VideoStartOutcome dco_decode_video_start_outcome(dynamic raw);
@@ -908,10 +902,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       SseDeserializer deserializer);
 
   @protected
-  VideoSourceRequest sse_decode_box_autoadd_video_source_request(
-      SseDeserializer deserializer);
-
-  @protected
   VideoTerminalReason sse_decode_box_autoadd_video_terminal_reason(
       SseDeserializer deserializer);
 
@@ -1087,10 +1077,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   VideoSourceCapability sse_decode_video_source_capability(
-      SseDeserializer deserializer);
-
-  @protected
-  VideoSourceRequest sse_decode_video_source_request(
       SseDeserializer deserializer);
 
   @protected
@@ -1451,10 +1437,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       VideoSessionIdentity self, SseSerializer serializer);
 
   @protected
-  void sse_encode_box_autoadd_video_source_request(
-      VideoSourceRequest self, SseSerializer serializer);
-
-  @protected
   void sse_encode_box_autoadd_video_terminal_reason(
       VideoTerminalReason self, SseSerializer serializer);
 
@@ -1633,10 +1615,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_video_source_capability(
       VideoSourceCapability self, SseSerializer serializer);
-
-  @protected
-  void sse_encode_video_source_request(
-      VideoSourceRequest self, SseSerializer serializer);
 
   @protected
   void sse_encode_video_start_outcome(

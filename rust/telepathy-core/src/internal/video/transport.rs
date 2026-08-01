@@ -3,10 +3,8 @@ use crate::internal::video::platform;
 use crate::internal::video::{
     VIDEO_MEDIA_MAX_FRAME_LENGTH, VIDEO_NEGOTIATION_TIMEOUT, VIDEO_PREAMBLE_MAX_LENGTH,
     VideoPreamble, VideoProtocolError, VideoWorkerStartup, decode_preamble, encode_preamble,
-    validate_media_frame,
 };
 use crate::types::RecordingConfig;
-use bytes::BytesMut;
 use iroh::endpoint::{Connection, VarInt};
 use std::io::{Error, ErrorKind, Result};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -60,34 +58,6 @@ where
         _ = cancellation.cancelled() => Err(Error::new(ErrorKind::Interrupted, "video transport cancelled")),
         preamble = read_preamble(reader) => preamble,
     }
-}
-
-pub async fn write_media_frame<W>(writer: &mut W, frame: &[u8]) -> Result<()>
-where
-    W: AsyncWrite + Unpin,
-{
-    validate_media_frame(frame.len()).map_err(protocol_error)?;
-    let length = u32::try_from(frame.len())
-        .map_err(|_| Error::new(ErrorKind::InvalidInput, "video frame exceeds u32 length"))?;
-    writer.write_u32(length).await?;
-    writer.write_all(frame).await
-}
-
-pub async fn read_media_frame<R>(reader: &mut R) -> Result<BytesMut>
-where
-    R: AsyncRead + Unpin,
-{
-    let length = usize::try_from(reader.read_u32().await?)
-        .map_err(|_| Error::new(ErrorKind::InvalidData, "invalid video frame length"))?;
-    if length > VIDEO_MEDIA_MAX_FRAME_LENGTH {
-        return Err(Error::new(
-            ErrorKind::InvalidData,
-            "video frame exceeds limit",
-        ));
-    }
-    let mut frame = BytesMut::zeroed(length);
-    reader.read_exact(&mut frame).await?;
-    Ok(frame)
 }
 
 pub(crate) async fn run_sender(
@@ -195,15 +165,15 @@ pub(crate) async fn run_receiver(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        read_media_frame, read_preamble, read_preamble_until_cancelled, run_receiver,
-        write_media_frame, write_preamble,
-    };
+    use super::{read_preamble, read_preamble_until_cancelled, run_receiver, write_preamble};
     use crate::internal::video::{
         VideoCodec, VideoMediaDescriptor, VideoPreamble, VideoSessionId, VideoWorkerStartup,
     };
+    use bytes::Bytes;
+    use futures_util::{SinkExt, StreamExt};
     use iroh::endpoint::Connection;
     use tokio::io::duplex;
+    use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
     use tokio_util::sync::CancellationToken;
 
     async fn iroh_pair() -> (iroh::Endpoint, iroh::Endpoint, Connection, Connection) {
@@ -250,35 +220,6 @@ mod tests {
 
         assert_eq!(received.expect("preamble is received"), preamble);
         assert!(send.await.expect("writer joins").is_ok());
-    }
-
-    #[tokio::test]
-    async fn media_frame_preserves_bytes_at_the_limit() {
-        let (mut sender, mut receiver) = duplex(128 * 1024);
-        let frame = vec![0xA5; crate::internal::video::VIDEO_MEDIA_MAX_FRAME_LENGTH];
-
-        let expected = frame.clone();
-        let send = tokio::spawn(async move { write_media_frame(&mut sender, &frame).await });
-        let received = read_media_frame(&mut receiver).await;
-
-        assert_eq!(
-            received.expect("frame is received").as_ref(),
-            expected.as_slice()
-        );
-        assert!(send.await.expect("writer joins").is_ok());
-    }
-
-    #[tokio::test]
-    async fn media_frame_rejects_limit_plus_one_before_write() {
-        let (mut sender, _receiver) = duplex(1);
-        let frame = vec![0xA5; crate::internal::video::VIDEO_MEDIA_MAX_FRAME_LENGTH + 1];
-
-        let result = write_media_frame(&mut sender, &frame).await;
-
-        assert_eq!(
-            result.expect_err("oversized frame fails").kind(),
-            std::io::ErrorKind::InvalidData
-        );
     }
 
     #[tokio::test]
@@ -330,19 +271,30 @@ mod tests {
             write_preamble(&mut stream, preamble)
                 .await
                 .expect("preamble writes");
-            write_media_frame(&mut stream, &payload)
+            let codec = LengthDelimitedCodec::builder()
+                .max_frame_length(crate::internal::video::VIDEO_MEDIA_MAX_FRAME_LENGTH)
+                .new_codec();
+            let mut framed = FramedWrite::new(stream, codec);
+            framed
+                .send(Bytes::from(payload))
                 .await
                 .expect("media frame writes");
-            stream.finish().expect("stream finishes");
+            framed.into_inner().finish().expect("stream finishes");
         });
         let mut stream = inbound.accept_uni().await.expect("uni stream accepted");
         assert_eq!(
             read_preamble(&mut stream).await.expect("preamble reads"),
             preamble
         );
+        let codec = LengthDelimitedCodec::builder()
+            .max_frame_length(crate::internal::video::VIDEO_MEDIA_MAX_FRAME_LENGTH)
+            .new_codec();
+        let mut framed = FramedRead::new(stream, codec);
         assert_eq!(
-            read_media_frame(&mut stream)
+            framed
+                .next()
                 .await
+                .expect("media frame arrives")
                 .expect("media frame reads")
                 .as_ref(),
             expected.as_slice()
@@ -443,7 +395,15 @@ mod tests {
         .await;
 
         assert!(joined.load(Ordering::Relaxed));
-        assert!(!slot.is_reserved().await);
+        assert!(
+            slot.current_event(
+                "peer".to_string(),
+                crate::internal::video::VideoPhase::Terminal,
+                None,
+            )
+            .await
+            .is_none()
+        );
         client.close().await;
         server.close().await;
     }

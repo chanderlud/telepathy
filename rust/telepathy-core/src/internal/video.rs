@@ -387,10 +387,6 @@ impl VideoSlot {
         }
     }
 
-    pub async fn is_reserved(&self) -> bool {
-        self.state.lock().await.reservation.is_some()
-    }
-
     pub async fn current_event(
         &self,
         peer_id: String,
@@ -513,12 +509,14 @@ impl VideoMediaDescriptor {
         self.source
     }
 
+    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
     pub(crate) const fn codec(self) -> VideoCodec {
         match self.format {
             VideoMediaFormat::MpegTs(codec) => codec,
         }
     }
 
+    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
     pub(crate) const fn dimensions(self) -> (u32, u32) {
         (self.width, self.height)
     }
@@ -661,16 +659,6 @@ pub enum VideoProtocolError {
     InvalidDimensions,
 }
 
-pub fn decode_video_control(bytes: &[u8]) -> Result<VideoControl, VideoProtocolError> {
-    if bytes.len() > VIDEO_CONTROL_MAX_FRAME_LENGTH {
-        return Err(VideoProtocolError::FrameTooLarge);
-    }
-    let control =
-        VideoControl::read_from_buffer(bytes).map_err(|_| VideoProtocolError::Malformed)?;
-    control.validate()?;
-    Ok(control)
-}
-
 pub(crate) fn encode_preamble(preamble: &VideoPreamble) -> Result<Vec<u8>, VideoProtocolError> {
     preamble.validate()?;
     let encoded = preamble
@@ -692,20 +680,11 @@ pub(crate) fn decode_preamble(bytes: &[u8]) -> Result<VideoPreamble, VideoProtoc
     Ok(preamble)
 }
 
-pub(crate) const fn validate_media_frame(length: usize) -> Result<(), VideoProtocolError> {
-    if length <= VIDEO_MEDIA_MAX_FRAME_LENGTH {
-        Ok(())
-    } else {
-        Err(VideoProtocolError::FrameTooLarge)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
         LocalVideoGeneration, VideoAttempt, VideoCodec, VideoControl, VideoMediaDescriptor,
         VideoPreamble, VideoProtocolError, VideoSessionId, decode_preamble, encode_preamble,
-        validate_media_frame,
     };
     use speedy::Writable;
 
@@ -759,10 +738,6 @@ mod tests {
         );
         assert_eq!(
             decode_preamble(&vec![0; super::VIDEO_PREAMBLE_MAX_LENGTH + 1]),
-            Err(VideoProtocolError::FrameTooLarge)
-        );
-        assert_eq!(
-            validate_media_frame(super::VIDEO_MEDIA_MAX_FRAME_LENGTH + 1),
             Err(VideoProtocolError::FrameTooLarge)
         );
     }
@@ -840,7 +815,11 @@ mod tests {
             Some(super::VideoTerminalReason::Stopped)
         );
         assert!(worker_exited.load(std::sync::atomic::Ordering::Relaxed));
-        assert!(!slot.is_reserved().await);
+        assert!(
+            slot.current_event("peer".to_string(), super::VideoPhase::Terminal, None)
+                .await
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -870,7 +849,11 @@ mod tests {
         slot.install(&first_launch, stale_worker).await;
 
         assert!(stale_joined.load(std::sync::atomic::Ordering::Relaxed));
-        assert!(slot.is_reserved().await);
+        assert!(
+            slot.current_event("peer".to_string(), super::VideoPhase::WaitingReady, None)
+                .await
+                .is_some()
+        );
         assert_ne!(first.session_id(), second.session_id());
     }
 
@@ -927,7 +910,11 @@ mod tests {
             outcomes.iter().filter(|outcome| outcome.is_some()).count(),
             1
         );
-        assert!(!slot.is_reserved().await);
+        assert!(
+            slot.current_event("peer".to_string(), super::VideoPhase::Terminal, None)
+                .await
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -966,7 +953,13 @@ mod tests {
         release.notify_one();
 
         teardown.await.expect("session teardown joins");
-        assert!(!state.video_slot.is_reserved().await);
+        assert!(
+            state
+                .video_slot
+                .current_event("peer".to_string(), super::VideoPhase::Terminal, None)
+                .await
+                .is_none()
+        );
     }
 
     #[tokio::test]

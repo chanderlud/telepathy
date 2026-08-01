@@ -310,7 +310,7 @@ class _RecordingTelepathy implements Telepathy {
   @override
   Future<VideoStartOutcome> requestVideoSource({
     required Contact contact,
-    required VideoSourceRequest request,
+    required VideoSource source,
   }) async =>
       const VideoStartOutcome.noSession();
 
