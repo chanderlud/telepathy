@@ -171,7 +171,7 @@ impl CallSlot {
         state: CallSlotState,
         peer: PublicKey,
     ) -> Result<CallSlotAcquireResult> {
-        Ok(self.try_acquire_or_match_with_owner(state, peer)?.0)
+        Ok(self.try_acquire_or_match_with_snapshot(state, peer)?.0)
     }
 
     /// Atomic variant of [`try_acquire_or_match`] that also returns the exact
@@ -203,6 +203,22 @@ impl CallSlot {
         state: CallSlotState,
         peer: PublicKey,
     ) -> Result<(CallSlotAcquireResult, Option<CallSlotSnapshot>)> {
+        let (result, snapshot) = self.try_acquire_or_match_with_snapshot(state, peer)?;
+        Ok((
+            result,
+            (result == CallSlotAcquireResult::Acquired)
+                .then_some(snapshot)
+                .flatten(),
+        ))
+    }
+
+    /// Atomic acquisition result plus exact snapshot of either newly acquired or matched state.
+    /// Callers decide whether matched state represents releasable ownership for their protocol path.
+    pub(crate) fn try_acquire_or_match_with_snapshot(
+        &self,
+        state: CallSlotState,
+        peer: PublicKey,
+    ) -> Result<(CallSlotAcquireResult, Option<CallSlotSnapshot>)> {
         let mut inner = self
             .inner
             .lock()
@@ -210,9 +226,14 @@ impl CallSlot {
         if let Some(matched) =
             Self::matched_pending_for_peer(state, inner.state, peer, inner.direct_peer)
         {
-            // Matched callers do not own the slot; the original acquirer does. Return
-            // no snapshot so the matcher cannot release ownership it never held.
-            return Ok((matched, None));
+            return Ok((
+                matched,
+                Some(CallSlotSnapshot {
+                    state: inner.state,
+                    direct_peer: inner.direct_peer,
+                    generation: inner.generation,
+                }),
+            ));
         }
 
         if inner.state == CallSlotState::Idle {

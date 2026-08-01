@@ -25,6 +25,91 @@ use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 
 #[tokio::test(flavor = "multi_thread")]
+async fn stale_incoming_prompt_transport_stop_releases_slot_before_room_join() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+    let codec_config = CodecConfig::new(true, true, 5.0);
+    let key_a = SecretKey::generate();
+    let key_b = SecretKey::generate();
+    let contact_a = Contact::new("timeout-caller-a".to_string(), key_a.public().to_string())
+        .expect("contact a invalid");
+    let contact_b = Contact::new("timeout-callee-b".to_string(), key_b.public().to_string())
+        .expect("contact b invalid");
+    let peer_a = contact_a.get_peer_id();
+    let accept_probe_b = PendingAcceptProbe::default();
+    let client_a = build_client(
+        relay_map,
+        key_a,
+        vec![contact_b.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        Arc::new(Mutex::new(Vec::new())),
+    )
+    .await;
+    let client_b = build_client_with_accept_probe(
+        relay_map,
+        key_b,
+        vec![contact_a.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        Arc::new(Mutex::new(Vec::new())),
+        accept_probe_b.clone(),
+    )
+    .await;
+    let shutdown_guard = TwoClientShutdownGuard {
+        a: &client_a,
+        b: &client_b,
+        dropped: AtomicBool::new(false),
+    };
+
+    client_a.telepathy.start_session(&contact_b).await;
+    client_b.telepathy.start_session(&contact_a).await;
+    wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
+    client_a
+        .telepathy
+        .start_call(&contact_b)
+        .await
+        .expect("caller should start direct call");
+    accept_probe_b.wait_opened().await;
+
+    let removed = client_b
+        .telepathy
+        .inner
+        .session_states
+        .write()
+        .await
+        .remove(&peer_a);
+    assert!(
+        removed.is_some(),
+        "callee session should still be registered"
+    );
+    client_a.telepathy.shutdown().await;
+    accept_probe_b.wait_cancelled().await;
+
+    client_b
+        .telepathy
+        .join_room(vec![])
+        .await
+        .expect("callee should immediately enter a room after stale incoming call stops");
+    wait_for_slot_room_call(&client_b, "callee after stale incoming stop").await;
+
+    client_b.telepathy.end_call().await;
+    wait_for_slot_idle(&client_b, &peer_a.to_string()).await;
+    shutdown_guard.disarm();
+    client_b.telepathy.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn cancelled_room_join_before_acquisition_leaves_slot_idle() {
     init_test_tracing();
     let client = build_client(

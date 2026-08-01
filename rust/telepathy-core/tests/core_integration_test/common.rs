@@ -882,11 +882,31 @@ impl PendingAcceptProbe {
         wait_for_counter(&self.opened, &self.opened_notify, 1, "accept prompt opened").await;
     }
 
+    pub(super) async fn wait_opened_count(&self, expected: usize) {
+        wait_for_counter(
+            &self.opened,
+            &self.opened_notify,
+            expected,
+            "accept prompt opened",
+        )
+        .await;
+    }
+
     pub(super) async fn wait_cancelled(&self) {
         wait_for_counter(
             &self.cancelled,
             &self.cancelled_notify,
             1,
+            "accept prompt cancelled",
+        )
+        .await;
+    }
+
+    pub(super) async fn wait_cancelled_count(&self, expected: usize) {
+        wait_for_counter(
+            &self.cancelled,
+            &self.cancelled_notify,
+            expected,
             "accept prompt cancelled",
         )
         .await;

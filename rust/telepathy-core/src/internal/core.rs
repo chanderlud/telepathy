@@ -1263,20 +1263,23 @@ where
             write_message(send, &ProtocolMessage::Reject).await?;
             Ok(IncomingSlotDecision::RejectedNotInRoom)
         } else {
-            // A direct-call pending slot may only be acquired by a session that is still
-            // the current map entry for `peer` and whose `stop_session` token has not
-            // been canceled.
-            if !is_session_still_current(&self.session_states, peer, session_id).await {
+            // Keep the map read lock through acquisition so a replacement cannot become
+            // current between validation and taking over a matching pending generation.
+            let states = self.session_states.read().await;
+            if states
+                .get(&peer)
+                .is_none_or(|session| session.id != session_id)
+            {
                 // see IncomingSlotDecision::StaleSession
                 info!(event = "incoming_call_skipped_stale_session", peer.id = %peer);
-                let states = self.session_states.read().await;
                 if states.get(&peer).is_none() {
                     connection.close(VarInt::from_u32(0), &[]);
                 }
-                drop(states);
                 return Ok(IncomingSlotDecision::StaleSession);
             }
-            match PendingDirectCallSlot::try_acquire_incoming(call_slot, peer)? {
+            let slot = PendingDirectCallSlot::try_acquire_incoming(call_slot, peer)?;
+            drop(states);
+            match slot {
                 Some(slot) => Ok(IncomingSlotDecision::Acquired(slot)),
                 None => {
                     info!(event = "call_busy_sent_call_already_active");
@@ -1759,7 +1762,16 @@ where
                             .await?;
                             return Ok(OutgoingNegotiationOutcome::CallEnded);
                         }
-                        Ok(Err(error)) => return Err(error),
+                        Ok(Err(error)) => {
+                            release_pending(
+                                &self.session_states,
+                                peer,
+                                io.state.id,
+                                &mut pending_slot,
+                            )
+                            .await?;
+                            return Err(error);
+                        }
                         Ok(Ok(message)) => {
                             match self
                                 .handle_outgoing_hello_response(
@@ -3452,31 +3464,39 @@ enum HelloResponse {
 
 /// Owns a direct-call pending slot from acquisition until handshake entry or explicit release.
 ///
-/// `release_on_failure` is `false` for an incoming `Matched*` slot — the peer already holds
-/// the matching pending slot (outgoing in the simultaneous-dial case) and is responsible
-/// for its lifecycle. Outgoing acquisition sets it for both `Acquired` and `Matched*`.
+/// Incoming negotiation takes over a matched incoming generation when its session is current;
+/// an incoming match against pending outgoing remains owned by the simultaneous dial. Outgoing
+/// negotiation may release either matched pending state through the exact captured generation.
 /// The handshake path does not release the slot; it transitions the slot to active.
 pub(crate) struct PendingDirectCallSlot<'a> {
     call_slot: &'a CallSlot,
-    peer: PublicKey,
-    release_on_failure: bool,
+    release_snapshot: Option<CallSlotSnapshot>,
+    release_if_session_absent: bool,
 }
 
 impl<'a> PendingDirectCallSlot<'a> {
     /// Acquires or matches an incoming direct-call pending slot for `peer`.
     fn try_acquire_incoming(call_slot: &'a CallSlot, peer: PublicKey) -> Result<Option<Self>> {
-        match call_slot.try_acquire_or_match(CallSlotState::PendingIncoming, peer)? {
+        let (result, snapshot) =
+            call_slot.try_acquire_or_match_with_snapshot(CallSlotState::PendingIncoming, peer)?;
+        match result {
             CallSlotAcquireResult::Acquired => Ok(Some(Self {
                 call_slot,
-                peer,
-                release_on_failure: true,
+                release_snapshot: snapshot,
+                release_if_session_absent: true,
             })),
-            // The peer already holds the matching pending slot; do not release on failure.
-            CallSlotAcquireResult::MatchedPendingIncoming
-            | CallSlotAcquireResult::MatchedPendingOutgoing => Ok(Some(Self {
+            // A current replacement session takes over an incoming generation retained from its
+            // predecessor. The map lock held by the caller makes that transfer atomic.
+            CallSlotAcquireResult::MatchedPendingIncoming => Ok(Some(Self {
                 call_slot,
-                peer,
-                release_on_failure: false,
+                release_snapshot: snapshot,
+                release_if_session_absent: true,
+            })),
+            // In simultaneous dial, outgoing negotiation still owns the matching generation.
+            CallSlotAcquireResult::MatchedPendingOutgoing => Ok(Some(Self {
+                call_slot,
+                release_snapshot: None,
+                release_if_session_absent: false,
             })),
             CallSlotAcquireResult::Failed => Ok(None),
         }
@@ -3487,13 +3507,15 @@ impl<'a> PendingDirectCallSlot<'a> {
         call_slot: &'a CallSlot,
         peer: PublicKey,
     ) -> Result<Option<Self>> {
-        match call_slot.try_acquire_or_match(CallSlotState::PendingOutgoing, peer)? {
+        let (result, snapshot) =
+            call_slot.try_acquire_or_match_with_snapshot(CallSlotState::PendingOutgoing, peer)?;
+        match result {
             CallSlotAcquireResult::Acquired
             | CallSlotAcquireResult::MatchedPendingIncoming
             | CallSlotAcquireResult::MatchedPendingOutgoing => Ok(Some(Self {
                 call_slot,
-                peer,
-                release_on_failure: true,
+                release_snapshot: snapshot,
+                release_if_session_absent: false,
             })),
             CallSlotAcquireResult::Failed => Ok(None),
         }
@@ -3501,9 +3523,8 @@ impl<'a> PendingDirectCallSlot<'a> {
 
     /// Releases the pending slot when negotiation fails before handshake.
     fn release(self) -> Result<()> {
-        // no-op when release_on_failure is false; peer owns the slot in the Matched-incoming case
-        if self.release_on_failure {
-            self.call_slot.release_if_pending_for_peer(self.peer)?;
+        if let Some(snapshot) = self.release_snapshot {
+            self.call_slot.release_if_match(snapshot)?;
         }
         Ok(())
     }
@@ -4195,41 +4216,60 @@ fn should_keep_new_session(local_peer: &PublicKey, peer: &PublicKey, new_is_clie
     new_is_client == (local_peer < peer)
 }
 
-/// Returns `true` if `session_id` is still the current map entry for `peer` in
-/// `session_states`. Used to gate call-slot releases caused by session tasks so that a
-/// collision-loser cleanup cannot tear down a slot owned by a replacement session.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SessionRelation {
+    Current,
+    Absent,
+    Replaced,
+}
+
+async fn session_relation(
+    session_states: &Arc<RwLock<HashMap<PublicKey, Arc<SessionState>>>>,
+    peer: PublicKey,
+    session_id: Uuid,
+) -> SessionRelation {
+    match session_states.read().await.get(&peer) {
+        Some(session) if session.id == session_id => SessionRelation::Current,
+        Some(_) => SessionRelation::Replaced,
+        None => SessionRelation::Absent,
+    }
+}
+
 async fn is_session_still_current(
     session_states: &Arc<RwLock<HashMap<PublicKey, Arc<SessionState>>>>,
     peer: PublicKey,
     session_id: Uuid,
 ) -> bool {
-    session_states
-        .read()
-        .await
-        .get(&peer)
-        .map(|s| s.id == session_id)
-        .unwrap_or(false)
+    session_relation(session_states, peer, session_id).await == SessionRelation::Current
 }
 
-/// Releases a pending direct-call slot only if the owning session is still the current
-/// map entry for `peer` in `session_states`.
-///
-/// A collision-loser session that is being torn down MUST NOT release a slot now owned by
-/// the replacement session: the replacement session will re-arm and take ownership via
-/// the `session_rearmed_pending_outgoing` path in `session_outer` and run its own
-/// terminal cleanup. Calling `release_if_pending_for_peer` here would clobber that intent
-/// and leave the replacement session waiting forever for a notify that never arrives.
-///
-/// Explicit terminal operations (e.g. `stop_session`, manager reset, shutdown) clear
-/// `session_states` before invoking release, so `is_session_still_current` is `false` for
-/// those paths and this function becomes a no-op as expected.
+/// Releases only the exact pending generation captured by this negotiation. Incoming acquisition
+/// remains releasable after session-map removal, but any replacement map entry owns matching state.
+/// Matched outgoing state remains releasable only while its session is current.
 async fn release_pending(
     session_states: &Arc<RwLock<HashMap<PublicKey, Arc<SessionState>>>>,
     peer: PublicKey,
     session_id: Uuid,
     pending_slot: &mut Option<PendingDirectCallSlot<'_>>,
 ) -> Result<()> {
-    if !is_session_still_current(session_states, peer, session_id).await {
+    let Some(slot) = pending_slot.as_ref() else {
+        return Ok(());
+    };
+    // Keep the read lock through synchronous release. Replacement installation takes the write
+    // lock and retains matched generations, so dropping this guard first would let stale cleanup
+    // release ownership after replacement became current.
+    let states = session_states.read().await;
+    let relation = match states.get(&peer) {
+        Some(session) if session.id == session_id => SessionRelation::Current,
+        Some(_) => SessionRelation::Replaced,
+        None => SessionRelation::Absent,
+    };
+    let release = match relation {
+        SessionRelation::Current => true,
+        SessionRelation::Absent => slot.release_if_session_absent,
+        SessionRelation::Replaced => false,
+    };
+    if !release {
         return Ok(());
     }
 
@@ -4239,8 +4279,7 @@ async fn release_pending(
     Ok(())
 }
 
-/// Sends a session-stopped `Goodbye`, releases any pending slot only if the owning
-/// session is still the current map entry, and asserts the post-condition.
+/// Sends a session-stopped `Goodbye` and releases this negotiation's pending generation.
 async fn abort_negotiation_session_stopped(
     session_states: &Arc<RwLock<HashMap<PublicKey, Arc<SessionState>>>>,
     peer: PublicKey,
