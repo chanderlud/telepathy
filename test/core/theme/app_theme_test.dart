@@ -33,7 +33,7 @@ void main() {
 
     expect(
       thumbColor.resolve({WidgetState.selected, WidgetState.hovered}),
-      appTheme.colorScheme.tertiaryContainer,
+      appTheme.colorScheme.surfaceDim,
     );
 
     for (final stateCase in <({String name, Set<WidgetState> states})>[
