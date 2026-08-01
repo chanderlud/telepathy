@@ -2,9 +2,13 @@ use crate::callbacks::Hub;
 use crate::commands::{Command, Envelope};
 use crate::events::Event;
 use crate::output::{OutputLine, spawn_writer};
+use crate::test_audio::FrameCapture;
 use anyhow::{Context, Result};
 use base64::Engine;
 use serde_json::json;
+use telepathy_audio::devices::{
+    AudioHost, CpalAudioHost, MockAudioHost, MockAudioInput, MockAudioOutput,
+};
 use telepathy_core::native::NativeTelepathy;
 use telepathy_core::types::{CodecConfig, Contact, NetworkConfig};
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -19,9 +23,34 @@ pub struct RunOptions {
     pub dns_endpoint: Option<String>,
     pub dns_origin_domain: Option<String>,
     pub pkarr_relay: Option<String>,
+    pub system_test_audio: bool,
+    pub capture_audio_frame_indices: bool,
 }
 
 pub async fn run(opts: RunOptions) -> Result<()> {
+    if opts.capture_audio_frame_indices {
+        let (host, capture) = crate::test_audio::host();
+        run_with_host(opts, host, Some(capture)).await
+    } else if opts.system_test_audio {
+        run_with_host(
+            opts,
+            MockAudioHost::<MockAudioInput, MockAudioOutput>::default(),
+            None,
+        )
+        .await
+    } else {
+        run_with_host(opts, CpalAudioHost::default(), None).await
+    }
+}
+
+async fn run_with_host<H>(
+    opts: RunOptions,
+    audio_host: H,
+    audio_frame_indices: Option<FrameCapture>,
+) -> Result<()>
+where
+    H: AudioHost + Send + Sync + Clone + 'static,
+{
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
     let (output_tx, output_rx) = tokio::sync::mpsc::unbounded_channel();
     let writer = spawn_writer(output_rx);
@@ -310,6 +339,9 @@ async fn handle_command(
             telepathy.set_output_device(id).await;
             CommandOutcome::AckOk
         }
+        Command::DrainAudioFrameIndices => CommandOutcome::AckErr(
+            "drain_audio_frame_indices unavailable with NativeTelepathy".to_string(),
+        ),
         Command::ListDevices => CommandOutcome::Result(json!({
             "supported": false,
             "reason": "NativeTelepathy does not currently expose list device APIs"

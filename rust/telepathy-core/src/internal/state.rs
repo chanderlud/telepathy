@@ -824,6 +824,7 @@ impl CoreState {
             codec_config: codec_config.clone(),
             applied_runtime_revision: Arc::new(AtomicU64::new(u64::MAX)),
             failed_runtime_revision: Arc::new(AtomicU64::new(u64::MAX)),
+            input_multiplier: Arc::new(AtomicF32::new(1.0)),
             ..Self::default()
         }
     }
@@ -1249,6 +1250,24 @@ fn relay_identifier(relay_url: &iroh::RelayUrl) -> String {
             None => address.to_string(),
         },
         None => "unknown".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod core_state_tests {
+    use super::CoreState;
+    use crate::types::{CodecConfig, NetworkConfig, ScreenshareConfig};
+    use std::sync::atomic::Ordering::Relaxed;
+
+    #[test]
+    fn new_initializes_input_multiplier_at_unity_gain() {
+        let state = CoreState::new(
+            &NetworkConfig::default(),
+            &ScreenshareConfig::default(),
+            &CodecConfig::default(),
+        );
+
+        assert_eq!(state.get_input_volume().load(Relaxed), 1.0);
     }
 }
 
