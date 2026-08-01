@@ -38,6 +38,7 @@ impl FrameCapture {
         indices.push_back(index);
     }
 
+    #[cfg(test)]
     pub(super) fn drain(&self) -> Vec<usize> {
         self.indices.lock().unwrap().drain(..).collect()
     }

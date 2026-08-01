@@ -45,8 +45,8 @@ pub async fn run(opts: RunOptions) -> Result<()> {
 
 async fn run_with_host<H>(
     opts: RunOptions,
-    audio_host: H,
-    audio_frame_indices: Option<FrameCapture>,
+    _audio_host: H,
+    _audio_frame_indices: Option<FrameCapture>,
 ) -> Result<()>
 where
     H: AudioHost + Send + Sync + Clone + 'static,
