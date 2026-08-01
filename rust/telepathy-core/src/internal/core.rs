@@ -3873,11 +3873,14 @@ impl PendingSessionCandidateLease {
 
 impl Drop for PendingSessionCandidateLease {
     fn drop(&mut self) {
-        let candidates = self.registry.inner.lock().unwrap();
+        let mut candidates = self.registry.inner.lock().unwrap();
         if candidates
             .get(&self.peer)
             .is_some_and(|candidate| candidate.id == self.id)
         {
+            if !self.resolution.terminal_pending.load(Relaxed) {
+                candidates.remove(&self.peer);
+            }
             self.resolution.completion.cancel();
         }
     }
@@ -4469,6 +4472,32 @@ mod tests {
         assert!(
             registry.try_install(peer, predecessor_id).is_some(),
             "candidate ownership must be reusable after cancellation completes"
+        );
+    }
+
+    #[tokio::test]
+    async fn canceled_pending_candidate_registry_entry_survives_lease_completion() {
+        let registry = PendingSessionCandidateRegistry::default();
+        let peer = SecretKey::generate().public();
+        let predecessor_id = Uuid::new_v4();
+        let lease = registry
+            .try_install(peer, predecessor_id)
+            .expect("the candidate should claim the peer");
+        let resolution = registry
+            .resolution_for(peer, predecessor_id)
+            .expect("the predecessor should observe candidate completion");
+
+        registry.cancel_all();
+        assert!(
+            lease.is_cancelled(),
+            "reset must cancel the retained candidate"
+        );
+        drop(lease);
+        resolution.completed().await;
+
+        assert!(
+            registry.resolution_for(peer, predecessor_id).is_none(),
+            "lease completion must remove the canceled candidate registry entry"
         );
     }
 

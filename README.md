@@ -2,7 +2,7 @@
 
 Private, low-latency peer-to-peer voice chat for desktop, mobile, and the web.
 
-Telepathy is an open-source communication app built with Flutter, Rust, and iroh. 
+Telepathy is an open-source communication app built with Flutter, Rust, and iroh.
 It combines real-time audio, video, and text chat in a lightweight cross-platform application.
 
 Download Telepathy from [GitHub Releases](https://github.com/chanderlud/telepathy/releases) for the native experience, or try Telepathy in the [browser](https://telepathy.chanchan.dev).
