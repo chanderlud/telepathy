@@ -671,7 +671,9 @@ async def cli_pair(
 ) -> AsyncIterator[dict[str, CliProcess]]:
     alice_namespace = topology.client_namespaces[0]
     bob_namespace = topology.client_namespaces[1]
-    system_test_audio = request.node.get_closest_marker("system_test_audio") is not None
+    capture_audio_frame_indices = (
+        request.node.get_closest_marker("capture_audio_frame_indices") is not None
+    )
 
     alice = CliProcess(
         binary_path=binaries["cli"],
@@ -682,7 +684,7 @@ async def cli_pair(
         dns_endpoint=topology.dns_endpoint(alice_namespace),
         dns_origin_domain=topology.dns_origin_domain(alice_namespace),
         pkarr_relay=topology.pkarr_relay(alice_namespace),
-        system_test_audio=system_test_audio,
+        capture_audio_frame_indices=capture_audio_frame_indices,
     )
     bob = CliProcess(
         binary_path=binaries["cli"],
@@ -693,7 +695,7 @@ async def cli_pair(
         dns_endpoint=topology.dns_endpoint(bob_namespace),
         dns_origin_domain=topology.dns_origin_domain(bob_namespace),
         pkarr_relay=topology.pkarr_relay(bob_namespace),
-        system_test_audio=system_test_audio,
+        capture_audio_frame_indices=capture_audio_frame_indices,
     )
     test_failed = False
     try:
@@ -1111,7 +1113,7 @@ async def test_call_repeated_without_restart_keeps_remote_audio(
 
 
 @pytest.mark.asyncio
-@pytest.mark.system_test_audio
+@pytest.mark.capture_audio_frame_indices
 @pytest.mark.parametrize("profile", NETWORK_PROFILES, ids=lambda profile: profile.name)
 async def test_call_drain_audio_frame_indices_strictly_increasing(
     cli_pair: dict[str, CliProcess],
@@ -1119,6 +1121,15 @@ async def test_call_drain_audio_frame_indices_strictly_increasing(
 ) -> None:
     alice = cli_pair["alice"]
     bob = cli_pair["bob"]
+
+    alice_peer_id = alice.identity_peer_id
+    bob_peer_id = bob.identity_peer_id
+    if not isinstance(alice_peer_id, str) or not isinstance(bob_peer_id, str):
+        raise AssertionError("missing CLI identity peer ID")
+    await asyncio.gather(
+        _add_contact(alice, "bob", bob_peer_id),
+        _add_contact(bob, "alice", alice_peer_id),
+    )
 
     await _start_call_and_wait_connected(
         alice,

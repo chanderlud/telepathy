@@ -38,7 +38,7 @@ class CliProcess:
         dns_endpoint: str | None = None,
         dns_origin_domain: str | None = None,
         pkarr_relay: str | None = None,
-        system_test_audio: bool = False,
+        capture_audio_frame_indices: bool = False,
     ) -> None:
         self.binary_path = binary_path
         self.namespace = namespace
@@ -48,7 +48,7 @@ class CliProcess:
         self.dns_endpoint = dns_endpoint
         self.dns_origin_domain = dns_origin_domain
         self.pkarr_relay = pkarr_relay
-        self.system_test_audio = system_test_audio
+        self.capture_audio_frame_indices = capture_audio_frame_indices
 
         self._proc: asyncio.subprocess.Process | None = None
         self._stderr_task: asyncio.Task[None] | None = None
@@ -73,8 +73,9 @@ class CliProcess:
             args.extend(["--dns-origin-domain", self.dns_origin_domain])
         if self.pkarr_relay is not None:
             args.extend(["--pkarr-relay", self.pkarr_relay])
-        if self.system_test_audio:
-            args.append("--system-test-audio")
+        args.append("--system-test-audio")
+        if self.capture_audio_frame_indices:
+            args.append("--capture-audio-frame-indices")
         exec_args = _build_exec_args(self.namespace, self.binary_path, args)
         self._proc = await asyncio.create_subprocess_exec(
             *exec_args,

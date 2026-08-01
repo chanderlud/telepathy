@@ -6,7 +6,9 @@ use crate::test_audio::FrameCapture;
 use anyhow::{Context, Result};
 use base64::Engine;
 use serde_json::json;
-use telepathy_audio::devices::{AudioHost, CpalAudioHost};
+use telepathy_audio::devices::{
+    AudioHost, CpalAudioHost, MockAudioHost, MockAudioInput, MockAudioOutput,
+};
 use telepathy_core::internal::TelepathyHandle;
 use telepathy_core::native::NativeCallbacks;
 use telepathy_core::types::{CodecConfig, Contact, NetworkConfig};
@@ -23,12 +25,20 @@ pub struct RunOptions {
     pub dns_origin_domain: Option<String>,
     pub pkarr_relay: Option<String>,
     pub system_test_audio: bool,
+    pub capture_audio_frame_indices: bool,
 }
 
 pub async fn run(opts: RunOptions) -> Result<()> {
-    if opts.system_test_audio {
+    if opts.capture_audio_frame_indices {
         let (host, capture) = crate::test_audio::host();
         run_with_host(opts, host, Some(capture)).await
+    } else if opts.system_test_audio {
+        run_with_host(
+            opts,
+            MockAudioHost::<MockAudioInput, MockAudioOutput>::default(),
+            None,
+        )
+        .await
     } else {
         run_with_host(opts, CpalAudioHost::default(), None).await
     }
@@ -355,7 +365,7 @@ where
         Command::DrainAudioFrameIndices => match audio_frame_indices {
             Some(capture) => CommandOutcome::Result(json!({ "indices": capture.drain() })),
             None => CommandOutcome::AckErr(
-                "drain_audio_frame_indices requires --system-test-audio".to_string(),
+                "drain_audio_frame_indices requires --capture-audio-frame-indices".to_string(),
             ),
         },
         Command::ListDevices => CommandOutcome::Result(json!({

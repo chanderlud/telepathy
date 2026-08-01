@@ -56,6 +56,7 @@ fn parse_args(args: Vec<String>) -> Result<RunOptions> {
     let mut dns_origin_domain = std::env::var("TELEPATHY_DNS_ORIGIN_DOMAIN").ok();
     let mut pkarr_relay = std::env::var("TELEPATHY_PKARR_RELAY").ok();
     let mut system_test_audio = false;
+    let mut capture_audio_frame_indices = false;
 
     let mut idx = 1usize;
     while idx < args.len() {
@@ -109,6 +110,7 @@ fn parse_args(args: Vec<String>) -> Result<RunOptions> {
                 );
             }
             "--system-test-audio" => system_test_audio = true,
+            "--capture-audio-frame-indices" => capture_audio_frame_indices = true,
             other => {
                 return Err(startup_failure(format!("unknown argument: {other}")));
             }
@@ -127,6 +129,7 @@ fn parse_args(args: Vec<String>) -> Result<RunOptions> {
         dns_origin_domain,
         pkarr_relay,
         system_test_audio,
+        capture_audio_frame_indices,
     })
 }
 
@@ -283,17 +286,27 @@ mod tests {
     }
 
     #[test]
-    fn system_test_audio_flag_is_explicit() {
+    fn test_audio_flags_are_independent_and_explicit() {
         let _guard = EnvVarGuard::clear("TELEPATHY_LISTEN_PORT");
-        assert!(!parse_args(base_args()).unwrap().system_test_audio);
-        assert!(
-            parse_args(vec![
-                "telepathy-cli".to_string(),
-                "--system-test-audio".to_string(),
-            ])
-            .unwrap()
-            .system_test_audio
-        );
+        let defaults = parse_args(base_args()).unwrap();
+        assert!(!defaults.system_test_audio);
+        assert!(!defaults.capture_audio_frame_indices);
+
+        let mock_audio = parse_args(vec![
+            "telepathy-cli".to_string(),
+            "--system-test-audio".to_string(),
+        ])
+        .unwrap();
+        assert!(mock_audio.system_test_audio);
+        assert!(!mock_audio.capture_audio_frame_indices);
+
+        let capture_audio = parse_args(vec![
+            "telepathy-cli".to_string(),
+            "--capture-audio-frame-indices".to_string(),
+        ])
+        .unwrap();
+        assert!(!capture_audio.system_test_audio);
+        assert!(capture_audio.capture_audio_frame_indices);
     }
 
     #[test]

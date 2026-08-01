@@ -18,7 +18,9 @@ Startup networking configuration can be provided in two ways:
 Discovery flags configure the iroh relay, DNS address lookup, and pkarr publisher used for endpoint discovery. `--relay-url` / `TELEPATHY_RELAY_URL` is an HTTP relay URL (for example `http://10.0.10.1:3340`). `--dns-endpoint` / `TELEPATHY_DNS_ENDPOINT` is a host:port DNS resolver address (for example `10.0.10.1:5300`). `--pkarr-relay` / `TELEPATHY_PKARR_RELAY` is an HTTP pkarr relay URL (for example `http://10.0.10.1:8080/pkarr`). Omit any discovery flag to leave that setting unset.
 
 Ordinary startup uses the Cpal audio host. `--system-test-audio` is a test-only option for the
-system-test harness; it substitutes deterministic mock input and capture output for physical audio.
+system-test harness; it substitutes the basic mock input and output for physical audio.
+`--capture-audio-frame-indices` instead selects the CLI-local sequenced input and capture output
+used by the audio ordering system test.
 
 Precedence:
 
@@ -93,8 +95,9 @@ Notes:
 - `id` is the request id from the input envelope.
 - Most commands emit an `ack` line.
 - `list_devices` emits only a `result` line (no `ack`).
-- `drain_audio_frame_indices` emits a `result` when test audio capture is enabled; otherwise it
-  emits a failed `ack` explaining that `--system-test-audio` is required.
+- `drain_audio_frame_indices` emits a `result` when audio frame capture is enabled; otherwise it
+  emits a failed `ack` explaining that `--capture-audio-frame-indices` is required. Basic mock
+  audio selected by `--system-test-audio` does not enable capture.
 
 `list_devices` returns:
 
@@ -102,8 +105,9 @@ Notes:
 {"kind":"result","id":"<string>","data":{"supported":false,"reason":"<string>"}}
 ```
 
-`drain_audio_frame_indices` is a test-only command used with `--system-test-audio`. It atomically
-returns and clears up to 512 frame indices decoded from samples written to mock audio output:
+`drain_audio_frame_indices` is a test-only command used with `--capture-audio-frame-indices`. It
+atomically returns and clears up to 512 frame indices decoded from samples written to capture
+output:
 
 ```json
 {"kind":"result","id":"<string>","data":{"indices":[1,2,4]}}
