@@ -4,6 +4,7 @@
 //! wrapping the framework-agnostic `telepathy-audio::AudioPlayer` with
 //! Flutter Rust Bridge attributes for Dart interop.
 
+use crate::internal::MAX_RINGTONE_LENGTH;
 use crate::types::DartError;
 #[cfg(not(target_family = "wasm"))]
 use std::path::Path;
@@ -156,7 +157,7 @@ pub async fn load_ringtone(path: String) -> Result<(), DartError> {
     let sea_bytes = wav_to_sea(wav_bytes, 5_f32)
         .await
         .map_err(|error| error.to_string())?;
-    if sea_bytes.len() > crate::internal::MAX_RINGTONE_LENGTH {
+    if sea_bytes.len() > MAX_RINGTONE_LENGTH {
         return Err("Encoded ringtone is too large".to_string().into());
     }
     File::create("ringtone.sea")

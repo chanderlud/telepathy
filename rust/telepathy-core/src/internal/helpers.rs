@@ -14,8 +14,15 @@ use crate::internal::state::{
 #[cfg(target_os = "ios")]
 use crate::internal::utils::deactivate_audio_session;
 use crate::internal::utils::{JoinHandle, KanalSink, KanalSource, spawn_task};
+use crate::internal::video::transport::{run_receiver, run_sender};
+use crate::internal::video::{
+    VideoAttempt, VideoControl, VideoLaunch, VideoPreamble, VideoRole, VideoSlotEffect,
+};
 use crate::internal::{ALPN, Result};
-use crate::types::{ManagerState, SessionStatus};
+use crate::types::{
+    ManagerState, SessionStatus, VideoLifecycleEvent, VideoPhase, VideoSessionIdentity,
+    VideoSource, VideoStartOutcome, VideoTerminalReason,
+};
 use bytes::Bytes;
 use iroh::address_lookup::PkarrPublisher;
 use iroh::endpoint::Connection;
@@ -241,13 +248,13 @@ where
     pub(crate) async fn request_video_source(
         &self,
         peer: PublicKey,
-        source: crate::types::VideoSource,
-    ) -> crate::types::VideoStartOutcome {
+        source: VideoSource,
+    ) -> VideoStartOutcome {
         let state = if let Some(s) = self.session_states.read().await.get(&peer) {
             s.clone()
         } else {
             warn!("video started for a peer without a session: {}", peer);
-            return crate::types::VideoStartOutcome::NoSession;
+            return VideoStartOutcome::NoSession;
         };
 
         if !self.core_state.call_slot.snapshot().is_ok_and(|slot| {
@@ -257,7 +264,7 @@ where
                 "video started for a peer without an active direct call: {}",
                 peer
             );
-            return crate::types::VideoStartOutcome::NoSession;
+            return VideoStartOutcome::NoSession;
         }
 
         let descriptor = match self
@@ -269,17 +276,17 @@ where
             Ok((_, descriptor)) => descriptor,
             Err(reason) => {
                 warn!(?reason, "video source unavailable at start");
-                return crate::types::VideoStartOutcome::Unavailable(reason);
+                return VideoStartOutcome::Unavailable(reason);
             }
         };
         if let Some(control) = state.video_slot.start_local(descriptor).await {
-            let identity = crate::types::VideoSessionIdentity {
+            let identity = VideoSessionIdentity {
                 peer_id: peer.to_string(),
                 session_id: control.session_id(),
             };
             if let Some(event) = state
                 .video_slot
-                .current_event(peer.to_string(), crate::types::VideoPhase::Offering, None)
+                .current_event(peer.to_string(), VideoPhase::Offering, None)
                 .await
             {
                 self.observe_video_lifecycle(event);
@@ -289,30 +296,28 @@ where
                 .send(ProtocolMessage::Video { control })
                 .await;
             if result.is_err() {
-                self.finish_current_video(&state, peer, crate::types::VideoTerminalReason::Failed)
+                self.finish_current_video(&state, peer, VideoTerminalReason::Failed)
                     .await;
                 warn!("giving up on screenshare start, state closed");
-                return crate::types::VideoStartOutcome::Failed(
-                    crate::types::VideoTerminalReason::Failed,
-                );
+                return VideoStartOutcome::Failed(VideoTerminalReason::Failed);
             }
-            return crate::types::VideoStartOutcome::Requested(identity);
+            return VideoStartOutcome::Requested(identity);
         }
-        crate::types::VideoStartOutcome::AlreadyActive
+        VideoStartOutcome::AlreadyActive
     }
 
     pub(crate) async fn handle_video_control(
         &self,
         peer: PublicKey,
         connection: &Connection,
-        control: crate::internal::video::VideoControl,
+        control: VideoControl,
     ) -> Result<()> {
         let Some(state) = self.session_states.read().await.get(&peer).cloned() else {
             return Ok(());
         };
         let local_offer_wins = self.peer_id().await.to_string() < peer.to_string();
         let effect = match control {
-            crate::internal::video::VideoControl::Offer(offer) => {
+            VideoControl::Offer(offer) => {
                 let capabilities = self
                     .core_state
                     .screenshare_config
@@ -326,17 +331,17 @@ where
             _ => state.video_slot.receive(control, local_offer_wins).await,
         };
         match effect {
-            crate::internal::video::VideoSlotEffect::Send(control) => {
+            VideoSlotEffect::Send(control) => {
                 let _ = state
                     .message_sender
                     .send(ProtocolMessage::Video { control })
                     .await;
             }
-            crate::internal::video::VideoSlotEffect::Launch(launch) => {
+            VideoSlotEffect::Launch(launch) => {
                 self.launch_video_worker(&state, peer, connection, launch)
                     .await;
             }
-            crate::internal::video::VideoSlotEffect::SendAndLaunch(control, launch) => {
+            VideoSlotEffect::SendAndLaunch(control, launch) => {
                 self.launch_video_worker(&state, peer, connection, launch)
                     .await;
                 let _ = state
@@ -344,16 +349,9 @@ where
                     .send(ProtocolMessage::Video { control })
                     .await;
             }
-            crate::internal::video::VideoSlotEffect::DisplaceAndSendAndLaunch(
-                displaced,
-                control,
-                launch,
-            ) => {
+            VideoSlotEffect::DisplaceAndSendAndLaunch(displaced, control, launch) => {
                 let event = displaced
-                    .cancel_and_join(
-                        peer.to_string(),
-                        crate::types::VideoTerminalReason::Rejected,
-                    )
+                    .cancel_and_join(peer.to_string(), VideoTerminalReason::Rejected)
                     .await;
                 self.observe_video_lifecycle(event);
                 self.launch_video_worker(&state, peer, connection, launch)
@@ -363,11 +361,11 @@ where
                     .send(ProtocolMessage::Video { control })
                     .await;
             }
-            crate::internal::video::VideoSlotEffect::Terminal(attempt, reason) => {
+            VideoSlotEffect::Terminal(attempt, reason) => {
                 self.finish_video_attempt(&state, peer, attempt, reason)
                     .await;
             }
-            crate::internal::video::VideoSlotEffect::Ignored => {}
+            VideoSlotEffect::Ignored => {}
         }
         Ok(())
     }
@@ -377,16 +375,16 @@ where
         state: &Arc<SessionState>,
         peer: PublicKey,
         connection: &Connection,
-        launch: crate::internal::video::VideoLaunch,
+        launch: VideoLaunch,
     ) {
-        self.observe_video_lifecycle(crate::types::VideoLifecycleEvent {
-            identity: crate::types::VideoSessionIdentity {
+        self.observe_video_lifecycle(VideoLifecycleEvent {
+            identity: VideoSessionIdentity {
                 peer_id: peer.to_string(),
                 session_id: launch.attempt().session_id(),
             },
             role: launch.role(),
             source: launch.descriptor().source(),
-            phase: crate::types::VideoPhase::Starting,
+            phase: VideoPhase::Starting,
             terminal_reason: None,
         });
         let slot = Arc::clone(&state.video_slot);
@@ -394,7 +392,7 @@ where
         let worker_launch = launch.clone();
         let (startup_sender, startup_receiver) = tokio::sync::oneshot::channel();
         let worker = match launch.role() {
-            crate::internal::video::VideoRole::Sender => {
+            VideoRole::Sender => {
                 let Ok((config, descriptor)) = self
                     .core_state
                     .screenshare_config
@@ -405,7 +403,7 @@ where
                         state,
                         peer,
                         launch.attempt(),
-                        crate::internal::video::VideoTerminalReason::Failed,
+                        VideoTerminalReason::Failed,
                     )
                     .await;
                     return;
@@ -415,17 +413,17 @@ where
                         state,
                         peer,
                         launch.attempt(),
-                        crate::internal::video::VideoTerminalReason::Failed,
+                        VideoTerminalReason::Failed,
                     )
                     .await;
                     return;
                 }
                 spawn_task(async move {
-                    let preamble = crate::internal::video::VideoPreamble::new(
+                    let preamble = VideoPreamble::new(
                         worker_launch.attempt().session_id(),
                         worker_launch.descriptor(),
                     );
-                    let result = crate::internal::video::transport::run_sender(
+                    let result = run_sender(
                         &connection,
                         preamble,
                         config,
@@ -435,20 +433,20 @@ where
                     .await;
                     if !worker_launch.cancellation().is_cancelled() {
                         let reason = if result.is_ok() {
-                            crate::internal::video::VideoTerminalReason::TransportEnded
+                            VideoTerminalReason::TransportEnded
                         } else {
-                            crate::internal::video::VideoTerminalReason::Failed
+                            VideoTerminalReason::Failed
                         };
                         slot.report_terminal(worker_launch.attempt(), reason).await;
                     }
                 })
             }
-            crate::internal::video::VideoRole::Receiver => spawn_task(async move {
-                let preamble = crate::internal::video::VideoPreamble::new(
+            VideoRole::Receiver => spawn_task(async move {
+                let preamble = VideoPreamble::new(
                     worker_launch.attempt().session_id(),
                     worker_launch.descriptor(),
                 );
-                let result = crate::internal::video::transport::run_receiver(
+                let result = run_receiver(
                     &connection,
                     preamble,
                     worker_launch.cancellation(),
@@ -457,9 +455,9 @@ where
                 .await;
                 if !worker_launch.cancellation().is_cancelled() {
                     let reason = if result.is_ok() {
-                        crate::internal::video::VideoTerminalReason::TransportEnded
+                        VideoTerminalReason::TransportEnded
                     } else {
-                        crate::internal::video::VideoTerminalReason::Failed
+                        VideoTerminalReason::Failed
                     };
                     slot.report_terminal(worker_launch.attempt(), reason).await;
                 }
@@ -482,7 +480,7 @@ where
         }
     }
 
-    pub(crate) fn observe_video_lifecycle(&self, event: crate::types::VideoLifecycleEvent) {
+    pub(crate) fn observe_video_lifecycle(&self, event: VideoLifecycleEvent) {
         let callbacks = Arc::clone(&self.callbacks);
         spawn_task(async move { callbacks.video_lifecycle(event).await });
     }
@@ -491,16 +489,12 @@ where
         &self,
         state: &Arc<SessionState>,
         peer: PublicKey,
-        attempt: crate::internal::video::VideoAttempt,
-        reason: crate::types::VideoTerminalReason,
+        attempt: VideoAttempt,
+        reason: VideoTerminalReason,
     ) {
         let event = state
             .video_slot
-            .current_event(
-                peer.to_string(),
-                crate::types::VideoPhase::Terminal,
-                Some(reason),
-            )
+            .current_event(peer.to_string(), VideoPhase::Terminal, Some(reason))
             .await;
         if state
             .video_slot
@@ -517,15 +511,11 @@ where
         &self,
         state: &Arc<SessionState>,
         peer: PublicKey,
-        reason: crate::types::VideoTerminalReason,
+        reason: VideoTerminalReason,
     ) -> bool {
         let event = state
             .video_slot
-            .current_event(
-                peer.to_string(),
-                crate::types::VideoPhase::Terminal,
-                Some(reason),
-            )
+            .current_event(peer.to_string(), VideoPhase::Terminal, Some(reason))
             .await;
         let finished = state
             .video_slot

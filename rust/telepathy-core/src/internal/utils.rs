@@ -237,6 +237,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::read_message;
+    use crate::internal::ALPN;
     use crate::internal::messages::ProtocolMessage;
     use crate::internal::video::{
         VIDEO_CONTROL_MAX_FRAME_LENGTH, VideoCodec, VideoControl, VideoMediaDescriptor,
@@ -251,7 +252,7 @@ mod tests {
     async fn iroh_pair() -> (iroh::Endpoint, iroh::Endpoint, Connection, Connection) {
         let server = iroh::Endpoint::builder(presets::N0)
             .relay_mode(iroh::RelayMode::Disabled)
-            .alpns(vec![crate::internal::ALPN.to_vec()])
+            .alpns(vec![ALPN.to_vec()])
             .bind()
             .await
             .expect("server endpoint binds");
@@ -261,14 +262,13 @@ mod tests {
             .await
             .expect("client endpoint binds");
         let server_addr = server.addr();
-        let (outbound, inbound) =
-            tokio::join!(client.connect(server_addr, crate::internal::ALPN), async {
-                server
-                    .accept()
-                    .await
-                    .expect("server receives connection")
-                    .await
-            });
+        let (outbound, inbound) = tokio::join!(client.connect(server_addr, ALPN), async {
+            server
+                .accept()
+                .await
+                .expect("server receives connection")
+                .await
+        });
         (
             client,
             server,

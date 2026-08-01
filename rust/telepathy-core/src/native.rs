@@ -3,9 +3,9 @@ use crate::internal::TelepathyHandle;
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::{JoinHandle, spawn_task};
 use crate::types::{
-    CallState, ChatMessage, Contact, ManagerState, ScreenshareConfig, SessionStatus, Statistics,
-    VideoCapabilities, VideoLifecycleEvent, VideoSessionIdentity, VideoSource, VideoStartOutcome,
-    VideoStopOutcome,
+    CallState, ChatMessage, CodecConfig, Contact, IDENTITY_KEY_LENGTH_MESSAGE, ManagerState,
+    NetworkConfig, ScreenshareConfig, SessionStatus, Statistics, VideoCapabilities,
+    VideoLifecycleEvent, VideoSessionIdentity, VideoSource, VideoStartOutcome, VideoStopOutcome,
 };
 use iroh::PublicKey;
 use std::future::Future;
@@ -45,9 +45,9 @@ pub struct NativeTelepathy {
 
 impl NativeTelepathy {
     pub fn new(
-        network_config: &crate::types::NetworkConfig,
+        network_config: &NetworkConfig,
         video_config: &ScreenshareConfig,
-        codec_config: &crate::types::CodecConfig,
+        codec_config: &CodecConfig,
         callbacks: NativeCallbacks,
     ) -> Self {
         Self {
@@ -109,7 +109,7 @@ impl NativeTelepathy {
             .set_identity(
                 &(key
                     .try_into()
-                    .map_err(|_| crate::types::IDENTITY_KEY_LENGTH_MESSAGE.to_string())?),
+                    .map_err(|_| IDENTITY_KEY_LENGTH_MESSAGE.to_string())?),
             )
             .await
             .map_err(|e| e.to_string())

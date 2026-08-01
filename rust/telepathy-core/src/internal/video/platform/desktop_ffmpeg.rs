@@ -1,6 +1,8 @@
 // allow: SIZE_OK - target-specific FFmpeg configuration and process adapter must compile together.
 use super::{CapabilityProbe, Decoder, Device, Encoder, Result};
-use crate::internal::video::{VideoMediaDescriptor, VideoMediaFormat, VideoSource};
+use crate::internal::video::{
+    VideoMediaDescriptor, VideoMediaFormat, VideoSource, VideoWorkerStartup,
+};
 use crate::types::{
     Capabilities, RecordingConfig, VideoCapabilities, VideoCapabilityAvailability,
     VideoSourceCapability, VideoUnavailable,
@@ -15,7 +17,7 @@ use tokio::select;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, instrument};
 
-use crate::internal::error::ErrorKind;
+use crate::internal::error::{Error, ErrorKind};
 
 #[cfg(target_os = "windows")]
 const CREATION_FLAGS: u32 = 0x08000000;
@@ -298,7 +300,7 @@ pub(crate) async fn run_sender<S>(
     transport: &mut S,
     stop: &CancellationToken,
     config: RecordingConfig,
-    startup: tokio::sync::oneshot::Sender<crate::internal::video::VideoWorkerStartup>,
+    startup: tokio::sync::oneshot::Sender<VideoWorkerStartup>,
 ) -> Result<()>
 where
     S: futures_util::Sink<Bytes> + Unpin,
@@ -317,16 +319,16 @@ where
         let stdout = child
             .stdout
             .take()
-            .ok_or_else(|| crate::internal::error::Error::from(ErrorKind::PlatformUnavailable))?;
+            .ok_or_else(|| Error::from(ErrorKind::PlatformUnavailable))?;
         Ok((child, stdout))
     })();
     let (mut child, mut stdout) = match startup_result {
         Ok(state) => {
-            let _ = startup.send(crate::internal::video::VideoWorkerStartup::Ready);
+            let _ = startup.send(VideoWorkerStartup::Ready);
             state
         }
         Err(error) => {
-            let _ = startup.send(crate::internal::video::VideoWorkerStartup::Failed);
+            let _ = startup.send(VideoWorkerStartup::Failed);
             return Err(error);
         }
     };
@@ -352,7 +354,7 @@ pub(crate) async fn run_receiver<S, E>(
     transport: &mut S,
     stop: &CancellationToken,
     descriptor: VideoMediaDescriptor,
-    startup: tokio::sync::oneshot::Sender<crate::internal::video::VideoWorkerStartup>,
+    startup: tokio::sync::oneshot::Sender<VideoWorkerStartup>,
 ) -> Result<()>
 where
     S: futures_util::Stream<Item = std::result::Result<bytes::BytesMut, E>> + Unpin,
@@ -371,16 +373,16 @@ where
         let stdin = child
             .stdin
             .take()
-            .ok_or_else(|| crate::internal::error::Error::from(ErrorKind::PlatformUnavailable))?;
+            .ok_or_else(|| Error::from(ErrorKind::PlatformUnavailable))?;
         Ok((child, stdin))
     })();
     let (mut child, mut stdin) = match startup_result {
         Ok(state) => {
-            let _ = startup.send(crate::internal::video::VideoWorkerStartup::Ready);
+            let _ = startup.send(VideoWorkerStartup::Ready);
             state
         }
         Err(error) => {
-            let _ = startup.send(crate::internal::video::VideoWorkerStartup::Failed);
+            let _ = startup.send(VideoWorkerStartup::Failed);
             return Err(error);
         }
     };
@@ -427,10 +429,12 @@ mod tests {
     use super::{
         Device, Encoder, make_playback_command, prepare_sender_from_capabilities, select_decoder,
     };
-    use crate::internal::error::ErrorKind;
+    use crate::internal::error::{Error, ErrorKind};
     use crate::internal::video::platform::Decoder;
     use crate::internal::video::{VideoCodec, VideoMediaDescriptor};
-    use crate::types::{Capabilities, RecordingConfig, VideoUnavailable};
+    use crate::types::{
+        Capabilities, RecordingConfig, VideoCapabilityAvailability, VideoUnavailable,
+    };
 
     fn recording_config() -> RecordingConfig {
         RecordingConfig {
@@ -572,7 +576,7 @@ mod tests {
     fn unimplemented_device_returns_typed_error_without_panicking() {
         assert!(matches!(
             recording_config().make_command(false),
-            Err(crate::internal::error::Error {
+            Err(Error {
                 kind: ErrorKind::PlatformUnavailable
             })
         ));
@@ -671,9 +675,7 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(
             generic.receive,
-            crate::types::VideoCapabilityAvailability::Unavailable(
-                VideoUnavailable::RuntimeUnavailable
-            )
+            VideoCapabilityAvailability::Unavailable(VideoUnavailable::RuntimeUnavailable)
         );
     }
 }

@@ -1,4 +1,6 @@
 use crate::internal::error::Error;
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+use crate::internal::video::VideoCodec;
 use crate::types::{Capabilities, VideoCapabilities};
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 use bytes::Bytes;
@@ -90,8 +92,7 @@ pub(crate) enum Encoder {
 
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 impl Encoder {
-    const fn codec(self) -> crate::internal::video::VideoCodec {
-        use crate::internal::video::VideoCodec;
+    const fn codec(self) -> VideoCodec {
         match self {
             Self::Libx264 | Self::H264Nvenc | Self::H264Amf | Self::H264Qsv | Self::H264Vaapi => {
                 VideoCodec::H264
@@ -169,8 +170,7 @@ pub(crate) enum Decoder {
 
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 impl Decoder {
-    const fn codec(self) -> crate::internal::video::VideoCodec {
-        use crate::internal::video::VideoCodec;
+    const fn codec(self) -> VideoCodec {
         match self {
             Self::H264 | Self::H264Cuvid | Self::H264Qsv => VideoCodec::H264,
             Self::Hevc | Self::HevcCuvid | Self::HevcQsv => VideoCodec::Hevc,

@@ -3,7 +3,9 @@ use crate::internal::callbacks::CoreCallbacks;
 use crate::internal::error::ErrorKind;
 use crate::internal::messages::{AudioHeader, ProtocolMessage, RoomMessage};
 use crate::internal::video::VideoSlot;
-use crate::types::{CodecConfig, Contact, NetworkConfig, ScreenshareConfig, SessionStatus};
+use crate::types::{
+    CodecConfig, Contact, NetworkConfig, ScreenshareConfig, SessionStatus, VideoTerminalReason,
+};
 use atomic_float::AtomicF32;
 use iroh::endpoint::{Connection, Path};
 use iroh::{PublicKey, SecretKey, TransportAddr};
@@ -1128,7 +1130,7 @@ impl SessionState {
         // stops the session loop
         self.stop_session.cancel();
         self.video_slot
-            .cancel_current_and_join(crate::types::VideoTerminalReason::Teardown)
+            .cancel_current_and_join(VideoTerminalReason::Teardown)
             .await;
     }
 

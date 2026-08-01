@@ -25,8 +25,13 @@ use crate::internal::state::{
     PreparedSwitchLease, RoomState, SessionState,
 };
 pub(crate) use crate::internal::utils::{JoinHandle, spawn_task};
+use crate::internal::video::VideoControl;
 use crate::overlay::Overlay;
-use crate::types::{ChatMessage, CodecConfig, Contact, NetworkConfig, ScreenshareConfig};
+use crate::types::{
+    CallState, ChatMessage, CodecConfig, Contact, NetworkConfig, ScreenshareConfig,
+    VideoCapabilities, VideoPhase, VideoSessionIdentity, VideoSource, VideoStartOutcome,
+    VideoStopOutcome, VideoTerminalReason,
+};
 use chrono::Local;
 use iroh::{PublicKey, SecretKey};
 use speedy::{LittleEndian, Writable, Writer};
@@ -632,7 +637,7 @@ where
                     if let Some(message) = outcome.into_message() {
                         self_clone
                             .callbacks
-                            .call_state(crate::types::CallState::CallEnded(message, false))
+                            .call_state(CallState::CallEnded(message, false))
                             .await;
                     }
                     stop_io.cancel();
@@ -937,50 +942,44 @@ where
     pub async fn request_video_source(
         &self,
         contact: &Contact,
-        source: crate::types::VideoSource,
-    ) -> crate::types::VideoStartOutcome {
+        source: VideoSource,
+    ) -> VideoStartOutcome {
         self.inner
             .request_video_source(contact.peer_id, source)
             .await
     }
 
-    pub async fn stop_video_source(
-        &self,
-        identity: crate::types::VideoSessionIdentity,
-    ) -> crate::types::VideoStopOutcome {
+    pub async fn stop_video_source(&self, identity: VideoSessionIdentity) -> VideoStopOutcome {
         let Ok(peer) = identity.peer_id.parse::<PublicKey>() else {
-            return crate::types::VideoStopOutcome::NotFound;
+            return VideoStopOutcome::NotFound;
         };
         let Some(state) = self.inner.session_states.read().await.get(&peer).cloned() else {
-            return crate::types::VideoStopOutcome::NotFound;
+            return VideoStopOutcome::NotFound;
         };
         let Some(event) = state
             .video_slot
-            .current_event(peer.to_string(), crate::types::VideoPhase::Stopping, None)
+            .current_event(peer.to_string(), VideoPhase::Stopping, None)
             .await
         else {
-            return crate::types::VideoStopOutcome::NotFound;
+            return VideoStopOutcome::NotFound;
         };
         if event.identity.session_id != identity.session_id {
-            return crate::types::VideoStopOutcome::NotFound;
+            return VideoStopOutcome::NotFound;
         }
         self.inner.observe_video_lifecycle(event);
         let _ = state
             .message_sender
             .send(ProtocolMessage::Video {
-                control: crate::internal::video::VideoControl::stop(
-                    identity.session_id,
-                    crate::types::VideoTerminalReason::Stopped,
-                ),
+                control: VideoControl::stop(identity.session_id, VideoTerminalReason::Stopped),
             })
             .await;
         self.inner
-            .finish_current_video(&state, peer, crate::types::VideoTerminalReason::Stopped)
+            .finish_current_video(&state, peer, VideoTerminalReason::Stopped)
             .await;
-        crate::types::VideoStopOutcome::Stopped
+        VideoStopOutcome::Stopped
     }
 
-    pub async fn video_capabilities(&self) -> crate::types::VideoCapabilities {
+    pub async fn video_capabilities(&self) -> VideoCapabilities {
         self.inner
             .core_state
             .screenshare_config

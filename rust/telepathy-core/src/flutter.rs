@@ -5,6 +5,7 @@ pub mod utils;
 
 use crate::AudioDevice;
 use crate::internal::TelepathyHandle;
+use crate::internal::state::PreparedIdentitySwitch as InternalPreparedIdentitySwitch;
 use crate::overlay::Overlay;
 pub use crate::types::*;
 use flutter_rust_bridge::{DartFnFuture, frb};
@@ -34,7 +35,7 @@ impl StartOperation {
 
 #[frb(opaque)]
 pub struct PreparedIdentitySwitch {
-    prepared: Option<crate::internal::state::PreparedIdentitySwitch>,
+    prepared: Option<InternalPreparedIdentitySwitch>,
 }
 
 impl PreparedIdentitySwitch {

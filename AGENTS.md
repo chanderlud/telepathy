@@ -34,6 +34,10 @@ dart format .
 
 Format only after cleanup is complete.
 
+## Rust Style
+
+- Import `VideoWorkerStartup` at file top instead of spelling inline paths such as `crate::internal::video::VideoWorkerStartup::Failed`; rename the import only when it conflicts with another name.
+
 ## Rust Tests
 
 Prefer nextest. Use `cargo test` only when required, and state why.

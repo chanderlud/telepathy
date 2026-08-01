@@ -24,6 +24,7 @@ use crate::internal::utils::{JoinHandle, spawn_task};
 #[cfg(target_os = "ios")]
 use crate::internal::utils::{configure_audio_session, deactivate_audio_session};
 use crate::internal::utils::{loopback, read_message, statistics_collector, write_message};
+use crate::internal::video::{VIDEO_NEGOTIATION_TIMEOUT, VideoControl};
 use crate::internal::{
     ALPN, EarlyCallState, HELLO_TIMEOUT, KEEP_ALIVE, MAX_RINGTONE_LENGTH, Result, RoomState,
     SESSION_MAX_FRAME_LENGTH, SessionState,
@@ -32,7 +33,7 @@ use crate::overlay::CONNECTED;
 use crate::overlay::Overlay;
 use crate::types::{
     CallState, ChatMessage, CodecConfig, Contact, ManagerState, NetworkConfig, ScreenshareConfig,
-    SessionStatus,
+    SessionStatus, VideoTerminalReason,
 };
 use chrono::Local;
 use iroh::endpoint::{
@@ -84,7 +85,7 @@ fn update_video_negotiation_deadline(
     if matches!(
         message,
         ProtocolMessage::Video {
-            control: crate::internal::video::VideoControl::Offer(_),
+            control: VideoControl::Offer(_),
         }
     ) {
         *deadline = Some(Instant::now() + timeout);
@@ -2107,12 +2108,8 @@ where
                 _ => None,
             };
 
-            self.finish_current_video(
-                &video_state,
-                call_state.peer,
-                crate::internal::video::VideoTerminalReason::Teardown,
-            )
-            .await;
+            self.finish_current_video(&video_state, call_state.peer, VideoTerminalReason::Teardown)
+                .await;
 
             info!(event = "call_controller_done_notifying_stop_io");
             stop_io.cancel();
@@ -2271,7 +2268,7 @@ where
                         update_video_negotiation_deadline(
                             &mut video_negotiation_deadline,
                             &message,
-                            crate::internal::video::VIDEO_NEGOTIATION_TIMEOUT,
+                            VIDEO_NEGOTIATION_TIMEOUT,
                         );
                         write_message(o.control_send, &message).await?;
                     } else {

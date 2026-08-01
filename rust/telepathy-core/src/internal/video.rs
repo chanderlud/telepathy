@@ -15,8 +15,8 @@ pub(crate) const VIDEO_NEGOTIATION_TIMEOUT: std::time::Duration =
 const MAX_VIDEO_DIMENSION: u32 = 16_384;
 
 pub(crate) use crate::types::{
-    VideoCodec, VideoMediaFormat, VideoPhase, VideoRole, VideoSessionId, VideoSource,
-    VideoTerminalReason,
+    VideoCodec, VideoLifecycleEvent, VideoMediaFormat, VideoPhase, VideoRole, VideoSessionId,
+    VideoSessionIdentity, VideoSource, VideoTerminalReason,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -149,12 +149,12 @@ impl VideoDisplacement {
         mut self,
         peer_id: String,
         reason: VideoTerminalReason,
-    ) -> crate::types::VideoLifecycleEvent {
+    ) -> VideoLifecycleEvent {
         if let Some(worker) = self.reservation.worker.take() {
             let _ = worker.await;
         }
-        crate::types::VideoLifecycleEvent {
-            identity: crate::types::VideoSessionIdentity {
+        VideoLifecycleEvent {
+            identity: VideoSessionIdentity {
                 peer_id,
                 session_id: self.reservation.attempt.session_id(),
             },
@@ -308,7 +308,7 @@ impl VideoSlot {
         launch: &VideoLaunch,
         startup: VideoWorkerStartup,
         peer_id: String,
-    ) -> Option<crate::types::VideoLifecycleEvent> {
+    ) -> Option<VideoLifecycleEvent> {
         if startup != VideoWorkerStartup::Ready {
             return None;
         }
@@ -321,8 +321,8 @@ impl VideoSlot {
             return None;
         }
         reservation.phase = VideoPhase::Active;
-        Some(crate::types::VideoLifecycleEvent {
-            identity: crate::types::VideoSessionIdentity {
+        Some(VideoLifecycleEvent {
+            identity: VideoSessionIdentity {
                 peer_id,
                 session_id: reservation.attempt.session_id(),
             },
@@ -392,11 +392,11 @@ impl VideoSlot {
         peer_id: String,
         phase: VideoPhase,
         terminal_reason: Option<VideoTerminalReason>,
-    ) -> Option<crate::types::VideoLifecycleEvent> {
+    ) -> Option<VideoLifecycleEvent> {
         let state = self.state.lock().await;
         let current = state.reservation.as_ref()?;
-        Some(crate::types::VideoLifecycleEvent {
-            identity: crate::types::VideoSessionIdentity {
+        Some(VideoLifecycleEvent {
+            identity: VideoSessionIdentity {
                 peer_id,
                 session_id: current.attempt.session_id(),
             },
@@ -686,6 +686,7 @@ mod tests {
         LocalVideoGeneration, VideoAttempt, VideoCodec, VideoControl, VideoMediaDescriptor,
         VideoPreamble, VideoProtocolError, VideoSessionId, decode_preamble, encode_preamble,
     };
+    use crate::internal::state::SessionState;
     use speedy::Writable;
 
     #[test]
@@ -920,7 +921,7 @@ mod tests {
     #[tokio::test]
     async fn session_teardown_waits_for_installed_video_worker() {
         let (sender, _receiver) = tokio::sync::mpsc::channel(1);
-        let state = std::sync::Arc::new(crate::internal::state::SessionState::new(&sender));
+        let state = std::sync::Arc::new(SessionState::new(&sender));
         let descriptor = VideoMediaDescriptor::display(VideoCodec::H264, 1920, 1080);
         let offer = state
             .video_slot

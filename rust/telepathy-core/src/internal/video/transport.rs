@@ -166,8 +166,10 @@ pub(crate) async fn run_receiver(
 #[cfg(test)]
 mod tests {
     use super::{read_preamble, read_preamble_until_cancelled, run_receiver, write_preamble};
+    use crate::internal::ALPN;
     use crate::internal::video::{
-        VideoCodec, VideoMediaDescriptor, VideoPreamble, VideoSessionId, VideoWorkerStartup,
+        VIDEO_MEDIA_MAX_FRAME_LENGTH, VideoCodec, VideoControl, VideoMediaDescriptor, VideoPhase,
+        VideoPreamble, VideoSessionId, VideoSlot, VideoTerminalReason, VideoWorkerStartup,
     };
     use bytes::Bytes;
     use futures_util::{SinkExt, StreamExt};
@@ -181,7 +183,7 @@ mod tests {
 
         let server = iroh::Endpoint::builder(presets::N0)
             .relay_mode(iroh::RelayMode::Disabled)
-            .alpns(vec![crate::internal::ALPN.to_vec()])
+            .alpns(vec![ALPN.to_vec()])
             .bind()
             .await
             .expect("server endpoint binds");
@@ -191,14 +193,13 @@ mod tests {
             .await
             .expect("client endpoint binds");
         let server_addr = server.addr();
-        let (outbound, inbound) =
-            tokio::join!(client.connect(server_addr, crate::internal::ALPN), async {
-                server
-                    .accept()
-                    .await
-                    .expect("server receives connection")
-                    .await
-            });
+        let (outbound, inbound) = tokio::join!(client.connect(server_addr, ALPN), async {
+            server
+                .accept()
+                .await
+                .expect("server receives connection")
+                .await
+        });
         (
             client,
             server,
@@ -259,7 +260,7 @@ mod tests {
             VideoSessionId::new(),
             VideoMediaDescriptor::display(VideoCodec::H264, 1280, 720),
         );
-        let payload = vec![0x5A; crate::internal::video::VIDEO_MEDIA_MAX_FRAME_LENGTH];
+        let payload = vec![0x5A; VIDEO_MEDIA_MAX_FRAME_LENGTH];
         let expected = payload.clone();
 
         let sender_connection = outbound.clone();
@@ -272,7 +273,7 @@ mod tests {
                 .await
                 .expect("preamble writes");
             let codec = LengthDelimitedCodec::builder()
-                .max_frame_length(crate::internal::video::VIDEO_MEDIA_MAX_FRAME_LENGTH)
+                .max_frame_length(VIDEO_MEDIA_MAX_FRAME_LENGTH)
                 .new_codec();
             let mut framed = FramedWrite::new(stream, codec);
             framed
@@ -287,7 +288,7 @@ mod tests {
             preamble
         );
         let codec = LengthDelimitedCodec::builder()
-            .max_frame_length(crate::internal::video::VIDEO_MEDIA_MAX_FRAME_LENGTH)
+            .max_frame_length(VIDEO_MEDIA_MAX_FRAME_LENGTH)
             .new_codec();
         let mut framed = FramedRead::new(stream, codec);
         assert_eq!(
@@ -364,14 +365,11 @@ mod tests {
         use std::sync::atomic::{AtomicBool, Ordering};
 
         let (client, server, _outbound, inbound) = iroh_pair().await;
-        let slot = Arc::new(crate::internal::video::VideoSlot::default());
+        let slot = Arc::new(VideoSlot::default());
         let descriptor = VideoMediaDescriptor::display(VideoCodec::H264, 1280, 720);
         let session_id = VideoSessionId::new();
         let launch = slot
-            .receive(
-                crate::internal::video::VideoControl::offer(session_id, descriptor),
-                true,
-            )
+            .receive(VideoControl::offer(session_id, descriptor), true)
             .await
             .launch()
             .expect("accepted offer arms receiver");
@@ -388,21 +386,14 @@ mod tests {
         });
         assert!(slot.install(&launch, worker).await);
 
-        slot.cancel_and_join(
-            launch.attempt(),
-            crate::internal::video::VideoTerminalReason::Teardown,
-        )
-        .await;
+        slot.cancel_and_join(launch.attempt(), VideoTerminalReason::Teardown)
+            .await;
 
         assert!(joined.load(Ordering::Relaxed));
         assert!(
-            slot.current_event(
-                "peer".to_string(),
-                crate::internal::video::VideoPhase::Terminal,
-                None,
-            )
-            .await
-            .is_none()
+            slot.current_event("peer".to_string(), VideoPhase::Terminal, None,)
+                .await
+                .is_none()
         );
         client.close().await;
         server.close().await;
