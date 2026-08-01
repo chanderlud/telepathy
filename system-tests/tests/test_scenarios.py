@@ -1131,6 +1131,24 @@ async def test_call_drain_audio_frame_indices_strictly_increasing(
         _add_contact(bob, "alice", alice_peer_id),
     )
 
+    start_responses = await asyncio.gather(
+        alice.send({"cmd": "start_session", "args": {"contact_id": "bob"}}),
+        bob.send({"cmd": "start_session", "args": {"contact_id": "alice"}}),
+    )
+    assert all(response.get("ok") is True for response in start_responses)
+    await asyncio.gather(
+        alice.expect_event(
+            lambda event: event.get("type") == "session_status"
+            and _status_name(event.get("status")) == "Connected",
+            timeout=20.0,
+        ),
+        bob.expect_event(
+            lambda event: event.get("type") == "session_status"
+            and _status_name(event.get("status")) == "Connected",
+            timeout=20.0,
+        ),
+    )
+
     await _start_call_and_wait_connected(
         alice,
         bob,
