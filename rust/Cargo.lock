@@ -4367,6 +4367,7 @@ dependencies = [
  "base64",
  "serde",
  "serde_json",
+ "telepathy-audio",
  "telepathy_core",
  "tokio",
  "tracing",
