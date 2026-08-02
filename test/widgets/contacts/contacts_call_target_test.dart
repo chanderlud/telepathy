@@ -411,6 +411,38 @@ Future<void> _flushAsync(WidgetTester tester) async {
   await tester.pump(const Duration(milliseconds: 16));
 }
 
+/// Seeds a minimal profile and returns an initialized controller.
+///
+/// `RoomWidget` reads `profilesController.peerId` while building (the online
+/// badge excludes the local user), which throws unless `init()` has run.
+/// Must be called after the mock storage/preferred platforms are installed.
+Future<ProfilesController> _seededProfilesController() async {
+  const String profileId = 'call-target-test-profile';
+  const FlutterSecureStorage storage = FlutterSecureStorage();
+  final options = SharedPreferencesAsync();
+
+  await storage.write(
+    key: '$profileId-keypair',
+    value: base64Encode(List<int>.generate(32, (int index) => index)),
+  );
+  await storage.write(
+      key: '$profileId-peerId', value: 'call-target-self-peer-id');
+  await storage.write(key: '$profileId-nickname', value: 'Call Target User');
+  await storage.write(key: '$profileId-contacts', value: '{}');
+  await storage.write(key: '$profileId-rooms', value: '{}');
+  await options.setStringList('profilesV2', const <String>[profileId]);
+  await options.setString('activeProfile', profileId);
+
+  final controller = ProfilesController(
+    storage: storage,
+    options: options,
+    roomHasher: ({required List<String> peers}) => peers.join('|'),
+  );
+  await controller.init(const <String>[]);
+  addTearDown(controller.dispose);
+  return controller;
+}
+
 Future<ProfilesController> _seedActiveProfile() async {
   const String profileId = 'room-hangup-regression-profile';
   const FlutterSecureStorage storage = FlutterSecureStorage();
@@ -619,7 +651,7 @@ void main() {
     late FakeContact alice;
     late FakeContact bob;
 
-    setUp(() {
+    setUp(() async {
       FlutterSecureStorage.setMockInitialValues(<String, String>{});
       SharedPreferencesAsyncPlatform.instance =
           InMemorySharedPreferencesAsync.empty();
@@ -627,11 +659,7 @@ void main() {
       player = _FakeSoundPlayer(handle);
       telepathy = _RecordingTelepathy();
       stateController = StateController();
-      profilesController = ProfilesController(
-        storage: const FlutterSecureStorage(),
-        options: SharedPreferencesAsync(),
-        roomHasher: ({required List<String> peers}) => peers.join('|'),
-      );
+      profilesController = await _seededProfilesController();
       alice = FakeContact(
         id: 'contact-alice-id',
         contactNickname: 'Alice Ng',
@@ -916,7 +944,7 @@ void main() {
     late Room alpha;
     late Room bravo;
 
-    setUp(() {
+    setUp(() async {
       FlutterSecureStorage.setMockInitialValues(<String, String>{});
       SharedPreferencesAsyncPlatform.instance =
           InMemorySharedPreferencesAsync.empty();
@@ -924,11 +952,7 @@ void main() {
       player = _FakeSoundPlayer(handle);
       telepathy = _RecordingTelepathy();
       stateController = StateController();
-      profilesController = ProfilesController(
-        storage: const FlutterSecureStorage(),
-        options: SharedPreferencesAsync(),
-        roomHasher: ({required List<String> peers}) => peers.join('|'),
-      );
+      profilesController = await _seededProfilesController();
       alpha = Room(
         id: 'room-alpha',
         peerIds: const ['peer-1', 'peer-2'],
@@ -1244,17 +1268,13 @@ void main() {
     late ProfilesController profilesController;
     late Room alpha;
 
-    setUp(() {
+    setUp(() async {
       FlutterSecureStorage.setMockInitialValues(<String, String>{});
       SharedPreferencesAsyncPlatform.instance =
           InMemorySharedPreferencesAsync.empty();
       telepathy = _RecordingTelepathy();
       stateController = StateController();
-      profilesController = ProfilesController(
-        storage: const FlutterSecureStorage(),
-        options: SharedPreferencesAsync(),
-        roomHasher: ({required List<String> peers}) => peers.join('|'),
-      );
+      profilesController = await _seededProfilesController();
       alpha = Room(
         id: 'room-hangup-regression',
         peerIds: const <String>['peer-alpha', 'peer-bravo'],
@@ -1495,7 +1515,7 @@ void main() {
     late ProfilesController profilesController;
     late FakeContact alice;
 
-    setUp(() {
+    setUp(() async {
       FlutterSecureStorage.setMockInitialValues(<String, String>{});
       SharedPreferencesAsyncPlatform.instance =
           InMemorySharedPreferencesAsync.empty();
@@ -1503,11 +1523,7 @@ void main() {
       player = _FakeSoundPlayer(handle);
       telepathy = _RecordingTelepathy();
       stateController = StateController();
-      profilesController = ProfilesController(
-        storage: const FlutterSecureStorage(),
-        options: SharedPreferencesAsync(),
-        roomHasher: ({required List<String> peers}) => peers.join('|'),
-      );
+      profilesController = await _seededProfilesController();
       alice = FakeContact(
         id: 'contact-alice-id',
         contactNickname: 'Alice Ng',
@@ -1594,7 +1610,7 @@ void main() {
     late ProfilesController profilesController;
     late Room alpha;
 
-    setUp(() {
+    setUp(() async {
       FlutterSecureStorage.setMockInitialValues(<String, String>{});
       SharedPreferencesAsyncPlatform.instance =
           InMemorySharedPreferencesAsync.empty();
@@ -1602,11 +1618,7 @@ void main() {
       player = _FakeSoundPlayer(handle);
       telepathy = _RecordingTelepathy();
       stateController = StateController();
-      profilesController = ProfilesController(
-        storage: const FlutterSecureStorage(),
-        options: SharedPreferencesAsync(),
-        roomHasher: ({required List<String> peers}) => peers.join('|'),
-      );
+      profilesController = await _seededProfilesController();
       alpha = Room(
         id: 'room-alpha',
         peerIds: const ['peer-1', 'peer-2'],

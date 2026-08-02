@@ -17,6 +17,7 @@ dependencies:
   flutter_secure_storage: ^10.0.0
 
   shared_preferences: ^2.5.3
+  shared_preferences_platform_interface: ^2.4.1
   mutex: ^3.1.0
   file_picker: ^11.0.2
   uuid: ^4.3.3
@@ -37,7 +38,6 @@ dependencies:
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  shared_preferences_platform_interface: ^2.4.1
 
   flutter_lints: ^6.0.0
   freezed: ^3.0.0

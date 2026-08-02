@@ -7,6 +7,8 @@ import 'package:telepathy/core/utils/index.dart';
 import 'package:telepathy/models/index.dart';
 import 'package:telepathy/core/rust/player.dart';
 import 'package:telepathy/core/rust/flutter.dart';
+import 'package:telepathy/core/rust/types.dart';
+import 'package:telepathy/widgets/call/room_details_widget.dart';
 import 'package:telepathy/widgets/common/index.dart';
 
 import 'call_start_lifecycle.dart';
@@ -56,6 +58,16 @@ class RoomWidgetState extends State<RoomWidget> {
     final active = stateController.isActiveRoom(widget.room);
     final pending = stateController.pendingRoom?.id == widget.room.id;
 
+    // Members (excluding the local user, who is always "online" from their
+    // own perspective) whose session is currently connected; drives the
+    // "N online" badge so rooms surface their reachability at a glance.
+    final List<String> otherPeers = widget.room.peerIds
+        .where((p) => p != profilesController.peerId)
+        .toList();
+    final int onlineCount = otherPeers
+        .where((p) => stateController.sessions[p] is SessionStatus_Connected)
+        .length;
+
     return InkWell(
       mouseCursor: SystemMouseCursors.click,
       onHover: (hover) {
@@ -94,6 +106,22 @@ class RoomWidgetState extends State<RoomWidget> {
                   overflow: TextOverflow.ellipsis,
                   maxLines: 1),
             ),
+            if (!active && !pending) ...[
+              Container(
+                width: 7,
+                height: 7,
+                decoration: BoxDecoration(
+                  color: onlineCount > 0 ? onlineDotColor : offlineDotColor,
+                  shape: BoxShape.circle,
+                ),
+              ),
+              const SizedBox(width: 5),
+              Text(
+                '$onlineCount/${otherPeers.length}',
+                style: TextStyle(fontSize: 12, color: Colors.grey.shade400),
+              ),
+              const SizedBox(width: 6),
+            ],
             IconButton(
               visualDensity: VisualDensity.comfortable,
               icon: SvgPicture.asset(
@@ -251,6 +279,24 @@ class RoomWidgetState extends State<RoomWidget> {
                     stateController.pendingRoom?.id == widget.room.id),
                 controller: _nicknameInput,
                 labelText: 'Nickname'),
+            const SizedBox(height: 16),
+            Text('Members — ${widget.room.peerIds.length}',
+                style: TextStyle(fontSize: 13, color: Colors.grey.shade400)),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final String peerId in widget.room.peerIds)
+                  MemberStatusChip(
+                    name: _memberName(profilesController, peerId),
+                    dotColor: peerId == profilesController.peerId ||
+                            _isOnline(stateController, peerId)
+                        ? onlineDotColor
+                        : offlineDotColor,
+                  ),
+              ],
+            ),
             const SizedBox(height: 20),
             Button(
               text: 'Save',
@@ -280,6 +326,18 @@ class RoomWidgetState extends State<RoomWidget> {
         );
       },
     );
+  }
+
+  String _memberName(ProfilesController profilesController, String peerId) {
+    if (peerId == profilesController.peerId) return 'You';
+    return profilesController.contacts[peerId]?.nickname() ?? 'Anonymous';
+  }
+
+  bool _isOnline(StateController stateController, String peerId) {
+    if (stateController.isActiveRoom(widget.room)) {
+      return widget.room.online.contains(peerId);
+    }
+    return stateController.sessions[peerId] is SessionStatus_Connected;
   }
 
   Future<bool> _confirmDelete(BuildContext context) async {

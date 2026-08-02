@@ -1,4 +1,4 @@
-export 'package:telepathy/widgets/contacts/contact_form.dart';
+export 'package:telepathy/widgets/contacts/add_entry_dialog.dart';
 export 'package:telepathy/widgets/contacts/contact_widget.dart';
 export 'package:telepathy/widgets/contacts/contacts_list.dart';
 export 'package:telepathy/widgets/contacts/room_widget.dart';
