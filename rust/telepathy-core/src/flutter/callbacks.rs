@@ -1,6 +1,6 @@
 use crate::flutter::{
     CallState, ChatMessage, Contact, FlutterCallbacks, FlutterStatisticsCallback, FrontendNotify,
-    SessionStatus, Statistics, invoke, notify,
+    SessionStatus, Statistics, VideoLifecycleEvent, invoke, notify,
 };
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::{JoinHandle, spawn_task};
@@ -32,12 +32,8 @@ impl CoreCallbacks for FlutterCallbacks {
         notify(&self.manager_active, state)
     }
 
-    fn screenshare_started(
-        &self,
-        stop: FrontendNotify,
-        sender: bool,
-    ) -> impl Future<Output = ()> + Send {
-        notify(&self.screenshare_started, (stop, sender))
+    fn video_lifecycle(&self, event: VideoLifecycleEvent) -> impl Future<Output = ()> + Send {
+        notify(&self.video_lifecycle, event)
     }
 
     fn get_contact(&self, peer_id: Vec<u8>) -> impl Future<Output = Option<Contact>> + Send {

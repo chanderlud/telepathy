@@ -1,5 +1,6 @@
 use crate::internal::error::Error;
 use crate::internal::state::EarlyCallState;
+use crate::internal::video::VideoControl;
 use iroh::PublicKey;
 use iroh::endpoint::Connection;
 use serde::Serialize;
@@ -56,8 +57,8 @@ pub(crate) enum ProtocolMessage {
         attachments: Vec<Attachment>,
     },
     KeepAlive,
-    ScreenshareHeader {
-        encoder_name: String,
+    Video {
+        control: VideoControl,
     },
 }
 
@@ -130,31 +131,36 @@ pub(crate) enum RoomJoinAdmission {
     Aborted,
 }
 
-#[derive(Debug)]
-pub(crate) struct StartScreenshare {
-    pub(crate) peer: PublicKey,
-    pub(crate) header: Option<ProtocolMessage>,
-    pub(crate) connection: Connection,
-}
+#[cfg(test)]
+mod tests {
+    use super::ProtocolMessage;
+    use crate::internal::video::{
+        VideoCodec, VideoControl, VideoMediaDescriptor, VideoRejectReason, VideoSessionId,
+        VideoTerminalReason,
+    };
+    use speedy::{Readable, Writable};
+    #[test]
+    fn video_controls_round_trip_with_the_initiator_identity() {
+        let session_id = VideoSessionId::new();
+        let controls = [
+            VideoControl::offer(
+                session_id,
+                VideoMediaDescriptor::display(VideoCodec::H264, 1920, 1080),
+            ),
+            VideoControl::ready(session_id),
+            VideoControl::reject(session_id, VideoRejectReason::UnsupportedCodec),
+            VideoControl::stop(session_id, VideoTerminalReason::Stopped),
+        ];
 
-impl StartScreenshare {
-    pub(crate) fn new_sender(peer: PublicKey, connection: Connection) -> Self {
-        Self {
-            peer,
-            header: None,
-            connection,
-        }
-    }
-
-    pub(crate) fn new_receiver(
-        peer: PublicKey,
-        message: ProtocolMessage,
-        connection: Connection,
-    ) -> Self {
-        Self {
-            peer,
-            header: Some(message),
-            connection,
+        for control in controls {
+            let message = ProtocolMessage::Video { control };
+            let encoded = message.write_to_vec().expect("control encodes");
+            let decoded = ProtocolMessage::read_from_buffer(&encoded).expect("control decodes");
+            let ProtocolMessage::Video { control: decoded } = decoded else {
+                panic!("video control must remain a video message");
+            };
+            assert_eq!(decoded, control);
+            assert_eq!(decoded.session_id(), session_id);
         }
     }
 }

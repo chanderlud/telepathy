@@ -34,7 +34,7 @@ impl Hub {
         let tx_for_statistics = self.event_tx.clone();
         let tx_for_message = self.event_tx.clone();
         let tx_for_manager = self.event_tx.clone();
-        let tx_for_screenshare = self.event_tx.clone();
+        let tx_for_video = self.event_tx.clone();
 
         NativeCallbacks::new(
             move |contact_id, ringtone, response_tx, mut cancel_rx| {
@@ -120,10 +120,10 @@ impl Hub {
                     let _ = tx.send(Event::ManagerActive(state));
                 })
             },
-            move |(_notify, sender)| {
-                let tx = tx_for_screenshare.clone();
+            move |event| {
+                let tx = tx_for_video.clone();
                 Box::pin(async move {
-                    let _ = tx.send(Event::ScreenshareStarted { sender });
+                    let _ = tx.send(Event::VideoLifecycle { event });
                 })
             },
         )

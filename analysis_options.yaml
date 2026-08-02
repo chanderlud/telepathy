@@ -12,6 +12,7 @@ include: package:flutter_lints/flutter.yaml
 analyzer:
   exclude:
     - lib/src/**
+    - lib/core/rust/lib.dart
 
 linter:
   # The lint rules applied to this project can be customized in the

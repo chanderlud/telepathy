@@ -54,6 +54,7 @@ pub enum ErrorKind {
     TransportRecv,
     #[cfg(not(target_family = "wasm"))]
     InvalidEncoder,
+    PlatformUnavailable,
     RoomStateMissing,
     NoEncoderAvailable,
     NoIdentityAvailable,
@@ -240,6 +241,7 @@ impl Display for Error {
                 ErrorKind::TransportRecv => "Transport failed on receive".to_string(),
                 #[cfg(not(target_family = "wasm"))]
                 ErrorKind::InvalidEncoder => "Invalid encoder".to_string(),
+                ErrorKind::PlatformUnavailable => "Video platform unavailable".to_string(),
                 ErrorKind::RoomStateMissing => "Room state missing".to_string(),
                 ErrorKind::NoEncoderAvailable => "No encoder available".to_string(),
                 ErrorKind::NoIdentityAvailable => "No identity available".to_string(),

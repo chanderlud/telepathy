@@ -2,6 +2,7 @@ use crate::internal::callbacks::CoreStatisticsCallback;
 use crate::internal::error::{AudioStreamError, Error, ErrorKind};
 use crate::internal::messages::ProtocolMessage;
 use crate::internal::state::StatisticsCollectorState;
+use crate::internal::video::VIDEO_CONTROL_MAX_FRAME_LENGTH;
 use crate::overlay::{CONNECTED, LATENCY, LOSS};
 use crate::types::Statistics;
 use bytes::Bytes;
@@ -101,8 +102,18 @@ pub(crate) async fn read_message(
     transport: &mut FramedRead<RecvStream, LengthDelimitedCodec>,
 ) -> Result<ProtocolMessage> {
     if let Some(Ok(buffer)) = transport.next().await {
+        if buffer.len() > VIDEO_CONTROL_MAX_FRAME_LENGTH {
+            return Err(speedy::Error::custom("control frame exceeds maximum size").into());
+        }
         let message = ProtocolMessage::read_from_buffer(&buffer[..])?;
-        Ok(message)
+        if let ProtocolMessage::Video { control } = message {
+            control
+                .validate()
+                .map_err(|_| speedy::Error::custom("invalid video control"))?;
+            Ok(ProtocolMessage::Video { control })
+        } else {
+            Ok(message)
+        }
     } else {
         Err(ErrorKind::TransportRecv.into())
     }
@@ -220,6 +231,114 @@ where
     #[cfg(all(feature = "native", not(feature = "flutter")))]
     {
         tokio::spawn(future)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::read_message;
+    use crate::internal::ALPN;
+    use crate::internal::messages::ProtocolMessage;
+    use crate::internal::video::{
+        VIDEO_CONTROL_MAX_FRAME_LENGTH, VideoCodec, VideoControl, VideoMediaDescriptor,
+        VideoSessionId,
+    };
+    use bytes::Bytes;
+    use futures_util::SinkExt;
+    use iroh::endpoint::{Connection, presets};
+    use speedy::Writable;
+    use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
+
+    async fn iroh_pair() -> (iroh::Endpoint, iroh::Endpoint, Connection, Connection) {
+        let server = iroh::Endpoint::builder(presets::N0)
+            .relay_mode(iroh::RelayMode::Disabled)
+            .alpns(vec![ALPN.to_vec()])
+            .bind()
+            .await
+            .expect("server endpoint binds");
+        let client = iroh::Endpoint::builder(presets::N0)
+            .relay_mode(iroh::RelayMode::Disabled)
+            .bind()
+            .await
+            .expect("client endpoint binds");
+        let server_addr = server.addr();
+        let (outbound, inbound) = tokio::join!(client.connect(server_addr, ALPN), async {
+            server
+                .accept()
+                .await
+                .expect("server receives connection")
+                .await
+        });
+        (
+            client,
+            server,
+            outbound.expect("client connects"),
+            inbound.expect("server accepts"),
+        )
+    }
+
+    async fn send_control_bytes(connection: &Connection, bytes: Vec<u8>) {
+        let stream = connection.open_uni().await.expect("stream opens");
+        let codec = LengthDelimitedCodec::builder()
+            .max_frame_length(VIDEO_CONTROL_MAX_FRAME_LENGTH + 1)
+            .new_codec();
+        let mut framed = FramedWrite::new(stream, codec);
+        framed.send(Bytes::from(bytes)).await.expect("frame writes");
+        framed.into_inner().finish().expect("stream finishes");
+    }
+
+    async fn receive_control(connection: &Connection) -> super::Result<ProtocolMessage> {
+        let stream = connection.accept_uni().await.expect("stream accepted");
+        let codec = LengthDelimitedCodec::builder()
+            .max_frame_length(VIDEO_CONTROL_MAX_FRAME_LENGTH + 1)
+            .new_codec();
+        read_message(&mut FramedRead::new(stream, codec)).await
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn read_message_validates_video_controls_on_real_iroh_streams() {
+        let (client, server, outbound, inbound) = iroh_pair().await;
+        let session_id = VideoSessionId::new();
+        let valid = ProtocolMessage::Video {
+            control: VideoControl::offer(
+                session_id,
+                VideoMediaDescriptor::display(VideoCodec::H264, 1_280, 720),
+            ),
+        };
+        send_control_bytes(
+            &outbound,
+            valid.write_to_vec().expect("valid control encodes"),
+        )
+        .await;
+        assert!(matches!(
+            receive_control(&inbound).await.expect("valid control reads"),
+            ProtocolMessage::Video { control } if control.session_id() == session_id
+        ));
+
+        send_control_bytes(&outbound, vec![0xFF]).await;
+        assert!(receive_control(&inbound).await.is_err());
+
+        let invalid = ProtocolMessage::Video {
+            control: VideoControl::offer(
+                VideoSessionId::new(),
+                VideoMediaDescriptor::display(VideoCodec::H264, 0, 720),
+            ),
+        };
+        send_control_bytes(
+            &outbound,
+            invalid.write_to_vec().expect("invalid control encodes"),
+        )
+        .await;
+        assert!(receive_control(&inbound).await.is_err());
+
+        let ((), oversized_result) = tokio::join!(
+            send_control_bytes(&outbound, vec![0; VIDEO_CONTROL_MAX_FRAME_LENGTH + 1]),
+            receive_control(&inbound),
+        );
+        assert!(oversized_result.is_err());
+
+        client.close().await;
+        server.close().await;
     }
 }
 

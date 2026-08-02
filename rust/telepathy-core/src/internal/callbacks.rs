@@ -1,6 +1,6 @@
 use crate::internal::utils::JoinHandle;
 use crate::types::{
-    CallState, ChatMessage, Contact, FrontendNotify, ManagerState, SessionStatus, Statistics,
+    CallState, ChatMessage, Contact, ManagerState, SessionStatus, Statistics, VideoLifecycleEvent,
 };
 #[cfg(feature = "integration-testing")]
 use async_trait::async_trait;
@@ -31,11 +31,7 @@ pub trait CoreCallbacks {
 
     fn manager_state(&self, state: ManagerState) -> impl Future<Output = ()> + Send;
 
-    fn screenshare_started(
-        &self,
-        stop: FrontendNotify,
-        sender: bool,
-    ) -> impl Future<Output = ()> + Send;
+    fn video_lifecycle(&self, event: VideoLifecycleEvent) -> impl Future<Output = ()> + Send;
 
     fn get_contact(&self, peer_id: Vec<u8>) -> impl Future<Output = Option<Contact>> + Send;
 

@@ -3,12 +3,15 @@ use crate::internal::TelepathyHandle;
 use crate::internal::callbacks::{CoreCallbacks, CoreStatisticsCallback};
 use crate::internal::{JoinHandle, spawn_task};
 use crate::types::{
-    CallState, ChatMessage, Contact, FrontendNotify, ManagerState, SessionStatus, Statistics,
+    CallState, ChatMessage, CodecConfig, Contact, IDENTITY_KEY_LENGTH_MESSAGE, ManagerState,
+    NetworkConfig, ScreenshareConfig, SessionStatus, Statistics, VideoCapabilities,
+    VideoLifecycleEvent, VideoSessionIdentity, VideoSource, VideoStartOutcome, VideoStopOutcome,
 };
 use iroh::PublicKey;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use telepathy_audio::devices::AudioHost;
 #[cfg(not(feature = "integration-testing"))]
 use telepathy_audio::devices::CpalAudioHost;
 #[cfg(feature = "integration-testing")]
@@ -23,35 +26,58 @@ type NativeAcceptCall = Arc<
 >;
 
 #[cfg(not(feature = "integration-testing"))]
-type NativeHandle = TelepathyHandle<NativeCallbacks, CpalAudioHost>;
+type DefaultNativeHost = CpalAudioHost;
 #[cfg(feature = "integration-testing")]
-type NativeHandle = TelepathyHandle<
-    NativeCallbacks,
-    MockAudioHost<
-        telepathy_audio::devices::MockAudioInput,
-        telepathy_audio::devices::MockAudioOutput,
-    >,
+type DefaultNativeHost = MockAudioHost<
+    telepathy_audio::devices::MockAudioInput,
+    telepathy_audio::devices::MockAudioOutput,
 >;
 
 /// Rust-native runtime client for `telepathy-core`.
 ///
 /// This mirrors the Flutter-facing API but accepts [`NativeCallbacks`] and does
 /// not depend on FRB runtime semantics.
-pub struct NativeTelepathy {
-    handle: NativeHandle,
+pub struct NativeTelepathy<H = DefaultNativeHost>
+where
+    H: AudioHost + Send + Sync + Clone + 'static,
+{
+    handle: TelepathyHandle<NativeCallbacks, H>,
 }
 
-impl NativeTelepathy {
+impl NativeTelepathy<DefaultNativeHost> {
     pub fn new(
-        network_config: &crate::types::NetworkConfig,
-        codec_config: &crate::types::CodecConfig,
+        network_config: &NetworkConfig,
+        video_config: &ScreenshareConfig,
+        codec_config: &CodecConfig,
+        callbacks: NativeCallbacks,
+    ) -> Self {
+        Self::with_host(
+            Default::default(),
+            network_config,
+            video_config,
+            codec_config,
+            callbacks,
+        )
+    }
+}
+
+impl<H> NativeTelepathy<H>
+where
+    H: AudioHost + Send + Sync + Clone + 'static,
+{
+    /// Builds a client around a caller-provided audio host (e.g. a mock host for headless tests).
+    pub fn with_host(
+        audio_host: H,
+        network_config: &NetworkConfig,
+        video_config: &ScreenshareConfig,
+        codec_config: &CodecConfig,
         callbacks: NativeCallbacks,
     ) -> Self {
         Self {
             handle: TelepathyHandle::new(
-                Default::default(),
+                audio_host,
                 network_config,
-                &Default::default(),
+                video_config,
                 &Default::default(),
                 codec_config,
                 callbacks,
@@ -106,7 +132,7 @@ impl NativeTelepathy {
             .set_identity(
                 &(key
                     .try_into()
-                    .map_err(|_| crate::types::IDENTITY_KEY_LENGTH_MESSAGE.to_string())?),
+                    .map_err(|_| IDENTITY_KEY_LENGTH_MESSAGE.to_string())?),
             )
             .await
             .map_err(|e| e.to_string())
@@ -136,8 +162,20 @@ impl NativeTelepathy {
             .map_err(|e| e.to_string())
     }
 
-    pub async fn start_screenshare(&self, contact: &Contact) {
-        self.handle.start_screenshare(contact).await;
+    pub async fn request_video_source(
+        &self,
+        contact: &Contact,
+        source: VideoSource,
+    ) -> VideoStartOutcome {
+        self.handle.request_video_source(contact, source).await
+    }
+
+    pub async fn stop_video_source(&self, identity: VideoSessionIdentity) -> VideoStopOutcome {
+        self.handle.stop_video_source(identity).await
+    }
+
+    pub async fn video_capabilities(&self) -> VideoCapabilities {
+        self.handle.video_capabilities().await
     }
 
     pub fn set_rms_threshold(&self, decimal: f32) {
@@ -242,7 +280,7 @@ pub struct NativeCallbacks {
     statistics: NativeVoid<Statistics>,
     message_received: NativeVoid<ChatMessage>,
     manager_active: NativeVoid<ManagerState>,
-    screenshare_started: NativeVoid<(FrontendNotify, bool)>,
+    video_lifecycle: NativeVoid<VideoLifecycleEvent>,
 }
 
 impl NativeCallbacks {
@@ -259,7 +297,7 @@ impl NativeCallbacks {
         statistics: impl Fn(Statistics) -> NativeFuture<()> + Send + Sync + 'static,
         message_received: impl Fn(ChatMessage) -> NativeFuture<()> + Send + Sync + 'static,
         manager_active: impl Fn(ManagerState) -> NativeFuture<()> + Send + Sync + 'static,
-        screenshare_started: impl Fn((FrontendNotify, bool)) -> NativeFuture<()> + Send + Sync + 'static,
+        video_lifecycle: impl Fn(VideoLifecycleEvent) -> NativeFuture<()> + Send + Sync + 'static,
     ) -> Self {
         Self {
             accept_call: Arc::new(accept_call),
@@ -270,7 +308,7 @@ impl NativeCallbacks {
             statistics: Arc::new(statistics),
             message_received: Arc::new(message_received),
             manager_active: Arc::new(manager_active),
-            screenshare_started: Arc::new(screenshare_started),
+            video_lifecycle: Arc::new(video_lifecycle),
         }
     }
 }
@@ -294,8 +332,8 @@ impl CoreCallbacks for NativeCallbacks {
         (self.manager_active)(state).await
     }
 
-    async fn screenshare_started(&self, stop: FrontendNotify, sender: bool) {
-        (self.screenshare_started)((stop, sender)).await
+    async fn video_lifecycle(&self, event: VideoLifecycleEvent) {
+        (self.video_lifecycle)(event).await
     }
 
     async fn get_contact(&self, peer_id: Vec<u8>) -> Option<Contact> {

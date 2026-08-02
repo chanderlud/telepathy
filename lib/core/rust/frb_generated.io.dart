@@ -281,11 +281,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
           dynamic raw);
 
   @protected
-  FutureOr<void> Function((FrontendNotify, bool))
-      dco_decode_DartFn_Inputs_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_bool_Output_unit_AnyhowException(
-          dynamic raw);
-
-  @protected
   FutureOr<bool> Function((String, Uint8List?, FrontendNotify))
       dco_decode_DartFn_Inputs_record_string_opt_list_prim_u_8_strict_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_Output_bool_AnyhowException(
           dynamic raw);
@@ -303,6 +298,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   FutureOr<List<Contact>> Function(void)
       dco_decode_DartFn_Inputs_unit_Output_list_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerContact_AnyhowException(
+          dynamic raw);
+
+  @protected
+  FutureOr<void> Function(VideoLifecycleEvent)
+      dco_decode_DartFn_Inputs_video_lifecycle_event_Output_unit_AnyhowException(
           dynamic raw);
 
   @protected
@@ -419,6 +419,19 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   int dco_decode_box_autoadd_u_32(dynamic raw);
 
   @protected
+  VideoMediaFormat dco_decode_box_autoadd_video_media_format(dynamic raw);
+
+  @protected
+  VideoSessionIdentity dco_decode_box_autoadd_video_session_identity(
+      dynamic raw);
+
+  @protected
+  VideoTerminalReason dco_decode_box_autoadd_video_terminal_reason(dynamic raw);
+
+  @protected
+  VideoUnavailable dco_decode_box_autoadd_video_unavailable(dynamic raw);
+
+  @protected
   CallState dco_decode_call_state(dynamic raw);
 
   @protected
@@ -455,6 +468,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       dynamic raw);
 
   @protected
+  List<VideoMediaFormat> dco_decode_list_video_media_format(dynamic raw);
+
+  @protected
+  List<VideoSourceCapability> dco_decode_list_video_source_capability(
+      dynamic raw);
+
+  @protected
   ManagerState dco_decode_manager_state(dynamic raw);
 
   @protected
@@ -480,17 +500,14 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   int? dco_decode_opt_box_autoadd_u_32(dynamic raw);
 
   @protected
+  VideoTerminalReason? dco_decode_opt_box_autoadd_video_terminal_reason(
+      dynamic raw);
+
+  @protected
   List<String>? dco_decode_opt_list_String(dynamic raw);
 
   @protected
   Uint8List? dco_decode_opt_list_prim_u_8_strict(dynamic raw);
-
-  @protected
-  (
-    FrontendNotify,
-    bool
-  ) dco_decode_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_bool(
-      dynamic raw);
 
   @protected
   (bool, bool, double) dco_decode_record_bool_bool_f_32(dynamic raw);
@@ -533,10 +550,59 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   int dco_decode_u_8(dynamic raw);
 
   @protected
+  U8Array16 dco_decode_u_8_array_16(dynamic raw);
+
+  @protected
   void dco_decode_unit(dynamic raw);
 
   @protected
   BigInt dco_decode_usize(dynamic raw);
+
+  @protected
+  VideoCapabilities dco_decode_video_capabilities(dynamic raw);
+
+  @protected
+  VideoCapabilityAvailability dco_decode_video_capability_availability(
+      dynamic raw);
+
+  @protected
+  VideoCodec dco_decode_video_codec(dynamic raw);
+
+  @protected
+  VideoLifecycleEvent dco_decode_video_lifecycle_event(dynamic raw);
+
+  @protected
+  VideoMediaFormat dco_decode_video_media_format(dynamic raw);
+
+  @protected
+  VideoPhase dco_decode_video_phase(dynamic raw);
+
+  @protected
+  VideoRole dco_decode_video_role(dynamic raw);
+
+  @protected
+  VideoSessionId dco_decode_video_session_id(dynamic raw);
+
+  @protected
+  VideoSessionIdentity dco_decode_video_session_identity(dynamic raw);
+
+  @protected
+  VideoSource dco_decode_video_source(dynamic raw);
+
+  @protected
+  VideoSourceCapability dco_decode_video_source_capability(dynamic raw);
+
+  @protected
+  VideoStartOutcome dco_decode_video_start_outcome(dynamic raw);
+
+  @protected
+  VideoStopOutcome dco_decode_video_stop_outcome(dynamic raw);
+
+  @protected
+  VideoTerminalReason dco_decode_video_terminal_reason(dynamic raw);
+
+  @protected
+  VideoUnavailable dco_decode_video_unavailable(dynamic raw);
 
   @protected
   AnyhowException sse_decode_AnyhowException(SseDeserializer deserializer);
@@ -826,6 +892,22 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   int sse_decode_box_autoadd_u_32(SseDeserializer deserializer);
 
   @protected
+  VideoMediaFormat sse_decode_box_autoadd_video_media_format(
+      SseDeserializer deserializer);
+
+  @protected
+  VideoSessionIdentity sse_decode_box_autoadd_video_session_identity(
+      SseDeserializer deserializer);
+
+  @protected
+  VideoTerminalReason sse_decode_box_autoadd_video_terminal_reason(
+      SseDeserializer deserializer);
+
+  @protected
+  VideoUnavailable sse_decode_box_autoadd_video_unavailable(
+      SseDeserializer deserializer);
+
+  @protected
   CallState sse_decode_call_state(SseDeserializer deserializer);
 
   @protected
@@ -862,6 +944,14 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       SseDeserializer deserializer);
 
   @protected
+  List<VideoMediaFormat> sse_decode_list_video_media_format(
+      SseDeserializer deserializer);
+
+  @protected
+  List<VideoSourceCapability> sse_decode_list_video_source_capability(
+      SseDeserializer deserializer);
+
+  @protected
   ManagerState sse_decode_manager_state(SseDeserializer deserializer);
 
   @protected
@@ -889,17 +979,14 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   int? sse_decode_opt_box_autoadd_u_32(SseDeserializer deserializer);
 
   @protected
+  VideoTerminalReason? sse_decode_opt_box_autoadd_video_terminal_reason(
+      SseDeserializer deserializer);
+
+  @protected
   List<String>? sse_decode_opt_list_String(SseDeserializer deserializer);
 
   @protected
   Uint8List? sse_decode_opt_list_prim_u_8_strict(SseDeserializer deserializer);
-
-  @protected
-  (
-    FrontendNotify,
-    bool
-  ) sse_decode_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_bool(
-      SseDeserializer deserializer);
 
   @protected
   (bool, bool, double) sse_decode_record_bool_bool_f_32(
@@ -945,10 +1032,64 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   int sse_decode_u_8(SseDeserializer deserializer);
 
   @protected
+  U8Array16 sse_decode_u_8_array_16(SseDeserializer deserializer);
+
+  @protected
   void sse_decode_unit(SseDeserializer deserializer);
 
   @protected
   BigInt sse_decode_usize(SseDeserializer deserializer);
+
+  @protected
+  VideoCapabilities sse_decode_video_capabilities(SseDeserializer deserializer);
+
+  @protected
+  VideoCapabilityAvailability sse_decode_video_capability_availability(
+      SseDeserializer deserializer);
+
+  @protected
+  VideoCodec sse_decode_video_codec(SseDeserializer deserializer);
+
+  @protected
+  VideoLifecycleEvent sse_decode_video_lifecycle_event(
+      SseDeserializer deserializer);
+
+  @protected
+  VideoMediaFormat sse_decode_video_media_format(SseDeserializer deserializer);
+
+  @protected
+  VideoPhase sse_decode_video_phase(SseDeserializer deserializer);
+
+  @protected
+  VideoRole sse_decode_video_role(SseDeserializer deserializer);
+
+  @protected
+  VideoSessionId sse_decode_video_session_id(SseDeserializer deserializer);
+
+  @protected
+  VideoSessionIdentity sse_decode_video_session_identity(
+      SseDeserializer deserializer);
+
+  @protected
+  VideoSource sse_decode_video_source(SseDeserializer deserializer);
+
+  @protected
+  VideoSourceCapability sse_decode_video_source_capability(
+      SseDeserializer deserializer);
+
+  @protected
+  VideoStartOutcome sse_decode_video_start_outcome(
+      SseDeserializer deserializer);
+
+  @protected
+  VideoStopOutcome sse_decode_video_stop_outcome(SseDeserializer deserializer);
+
+  @protected
+  VideoTerminalReason sse_decode_video_terminal_reason(
+      SseDeserializer deserializer);
+
+  @protected
+  VideoUnavailable sse_decode_video_unavailable(SseDeserializer deserializer);
 
   @protected
   void sse_encode_AnyhowException(
@@ -1145,12 +1286,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void
-      sse_encode_DartFn_Inputs_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_bool_Output_unit_AnyhowException(
-          FutureOr<void> Function((FrontendNotify, bool)) self,
-          SseSerializer serializer);
-
-  @protected
-  void
       sse_encode_DartFn_Inputs_record_string_opt_list_prim_u_8_strict_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_Output_bool_AnyhowException(
           FutureOr<bool> Function((String, Uint8List?, FrontendNotify)) self,
           SseSerializer serializer);
@@ -1169,6 +1304,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void
       sse_encode_DartFn_Inputs_unit_Output_list_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerContact_AnyhowException(
           FutureOr<List<Contact>> Function(void) self,
+          SseSerializer serializer);
+
+  @protected
+  void
+      sse_encode_DartFn_Inputs_video_lifecycle_event_Output_unit_AnyhowException(
+          FutureOr<void> Function(VideoLifecycleEvent) self,
           SseSerializer serializer);
 
   @protected
@@ -1286,6 +1427,22 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_box_autoadd_u_32(int self, SseSerializer serializer);
 
   @protected
+  void sse_encode_box_autoadd_video_media_format(
+      VideoMediaFormat self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_box_autoadd_video_session_identity(
+      VideoSessionIdentity self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_box_autoadd_video_terminal_reason(
+      VideoTerminalReason self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_box_autoadd_video_unavailable(
+      VideoUnavailable self, SseSerializer serializer);
+
+  @protected
   void sse_encode_call_state(CallState self, SseSerializer serializer);
 
   @protected
@@ -1324,6 +1481,14 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       List<(String, Uint8List)> self, SseSerializer serializer);
 
   @protected
+  void sse_encode_list_video_media_format(
+      List<VideoMediaFormat> self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_list_video_source_capability(
+      List<VideoSourceCapability> self, SseSerializer serializer);
+
+  @protected
   void sse_encode_manager_state(ManagerState self, SseSerializer serializer);
 
   @protected
@@ -1351,16 +1516,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_opt_box_autoadd_u_32(int? self, SseSerializer serializer);
 
   @protected
+  void sse_encode_opt_box_autoadd_video_terminal_reason(
+      VideoTerminalReason? self, SseSerializer serializer);
+
+  @protected
   void sse_encode_opt_list_String(List<String>? self, SseSerializer serializer);
 
   @protected
   void sse_encode_opt_list_prim_u_8_strict(
       Uint8List? self, SseSerializer serializer);
-
-  @protected
-  void
-      sse_encode_record_auto_owned_rust_opaque_flutter_rust_bridgefor_generated_rust_auto_opaque_inner_frontend_notify_bool(
-          (FrontendNotify, bool) self, SseSerializer serializer);
 
   @protected
   void sse_encode_record_bool_bool_f_32(
@@ -1402,10 +1566,69 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_u_8(int self, SseSerializer serializer);
 
   @protected
+  void sse_encode_u_8_array_16(U8Array16 self, SseSerializer serializer);
+
+  @protected
   void sse_encode_unit(void self, SseSerializer serializer);
 
   @protected
   void sse_encode_usize(BigInt self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_video_capabilities(
+      VideoCapabilities self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_video_capability_availability(
+      VideoCapabilityAvailability self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_video_codec(VideoCodec self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_video_lifecycle_event(
+      VideoLifecycleEvent self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_video_media_format(
+      VideoMediaFormat self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_video_phase(VideoPhase self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_video_role(VideoRole self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_video_session_id(
+      VideoSessionId self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_video_session_identity(
+      VideoSessionIdentity self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_video_source(VideoSource self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_video_source_capability(
+      VideoSourceCapability self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_video_start_outcome(
+      VideoStartOutcome self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_video_stop_outcome(
+      VideoStopOutcome self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_video_terminal_reason(
+      VideoTerminalReason self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_video_unavailable(
+      VideoUnavailable self, SseSerializer serializer);
 }
 
 // Section: wire_class

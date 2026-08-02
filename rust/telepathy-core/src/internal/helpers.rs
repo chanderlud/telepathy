@@ -1,24 +1,31 @@
+#[cfg(not(target_family = "wasm"))]
+use crate::internal::MAX_RINGTONE_LENGTH;
 use crate::internal::callbacks::CoreCallbacks;
 use crate::internal::core::{
     OutgoingSlotDecision, PendingDirectCallSlot, RoomControllerCleanup, RoomControllerOutcome,
     TelepathyCore,
 };
 use crate::internal::error::{AudioStreamError, Error, ErrorKind};
+use crate::internal::messages::ProtocolMessage;
 use crate::internal::messages::{AudioHeader, RoomMessage};
-#[cfg(not(target_family = "wasm"))]
-use crate::internal::messages::{ProtocolMessage, StartScreenshare};
-#[cfg(not(target_family = "wasm"))]
-use crate::internal::screenshare;
-use crate::internal::state::{CallSlot, EarlyCallState, StatisticsCollectorState};
+use crate::internal::state::{
+    CallSlot, CallSlotState, EarlyCallState, SessionState, StatisticsCollectorState,
+};
 #[cfg(target_os = "ios")]
 use crate::internal::utils::deactivate_audio_session;
-use crate::internal::utils::{JoinHandle, KanalSink, KanalSource};
-use crate::internal::{ALPN, MAX_RINGTONE_LENGTH, Result};
-#[cfg(not(target_family = "wasm"))]
-use crate::types::FrontendNotify;
-use crate::types::{ManagerState, SessionStatus};
+use crate::internal::utils::{JoinHandle, KanalSink, KanalSource, spawn_task};
+use crate::internal::video::transport::{run_receiver, run_sender};
+use crate::internal::video::{
+    VideoAttempt, VideoControl, VideoLaunch, VideoPreamble, VideoRole, VideoSlotEffect,
+};
+use crate::internal::{ALPN, Result};
+use crate::types::{
+    ManagerState, SessionStatus, VideoLifecycleEvent, VideoPhase, VideoSessionIdentity,
+    VideoSource, VideoStartOutcome, VideoTerminalReason,
+};
 use bytes::Bytes;
 use iroh::address_lookup::PkarrPublisher;
+use iroh::endpoint::Connection;
 use iroh::endpoint::{default_relay_mode, presets};
 use iroh::{Endpoint, PublicKey, RelayMode, SecretKey};
 #[cfg(not(target_family = "wasm"))]
@@ -237,80 +244,288 @@ where
         Ok(Some(endpoint))
     }
 
-    #[cfg(not(target_family = "wasm"))]
-    #[instrument(
-        name = "screenshare",
-        skip_all,
-        fields(
-            peer.id = %message.peer,
-            role = if message.header.is_some() { "receiver" } else { "sender" }
-        )
-    )]
-    pub(crate) async fn start_screenshare(&self, message: StartScreenshare) -> Result<()> {
-        let state = if let Some(s) = self.session_states.read().await.get(&message.peer) {
+    #[instrument(name = "video", skip_all)]
+    pub(crate) async fn request_video_source(
+        &self,
+        peer: PublicKey,
+        source: VideoSource,
+    ) -> VideoStartOutcome {
+        let state = if let Some(s) = self.session_states.read().await.get(&peer) {
             s.clone()
         } else {
-            warn!(
-                "screenshare started for a peer without a session: {}",
-                message.peer
-            );
-            return Ok(());
+            warn!("video started for a peer without a session: {}", peer);
+            return VideoStartOutcome::NoSession;
         };
 
-        let stop = Arc::new(Notify::new());
-        *state.stop_screenshare.lock().await = Some(stop.clone());
-        let dart_stop = FrontendNotify::new(&stop);
-
-        if let Some(ProtocolMessage::ScreenshareHeader { encoder_name }) = message.header {
-            // alert the frontend
-            self.callbacks.screenshare_started(dart_stop, false).await;
-            let stream = message.connection.accept_uni().await?;
-            // start playing back the screenshare
-            screenshare::playback(
-                stream,
-                stop,
-                encoder_name,
-                self.core_state.screenshare_config.width.load(Relaxed),
-                self.core_state.screenshare_config.height.load(Relaxed),
-            )
-            .await?;
-        } else {
-            let config = if let Some(c) = self
-                .core_state
-                .screenshare_config
-                .recording_config
-                .read()
-                .await
-                .as_ref()
-            {
-                c.clone()
-            } else {
-                // the frontend blocks this case
-                warn!("screenshare started without recording configuration");
-                return Ok(());
-            };
-
-            // send the peer a screenshare header
-            // the peer will open a stream after receiving it
-            let result = state
-                .message_sender
-                .send(ProtocolMessage::ScreenshareHeader {
-                    encoder_name: config.encoder.to_string(),
-                })
-                .await;
-
-            if result.is_ok() {
-                // alert the frontend & provide the stop object
-                self.callbacks.screenshare_started(dart_stop, true).await;
-                let stream = message.connection.open_uni().await?;
-                // start recording the screenshare
-                screenshare::record(stream, stop, config).await?;
-            } else {
-                warn!("giving up on screenshare start, state closed");
-            }
+        if !self.core_state.call_slot.snapshot().is_ok_and(|slot| {
+            slot.state == CallSlotState::ActiveDirect && slot.direct_peer == Some(peer)
+        }) {
+            warn!(
+                "video started for a peer without an active direct call: {}",
+                peer
+            );
+            return VideoStartOutcome::NoSession;
         }
 
+        let descriptor = match self
+            .core_state
+            .screenshare_config
+            .prepare_video_sender(source)
+            .await
+        {
+            Ok((_, descriptor)) => descriptor,
+            Err(reason) => {
+                warn!(?reason, "video source unavailable at start");
+                return VideoStartOutcome::Unavailable(reason);
+            }
+        };
+        if let Some(control) = state.video_slot.start_local(descriptor).await {
+            let identity = VideoSessionIdentity {
+                peer_id: peer.to_string(),
+                session_id: control.session_id(),
+            };
+            if let Some(event) = state
+                .video_slot
+                .current_event(peer.to_string(), VideoPhase::Offering, None)
+                .await
+            {
+                self.observe_video_lifecycle(event);
+            }
+            let result = state
+                .message_sender
+                .send(ProtocolMessage::Video { control })
+                .await;
+            if result.is_err() {
+                self.finish_current_video(&state, peer, VideoTerminalReason::Failed)
+                    .await;
+                warn!("giving up on screenshare start, state closed");
+                return VideoStartOutcome::Failed(VideoTerminalReason::Failed);
+            }
+            return VideoStartOutcome::Requested(identity);
+        }
+        VideoStartOutcome::AlreadyActive
+    }
+
+    pub(crate) async fn handle_video_control(
+        &self,
+        peer: PublicKey,
+        connection: &Connection,
+        control: VideoControl,
+    ) -> Result<()> {
+        let Some(state) = self.session_states.read().await.get(&peer).cloned() else {
+            return Ok(());
+        };
+        let local_offer_wins = self.peer_id().await.to_string() < peer.to_string();
+        let effect = match control {
+            VideoControl::Offer(offer) => {
+                let capabilities = self
+                    .core_state
+                    .screenshare_config
+                    .video_capabilities()
+                    .await;
+                state
+                    .video_slot
+                    .receive_offer(offer, local_offer_wins, &capabilities.receive_formats)
+                    .await
+            }
+            _ => state.video_slot.receive(control, local_offer_wins).await,
+        };
+        match effect {
+            VideoSlotEffect::Send(control) => {
+                let _ = state
+                    .message_sender
+                    .send(ProtocolMessage::Video { control })
+                    .await;
+            }
+            VideoSlotEffect::Launch(launch) => {
+                self.launch_video_worker(&state, peer, connection, launch)
+                    .await;
+            }
+            VideoSlotEffect::SendAndLaunch(control, launch) => {
+                self.launch_video_worker(&state, peer, connection, launch)
+                    .await;
+                let _ = state
+                    .message_sender
+                    .send(ProtocolMessage::Video { control })
+                    .await;
+            }
+            VideoSlotEffect::DisplaceAndSendAndLaunch(displaced, control, launch) => {
+                let event = displaced
+                    .cancel_and_join(peer.to_string(), VideoTerminalReason::Rejected)
+                    .await;
+                self.observe_video_lifecycle(event);
+                self.launch_video_worker(&state, peer, connection, launch)
+                    .await;
+                let _ = state
+                    .message_sender
+                    .send(ProtocolMessage::Video { control })
+                    .await;
+            }
+            VideoSlotEffect::Terminal(attempt, reason) => {
+                self.finish_video_attempt(&state, peer, attempt, reason)
+                    .await;
+            }
+            VideoSlotEffect::Ignored => {}
+        }
         Ok(())
+    }
+
+    async fn launch_video_worker(
+        &self,
+        state: &Arc<SessionState>,
+        peer: PublicKey,
+        connection: &Connection,
+        launch: VideoLaunch,
+    ) {
+        self.observe_video_lifecycle(VideoLifecycleEvent {
+            identity: VideoSessionIdentity {
+                peer_id: peer.to_string(),
+                session_id: launch.attempt().session_id(),
+            },
+            role: launch.role(),
+            source: launch.descriptor().source(),
+            phase: VideoPhase::Starting,
+            terminal_reason: None,
+        });
+        let slot = Arc::clone(&state.video_slot);
+        let connection = connection.clone();
+        let worker_launch = launch.clone();
+        let (startup_sender, startup_receiver) = tokio::sync::oneshot::channel();
+        let worker = match launch.role() {
+            VideoRole::Sender => {
+                let Ok((config, descriptor)) = self
+                    .core_state
+                    .screenshare_config
+                    .prepare_video_sender(worker_launch.descriptor().source())
+                    .await
+                else {
+                    self.finish_video_attempt(
+                        state,
+                        peer,
+                        launch.attempt(),
+                        VideoTerminalReason::Failed,
+                    )
+                    .await;
+                    return;
+                };
+                if descriptor != worker_launch.descriptor() {
+                    self.finish_video_attempt(
+                        state,
+                        peer,
+                        launch.attempt(),
+                        VideoTerminalReason::Failed,
+                    )
+                    .await;
+                    return;
+                }
+                spawn_task(async move {
+                    let preamble = VideoPreamble::new(
+                        worker_launch.attempt().session_id(),
+                        worker_launch.descriptor(),
+                    );
+                    let result = run_sender(
+                        &connection,
+                        preamble,
+                        config,
+                        worker_launch.cancellation(),
+                        startup_sender,
+                    )
+                    .await;
+                    if !worker_launch.cancellation().is_cancelled() {
+                        let reason = if result.is_ok() {
+                            VideoTerminalReason::TransportEnded
+                        } else {
+                            VideoTerminalReason::Failed
+                        };
+                        slot.report_terminal(worker_launch.attempt(), reason).await;
+                    }
+                })
+            }
+            VideoRole::Receiver => spawn_task(async move {
+                let preamble = VideoPreamble::new(
+                    worker_launch.attempt().session_id(),
+                    worker_launch.descriptor(),
+                );
+                let result = run_receiver(
+                    &connection,
+                    preamble,
+                    worker_launch.cancellation(),
+                    startup_sender,
+                )
+                .await;
+                if !worker_launch.cancellation().is_cancelled() {
+                    let reason = if result.is_ok() {
+                        VideoTerminalReason::TransportEnded
+                    } else {
+                        VideoTerminalReason::Failed
+                    };
+                    slot.report_terminal(worker_launch.attempt(), reason).await;
+                }
+            }),
+        };
+        if state.video_slot.install(&launch, worker).await {
+            let callbacks = Arc::clone(&self.callbacks);
+            let slot = Arc::clone(&state.video_slot);
+            spawn_task(async move {
+                let Ok(startup) = startup_receiver.await else {
+                    return;
+                };
+                if let Some(event) = slot
+                    .complete_startup(&launch, startup, peer.to_string())
+                    .await
+                {
+                    callbacks.video_lifecycle(event).await;
+                }
+            });
+        }
+    }
+
+    pub(crate) fn observe_video_lifecycle(&self, event: VideoLifecycleEvent) {
+        let callbacks = Arc::clone(&self.callbacks);
+        spawn_task(async move { callbacks.video_lifecycle(event).await });
+    }
+
+    pub(crate) async fn finish_video_attempt(
+        &self,
+        state: &Arc<SessionState>,
+        peer: PublicKey,
+        attempt: VideoAttempt,
+        reason: VideoTerminalReason,
+    ) {
+        let event = state
+            .video_slot
+            .current_event(peer.to_string(), VideoPhase::Terminal, Some(reason))
+            .await;
+        if state
+            .video_slot
+            .cancel_and_join(attempt, reason)
+            .await
+            .is_some()
+            && let Some(event) = event
+        {
+            self.observe_video_lifecycle(event);
+        }
+    }
+
+    pub(crate) async fn finish_current_video(
+        &self,
+        state: &Arc<SessionState>,
+        peer: PublicKey,
+        reason: VideoTerminalReason,
+    ) -> bool {
+        let event = state
+            .video_slot
+            .current_event(peer.to_string(), VideoPhase::Terminal, Some(reason))
+            .await;
+        let finished = state
+            .video_slot
+            .cancel_current_and_join(reason)
+            .await
+            .is_some();
+        if finished && let Some(event) = event {
+            self.observe_video_lifecycle(event);
+        }
+        finished
     }
 
     /// helper method to set up audio input stack using the telepathy-audio library

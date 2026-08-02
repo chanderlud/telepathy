@@ -7,11 +7,27 @@ import 'package:telepathy/core/utils/index.dart';
 import 'package:telepathy/screens/settings/view.dart';
 import 'package:telepathy/core/rust/player.dart';
 import 'package:telepathy/core/rust/flutter.dart';
-import 'package:telepathy/core/rust/flutter/utils.dart';
+import 'package:telepathy/core/rust/types.dart';
+
+class VideoControlActions {
+  const VideoControlActions({
+    required this.videoCapabilities,
+    required this.isSourceConfigured,
+    required this.requestDisplay,
+    required this.stop,
+  });
+
+  final Future<VideoCapabilities> Function() videoCapabilities;
+  final Future<bool> Function(VideoSource source) isSourceConfigured;
+  final Future<VideoStartOutcome> Function(Contact contact) requestDisplay;
+  final Future<VideoStopOutcome> Function(VideoSessionIdentity identity) stop;
+}
 
 /// A widget with commonly used controls for a call.
 class CallControls extends StatefulWidget {
-  const CallControls({super.key});
+  const CallControls({super.key, this.videoActions});
+
+  final VideoControlActions? videoActions;
 
   @override
   State<CallControls> createState() => _CallControlsState();
@@ -30,6 +46,21 @@ class _CallControlsState extends State<CallControls> {
   void dispose() {
     _notifier.dispose();
     super.dispose();
+  }
+
+  VideoControlActions _videoActions(Telepathy telepathy) {
+    return widget.videoActions ??
+        VideoControlActions(
+          videoCapabilities: telepathy.videoCapabilities,
+          isSourceConfigured: (source) => context
+              .read<NetworkSettingsController>()
+              .isVideoSourceConfigured(source),
+          requestDisplay: (contact) => telepathy.requestVideoSource(
+            contact: contact,
+            source: VideoSource.display,
+          ),
+          stop: (identity) => telepathy.stopVideoSource(identity: identity),
+        );
   }
 
   @override
@@ -252,10 +283,18 @@ class _CallControlsState extends State<CallControls> {
                                         return;
                                       }
 
-                                      final networkSettingsController = context
-                                          .read<NetworkSettingsController>();
+                                      final videoActions =
+                                          _videoActions(telepathy);
 
-                                      if (!(await screenshareAvailable())) {
+                                      final capabilities = await videoActions
+                                          .videoCapabilities();
+                                      final canSendDisplay = capabilities.send
+                                              is VideoCapabilityAvailability_Available &&
+                                          capabilities.sendSources.any(
+                                              (capability) =>
+                                                  capability.source ==
+                                                  VideoSource.display);
+                                      if (!canSendDisplay) {
                                         if (context.mounted) {
                                           showErrorDialog(
                                               context,
@@ -264,10 +303,9 @@ class _CallControlsState extends State<CallControls> {
                                         }
 
                                         return;
-                                      } else if ((await networkSettingsController
-                                              .screenshareConfig
-                                              .recordingConfig()) ==
-                                          null) {
+                                      } else if (!(await videoActions
+                                          .isSourceConfigured(
+                                              VideoSource.display))) {
                                         if (context.mounted) {
                                           showErrorDialog(
                                               context,
@@ -280,12 +318,26 @@ class _CallControlsState extends State<CallControls> {
 
                                       if (!stateController
                                           .isSendingScreenshare) {
-                                        telepathy.startScreenshare(
-                                            contact:
-                                                stateController.activeContact!);
+                                        final outcome =
+                                            await videoActions.requestDisplay(
+                                          stateController.activeContact!,
+                                        );
+                                        if (outcome
+                                            is VideoStartOutcome_Unavailable) {
+                                          if (context.mounted) {
+                                            showErrorDialog(
+                                              context,
+                                              'Screenshare Unavailable',
+                                              'ffmpeg must be installed to use the screenshare feature',
+                                            );
+                                          }
+                                        }
                                       } else {
-                                        stateController.stopScreenshare(
-                                            true, true);
+                                        final identity = stateController
+                                            .stopSendingScreenshare();
+                                        if (identity != null) {
+                                          await videoActions.stop(identity);
+                                        }
                                       }
                                     },
                                     icon: SvgPicture.asset(

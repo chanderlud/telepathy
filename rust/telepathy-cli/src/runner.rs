@@ -9,8 +9,7 @@ use serde_json::json;
 use telepathy_audio::devices::{
     AudioHost, CpalAudioHost, MockAudioHost, MockAudioInput, MockAudioOutput,
 };
-use telepathy_core::internal::TelepathyHandle;
-use telepathy_core::native::NativeCallbacks;
+use telepathy_core::native::NativeTelepathy;
 use telepathy_core::types::{CodecConfig, Contact, NetworkConfig};
 use tokio::io::{AsyncBufReadExt, BufReader};
 
@@ -83,11 +82,11 @@ where
         }
     };
     let codec_config = CodecConfig::new(true, true, 5.0);
-    let mut telepathy = TelepathyHandle::new(
+    let video_config = telepathy_core::types::ScreenshareConfig::default();
+    let mut telepathy = NativeTelepathy::with_host(
         audio_host,
         &network_config,
-        &Default::default(),
-        &Default::default(),
+        &video_config,
         &codec_config,
         callbacks,
     );
@@ -192,7 +191,7 @@ enum CommandOutcome {
 }
 
 async fn handle_command<H>(
-    telepathy: &mut TelepathyHandle<NativeCallbacks, H>,
+    telepathy: &mut NativeTelepathy<H>,
     audio_frame_indices: Option<&FrameCapture>,
     hub: &Hub,
     envelope: Envelope,
@@ -209,17 +208,9 @@ where
                 }
             };
 
-            let key = match decoded.try_into() {
-                Ok(key) => key,
-                Err(_) => {
-                    return CommandOutcome::AckErr(
-                        telepathy_core::types::IDENTITY_KEY_LENGTH_MESSAGE.to_string(),
-                    );
-                }
-            };
-            match telepathy.set_identity(&key).await {
+            match telepathy.set_identity(decoded).await {
                 Ok(()) => CommandOutcome::AckOk,
-                Err(err) => CommandOutcome::AckErr(err.to_string()),
+                Err(err) => CommandOutcome::AckErr(err),
             }
         }
         Command::AddContact {
@@ -243,13 +234,13 @@ where
         }
         Command::RestartManager => match telepathy.restart_manager().await {
             Ok(()) => CommandOutcome::AckOk,
-            Err(err) => CommandOutcome::AckErr(err.to_string()),
+            Err(err) => CommandOutcome::AckErr(err),
         },
         Command::Shutdown => CommandOutcome::Shutdown,
         Command::StartSession { contact_id } => match contact_by_id(hub, &contact_id).await {
-            Ok(contact) => match telepathy.try_start_session(&contact).await {
+            Ok(contact) => match telepathy.start_session(&contact).await {
                 Ok(()) => CommandOutcome::AckOk,
-                Err(err) => CommandOutcome::AckErr(err.to_string()),
+                Err(err) => CommandOutcome::AckErr(err),
             },
             Err(err) => CommandOutcome::AckErr(err),
         },
@@ -263,7 +254,7 @@ where
         Command::StartCall { contact_id } => match contact_by_id(hub, &contact_id).await {
             Ok(contact) => match telepathy.start_call(&contact).await {
                 Ok(()) => CommandOutcome::AckOk,
-                Err(err) => CommandOutcome::AckErr(err.to_string()),
+                Err(err) => CommandOutcome::AckErr(err),
             },
             Err(err) => CommandOutcome::AckErr(err),
         },
@@ -290,7 +281,7 @@ where
         }
         Command::JoinRoom { members } => match telepathy.join_room(members).await {
             Ok(()) => CommandOutcome::AckOk,
-            Err(err) => CommandOutcome::AckErr(err.to_string()),
+            Err(err) => CommandOutcome::AckErr(err),
         },
         Command::SendChat {
             contact_id,
@@ -313,14 +304,14 @@ where
                 let mut message = telepathy.build_chat(&contact, text, decoded);
                 match telepathy.send_chat(&mut message).await {
                     Ok(()) => CommandOutcome::AckOk,
-                    Err(err) => CommandOutcome::AckErr(err.to_string()),
+                    Err(err) => CommandOutcome::AckErr(err),
                 }
             }
             Err(err) => CommandOutcome::AckErr(err),
         },
         Command::AudioTest => match telepathy.audio_test().await {
             Ok(()) => CommandOutcome::AckOk,
-            Err(err) => CommandOutcome::AckErr(err.to_string()),
+            Err(err) => CommandOutcome::AckErr(err),
         },
         Command::SetMuted { value } => {
             telepathy.set_muted(value);
@@ -336,7 +327,7 @@ where
         }
         Command::SetOutputVolumeDb { value } => match telepathy.set_output_volume(value) {
             Ok(()) => CommandOutcome::AckOk,
-            Err(err) => CommandOutcome::AckErr(err.to_string()),
+            Err(err) => CommandOutcome::AckErr(err),
         },
         Command::SetRmsThresholdDb { value } => {
             telepathy.set_rms_threshold(value);

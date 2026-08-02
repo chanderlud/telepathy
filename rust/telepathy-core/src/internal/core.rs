@@ -15,7 +15,6 @@ use crate::internal::helpers::OutputHelper;
 use crate::internal::helpers::{RoomTaskOutcome, join_room_task_bounded};
 use crate::internal::messages::{
     AudioHeader, GoodbyeReason, ProtocolMessage, RoomControl, RoomJoinAdmission, RoomMessage,
-    StartScreenshare,
 };
 use crate::internal::state::{
     CallSlot, CallSlotAcquireResult, CallSlotSnapshot, CallSlotState, CoreState, RuntimeSnapshot,
@@ -25,6 +24,7 @@ use crate::internal::utils::{JoinHandle, spawn_task};
 #[cfg(target_os = "ios")]
 use crate::internal::utils::{configure_audio_session, deactivate_audio_session};
 use crate::internal::utils::{loopback, read_message, statistics_collector, write_message};
+use crate::internal::video::{VIDEO_NEGOTIATION_TIMEOUT, VideoControl};
 use crate::internal::{
     ALPN, EarlyCallState, HELLO_TIMEOUT, KEEP_ALIVE, MAX_RINGTONE_LENGTH, Result, RoomState,
     SESSION_MAX_FRAME_LENGTH, SessionState,
@@ -33,7 +33,7 @@ use crate::overlay::CONNECTED;
 use crate::overlay::Overlay;
 use crate::types::{
     CallState, ChatMessage, CodecConfig, Contact, ManagerState, NetworkConfig, ScreenshareConfig,
-    SessionStatus,
+    SessionStatus, VideoTerminalReason,
 };
 use chrono::Local;
 use iroh::endpoint::{
@@ -76,6 +76,29 @@ const ROOM_DIAL_BACKOFF_MAX_MS: u64 = 30_000;
 /// the 30s cap at retry 10, so exhaustion follows ~80s of active retrying
 const ROOM_DIAL_MAX_RETRIES: u32 = 10;
 const ROOM_DIAL_EXISTING_SESSION_BACKOFF: Duration = Duration::from_secs(5);
+
+fn update_video_negotiation_deadline(
+    deadline: &mut Option<Instant>,
+    message: &ProtocolMessage,
+    timeout: Duration,
+) {
+    if matches!(
+        message,
+        ProtocolMessage::Video {
+            control: VideoControl::Offer(_),
+        }
+    ) {
+        *deadline = Some(Instant::now() + timeout);
+    }
+}
+
+async fn wait_for_video_negotiation_deadline(deadline: Option<Instant>) {
+    if let Some(deadline) = deadline {
+        sleep_until(deadline).await;
+    } else {
+        std::future::pending().await
+    }
+}
 
 pub struct TelepathyCore<C, H>
 where
@@ -2066,6 +2089,7 @@ where
                 call_state.remote_configuration.sample_rate,
             ));
 
+            let video_state = Arc::clone(o.state);
             let controller_future =
                 self.call_controller(o, call_state.peer, end_call, &mut stream_error_receiver);
 
@@ -2083,6 +2107,9 @@ where
                 }
                 _ => None,
             };
+
+            self.finish_current_video(&video_state, call_state.peer, VideoTerminalReason::Teardown)
+                .await;
 
             info!(event = "call_controller_done_notifying_stop_io");
             stop_io.cancel();
@@ -2149,6 +2176,7 @@ where
     ) -> Result<CallControllerOutcome> {
         let identity = self.peer_id().await;
         let mut stream_errors_open = true;
+        let mut video_negotiation_deadline = None;
 
         CONNECTED.store(true, Relaxed);
         // Race Connected delivery against the two authoritative teardown signals
@@ -2196,19 +2224,15 @@ where
                     write_message(o.control_send, &ProtocolMessage::goodbye()).await?;
                     break Ok(CallControllerOutcome::Silent);
                 },
-                _ = o.state.start_screenshare.notified() => {
-                    info!(event = "starting_screenshare", peer.id = ?peer);
-
-                    #[cfg(not(target_family = "wasm"))]
-                    {
-                        let message = StartScreenshare::new_sender(peer, o.connection.clone());
-                        let self_clone = self.clone();
-                        spawn_task(async move {
-                            let result = self_clone.start_screenshare(message).await;
-                            if let Err(error) = result {
-                                error!(event = "screenshare_start_failed", error = ?error);
-                            }
-                        }.in_current_span());
+                _ = wait_for_video_negotiation_deadline(video_negotiation_deadline) => {
+                    video_negotiation_deadline = None;
+                    if let Some((attempt, reason)) = o.state.video_slot.expire_waiting_ready().await {
+                        self.finish_video_attempt(o.state, peer, attempt, reason).await;
+                    }
+                }
+                _ = o.state.video_slot.terminal_notified() => {
+                    if let Some((attempt, reason)) = o.state.video_slot.take_terminal().await {
+                        self.finish_video_attempt(o.state, peer, attempt, reason).await;
                     }
                 }
                 // receives and handles messages from the callee
@@ -2232,21 +2256,8 @@ where
                                 attachments,
                             }).await;
                         }
-                        ProtocolMessage::ScreenshareHeader { .. } => {
-                            info!(event = "screenshare_header_received", ?message, peer.id = ?peer);
-
-                            #[cfg(not(target_family = "wasm"))]
-                            {
-                                let message = StartScreenshare::new_receiver(peer, message, o.connection.clone());
-                                let self_clone = self.clone();
-                                spawn_task(async move {
-                                    let result = self_clone.start_screenshare(message).await;
-                                    if let Err(error) = result {
-                                        error!(event = "screenshare_start_failed", error = ?error);
-                                    }
-                                }.in_current_span());
-                            }
-
+                        ProtocolMessage::Video { control } => {
+                            self.handle_video_control(peer, o.connection, control).await?;
                         }
                         _ => error!(event = "call_controller_unexpected_message", ?message),
                     }
@@ -2254,6 +2265,11 @@ where
                 // sends messages to the callee
                 result = o.message_receiver.recv() => {
                     if let Some(message) = result {
+                        update_video_negotiation_deadline(
+                            &mut video_negotiation_deadline,
+                            &message,
+                            VIDEO_NEGOTIATION_TIMEOUT,
+                        );
                         write_message(o.control_send, &message).await?;
                     } else {
                         // if the channel closes, the call has ended
@@ -4116,6 +4132,43 @@ mod tests {
     use crate::internal::messages::AudioHeader;
     use iroh::SecretKey;
     use speedy::{Readable, Writable};
+
+    #[tokio::test]
+    async fn video_negotiation_deadline_survives_non_progress_messages() {
+        let mut deadline = Some(tokio::time::Instant::now() + Duration::from_millis(50));
+        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        let traffic = tokio::spawn(async move {
+            for _ in 0..20 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+                sender.send(ProtocolMessage::KeepAlive).unwrap();
+            }
+        });
+        let mut messages = 0;
+
+        loop {
+            tokio::select! {
+                _ = wait_for_video_negotiation_deadline(deadline) => break,
+                Some(message) = receiver.recv() => {
+                    update_video_negotiation_deadline(
+                        &mut deadline,
+                        &message,
+                        Duration::from_millis(50),
+                    );
+                    messages += 1;
+                },
+            }
+        }
+
+        assert!(
+            messages > 1,
+            "non-progress traffic must arrive before expiry"
+        );
+        assert!(
+            messages < 20,
+            "non-progress traffic must not postpone expiry"
+        );
+        traffic.abort();
+    }
 
     #[test]
     fn oversized_hello_ringtone_is_rejected_before_prompting() {

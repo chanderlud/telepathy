@@ -211,6 +211,13 @@ class NetworkSettingsController with ChangeNotifier {
         'screenshareConfigBuffer', base64Encode(screenshareConfig.toBytes()));
   }
 
+  Future<bool> isVideoSourceConfigured(VideoSource source) async {
+    switch (source) {
+      case VideoSource.display:
+        return (await screenshareConfig.recordingConfig()) != null;
+    }
+  }
+
   Future<CodecConfig> loadCodecConfig() async {
     return CodecConfig(
       enabled: await options.getBool('codecEnabled') ?? true,
