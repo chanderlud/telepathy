@@ -2428,3 +2428,134 @@ async fn parked_call_ended_callback_does_not_wedge_slot_ownership() {
         .expect("client_a fresh-call end_call must return promptly");
     wait_for_slot_idle(&client_a, &peer_id_b.to_string()).await;
 }
+
+/// End-to-end coverage for the accept-prompt transfer: a simultaneous-dial glare
+/// resolved with `session_collision_kept_new` must not cancel the callee's pending
+/// prompt; the caller re-drives its Hello on the winning session, whose incoming
+/// negotiation adopts the parked prompt. Accepting the original prompt then
+/// connects the call, and no second prompt is ever raised.
+#[tokio::test(flavor = "multi_thread")]
+async fn outbound_collision_transfers_accept_prompt_and_completes_call() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+    let codec_config = CodecConfig::new(true, true, 5.0);
+
+    // Bob sorts before Alice so Bob's outbound (client) connection wins the
+    // collision on Bob via `should_keep_new_session` — the glare geometry from
+    // the system-test failure.
+    let (key_a, key_b) = loop {
+        let key_a = SecretKey::generate();
+        let key_b = SecretKey::generate();
+        if key_b.public() < key_a.public() {
+            break (key_a, key_b);
+        }
+    };
+    let contact_a = Contact::new(
+        "prompt-transfer-client-a".to_string(),
+        key_a.public().to_string(),
+    )
+    .expect("contact a invalid");
+    let contact_b = Contact::new(
+        "prompt-transfer-client-b".to_string(),
+        key_b.public().to_string(),
+    )
+    .expect("contact b invalid");
+    let peer_a = contact_a.get_peer_id();
+    let peer_b = contact_b.get_peer_id();
+
+    let call_states_a = Arc::new(Mutex::new(Vec::new()));
+    let call_states_b = Arc::new(Mutex::new(Vec::new()));
+    let accept_probe_b = PendingAcceptProbe::default();
+
+    let client_a = build_client(
+        relay_map,
+        key_a,
+        vec![contact_b.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_a.clone(),
+    )
+    .await;
+    let client_b = build_client_with_accept_probe(
+        relay_map,
+        key_b,
+        vec![contact_a.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_b.clone(),
+        accept_probe_b.clone(),
+    )
+    .await;
+
+    let shutdown_guard = TwoClientShutdownGuard {
+        a: &client_a,
+        b: &client_b,
+        dropped: AtomicBool::new(false),
+    };
+
+    // Park Bob's outbound dial at its Connecting emission so it stays in-flight
+    // while Alice's dial installs the listener session on Bob.
+    client_b.session_status_probe.park_connecting();
+    client_b.telepathy.start_session(&contact_a).await;
+    client_b
+        .session_status_probe
+        .wait_for(peer_a.as_bytes(), SessionStatus::Connecting)
+        .await;
+
+    client_a.telepathy.start_session(&contact_b).await;
+    wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
+
+    client_a
+        .telepathy
+        .start_call(&contact_b)
+        .await
+        .expect("alice should start the outgoing call");
+    accept_probe_b.wait_opened().await;
+
+    let listener_id = client_b
+        .telepathy
+        .inner
+        .session_states
+        .read()
+        .await
+        .get(&peer_a)
+        .map(|state| state.id())
+        .expect("bob should register the listener session");
+
+    client_b.session_status_probe.release_connecting();
+    wait_for_stable_session_pair(&client_b, &peer_a, &client_a, &peer_b, Some(listener_id)).await;
+
+    accept_probe_b.accept();
+    wait_for_connected(&call_states_a, "alice transferred call").await;
+    wait_for_connected(&call_states_b, "bob transferred call").await;
+    accept_probe_b.wait_accepted().await;
+
+    assert_eq!(
+        accept_probe_b.opened.load(Relaxed),
+        1,
+        "the original prompt must be transferred, not re-raised"
+    );
+    assert_eq!(
+        accept_probe_b.cancelled.load(Relaxed),
+        0,
+        "the original prompt must survive the session replacement"
+    );
+    assert_no_call_ended_before_connected(&call_state_snapshot(&call_states_a), "alice");
+    assert_no_call_ended_before_connected(&call_state_snapshot(&call_states_b), "bob");
+
+    shutdown_guard.disarm();
+    drop(shutdown_guard);
+    client_a.telepathy.end_call().await;
+    client_a.telepathy.shutdown().await;
+    client_b.telepathy.shutdown().await;
+}

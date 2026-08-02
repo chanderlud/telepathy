@@ -19,6 +19,7 @@ use telepathy_core::types::Contact;
 use telepathy_core::types::{
     CallState, CodecConfig, ManagerState, NetworkConfig, ScreenshareConfig, SessionStatus,
 };
+use tokio::select;
 use tokio::sync::{Notify, watch};
 use tokio::time::{interval, sleep};
 use tracing::info;
@@ -780,8 +781,11 @@ pub(super) enum RoomEventKind {
 pub(super) struct PendingAcceptProbe {
     pub(super) opened: Arc<AtomicUsize>,
     pub(super) cancelled: Arc<AtomicUsize>,
+    pub(super) accepted: Arc<AtomicUsize>,
     pub(super) opened_notify: Arc<Notify>,
     pub(super) cancelled_notify: Arc<Notify>,
+    pub(super) accepted_notify: Arc<Notify>,
+    accept_requests: Arc<Notify>,
 }
 
 /// How many manager lifecycle cycles the mock `manager_state` callback accepts.
@@ -911,6 +915,22 @@ impl PendingAcceptProbe {
             &self.cancelled_notify,
             expected,
             "accept prompt cancelled",
+        )
+        .await;
+    }
+
+    /// Resolves the current prompt as accepted; the permit is retained when no
+    /// prompt task is waiting yet, so calling this before `wait_opened` is safe.
+    pub(super) fn accept(&self) {
+        self.accept_requests.notify_one();
+    }
+
+    pub(super) async fn wait_accepted(&self) {
+        wait_for_counter(
+            &self.accepted,
+            &self.accepted_notify,
+            1,
+            "accept prompt accepted",
         )
         .await;
     }
@@ -1507,10 +1527,18 @@ fn construct_mock_callbacks_with_contact_lookup(
                 tokio::spawn(async move {
                     probe.opened.fetch_add(1, Relaxed);
                     probe.opened_notify.notify_waiters();
-                    cancel.notified().await;
-                    probe.cancelled.fetch_add(1, Relaxed);
-                    probe.cancelled_notify.notify_waiters();
-                    false
+                    select! {
+                        _ = cancel.notified() => {
+                            probe.cancelled.fetch_add(1, Relaxed);
+                            probe.cancelled_notify.notify_waiters();
+                            false
+                        }
+                        _ = probe.accept_requests.notified() => {
+                            probe.accepted.fetch_add(1, Relaxed);
+                            probe.accepted_notify.notify_waiters();
+                            true
+                        }
+                    }
                 })
             });
     } else {

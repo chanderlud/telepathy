@@ -1044,6 +1044,11 @@ pub struct SessionState {
 
     finished: CancellationToken,
 
+    /// Set when this session was replaced by an outbound collision winner (our own
+    /// dial completing against a live session); a pending accept prompt then parks
+    /// for adoption by the replacement instead of being cancelled.
+    replaced_by_outbound: AtomicBool,
+
     room_admission: AtomicU64,
 
     reconcile_room_generation: AtomicU64,
@@ -1066,6 +1071,7 @@ impl SessionState {
             start_screenshare: Default::default(),
             stop_screenshare: Default::default(),
             finished: Default::default(),
+            replaced_by_outbound: AtomicBool::new(false),
             room_admission: AtomicU64::new(0),
             reconcile_room_generation: AtomicU64::new(0),
             deferred_room_predecessor: Default::default(),
@@ -1082,6 +1088,14 @@ impl SessionState {
 
     pub(crate) async fn finished(&self) {
         self.finished.cancelled().await;
+    }
+
+    pub(crate) fn mark_replaced_by_outbound(&self) {
+        self.replaced_by_outbound.store(true, Relaxed);
+    }
+
+    pub(crate) fn was_replaced_by_outbound(&self) -> bool {
+        self.replaced_by_outbound.load(Relaxed)
     }
 
     pub(crate) fn can_restore_room_predecessor(&self) -> bool {

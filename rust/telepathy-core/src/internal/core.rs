@@ -97,6 +97,11 @@ where
 
     pending_session_candidates: PendingSessionCandidateRegistry,
 
+    /// Accept prompts parked when an outbound collision winner replaced the session
+    /// mid-prompt; the replacement session's re-driven negotiation adopts the handle
+    /// so the user's prompt survives the swap instead of being cancelled.
+    pending_accept_transfers: PendingAcceptTransferRegistry,
+
     /// Keeps track of and controls the sessions
     pub session_states: Arc<RwLock<HashMap<PublicKey, Arc<SessionState>>>>,
 
@@ -236,6 +241,7 @@ where
             room_reconcile: Default::default(),
             pending_room_admission: Default::default(),
             pending_session_candidates: Default::default(),
+            pending_accept_transfers: Default::default(),
             session_states: Default::default(),
             start_session: None,
             cancel_outbound_connections: Default::default(),
@@ -804,34 +810,10 @@ where
         let is_room = self.is_in_room(&peer).await;
         let keep_new_session =
             should_keep_new_session(&local_peer, &peer, connection.side().is_client());
-        // A collision winner that would replace the current session must wait while that
-        // session carries a direct-call engagement with this peer: swapping mid-negotiation
-        // cancels the callee's pending accept prompt and strands the caller's outgoing call
-        // (the `session_stopped_during_accept_prompt` / "unknown accept_call request_id"
-        // failure), and swapping mid-call kills the call's transport. The exception is an
-        // inbound winner while a prompt is pending: that replacement is remote-initiated,
-        // so it is honored immediately — the old endpoint may be a stale predecessor that
-        // can never complete the call, and the pending incoming ownership is retained for
-        // the replacement session. An outbound winner is our own dial completing against a
-        // live session, so it defers instead.
-        let mut call_engagement = match self.core_state.call_slot.snapshot() {
-            Ok(snapshot)
-                if !is_room
-                    && snapshot.direct_peer == Some(peer)
-                    && match snapshot.state {
-                        CallSlotState::PendingOutgoing | CallSlotState::ActiveDirect => true,
-                        CallSlotState::PendingIncoming => connection.side().is_client(),
-                        _ => false,
-                    } =>
-            {
-                Some(snapshot)
-            }
-            _ => None,
-        };
         let mut states = self.session_states.write().await;
         let mut deferred_candidate = None;
         let old_state_option = if let Some(old_state) = states.get(&peer).cloned() {
-            if keep_new_session && call_engagement.is_none() {
+            if keep_new_session {
                 states.insert(peer, state.clone());
                 self.publish_session_locked(peer);
             } else {
@@ -849,7 +831,7 @@ where
         drop(states);
 
         if let Some(old_state) = old_state_option {
-            if keep_new_session && call_engagement.is_none() {
+            if keep_new_session {
                 warn!(
                     event = "session_collision_kept_new",
                     peer.id = %peer,
@@ -861,64 +843,33 @@ where
                 if is_room {
                     state.defer_room_predecessor(old_state).await;
                 } else {
+                    // our own dial won the glare against a live session: a pending
+                    // accept prompt on the loser parks for adoption rather than
+                    // being cancelled
+                    if connection.side().is_client() {
+                        old_state.mark_replaced_by_outbound();
+                    }
                     old_state.teardown().await;
                 }
             } else if let Some(candidate) = deferred_candidate {
                 drop(incoming_candidate);
-                let deferred_for_call = call_engagement.is_some();
                 warn!(
                     event = "session_collision_deferred_candidate",
                     peer.id = %peer,
                     peer.local = %local_peer,
                     session.id = %state.id,
                     old_session.id = %old_state.id,
-                    connection.side.client = connection.side().is_client(),
-                    deferred_for_call,
+                    connection.side.client = connection.side().is_client()
                 );
 
-                loop {
-                    select! {
-                        biased;
-                        _ = candidate.cancelled() => {
-                            connection.close(VarInt::from_u32(0), b"session candidate canceled");
-                            return Ok(());
-                        }
-                        _ = connection.closed() => return Ok(()),
-                        _ = old_state.finished() => break,
-                        // `select!` evaluates branch futures even for disabled branches, so
-                        // the None case must be a never-completing future rather than an
-                        // unwrap guarded by a precondition.
-                        result = async {
-                            match call_engagement {
-                                Some(snapshot) => {
-                                    self.core_state.call_slot.wait_for_release(snapshot).await
-                                }
-                                None => std::future::pending::<Result<()>>().await,
-                            }
-                        }, if call_engagement.is_some() => {
-                            result?;
-                            // The engagement this candidate waited on ended; if the slot was
-                            // immediately re-acquired by a fresh call with this peer, keep
-                            // waiting rather than swapping the session out from under it.
-                            call_engagement = match self.core_state.call_slot.snapshot() {
-                                Ok(snapshot)
-                                    if snapshot.direct_peer == Some(peer)
-                                        && matches!(
-                                            snapshot.state,
-                                            CallSlotState::PendingIncoming
-                                                | CallSlotState::PendingOutgoing
-                                                | CallSlotState::ActiveDirect
-                                        ) =>
-                                {
-                                    Some(snapshot)
-                                }
-                                _ => None,
-                            };
-                            if call_engagement.is_none() {
-                                break;
-                            }
-                        }
+                select! {
+                    biased;
+                    _ = candidate.cancelled() => {
+                        connection.close(VarInt::from_u32(0), b"session candidate canceled");
+                        return Ok(());
                     }
+                    _ = connection.closed() => return Ok(()),
+                    _ = old_state.finished() => {}
                 }
 
                 let mut states = self.session_states.write().await;
@@ -941,12 +892,6 @@ where
                     session.id = %state.id,
                     old_session.id = %old_state.id
                 );
-                if deferred_for_call {
-                    // the engagement that protected the predecessor is over; take over from
-                    // it with kept-new semantics (it is still alive when the wait above ended
-                    // on slot release, already finished otherwise)
-                    old_state.teardown().await;
-                }
             } else {
                 drop(incoming_candidate);
                 warn!(
@@ -1201,6 +1146,24 @@ where
                     let peer = contact.peer_id;
                     let call_slot = &self.core_state.call_slot;
                     let in_room = self.is_in_room(&peer).await;
+                    // A critical transport error with a pending outgoing call is usually a
+                    // dial glare: the peer's collision winner tore down this session's
+                    // connection, and the replacement session is already on its way. Give it
+                    // a brief window to arrive — the still-current check below then skips
+                    // terminalization and the replacement re-drives the call — instead of
+                    // ending the call just before the replacement installs. When a deferred
+                    // candidate is already parked on this session, the existing candidate
+                    // resolution owns preservation and must not be delayed.
+                    if matches!(call_slot.current(), CallSlotState::PendingOutgoing)
+                        && error.is_session_critical()
+                        && self
+                            .pending_session_candidates
+                            .resolution_for(peer, state.id)
+                            .is_none()
+                    {
+                        self.wait_for_pending_outgoing_replacement(peer, state.id)
+                            .await;
+                    }
                     // Snapshot state + owning peer in one lock acquisition; a split read could
                     // observe a newer call's slot between the two checks and incorrectly release it.
                     let call_ended = {
@@ -1397,17 +1360,32 @@ where
                 Ok(HelloResponse::EndedSilently)
             }
             ProtocolMessage::Goodbye { reason } => {
+                // A session-stopped goodbye means the peer's session was torn down
+                // mid-negotiation; in a dial glare its replacement session is already
+                // on its way and re-drives the call, so give it the same brief window
+                // the transport-error path gets before treating this as terminal.
                 if matches!(reason, GoodbyeReason::SessionStopped) {
-                    Ok(HelloResponse::EndedDeferred(peer_goodbye_reason_message(
-                        &args.contact.nickname,
-                        reason,
-                    )))
-                } else {
-                    Ok(HelloResponse::EndedWith(peer_goodbye_reason_message(
-                        &args.contact.nickname,
-                        reason,
-                    )))
+                    match self
+                        .wait_for_pending_outgoing_replacement(args.contact.peer_id, io.state.id)
+                        .await
+                    {
+                        PendingOutgoingWait::Replaced => {
+                            info!(event = "goodbye_superseded_by_replacement", peer.id = %args.contact.peer_id);
+                            return Ok(HelloResponse::EndedSilently);
+                        }
+                        PendingOutgoingWait::CandidateRegistered => {
+                            info!(event = "goodbye_preserved_for_candidate", peer.id = %args.contact.peer_id);
+                            self.pending_session_candidates
+                                .claim_terminal_resolution(args.contact.peer_id, io.state.id);
+                            return Ok(HelloResponse::SessionStopped);
+                        }
+                        PendingOutgoingWait::Elapsed => {}
+                    }
                 }
+                Ok(HelloResponse::EndedWith(peer_goodbye_reason_message(
+                    &args.contact.nickname,
+                    reason,
+                )))
             }
             // Peer-level rejection ends only this room negotiation; other peers remain connected.
             ProtocolMessage::Reject | ProtocolMessage::Busy if is_in_room => {
@@ -1501,6 +1479,7 @@ where
         let mut pending_slot = None;
         let mut cancel_prompt = None;
         let mut accept_handle = None;
+        let mut prompt_generation = None;
 
         // Honor cancellation before acquiring any pending direct-call slot
         if io.state.stop_session.is_cancelled() {
@@ -1542,23 +1521,47 @@ where
                 return Ok(IncomingNegotiationOutcome::SessionStopped);
             }
             IncomingSlotDecision::Acquired(slot) => {
+                // An outbound collision winner may have displaced a prompt for this peer;
+                // adopt it so the user's open prompt continues on this session. Validate
+                // against the live slot snapshot: a matched generation carries no snapshot
+                // on the slot guard even though the generation was preserved.
+                let transferred = self
+                    .pending_accept_transfers
+                    .take_valid(peer, self.core_state.call_slot.snapshot().ok());
+                prompt_generation = slot.release_snapshot;
                 pending_slot = Some(slot);
-                // Only direct calls show an accept prompt; room calls auto-accept.
-                let cancel = Arc::new(Notify::new());
-                accept_handle = Some(self.callbacks.get_accept_handle(
-                    &args.contact.id,
-                    args.other_ringtone,
-                    &cancel,
-                ));
-                cancel_prompt = Some(cancel);
+                if let Some(transfer) = transferred {
+                    info!(event = "accept_prompt_transferred", peer.id = %peer);
+                    cancel_prompt = Some(transfer.cancel);
+                    accept_handle = Some(transfer.handle);
+                } else {
+                    // Only direct calls show an accept prompt; room calls auto-accept.
+                    let cancel = Arc::new(Notify::new());
+                    accept_handle = Some(self.callbacks.get_accept_handle(
+                        &args.contact.id,
+                        args.other_ringtone,
+                        &cancel,
+                    ));
+                    cancel_prompt = Some(cancel);
+                }
             }
         }
 
         let cancel_prompt_clone = cancel_prompt.clone();
+        let mut prompt_guard = accept_handle.map(|handle| {
+            AcceptPromptGuard::new(
+                self.pending_accept_transfers.clone(),
+                Arc::clone(io.state),
+                peer,
+                prompt_generation,
+                handle,
+                cancel_prompt_clone.clone().expect("prompt cancel missing"),
+            )
+        });
         let accept_future = async {
-            if let Some(accept_handle) = accept_handle {
+            if let Some(guard) = prompt_guard.as_mut() {
                 select! {
-                    accept_result = accept_handle => accept_result,
+                    accept_result = guard.handle_mut() => accept_result,
                     _ = io.state.start_call.notified() => {
                         // Local user pressed "accept" via start_call before the platform prompt resolved;
                         // cancel the prompt and proceed.
@@ -1585,12 +1588,15 @@ where
                     &mut pending_slot,
                 )
                 .await?;
-                if let Some(cancel) = cancel_prompt {
-                    cancel.notify_one();
-                }
+                // dropping `prompt_guard` parks the prompt for adoption when this session
+                // was displaced by an outbound collision winner, and cancels it otherwise
+                drop(prompt_guard);
                 Ok(IncomingNegotiationOutcome::SessionStopped)
             }
             accept_result = accept_future => {
+                if let Some(guard) = prompt_guard.as_mut() {
+                    guard.disarm();
+                }
                 if !accept_result? {
                     if io.state.stop_session.is_cancelled() {
                         abort_negotiation_session_stopped(
@@ -1840,13 +1846,19 @@ where
                             return Ok(OutgoingNegotiationOutcome::CallEnded);
                         }
                         Ok(Err(error)) => {
-                            release_pending(
-                                &self.session_states,
-                                peer,
-                                io.state.id,
-                                &mut pending_slot,
-                            )
-                            .await?;
+                            // critical transport errors terminalize through the
+                            // session-error path, which emits CallEnded for a still-pending
+                            // call (or skips it when a collision replacement has
+                            // installed); releasing here would race ahead of both
+                            if !error.is_session_critical() {
+                                release_pending(
+                                    &self.session_states,
+                                    peer,
+                                    io.state.id,
+                                    &mut pending_slot,
+                                )
+                                .await?;
+                            }
                             return Err(error);
                         }
                         Ok(Ok(message)) => {
@@ -1877,39 +1889,6 @@ where
                                         &mut pending_slot,
                                     )
                                     .await?;
-                                    return Ok(OutgoingNegotiationOutcome::CallEnded);
-                                }
-                                HelloResponse::EndedDeferred(message) => {
-                                    // Serialize behind the collision winner's map write: a
-                                    // deferred candidate installs under the write lock, and
-                                    // lock ordering guarantees it is visible here before the
-                                    // slot decision. When present, preserve the pending
-                                    // outgoing ownership quietly — the promoted session
-                                    // re-drives the call, or the claimed terminal resolution
-                                    // terminalizes it if the candidate aborts.
-                                    let states = self.session_states.read().await;
-                                    let deferred = self
-                                        .pending_session_candidates
-                                        .claim_terminal_resolution(peer, io.state.id)
-                                        .is_some();
-                                    drop(states);
-                                    if deferred {
-                                        info!(
-                                            event = "outgoing_negotiation_preserved_for_candidate",
-                                            peer.id = %peer
-                                        );
-                                    } else {
-                                        self.callbacks
-                                            .call_state(CallState::CallEnded(message, true))
-                                            .await;
-                                        release_pending(
-                                            &self.session_states,
-                                            peer,
-                                            io.state.id,
-                                            &mut pending_slot,
-                                        )
-                                        .await?;
-                                    }
                                     return Ok(OutgoingNegotiationOutcome::CallEnded);
                                 }
                                 HelloResponse::EndedSilently => {
@@ -3286,6 +3265,7 @@ where
             room_reconcile: Arc::clone(&self.room_reconcile),
             pending_room_admission: self.pending_room_admission.clone(),
             pending_session_candidates: self.pending_session_candidates.clone(),
+            pending_accept_transfers: self.pending_accept_transfers.clone(),
             session_states: Arc::clone(&self.session_states),
             start_session: self.start_session.clone(),
             cancel_outbound_connections: Arc::clone(&self.cancel_outbound_connections),
@@ -3566,12 +3546,6 @@ enum HelloResponse {
     Completed,
     SessionStopped,
     EndedWith(String),
-    /// Session-stopped Goodbye during outgoing negotiation: end quietly and preserve the
-    /// pending outgoing slot when a deferred collision candidate will re-drive the call.
-    /// `SessionStopped` is generated by session teardown (collision/shutdown), never by a
-    /// user decision, so unlike `Reject` it must not terminalize a call that a parked
-    /// replacement session can still complete.
-    EndedDeferred(String),
     /// End the outgoing negotiation without notifying call ended (slot cleanup only).
     EndedSilently,
     /// Keep waiting (e.g. `KeepAlive`, ignored room reject/busy, simultaneous-dial winner).
@@ -3829,10 +3803,159 @@ struct DirectAttempt {
     candidates: usize,
 }
 
+const PENDING_OUTGOING_REPLACEMENT_GRACE: Duration = Duration::from_millis(500);
+const PENDING_OUTGOING_REPLACEMENT_POLL: Duration = Duration::from_millis(10);
+
+/// Outcome of waiting for a pending outgoing call's replacement to materialize.
+enum PendingOutgoingWait {
+    /// a replacement session installed for the peer
+    Replaced,
+    /// a deferred collision candidate registered for this session; its resolution owns
+    /// the pending call (re-drive on promote, terminalize on abort)
+    CandidateRegistered,
+    /// neither happened within the grace window
+    Elapsed,
+}
+
 struct IncomingCandidateLease {
     availability: Arc<SessionAvailability>,
     peer: PublicKey,
     attempt_id: u64,
+}
+
+/// A pending accept prompt displaced when an outbound session-collision winner tore
+/// down the session that owned the negotiation. The platform prompt stays open; the
+/// replacement session's re-driven incoming negotiation adopts the handle.
+struct PendingAcceptTransfer {
+    generation: Option<CallSlotSnapshot>,
+    handle: JoinHandle<bool>,
+    cancel: Arc<Notify>,
+}
+
+#[derive(Clone, Default)]
+struct PendingAcceptTransferRegistry {
+    inner: Arc<StdMutex<HashMap<PublicKey, PendingAcceptTransfer>>>,
+}
+
+/// Owns a pending accept prompt while the session waits on it. Dropping the guard (the
+/// surrounding negotiation select cancelled) parks the prompt for adoption by the
+/// replacement session when this session was displaced by an outbound collision winner;
+/// otherwise the prompt is cancelled as before. `disarm` on a resolved prompt keeps the
+/// drop a no-op so a stale answer is never parked.
+struct AcceptPromptGuard {
+    registry: PendingAcceptTransferRegistry,
+    state: Arc<SessionState>,
+    peer: PublicKey,
+    generation: Option<CallSlotSnapshot>,
+    handle: Option<JoinHandle<bool>>,
+    cancel: Option<Arc<Notify>>,
+}
+
+impl AcceptPromptGuard {
+    fn new(
+        registry: PendingAcceptTransferRegistry,
+        state: Arc<SessionState>,
+        peer: PublicKey,
+        generation: Option<CallSlotSnapshot>,
+        handle: JoinHandle<bool>,
+        cancel: Arc<Notify>,
+    ) -> Self {
+        Self {
+            registry,
+            state,
+            peer,
+            generation,
+            handle: Some(handle),
+            cancel: Some(cancel),
+        }
+    }
+
+    fn handle_mut(&mut self) -> &mut JoinHandle<bool> {
+        self.handle
+            .as_mut()
+            .expect("accept prompt handle polled after disarm")
+    }
+
+    fn disarm(&mut self) {
+        self.handle = None;
+        self.cancel = None;
+    }
+}
+
+impl Drop for AcceptPromptGuard {
+    fn drop(&mut self) {
+        let (Some(handle), Some(cancel)) = (self.handle.take(), self.cancel.take()) else {
+            return;
+        };
+        if self.state.was_replaced_by_outbound() {
+            self.registry
+                .park(self.peer, self.generation, handle, cancel);
+        } else {
+            cancel.notify_one();
+        }
+    }
+}
+
+impl PendingAcceptTransferRegistry {
+    fn park(
+        &self,
+        peer: PublicKey,
+        generation: Option<CallSlotSnapshot>,
+        handle: JoinHandle<bool>,
+        cancel: Arc<Notify>,
+    ) {
+        let mut transfers = self.inner.lock().unwrap();
+        if let Some(previous) = transfers.insert(
+            peer,
+            PendingAcceptTransfer {
+                generation,
+                handle,
+                cancel,
+            },
+        ) {
+            previous.cancel.notify_one();
+        }
+    }
+
+    /// Takes the parked prompt for `peer` when the current slot still owns the same
+    /// pending incoming generation; a stale transfer (slot released or re-acquired by
+    /// a different call) is cancelled and not adopted.
+    fn take_valid(
+        &self,
+        peer: PublicKey,
+        current: Option<CallSlotSnapshot>,
+    ) -> Option<PendingAcceptTransfer> {
+        let transfer = self.inner.lock().unwrap().remove(&peer)?;
+        let valid = match (&transfer.generation, current) {
+            (Some(parked), Some(current)) => {
+                current.state == CallSlotState::PendingIncoming
+                    && current.direct_peer == Some(peer)
+                    && current.generation == parked.generation
+            }
+            // the parked negotiation matched a simultaneous-dial outgoing generation;
+            // adoption only makes sense while the slot is still pending for this peer
+            (None, Some(current)) => {
+                matches!(
+                    current.state,
+                    CallSlotState::PendingIncoming | CallSlotState::PendingOutgoing
+                ) && current.direct_peer == Some(peer)
+            }
+            _ => false,
+        };
+        if valid {
+            Some(transfer)
+        } else {
+            transfer.cancel.notify_one();
+            None
+        }
+    }
+
+    fn cancel_all(&self) {
+        let transfers: Vec<_> = self.inner.lock().unwrap().drain().map(|(_, t)| t).collect();
+        for transfer in transfers {
+            transfer.cancel.notify_one();
+        }
+    }
 }
 
 #[derive(Clone, Default)]
@@ -4081,6 +4204,7 @@ where
 
     pub(crate) fn cancel_pending_session_candidates(&self) {
         self.pending_session_candidates.cancel_all();
+        self.pending_accept_transfers.cancel_all();
     }
 
     pub(crate) fn complete_direct_attempt(&self, peer: PublicKey, attempt_id: u64) {
@@ -4142,6 +4266,46 @@ where
         self.session_availability
             .wait_for_change(peer, generation)
             .await;
+    }
+
+    /// Briefly waits for a collision replacement for `peer` to materialize while a
+    /// pending outgoing call could still be re-driven. The candidate registry and the
+    /// session map are ordered by different locks, so both are polled: an installed
+    /// replacement (`Replaced`) and a freshly registered deferred candidate
+    /// (`CandidateRegistered`) both stop the wait promptly.
+    async fn wait_for_pending_outgoing_replacement(
+        &self,
+        peer: PublicKey,
+        session_id: Uuid,
+    ) -> PendingOutgoingWait {
+        let mut poll = interval(PENDING_OUTGOING_REPLACEMENT_POLL);
+        let deadline = Instant::now() + PENDING_OUTGOING_REPLACEMENT_GRACE;
+        loop {
+            poll.tick().await;
+            let replaced = self
+                .session_states
+                .read()
+                .await
+                .get(&peer)
+                .is_some_and(|session| session.id != session_id);
+            if replaced {
+                return PendingOutgoingWait::Replaced;
+            }
+            if self
+                .pending_session_candidates
+                .resolution_for(peer, session_id)
+                .is_some()
+            {
+                return PendingOutgoingWait::CandidateRegistered;
+            }
+            if !matches!(
+                self.core_state.call_slot.current(),
+                CallSlotState::PendingOutgoing
+            ) || Instant::now() >= deadline
+            {
+                return PendingOutgoingWait::Elapsed;
+            }
+        }
     }
 }
 
