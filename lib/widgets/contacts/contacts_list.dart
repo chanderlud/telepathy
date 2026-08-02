@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
@@ -18,10 +16,6 @@ const double managerStatusSize = 28;
 const double contactsHeaderHeight = 36;
 const double addButtonSize = 36;
 const double addIconSize = 28;
-
-/// Minimum height of a contact/room list item; keeps the row content
-/// (avatar, 20px spinner, icon buttons) from being squished.
-const double minContactItemHeight = 60;
 
 /// A widget which displays a list of ContactWidgets.
 class ContactsList extends StatelessWidget {
@@ -150,7 +144,8 @@ class ContactsList extends StatelessWidget {
                                 Theme.of(context).colorScheme.tertiaryContainer,
                             borderRadius: BorderRadius.circular(10),
                           ),
-                          padding: const EdgeInsets.only(left: 8, right: 3),
+                          padding: EdgeInsets.only(
+                              left: showManagerLabel ? 8 : 3, right: 3),
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             crossAxisAlignment: CrossAxisAlignment.center,
@@ -226,14 +221,12 @@ class ContactsList extends StatelessWidget {
               ),
               padding: const EdgeInsets.symmetric(vertical: 3),
               child: LayoutBuilder(builder: (context, constraints) {
-                // Floor the item extent at the height the row content
-                // actually needs (avatar 34 + margin/padding 19 + slack);
-                // below it the 20px session spinner and icons get squished
-                // (issue #58, case 3). The list scrolls, so taller items
-                // only mean fewer are visible at once.
-                final itemHeight = math.max(
-                    constraints.maxHeight / (isCompact ? 2 : 3),
-                    minContactItemHeight);
+                // The viewport is always sized to fit exactly 2 (compact) or
+                // 3 items so no item is clipped. The spinner smoosh that
+                // motivated a height floor is instead fixed by removing the
+                // spinner's vertical padding (see ContactWidget) — a 20px
+                // spinner fits the smallest possible row.
+                final itemHeight = constraints.maxHeight / (isCompact ? 2 : 3);
 
                 return ListView.builder(
                   itemCount: items.length,

@@ -20,6 +20,7 @@ import 'package:telepathy/core/rust/types.dart';
 import 'package:telepathy/models/index.dart';
 import 'package:telepathy/screens/home/home_page.dart';
 import 'package:telepathy/widgets/call/call_details_widget.dart';
+import 'package:telepathy/widgets/contacts/contacts_list.dart';
 
 import '../../support/fake_contact.dart';
 
@@ -92,6 +93,23 @@ class _SvgAwareAssetBundle extends CachingAssetBundle {
 }
 
 class Harness {
+  static bool _robotoLoaded = false;
+
+  /// Loads real Roboto so text metrics match production; the flutter_test
+  /// default font has significantly different glyph widths/line heights,
+  /// which hid the overflows this suite guards against. Must be called from
+  /// `setUpAll` — it performs real file I/O, which never completes inside a
+  /// test body's fake async zone.
+  static Future<void> loadRoboto() async {
+    if (_robotoLoaded) return;
+    final bytes =
+        await File('test/support/fonts/Roboto-Regular.ttf').readAsBytes();
+    final loader = FontLoader('Roboto')
+      ..addFont(Future.value(bytes.buffer.asByteData()));
+    await loader.load();
+    _robotoLoaded = true;
+  }
+
   final AudioSettingsController audioSettingsController;
 
   Harness({
@@ -188,16 +206,7 @@ void _setCanvasSize(WidgetTester tester, Size size) {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  setUpAll(() async {
-    // Load real Roboto so text metrics match production; the flutter_test
-    // default font has significantly different glyph widths/line heights,
-    // which hid the overflows this suite guards against.
-    final bytes =
-        await File('test/support/fonts/Roboto-Regular.ttf').readAsBytes();
-    final loader = FontLoader('Roboto')
-      ..addFont(Future.value(bytes.buffer.asByteData()));
-    await loader.load();
-  });
+  setUpAll(Harness.loadRoboto);
 
   testWidgets(
       'case 1: semi-narrow two-column layout with an active call does '
@@ -225,6 +234,20 @@ void main() {
     // Guard against vacuous passes: the call details card must actually be
     // on screen for the overflow checks to mean anything.
     expect(find.byType(CallDetailsWidget), findsOneWidget);
+
+    // The end-call button must stay flush against the row's right padding —
+    // flexible text slots that underfill let it float mid-row (regression).
+    final cardRight = tester.getRect(find.byType(ContactsList)).right;
+    final endCallButton = find.ancestor(
+        of: find.bySemanticsLabel('End call icon'),
+        matching: find.byType(IconButton));
+    expect(endCallButton, findsWidgets);
+    for (final element in tester.elementList(endCallButton)) {
+      final buttonRect = tester.getRect(find.byWidget(element.widget));
+      // card padding 12 + item margin 6 + item padding 10
+      expect(cardRight - 28 - buttonRect.right, lessThanOrEqualTo(1.5),
+          reason: 'row buttons must stay flush right');
+    }
   });
 
   testWidgets(
@@ -278,6 +301,20 @@ void main() {
     // Guard against vacuous passes: the call details card must actually be
     // on screen for the overflow checks to mean anything.
     expect(find.byType(CallDetailsWidget), findsOneWidget);
+
+    // The end-call button must stay flush against the row's right padding —
+    // flexible text slots that underfill let it float mid-row (regression).
+    final cardRight = tester.getRect(find.byType(ContactsList)).right;
+    final endCallButton = find.ancestor(
+        of: find.bySemanticsLabel('End call icon'),
+        matching: find.byType(IconButton));
+    expect(endCallButton, findsWidgets);
+    for (final element in tester.elementList(endCallButton)) {
+      final buttonRect = tester.getRect(find.byWidget(element.widget));
+      // card padding 12 + item margin 6 + item padding 10
+      expect(cardRight - 28 - buttonRect.right, lessThanOrEqualTo(1.5),
+          reason: 'row buttons must stay flush right');
+    }
   });
 
   testWidgets(
@@ -342,6 +379,20 @@ void main() {
     // Guard against vacuous passes: the call details card must actually be
     // on screen for the overflow checks to mean anything.
     expect(find.byType(CallDetailsWidget), findsOneWidget);
+
+    // The end-call button must stay flush against the row's right padding —
+    // flexible text slots that underfill let it float mid-row (regression).
+    final cardRight = tester.getRect(find.byType(ContactsList)).right;
+    final endCallButton = find.ancestor(
+        of: find.bySemanticsLabel('End call icon'),
+        matching: find.byType(IconButton));
+    expect(endCallButton, findsWidgets);
+    for (final element in tester.elementList(endCallButton)) {
+      final buttonRect = tester.getRect(find.byWidget(element.widget));
+      // card padding 12 + item margin 6 + item padding 10
+      expect(cardRight - 28 - buttonRect.right, lessThanOrEqualTo(1.5),
+          reason: 'row buttons must stay flush right');
+    }
   });
 
   testWidgets(
@@ -411,5 +462,19 @@ void main() {
     // Guard against vacuous passes: the call details card must actually be
     // on screen for the overflow checks to mean anything.
     expect(find.byType(CallDetailsWidget), findsOneWidget);
+
+    // The end-call button must stay flush against the row's right padding —
+    // flexible text slots that underfill let it float mid-row (regression).
+    final cardRight = tester.getRect(find.byType(ContactsList)).right;
+    final endCallButton = find.ancestor(
+        of: find.bySemanticsLabel('End call icon'),
+        matching: find.byType(IconButton));
+    expect(endCallButton, findsWidgets);
+    for (final element in tester.elementList(endCallButton)) {
+      final buttonRect = tester.getRect(find.byWidget(element.widget));
+      // card padding 12 + item margin 6 + item padding 10
+      expect(cardRight - 28 - buttonRect.right, lessThanOrEqualTo(1.5),
+          reason: 'row buttons must stay flush right');
+    }
   });
 }

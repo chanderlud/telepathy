@@ -221,14 +221,16 @@ class ContactWidgetState extends State<ContactWidget> {
                   : 'assets/icons/Profile.svg'),
             ),
             const SizedBox(width: 10),
-            Flexible(
-              fit: FlexFit.loose,
+            // The nickname is the row's slack absorber (replacing the old
+            // Spacer): the tight Expanded slot keeps the buttons flush
+            // right, while the left-aligned text inside keeps its natural
+            // width and only ellipsizes when the row gets narrow.
+            Expanded(
               child: Text(widget.contact.nickname(),
                   style: const TextStyle(fontSize: 16),
                   overflow: TextOverflow.ellipsis,
                   maxLines: 1),
             ),
-            const Spacer(),
             if (inactive) ...[
               IconButton(
                   onPressed: () {
@@ -253,15 +255,26 @@ class ContactWidgetState extends State<ContactWidget> {
                     semanticsLabel: 'Offline icon',
                     width: 26,
                   )),
-            if (online && connectedStatus != null) ...[
-              Text(connectedStatus.relayed ? 'relayed' : 'direct'),
-              const SizedBox(width: 5),
-              Flexible(
-                fit: FlexFit.loose,
-                child: Text(connectedStatus.remoteAddress,
-                    overflow: TextOverflow.ellipsis, maxLines: 1),
+            if (online && connectedStatus != null)
+              // Status group: a tight slot whose end-aligned contents hug
+              // the call button; the address ellipsizes inside when space
+              // runs out. Tight is required — a loose slot underfills and
+              // the button ends up floating mid-row.
+              Expanded(
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(connectedStatus.relayed ? 'relayed' : 'direct'),
+                    const SizedBox(width: 5),
+                    Flexible(
+                      fit: FlexFit.loose,
+                      child: Text(connectedStatus.remoteAddress,
+                          overflow: TextOverflow.ellipsis, maxLines: 1),
+                    ),
+                  ],
+                ),
               ),
-            ],
             if (active || pending)
               IconButton(
                 visualDensity: VisualDensity.comfortable,
