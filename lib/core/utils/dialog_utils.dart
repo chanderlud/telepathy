@@ -2,7 +2,10 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:telepathy/core/rust/types.dart';
+import 'package:telepathy/core/utils/console.dart';
+import 'package:telepathy/core/utils/update_checker.dart';
 import 'package:telepathy/widgets/common/index.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 /// Shows an error modal.
 void showErrorDialog(BuildContext context, String title, String errorMessage) {
@@ -18,6 +21,54 @@ void showErrorDialog(BuildContext context, String title, String errorMessage) {
             onPressed: () {
               Navigator.of(context).pop();
             },
+          ),
+        ],
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(10),
+        ),
+      );
+    },
+  );
+}
+
+Future<void> showUpdateAvailableDialog(
+  BuildContext context,
+  AvailableUpdate update,
+) {
+  return showDialog<void>(
+    context: context,
+    builder: (BuildContext dialogContext) {
+      return AlertDialog(
+        title: const Text('Update Available'),
+        content: Text(
+          'Telepathy ${update.version} is available. '
+          'Open the release page to download it.',
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Later'),
+          ),
+          TextButton(
+            onPressed: () async {
+              try {
+                final launched = await launchUrl(
+                  update.releaseUrl,
+                  mode: LaunchMode.externalApplication,
+                );
+                if (launched) {
+                  return;
+                }
+                DebugConsole.warn(
+                  'Could not open release URL: ${update.releaseUrl}',
+                );
+              } catch (error) {
+                DebugConsole.warn(
+                  'Could not open release URL ${update.releaseUrl}: $error',
+                );
+              }
+            },
+            child: const Text('View Release'),
           ),
         ],
         shape: RoundedRectangleBorder(

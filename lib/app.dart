@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart' hide Overlay;
 import 'package:provider/provider.dart';
 import 'package:telepathy/core/theme/app_theme.dart';
+import 'package:telepathy/core/utils/index.dart';
 import 'package:telepathy/controllers/index.dart';
 import 'package:telepathy/screens/home/home_page.dart';
 
@@ -26,6 +27,21 @@ class _TelepathyAppState extends State<TelepathyApp> with WindowListener {
     super.initState();
     windowManager.addListener(this);
     _initWindow();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkForUpdates();
+    });
+  }
+
+  Future<void> _checkForUpdates() async {
+    if (!context.read<PreferencesController>().automaticUpdateChecks) {
+      return;
+    }
+
+    final update = (await UpdateChecker().check()).availableUpdate;
+    final navigator = navigatorKey.currentState;
+    if (update != null && navigator?.mounted == true) {
+      await showUpdateAvailableDialog(navigator!.context, update);
+    }
   }
 
   Future<void> _initWindow() async {

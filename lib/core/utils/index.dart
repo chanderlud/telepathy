@@ -7,3 +7,4 @@ export 'format_utils.dart';
 export 'io_shim.dart';
 export 'layout_context.dart';
 export 'sound_effects.dart';
+export 'update_checker.dart';

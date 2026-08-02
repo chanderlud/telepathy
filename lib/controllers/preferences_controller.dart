@@ -12,12 +12,16 @@ class PreferencesController with ChangeNotifier {
 
   late bool efficiencyMode;
 
+  late bool automaticUpdateChecks;
+
   PreferencesController({required this.options});
 
   Future<void> init() async {
     playCustomRingtones = await options.getBool('playCustomRingtones') ?? true;
     customRingtoneFile = await options.getString('customRingtoneFile');
     efficiencyMode = await options.getBool('efficiencyMode') ?? false;
+    automaticUpdateChecks =
+        await options.getBool('automaticUpdateChecks') ?? true;
     notifyListeners();
   }
 
@@ -42,6 +46,12 @@ class PreferencesController with ChangeNotifier {
   Future<void> updateEfficiencyMode(bool enabled) async {
     efficiencyMode = enabled;
     await options.setBool('efficiencyMode', enabled);
+    notifyListeners();
+  }
+
+  Future<void> updateAutomaticUpdateChecks(bool enabled) async {
+    automaticUpdateChecks = enabled;
+    await options.setBool('automaticUpdateChecks', enabled);
     notifyListeners();
   }
 }
