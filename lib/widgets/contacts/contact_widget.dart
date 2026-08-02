@@ -221,8 +221,12 @@ class ContactWidgetState extends State<ContactWidget> {
                   : 'assets/icons/Profile.svg'),
             ),
             const SizedBox(width: 10),
-            Text(widget.contact.nickname(),
-                style: const TextStyle(fontSize: 16)),
+            Flexible(
+              child: Text(widget.contact.nickname(),
+                  style: const TextStyle(fontSize: 16),
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1),
+            ),
             const Spacer(),
             if (inactive) ...[
               IconButton(
@@ -254,7 +258,10 @@ class ContactWidgetState extends State<ContactWidget> {
             if (online && connectedStatus != null) ...[
               Text(connectedStatus.relayed ? 'relayed' : 'direct'),
               const SizedBox(width: 5),
-              Text(connectedStatus.remoteAddress),
+              Flexible(
+                child: Text(connectedStatus.remoteAddress,
+                    overflow: TextOverflow.ellipsis, maxLines: 1),
+              ),
             ],
             if (active || pending)
               IconButton(

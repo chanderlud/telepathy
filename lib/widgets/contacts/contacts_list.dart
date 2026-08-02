@@ -52,93 +52,43 @@ class ContactsList extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          Padding(
-              padding: EdgeInsets.symmetric(
-                horizontal: 8,
-                vertical: isCompact ? 0 : 7,
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  SizedBox(
-                    height: contactsHeaderHeight,
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.center,
-                      children: [
-                        const Text(
-                          'Contacts',
-                          style: TextStyle(
-                            fontSize: 20,
-                            height: 1.0,
-                            leadingDistribution: TextLeadingDistribution.even,
-                          ),
-                          strutStyle: StrutStyle(
-                            fontSize: 20,
-                            height: 1.0,
-                            leading: 0,
-                            forceStrutHeight: true,
-                          ),
-                          textHeightBehavior: TextHeightBehavior(
-                            applyHeightToFirstAscent: false,
-                            applyHeightToLastDescent: false,
-                            leadingDistribution: TextLeadingDistribution.even,
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        SizedBox.square(
-                          dimension: addButtonSize,
-                          child: IconButton(
-                            onPressed: () {
-                              showDialog(
-                                context: context,
-                                builder: (BuildContext context) {
-                                  return SimpleDialog(
-                                    backgroundColor: Theme.of(context)
-                                        .colorScheme
-                                        .secondaryContainer,
-                                    children: const [ContactForm()],
-                                  );
-                                },
-                              );
-                            },
-                            constraints: const BoxConstraints.tightFor(
-                              width: addButtonSize,
-                              height: addButtonSize,
-                            ),
-                            padding: isWindowsDesktop
-                                ? const EdgeInsets.only(top: 2.0)
-                                : EdgeInsets.zero,
-                            icon: SvgPicture.asset(
-                              'assets/icons/Plus.svg',
-                              width: addIconSize,
-                              height: addIconSize,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Transform.translate(
-                    offset: Offset(0, isCompact ? 0 : 1.5),
-                    child: Container(
-                      height: 34,
-                      decoration: BoxDecoration(
-                        color: Theme.of(context).colorScheme.tertiaryContainer,
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      padding: const EdgeInsets.only(left: 8, right: 3),
+          LayoutBuilder(builder: (context, headerConstraints) {
+            // Width budget for the header. When the card is too narrow for
+            // the full "Session Manager" label plus the status icon (and the
+            // restart button in the failed state), drop the label and keep
+            // the icons — otherwise the row overflows (issue #58, case 1).
+            const double contactsTitleWidth = 126;
+            const double statusIconWidth = 44; // gap + icon + chip padding
+            const double restartButtonWidth = 38;
+            final double labelBudget = headerConstraints.maxWidth -
+                contactsTitleWidth -
+                statusIconWidth -
+                (managerState == ManagerState.failed ? restartButtonWidth : 0);
+            final bool showManagerLabel = labelBudget >= 110;
+
+            return Padding(
+                padding: EdgeInsets.symmetric(
+                  horizontal: 8,
+                  vertical: isCompact ? 0 : 7,
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    SizedBox(
+                      height: contactsHeaderHeight,
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         crossAxisAlignment: CrossAxisAlignment.center,
                         children: [
                           const Text(
-                            'Session Manager',
+                            'Contacts',
                             style: TextStyle(
+                              fontSize: 20,
                               height: 1.0,
                               leadingDistribution: TextLeadingDistribution.even,
                             ),
                             strutStyle: StrutStyle(
+                              fontSize: 20,
                               height: 1.0,
                               leading: 0,
                               forceStrutHeight: true,
@@ -149,40 +99,115 @@ class ContactsList extends StatelessWidget {
                               leadingDistribution: TextLeadingDistribution.even,
                             ),
                           ),
-                          const SizedBox(width: 5),
-                          managerStatusIcon(context, managerState),
-                          if (managerState == ManagerState.failed) ...[
-                            const SizedBox(width: 10),
-                            SizedBox.square(
-                              dimension: 28,
-                              child: IconButton(
-                                onPressed: () {
-                                  telepathy.restartManager();
-                                },
-                                constraints: const BoxConstraints.tightFor(
-                                  width: 28,
-                                  height: 28,
-                                ),
-                                padding: EdgeInsets.zero,
-                                icon: SvgPicture.asset(
-                                  'assets/icons/Restart.svg',
-                                  colorFilter: const ColorFilter.mode(
-                                    Color(0xFFdc2626),
-                                    BlendMode.srcIn,
-                                  ),
-                                  semanticsLabel: 'Restart session manager',
-                                  width: 24,
-                                  height: 24,
-                                ),
+                          const SizedBox(width: 10),
+                          SizedBox.square(
+                            dimension: addButtonSize,
+                            child: IconButton(
+                              onPressed: () {
+                                showDialog(
+                                  context: context,
+                                  builder: (BuildContext context) {
+                                    return SimpleDialog(
+                                      backgroundColor: Theme.of(context)
+                                          .colorScheme
+                                          .secondaryContainer,
+                                      children: const [ContactForm()],
+                                    );
+                                  },
+                                );
+                              },
+                              constraints: const BoxConstraints.tightFor(
+                                width: addButtonSize,
+                                height: addButtonSize,
+                              ),
+                              padding: isWindowsDesktop
+                                  ? const EdgeInsets.only(top: 2.0)
+                                  : EdgeInsets.zero,
+                              icon: SvgPicture.asset(
+                                'assets/icons/Plus.svg',
+                                width: addIconSize,
+                                height: addIconSize,
                               ),
                             ),
-                          ],
+                          ),
                         ],
                       ),
                     ),
-                  )
-                ],
-              )),
+                    Flexible(
+                      child: Transform.translate(
+                        offset: Offset(0, isCompact ? 0 : 1.5),
+                        child: Container(
+                          height: 34,
+                          decoration: BoxDecoration(
+                            color:
+                                Theme.of(context).colorScheme.tertiaryContainer,
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          padding: const EdgeInsets.only(left: 8, right: 3),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              if (showManagerLabel)
+                                const Flexible(
+                                  child: Text(
+                                    'Session Manager',
+                                    style: TextStyle(
+                                      height: 1.0,
+                                      leadingDistribution:
+                                          TextLeadingDistribution.even,
+                                    ),
+                                    strutStyle: StrutStyle(
+                                      height: 1.0,
+                                      leading: 0,
+                                      forceStrutHeight: true,
+                                    ),
+                                    textHeightBehavior: TextHeightBehavior(
+                                      applyHeightToFirstAscent: false,
+                                      applyHeightToLastDescent: false,
+                                      leadingDistribution:
+                                          TextLeadingDistribution.even,
+                                    ),
+                                    overflow: TextOverflow.ellipsis,
+                                    maxLines: 1,
+                                  ),
+                                ),
+                              if (showManagerLabel) const SizedBox(width: 5),
+                              managerStatusIcon(context, managerState),
+                              if (managerState == ManagerState.failed) ...[
+                                const SizedBox(width: 10),
+                                SizedBox.square(
+                                  dimension: 28,
+                                  child: IconButton(
+                                    onPressed: () {
+                                      telepathy.restartManager();
+                                    },
+                                    constraints: const BoxConstraints.tightFor(
+                                      width: 28,
+                                      height: 28,
+                                    ),
+                                    padding: EdgeInsets.zero,
+                                    icon: SvgPicture.asset(
+                                      'assets/icons/Restart.svg',
+                                      colorFilter: const ColorFilter.mode(
+                                        Color(0xFFdc2626),
+                                        BlendMode.srcIn,
+                                      ),
+                                      semanticsLabel: 'Restart session manager',
+                                      width: 24,
+                                      height: 24,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ),
+                    )
+                  ],
+                ));
+          }),
           SizedBox(height: isCompact ? 2.5 : 10),
           Flexible(
             fit: FlexFit.loose,

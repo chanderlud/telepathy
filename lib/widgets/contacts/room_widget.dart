@@ -86,7 +86,12 @@ class RoomWidgetState extends State<RoomWidget> {
                   : 'assets/icons/Group.svg'),
             ),
             const SizedBox(width: 10),
-            Text(widget.room.nickname, style: const TextStyle(fontSize: 16)),
+            Flexible(
+              child: Text(widget.room.nickname,
+                  style: const TextStyle(fontSize: 16),
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1),
+            ),
             const Spacer(),
             IconButton(
               visualDensity: VisualDensity.comfortable,

@@ -7,7 +7,11 @@ class AppConstants {
   static const double wideLayoutBreakpoint = 600.0;
   static const double compactHeightBreakpoint = 680.0;
   static const double topSectionMaxHeightWide = 275.0;
-  static const double topSectionMaxHeightWideCompact = 170.0;
+
+  /// Compact wide cap. Must fit the compact call-details layout (title +
+  /// input/output levels + stats row, without the loss chart) — see
+  /// `CallDetailsWidget`.
+  static const double topSectionMaxHeightWideCompact = 225.0;
   static const double topSectionMaxHeightNarrowCompact = 170.0;
   static const double topSectionMaxHeightNarrow = 250.0;
 
