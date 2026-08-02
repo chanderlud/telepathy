@@ -93,21 +93,28 @@ class _SvgAwareAssetBundle extends CachingAssetBundle {
 }
 
 class Harness {
-  static bool _robotoLoaded = false;
+  static bool _fontLoaded = false;
 
-  /// Loads real Roboto so text metrics match production; the flutter_test
-  /// default font has significantly different glyph widths/line heights,
-  /// which hid the overflows this suite guards against. Must be called from
-  /// `setUpAll` — it performs real file I/O, which never completes inside a
-  /// test body's fake async zone.
-  static Future<void> loadRoboto() async {
-    if (_robotoLoaded) return;
-    final bytes =
-        await File('test/support/fonts/Roboto-Regular.ttf').readAsBytes();
-    final loader = FontLoader('Roboto')
-      ..addFont(Future.value(bytes.buffer.asByteData()));
+  /// Loads the app's bundled font so text metrics match production; the
+  /// flutter_test default font has significantly different glyph
+  /// widths/line heights, which hid the overflows this suite guards
+  /// against. Must be called from `setUpAll` — it performs real file I/O,
+  /// which never completes inside a test body's fake async zone.
+  static Future<void> loadAppFont() async {
+    if (_fontLoaded) return;
+    final loader = FontLoader('Nunito');
+    for (final entry in const {
+      'Nunito-Regular.ttf': FontWeight.w400,
+      'Nunito-Medium.ttf': FontWeight.w500,
+      'Nunito-SemiBold.ttf': FontWeight.w600,
+      'Nunito-Bold.ttf': FontWeight.w700,
+    }.entries) {
+      final bytes =
+          await File('assets/fonts/nunito/${entry.key}').readAsBytes();
+      loader.addFont(Future.value(bytes.buffer.asByteData()));
+    }
     await loader.load();
-    _robotoLoaded = true;
+    _fontLoaded = true;
   }
 
   final AudioSettingsController audioSettingsController;
@@ -189,7 +196,7 @@ class Harness {
         ],
         child: MaterialApp(
           // Match production text metrics (engine default on Linux/Android).
-          theme: ThemeData(fontFamily: 'Roboto'),
+          theme: ThemeData(fontFamily: 'Nunito'),
           home: const HomePage(),
         ),
       ),
@@ -206,7 +213,7 @@ void _setCanvasSize(WidgetTester tester, Size size) {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  setUpAll(Harness.loadRoboto);
+  setUpAll(Harness.loadAppFont);
 
   testWidgets(
       'case 1: semi-narrow two-column layout with an active call does '
@@ -290,8 +297,8 @@ void main() {
     harness.stateController.setSessionManager(ManagerState.failed);
 
     // Narrow two-column layout: the contacts card is at its tightest.
-    // (Test fonts have wider metrics than production Roboto, so 700px here
-    // exercises the same stress as ~660px in the real app.)
+    // (The default flutter_test font has wider metrics than the bundled
+    // UI font; 700px here exercises the same stress as ~660px in the app.)
     _setCanvasSize(tester, const Size(700, 900));
     await tester.pumpWidget(harness.buildApp());
     // Let the AnimatedSize transition finish so the steady-state layout is
