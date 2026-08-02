@@ -11,6 +11,7 @@ use iroh::PublicKey;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use telepathy_audio::devices::AudioHost;
 #[cfg(not(feature = "integration-testing"))]
 use telepathy_audio::devices::CpalAudioHost;
 #[cfg(feature = "integration-testing")]
@@ -25,26 +26,48 @@ type NativeAcceptCall = Arc<
 >;
 
 #[cfg(not(feature = "integration-testing"))]
-type NativeHandle = TelepathyHandle<NativeCallbacks, CpalAudioHost>;
+type DefaultNativeHost = CpalAudioHost;
 #[cfg(feature = "integration-testing")]
-type NativeHandle = TelepathyHandle<
-    NativeCallbacks,
-    MockAudioHost<
-        telepathy_audio::devices::MockAudioInput,
-        telepathy_audio::devices::MockAudioOutput,
-    >,
+type DefaultNativeHost = MockAudioHost<
+    telepathy_audio::devices::MockAudioInput,
+    telepathy_audio::devices::MockAudioOutput,
 >;
 
 /// Rust-native runtime client for `telepathy-core`.
 ///
 /// This mirrors the Flutter-facing API but accepts [`NativeCallbacks`] and does
 /// not depend on FRB runtime semantics.
-pub struct NativeTelepathy {
-    handle: NativeHandle,
+pub struct NativeTelepathy<H = DefaultNativeHost>
+where
+    H: AudioHost + Send + Sync + Clone + 'static,
+{
+    handle: TelepathyHandle<NativeCallbacks, H>,
 }
 
-impl NativeTelepathy {
+impl NativeTelepathy<DefaultNativeHost> {
     pub fn new(
+        network_config: &NetworkConfig,
+        video_config: &ScreenshareConfig,
+        codec_config: &CodecConfig,
+        callbacks: NativeCallbacks,
+    ) -> Self {
+        Self::with_host(
+            Default::default(),
+            network_config,
+            video_config,
+            codec_config,
+            callbacks,
+        )
+    }
+}
+
+impl<H> NativeTelepathy<H>
+where
+    H: AudioHost + Send + Sync + Clone + 'static,
+{
+    /// Builds a client around a caller-provided audio host (e.g. a mock host for headless tests).
+    pub fn with_host(
+        audio_host: H,
         network_config: &NetworkConfig,
         video_config: &ScreenshareConfig,
         codec_config: &CodecConfig,
@@ -52,7 +75,7 @@ impl NativeTelepathy {
     ) -> Self {
         Self {
             handle: TelepathyHandle::new(
-                Default::default(),
+                audio_host,
                 network_config,
                 video_config,
                 &Default::default(),

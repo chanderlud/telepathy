@@ -45,8 +45,8 @@ pub async fn run(opts: RunOptions) -> Result<()> {
 
 async fn run_with_host<H>(
     opts: RunOptions,
-    _audio_host: H,
-    _audio_frame_indices: Option<FrameCapture>,
+    audio_host: H,
+    audio_frame_indices: Option<FrameCapture>,
 ) -> Result<()>
 where
     H: AudioHost + Send + Sync + Clone + 'static,
@@ -83,8 +83,13 @@ where
     };
     let codec_config = CodecConfig::new(true, true, 5.0);
     let video_config = telepathy_core::types::ScreenshareConfig::default();
-    let mut telepathy =
-        NativeTelepathy::new(&network_config, &video_config, &codec_config, callbacks);
+    let mut telepathy = NativeTelepathy::with_host(
+        audio_host,
+        &network_config,
+        &video_config,
+        &codec_config,
+        callbacks,
+    );
 
     send_event(
         &output_tx,
@@ -116,7 +121,12 @@ where
                         match serde_json::from_str::<Envelope>(&line) {
                             Ok(envelope) => {
                                 let id = envelope.id.clone();
-                                match handle_command(&mut telepathy, &hub, envelope).await {
+                                match handle_command(
+                                    &mut telepathy,
+                                    audio_frame_indices.as_ref(),
+                                    &hub,
+                                    envelope,
+                                ).await {
                                     CommandOutcome::AckOk => send_ack_ok(&output_tx, id),
                                     CommandOutcome::AckErr(message) => send_ack_err(&output_tx, id, message),
                                     CommandOutcome::Result(data) => send_result(&output_tx, id, data),
@@ -180,11 +190,15 @@ enum CommandOutcome {
     Shutdown,
 }
 
-async fn handle_command(
-    telepathy: &mut NativeTelepathy,
+async fn handle_command<H>(
+    telepathy: &mut NativeTelepathy<H>,
+    audio_frame_indices: Option<&FrameCapture>,
     hub: &Hub,
     envelope: Envelope,
-) -> CommandOutcome {
+) -> CommandOutcome
+where
+    H: AudioHost + Send + Sync + Clone + 'static,
+{
     match envelope.cmd {
         Command::SetIdentity { key_b64 } => {
             let decoded = match base64::engine::general_purpose::STANDARD.decode(key_b64) {
@@ -339,9 +353,12 @@ async fn handle_command(
             telepathy.set_output_device(id).await;
             CommandOutcome::AckOk
         }
-        Command::DrainAudioFrameIndices => CommandOutcome::AckErr(
-            "drain_audio_frame_indices unavailable with NativeTelepathy".to_string(),
-        ),
+        Command::DrainAudioFrameIndices => match audio_frame_indices {
+            Some(capture) => CommandOutcome::Result(json!({ "indices": capture.drain() })),
+            None => CommandOutcome::AckErr(
+                "drain_audio_frame_indices requires --capture-audio-frame-indices".to_string(),
+            ),
+        },
         Command::ListDevices => CommandOutcome::Result(json!({
             "supported": false,
             "reason": "NativeTelepathy does not currently expose list device APIs"

@@ -331,8 +331,11 @@ mod tests {
         .await;
         assert!(receive_control(&inbound).await.is_err());
 
-        send_control_bytes(&outbound, vec![0; VIDEO_CONTROL_MAX_FRAME_LENGTH + 1]).await;
-        assert!(receive_control(&inbound).await.is_err());
+        let ((), oversized_result) = tokio::join!(
+            send_control_bytes(&outbound, vec![0; VIDEO_CONTROL_MAX_FRAME_LENGTH + 1]),
+            receive_control(&inbound),
+        );
+        assert!(oversized_result.is_err());
 
         client.close().await;
         server.close().await;

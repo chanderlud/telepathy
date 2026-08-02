@@ -348,6 +348,7 @@ pub struct VideoCapabilities {
 }
 
 impl VideoCapabilities {
+    #[cfg(any(test, target_os = "windows", target_os = "macos", target_os = "linux"))]
     pub(crate) fn formats(
         &self,
         source: VideoSource,

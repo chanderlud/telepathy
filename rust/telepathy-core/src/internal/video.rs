@@ -496,6 +496,7 @@ pub struct VideoMediaDescriptor {
 }
 
 impl VideoMediaDescriptor {
+    #[cfg(any(test, target_os = "windows", target_os = "macos", target_os = "linux"))]
     pub const fn display(codec: VideoCodec, width: u32, height: u32) -> Self {
         Self {
             source: VideoSource::Display,
