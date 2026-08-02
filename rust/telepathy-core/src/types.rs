@@ -348,7 +348,13 @@ pub struct VideoCapabilities {
 }
 
 impl VideoCapabilities {
-    #[cfg(any(test, target_os = "windows", target_os = "macos", target_os = "linux"))]
+    #[cfg_attr(
+        not(any(target_os = "windows", target_os = "macos", target_os = "linux")),
+        expect(
+            dead_code,
+            reason = "only used by the desktop ffmpeg backend and tests"
+        )
+    )]
     pub(crate) fn formats(
         &self,
         source: VideoSource,

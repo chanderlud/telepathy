@@ -496,7 +496,13 @@ pub struct VideoMediaDescriptor {
 }
 
 impl VideoMediaDescriptor {
-    #[cfg(any(test, target_os = "windows", target_os = "macos", target_os = "linux"))]
+    #[cfg_attr(
+        not(any(target_os = "windows", target_os = "macos", target_os = "linux")),
+        expect(
+            dead_code,
+            reason = "only used by the desktop ffmpeg backend and tests"
+        )
+    )]
     pub const fn display(codec: VideoCodec, width: u32, height: u32) -> Self {
         Self {
             source: VideoSource::Display,
@@ -510,14 +516,26 @@ impl VideoMediaDescriptor {
         self.source
     }
 
-    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+    #[cfg_attr(
+        not(any(target_os = "windows", target_os = "macos", target_os = "linux")),
+        expect(
+            dead_code,
+            reason = "only used by the desktop ffmpeg backend and tests"
+        )
+    )]
     pub(crate) const fn codec(self) -> VideoCodec {
         match self.format {
             VideoMediaFormat::MpegTs(codec) => codec,
         }
     }
 
-    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+    #[cfg_attr(
+        not(any(target_os = "windows", target_os = "macos", target_os = "linux")),
+        expect(
+            dead_code,
+            reason = "only used by the desktop ffmpeg backend and tests"
+        )
+    )]
     pub(crate) const fn dimensions(self) -> (u32, u32) {
         (self.width, self.height)
     }
