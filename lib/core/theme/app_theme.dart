@@ -17,6 +17,7 @@ class AppTheme {
     );
 
     return ThemeData(
+      fontFamily: 'Nunito',
       dialogTheme: const DialogThemeData(
         surfaceTintColor: Color(0xFF27292A),
       ),
