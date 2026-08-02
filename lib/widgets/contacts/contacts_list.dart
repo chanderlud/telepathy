@@ -17,6 +17,11 @@ const double contactsHeaderHeight = 36;
 const double addButtonSize = 36;
 const double addIconSize = 28;
 
+/// List-viewport height at which 3 contact rows fit comfortably
+/// (~53px each, matching the narrow non-compact layout). Below this the
+/// list shows 2 rows instead.
+const double minThreeItemListHeight = 160;
+
 /// A widget which displays a list of ContactWidgets.
 class ContactsList extends StatelessWidget {
   final List<Contact> contacts;
@@ -221,12 +226,13 @@ class ContactsList extends StatelessWidget {
               ),
               padding: const EdgeInsets.symmetric(vertical: 3),
               child: LayoutBuilder(builder: (context, constraints) {
-                // The viewport is always sized to fit exactly 2 (compact) or
-                // 3 items so no item is clipped. The spinner smoosh that
-                // motivated a height floor is instead fixed by removing the
-                // spinner's vertical padding (see ContactWidget) — a 20px
-                // spinner fits the smallest possible row.
-                final itemHeight = constraints.maxHeight / (isCompact ? 2 : 3);
+                // The viewport always fits a whole number of items: 3 when
+                // the height allows comfortable rows, otherwise 2. Driving
+                // this from the measured height (not the compact flag)
+                // keeps the wide compact layout — whose taller cap fits 3 —
+                // from stretching 2 fat items to fill the space.
+                final itemHeight = constraints.maxHeight /
+                    (constraints.maxHeight >= minThreeItemListHeight ? 3 : 2);
 
                 return ListView.builder(
                   itemCount: items.length,
