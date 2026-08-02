@@ -3,11 +3,12 @@ use super::common::{
     assert_no_call_ended_before_connected, build_client, build_client_with_accept_probe,
     build_client_with_lookup_contacts, call_state_snapshot, init_test_tracing,
     shared_address_lookup, shared_relay_map, wait_for_active_transport, wait_for_connected,
-    wait_for_sessions,
+    wait_for_sessions, wait_for_stable_session_pair,
 };
 
 use iroh::SecretKey;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering::Relaxed;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use telepathy_audio::devices::{MockAudioHost, MockAudioInput, MockAudioOutput};
@@ -679,4 +680,149 @@ async fn stale_session_with_no_replacement_closes_connection_promptly() {
         current_b_id_after.is_none(),
         "drain should have removed Bob's session entry; after={current_b_id_after:?}"
     );
+}
+
+/// Reproduces the system-test failure
+/// `test_call_drain_audio_frame_indices_strictly_increasing[iter-1-clean]`
+/// (workflow run 30717774611, sweep 0, seed 30717774611-0): both sides issued
+/// `start_session` simultaneously; Alice's dial installed a listener session
+/// on Bob and her `Hello` opened Bob's accept prompt on it, then Bob's slower
+/// outbound dial completed and `session_collision_kept_new` tore the listener
+/// session down mid-prompt. Bob emitted `accept_call_canceled`, so the
+/// subsequent `accept_call` was rejected with "unknown accept_call
+/// request_id" and the in-flight call offer was lost.
+///
+/// Deterministic ordering via Bob's `SessionStatusProbe`:
+/// 1. Bob's outbound dial is parked at its `Connecting` status emission,
+///    which `open_session` awaits before connecting — the dial is in-flight
+///    (past the `ignored_redundant_outgoing` guard) while no session exists.
+/// 2. Alice's dial then installs the listener session on Bob and her `Hello`
+///    opens Bob's accept prompt on that session.
+/// 3. Releasing the park lets Bob's dial complete; collision resolution runs
+///    while the prompt is still pending.
+///
+/// The prompt must survive collision resolution. On the broken code the
+/// kept-new teardown cancels it, which is exactly the cancellation the system
+/// test observed.
+#[tokio::test(flavor = "multi_thread")]
+async fn session_collision_kept_new_preserves_pending_accept_prompt() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+    let codec_config = CodecConfig::new(true, true, 5.0);
+
+    // Bob sorts before Alice so Bob's outbound (client) connection wins the
+    // collision on Bob via `should_keep_new_session` — the same geometry as
+    // the system-test failure (`connection.side.client=true` in the
+    // `session_collision_kept_new` log line).
+    let (key_a, key_b) = loop {
+        let key_a = SecretKey::generate();
+        let key_b = SecretKey::generate();
+        if key_b.public() < key_a.public() {
+            break (key_a, key_b);
+        }
+    };
+    let contact_a = Contact::new(
+        "prompt-collision-client-a".to_string(),
+        key_a.public().to_string(),
+    )
+    .expect("contact a invalid");
+    let contact_b = Contact::new(
+        "prompt-collision-client-b".to_string(),
+        key_b.public().to_string(),
+    )
+    .expect("contact b invalid");
+    let peer_a = contact_a.get_peer_id();
+    let peer_b = contact_b.get_peer_id();
+
+    let call_states_a = Arc::new(Mutex::new(Vec::new()));
+    let call_states_b = Arc::new(Mutex::new(Vec::new()));
+    let accept_probe_b = PendingAcceptProbe::default();
+
+    let client_a = build_client(
+        relay_map,
+        key_a,
+        vec![contact_b.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_a.clone(),
+    )
+    .await;
+    let client_b = build_client_with_accept_probe(
+        relay_map,
+        key_b,
+        vec![contact_a.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_b.clone(),
+        accept_probe_b.clone(),
+    )
+    .await;
+
+    let shutdown_guard = TwoClientShutdownGuard {
+        a: &client_a,
+        b: &client_b,
+        dropped: AtomicBool::new(false),
+    };
+
+    // Park Bob's `Connecting` emission, then launch his outbound dial. The
+    // manager spawns `open_session` (no session exists yet, so the dial is not
+    // coalesced) and it blocks inside the status callback before connecting.
+    client_b.session_status_probe.park_connecting();
+    client_b.telepathy.start_session(&contact_a).await;
+    client_b
+        .session_status_probe
+        .wait_for(peer_a.as_bytes(), SessionStatus::Connecting)
+        .await;
+
+    // Alice's dial installs the listener session on Bob while his own dial is
+    // still parked — the glare window from the system test.
+    client_a.telepathy.start_session(&contact_b).await;
+    wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
+
+    // Alice's Hello opens Bob's accept prompt on the listener session.
+    client_a
+        .telepathy
+        .start_call(&contact_b)
+        .await
+        .expect("alice should start the outgoing call");
+    accept_probe_b.wait_opened().await;
+    assert_eq!(
+        accept_probe_b.opened.load(Relaxed),
+        1,
+        "bob should have exactly one pending accept prompt before the collision"
+    );
+
+    // Let Bob's in-flight dial complete; collision resolution now runs while
+    // the accept prompt is still pending on the listener session.
+    client_b.session_status_probe.release_connecting();
+    wait_for_stable_session_pair(&client_b, &peer_a, &client_a, &peer_b, None).await;
+
+    // Grace window for a wrongful cancellation to surface, then assert the
+    // prompt survived. On the broken code the kept-new teardown fires the
+    // prompt's cancel token (`session_stopped_during_accept_prompt`) during
+    // the swap above.
+    sleep(Duration::from_secs(1)).await;
+    assert_eq!(
+        accept_probe_b.cancelled.load(Relaxed),
+        0,
+        "session collision must not cancel the pending accept prompt; \
+         cancelling it drops the in-flight call offer — the system-test \
+         failure mode where accept_call is rejected with \
+         'unknown accept_call request_id'"
+    );
+
+    shutdown_guard.disarm();
+    drop(shutdown_guard);
+    client_a.telepathy.shutdown().await;
+    client_b.telepathy.shutdown().await;
 }

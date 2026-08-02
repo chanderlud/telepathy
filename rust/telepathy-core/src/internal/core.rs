@@ -804,10 +804,34 @@ where
         let is_room = self.is_in_room(&peer).await;
         let keep_new_session =
             should_keep_new_session(&local_peer, &peer, connection.side().is_client());
+        // A collision winner that would replace the current session must wait while that
+        // session carries a direct-call engagement with this peer: swapping mid-negotiation
+        // cancels the callee's pending accept prompt and strands the caller's outgoing call
+        // (the `session_stopped_during_accept_prompt` / "unknown accept_call request_id"
+        // failure), and swapping mid-call kills the call's transport. The exception is an
+        // inbound winner while a prompt is pending: that replacement is remote-initiated,
+        // so it is honored immediately — the old endpoint may be a stale predecessor that
+        // can never complete the call, and the pending incoming ownership is retained for
+        // the replacement session. An outbound winner is our own dial completing against a
+        // live session, so it defers instead.
+        let mut call_engagement = match self.core_state.call_slot.snapshot() {
+            Ok(snapshot)
+                if !is_room
+                    && snapshot.direct_peer == Some(peer)
+                    && match snapshot.state {
+                        CallSlotState::PendingOutgoing | CallSlotState::ActiveDirect => true,
+                        CallSlotState::PendingIncoming => connection.side().is_client(),
+                        _ => false,
+                    } =>
+            {
+                Some(snapshot)
+            }
+            _ => None,
+        };
         let mut states = self.session_states.write().await;
         let mut deferred_candidate = None;
         let old_state_option = if let Some(old_state) = states.get(&peer).cloned() {
-            if keep_new_session {
+            if keep_new_session && call_engagement.is_none() {
                 states.insert(peer, state.clone());
                 self.publish_session_locked(peer);
             } else {
@@ -825,7 +849,7 @@ where
         drop(states);
 
         if let Some(old_state) = old_state_option {
-            if keep_new_session {
+            if keep_new_session && call_engagement.is_none() {
                 warn!(
                     event = "session_collision_kept_new",
                     peer.id = %peer,
@@ -841,23 +865,60 @@ where
                 }
             } else if let Some(candidate) = deferred_candidate {
                 drop(incoming_candidate);
+                let deferred_for_call = call_engagement.is_some();
                 warn!(
                     event = "session_collision_deferred_candidate",
                     peer.id = %peer,
                     peer.local = %local_peer,
                     session.id = %state.id,
                     old_session.id = %old_state.id,
-                    connection.side.client = connection.side().is_client()
+                    connection.side.client = connection.side().is_client(),
+                    deferred_for_call,
                 );
 
-                select! {
-                    biased;
-                    _ = candidate.cancelled() => {
-                        connection.close(VarInt::from_u32(0), b"session candidate canceled");
-                        return Ok(());
+                loop {
+                    select! {
+                        biased;
+                        _ = candidate.cancelled() => {
+                            connection.close(VarInt::from_u32(0), b"session candidate canceled");
+                            return Ok(());
+                        }
+                        _ = connection.closed() => return Ok(()),
+                        _ = old_state.finished() => break,
+                        // `select!` evaluates branch futures even for disabled branches, so
+                        // the None case must be a never-completing future rather than an
+                        // unwrap guarded by a precondition.
+                        result = async {
+                            match call_engagement {
+                                Some(snapshot) => {
+                                    self.core_state.call_slot.wait_for_release(snapshot).await
+                                }
+                                None => std::future::pending::<Result<()>>().await,
+                            }
+                        }, if call_engagement.is_some() => {
+                            result?;
+                            // The engagement this candidate waited on ended; if the slot was
+                            // immediately re-acquired by a fresh call with this peer, keep
+                            // waiting rather than swapping the session out from under it.
+                            call_engagement = match self.core_state.call_slot.snapshot() {
+                                Ok(snapshot)
+                                    if snapshot.direct_peer == Some(peer)
+                                        && matches!(
+                                            snapshot.state,
+                                            CallSlotState::PendingIncoming
+                                                | CallSlotState::PendingOutgoing
+                                                | CallSlotState::ActiveDirect
+                                        ) =>
+                                {
+                                    Some(snapshot)
+                                }
+                                _ => None,
+                            };
+                            if call_engagement.is_none() {
+                                break;
+                            }
+                        }
                     }
-                    _ = connection.closed() => return Ok(()),
-                    _ = old_state.finished() => {}
                 }
 
                 let mut states = self.session_states.write().await;
@@ -880,6 +941,12 @@ where
                     session.id = %state.id,
                     old_session.id = %old_state.id
                 );
+                if deferred_for_call {
+                    // the engagement that protected the predecessor is over; take over from
+                    // it with kept-new semantics (it is still alive when the wait above ended
+                    // on slot release, already finished otherwise)
+                    old_state.teardown().await;
+                }
             } else {
                 drop(incoming_candidate);
                 warn!(
@@ -1329,9 +1396,19 @@ where
                 info!(event = "room_peer_goodbye_during_negotiation", ?reason);
                 Ok(HelloResponse::EndedSilently)
             }
-            ProtocolMessage::Goodbye { reason } => Ok(HelloResponse::EndedWith(
-                peer_goodbye_reason_message(&args.contact.nickname, reason),
-            )),
+            ProtocolMessage::Goodbye { reason } => {
+                if matches!(reason, GoodbyeReason::SessionStopped) {
+                    Ok(HelloResponse::EndedDeferred(peer_goodbye_reason_message(
+                        &args.contact.nickname,
+                        reason,
+                    )))
+                } else {
+                    Ok(HelloResponse::EndedWith(peer_goodbye_reason_message(
+                        &args.contact.nickname,
+                        reason,
+                    )))
+                }
+            }
             // Peer-level rejection ends only this room negotiation; other peers remain connected.
             ProtocolMessage::Reject | ProtocolMessage::Busy if is_in_room => {
                 info!(event = "room_peer_rejected_or_busy_during_negotiation");
@@ -1800,6 +1877,39 @@ where
                                         &mut pending_slot,
                                     )
                                     .await?;
+                                    return Ok(OutgoingNegotiationOutcome::CallEnded);
+                                }
+                                HelloResponse::EndedDeferred(message) => {
+                                    // Serialize behind the collision winner's map write: a
+                                    // deferred candidate installs under the write lock, and
+                                    // lock ordering guarantees it is visible here before the
+                                    // slot decision. When present, preserve the pending
+                                    // outgoing ownership quietly — the promoted session
+                                    // re-drives the call, or the claimed terminal resolution
+                                    // terminalizes it if the candidate aborts.
+                                    let states = self.session_states.read().await;
+                                    let deferred = self
+                                        .pending_session_candidates
+                                        .claim_terminal_resolution(peer, io.state.id)
+                                        .is_some();
+                                    drop(states);
+                                    if deferred {
+                                        info!(
+                                            event = "outgoing_negotiation_preserved_for_candidate",
+                                            peer.id = %peer
+                                        );
+                                    } else {
+                                        self.callbacks
+                                            .call_state(CallState::CallEnded(message, true))
+                                            .await;
+                                        release_pending(
+                                            &self.session_states,
+                                            peer,
+                                            io.state.id,
+                                            &mut pending_slot,
+                                        )
+                                        .await?;
+                                    }
                                     return Ok(OutgoingNegotiationOutcome::CallEnded);
                                 }
                                 HelloResponse::EndedSilently => {
@@ -3456,6 +3566,12 @@ enum HelloResponse {
     Completed,
     SessionStopped,
     EndedWith(String),
+    /// Session-stopped Goodbye during outgoing negotiation: end quietly and preserve the
+    /// pending outgoing slot when a deferred collision candidate will re-drive the call.
+    /// `SessionStopped` is generated by session teardown (collision/shutdown), never by a
+    /// user decision, so unlike `Reject` it must not terminalize a call that a parked
+    /// replacement session can still complete.
+    EndedDeferred(String),
     /// End the outgoing negotiation without notifying call ended (slot cleanup only).
     EndedSilently,
     /// Keep waiting (e.g. `KeepAlive`, ignored room reject/busy, simultaneous-dial winner).

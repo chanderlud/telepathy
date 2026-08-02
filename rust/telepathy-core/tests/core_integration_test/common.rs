@@ -202,12 +202,15 @@ impl SessionStatusProbe {
 
     pub(super) fn park_connecting(&self) {
         self.park_connecting.store(true, Relaxed);
-        let _ = self.connecting_released.send(true);
+        // `send` drops the value when no receiver exists (the initial receiver
+        // is discarded at construction and callbacks subscribe only once they
+        // park); `send_replace` stores unconditionally.
+        self.connecting_released.send_replace(true);
     }
 
     pub(super) fn release_connecting(&self) {
         self.park_connecting.store(false, Relaxed);
-        let _ = self.connecting_released.send(false);
+        self.connecting_released.send_replace(false);
     }
 
     async fn wait_for_connecting_release(&self) {
