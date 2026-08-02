@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -74,13 +75,16 @@ class _FakeTelepathy implements Telepathy {
   Object? noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
-/// AssetBundle that resolves `.svg` requests to a minimal well-formed SVG.
+/// AssetBundle that resolves `.svg` requests to a minimal SVG whose viewport
+/// matches the real icons in `assets/icons/` (viewBox 0 0 24 24 with 128px
+/// width/height attributes — the parser derives the intrinsic 24px size from
+/// the viewBox, so un-sized `SvgPicture`s measure exactly like production).
 class _SvgAwareAssetBundle extends CachingAssetBundle {
   @override
   Future<ByteData> load(String key) async {
     if (key.endsWith('.svg')) {
-      const minimalSvg = '<svg viewBox="0 0 10 10"></svg>';
-      final Uint8List bytes = Uint8List.fromList(utf8.encode(minimalSvg));
+      const svg = '<svg viewBox="0 0 24 24" width="128" height="128"></svg>';
+      final Uint8List bytes = Uint8List.fromList(utf8.encode(svg));
       return bytes.buffer.asByteData();
     }
     return ByteData(0);
@@ -165,7 +169,11 @@ class Harness {
           Provider<Telepathy>.value(value: _FakeTelepathy()),
           Provider<SoundPlayer>.value(value: _FakeSoundPlayer()),
         ],
-        child: const MaterialApp(home: HomePage()),
+        child: MaterialApp(
+          // Match production text metrics (engine default on Linux/Android).
+          theme: ThemeData(fontFamily: 'Roboto'),
+          home: const HomePage(),
+        ),
       ),
     );
   }
@@ -179,6 +187,17 @@ void _setCanvasSize(WidgetTester tester, Size size) {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  setUpAll(() async {
+    // Load real Roboto so text metrics match production; the flutter_test
+    // default font has significantly different glyph widths/line heights,
+    // which hid the overflows this suite guards against.
+    final bytes =
+        await File('test/support/fonts/Roboto-Regular.ttf').readAsBytes();
+    final loader = FontLoader('Roboto')
+      ..addFont(Future.value(bytes.buffer.asByteData()));
+    await loader.load();
+  });
 
   testWidgets(
       'case 1: semi-narrow two-column layout with an active call does '
@@ -323,6 +342,54 @@ void main() {
     // Guard against vacuous passes: the call details card must actually be
     // on screen for the overflow checks to mean anything.
     expect(find.byType(CallDetailsWidget), findsOneWidget);
+  });
+
+  testWidgets(
+      'case 3b: connecting spinner keeps its size at the narrow '
+      'layout breakpoint', (WidgetTester tester) async {
+    // 620px canvas: the narrow branch is chosen from the padded width (580)
+    // while MediaQuery still reports a "wide" 620 — a mismatch that used to
+    // apply the wrong cap here (see home_page.dart). The 250px cap split
+    // across 3 items left the spinner row only 34px tall.
+    final harness = await Harness.create();
+    final contact = FakeContact(id: 'c1', contactNickname: 'Profile 3');
+    harness.addContact(contact);
+    harness
+        .addContact(FakeContact(id: 'c2', contactNickname: 'Default Profile'));
+    harness.stateController
+        .updateSession((contact.peerId(), const SessionStatus.connecting()));
+
+    _setCanvasSize(tester, const Size(620, 800));
+    await tester.pumpWidget(harness.buildApp());
+    await tester.pump();
+
+    final spinner = find.byType(CircularProgressIndicator);
+    expect(spinner, findsWidgets);
+    for (final element in tester.elementList(spinner)) {
+      final size = tester.getSize(find.byWidget(element.widget));
+      expect(size, const Size(20, 20),
+          reason: 'the session spinner must not be squished');
+    }
+  });
+
+  testWidgets(
+      'case 2c: short narrow layout at the width breakpoint does '
+      'not overflow the call controls', (WidgetTester tester) async {
+    // 620x400: the padded/MediaQuery width mismatch applied the 250px
+    // contacts cap in a compact-height window, crushing the tab view and
+    // overflowing CallControls by 46px.
+    final harness = await Harness.create();
+    final contact = FakeContact(id: 'c1', contactNickname: 'Profile 3');
+    harness.addContact(contact);
+    harness.stateController.setPendingContact(contact);
+    harness.stateController.setActiveContact(contact);
+    harness.stateController.setStatus('Active');
+
+    _setCanvasSize(tester, const Size(620, 400));
+    await tester.pumpWidget(harness.buildApp());
+    // Let the AnimatedSize transition finish so the steady-state layout is
+    // what gets verified.
+    await tester.pump(const Duration(milliseconds: 300));
   });
 
   testWidgets(

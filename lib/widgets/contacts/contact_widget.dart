@@ -222,6 +222,7 @@ class ContactWidgetState extends State<ContactWidget> {
             ),
             const SizedBox(width: 10),
             Flexible(
+              fit: FlexFit.loose,
               child: Text(widget.contact.nickname(),
                   style: const TextStyle(fontSize: 16),
                   overflow: TextOverflow.ellipsis,
@@ -238,13 +239,10 @@ class ContactWidgetState extends State<ContactWidget> {
               const SizedBox(width: 4)
             ],
             if (connecting) ...[
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 10),
-                child: SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 3)),
-              ),
+              const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 3)),
               const SizedBox(width: 10)
             ],
             if (!online && !connecting)
@@ -259,6 +257,7 @@ class ContactWidgetState extends State<ContactWidget> {
               Text(connectedStatus.relayed ? 'relayed' : 'direct'),
               const SizedBox(width: 5),
               Flexible(
+                fit: FlexFit.loose,
                 child: Text(connectedStatus.remoteAddress,
                     overflow: TextOverflow.ellipsis, maxLines: 1),
               ),

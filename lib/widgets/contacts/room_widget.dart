@@ -87,6 +87,7 @@ class RoomWidgetState extends State<RoomWidget> {
             ),
             const SizedBox(width: 10),
             Flexible(
+              fit: FlexFit.loose,
               child: Text(widget.room.nickname,
                   style: const TextStyle(fontSize: 16),
                   overflow: TextOverflow.ellipsis,

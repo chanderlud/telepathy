@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
@@ -16,6 +18,10 @@ const double managerStatusSize = 28;
 const double contactsHeaderHeight = 36;
 const double addButtonSize = 36;
 const double addIconSize = 28;
+
+/// Minimum height of a contact/room list item; keeps the row content
+/// (avatar, 20px spinner, icon buttons) from being squished.
+const double minContactItemHeight = 60;
 
 /// A widget which displays a list of ContactWidgets.
 class ContactsList extends StatelessWidget {
@@ -134,6 +140,7 @@ class ContactsList extends StatelessWidget {
                       ),
                     ),
                     Flexible(
+                      fit: FlexFit.loose,
                       child: Transform.translate(
                         offset: Offset(0, isCompact ? 0 : 1.5),
                         child: Container(
@@ -150,6 +157,7 @@ class ContactsList extends StatelessWidget {
                             children: [
                               if (showManagerLabel)
                                 const Flexible(
+                                  fit: FlexFit.loose,
                                   child: Text(
                                     'Session Manager',
                                     style: TextStyle(
@@ -218,7 +226,14 @@ class ContactsList extends StatelessWidget {
               ),
               padding: const EdgeInsets.symmetric(vertical: 3),
               child: LayoutBuilder(builder: (context, constraints) {
-                final itemHeight = constraints.maxHeight / (isCompact ? 2 : 3);
+                // Floor the item extent at the height the row content
+                // actually needs (avatar 34 + margin/padding 19 + slack);
+                // below it the 20px session spinner and icons get squished
+                // (issue #58, case 3). The list scrolls, so taller items
+                // only mean fewer are visible at once.
+                final itemHeight = math.max(
+                    constraints.maxHeight / (isCompact ? 2 : 3),
+                    minContactItemHeight);
 
                 return ListView.builder(
                   itemCount: items.length,
