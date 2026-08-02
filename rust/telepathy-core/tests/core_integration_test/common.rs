@@ -1983,13 +1983,17 @@ pub(super) async fn wait_for_stable_session_pair<HA, HB>(
         }
 
         if both_present && a_id == prev_a_id && b_id == prev_b_id {
-            if let Some(prev) = require_a_id_change {
-                assert_ne!(
-                    a_id,
-                    Some(prev),
-                    "client_a session id was not replaced across the restart; \
-                     expected a new id distinct from {prev:?}, got {a_id:?}"
+            // a required replacement that has not landed yet is not a stable end
+            // state; keep polling (the deadline below bounds the wait) instead of
+            // asserting on the pre-replacement id
+            if require_a_id_change.is_some_and(|required| a_id == Some(required)) {
+                prev_a_id = a_id;
+                prev_b_id = b_id;
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "timed out waiting for client_a session id to change from {a_id:?}"
                 );
+                continue;
             }
             info!("both clients have stable post-restart session state");
             return;
