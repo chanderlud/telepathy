@@ -6,7 +6,6 @@ import 'package:telepathy/controllers/index.dart';
 import 'package:telepathy/screens/home/home_page.dart';
 
 import 'package:telepathy/core/rust/flutter.dart';
-import 'package:telepathy/core/utils/io_shim.dart';
 import 'package:window_manager/window_manager.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
