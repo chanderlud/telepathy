@@ -159,8 +159,25 @@ jobs:
       - name: Get Packages
         run: flutter pub get
 
-      - name: Build macOS app
-        run: flutter build macos --debug
+      - name: Build macOS app unsigned
+        run: |
+          set -eux
+          BUILD_DIR="$PWD/build/macos"
+          flutter build macos --config-only --debug
+          xcodebuild \
+            -workspace macos/Runner.xcworkspace \
+            -scheme Runner \
+            -configuration Debug \
+            -derivedDataPath "$BUILD_DIR" \
+            -destination platform=macOS \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            MACOSX_DEPLOYMENT_TARGET=10.15 \
+            OBJROOT="$BUILD_DIR/Build/Intermediates.noindex" \
+            SYMROOT="$BUILD_DIR/Build/Products" \
+            build
 
       - name: Launch app and assert clean startup
         run: |
