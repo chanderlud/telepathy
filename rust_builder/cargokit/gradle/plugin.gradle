@@ -95,7 +95,10 @@ class CargoKitPlugin implements Plugin<Project> {
    private Plugin _findFlutterPlugin(Map projects) {
         for (project in projects) {
             for (plugin in project.value.getPlugins()) {
-                if (plugin.class.name == "FlutterPlugin") {
+                // Flutter moved the plugin class into the com.flutter.gradle
+                // package; match both the legacy and packaged class names.
+                if (plugin.class.name == "FlutterPlugin"
+                        || plugin.class.name == "com.flutter.gradle.FlutterPlugin") {
                     return plugin;
                 }
             }
@@ -109,38 +112,40 @@ class CargoKitPlugin implements Plugin<Project> {
 
     @Override
     void apply(Project project) {
+        def plugin = findFlutterPlugin(project.rootProject);
+
         project.extensions.create("cargokit", CargoKitExtension)
 
-        project.getGradle().projectsEvaluated {
-            def plugin = findFlutterPlugin(project.rootProject);
+        if (plugin == null) {
+            print("Flutter plugin not found, CargoKit plugin will not be applied.")
+            return;
+        }
 
-            if (plugin == null) {
-                print("Flutter plugin not found, CargoKit plugin will not be applied.")
-                return
+        def cargoBuildDir = "${project.buildDir}/build"
+
+        // Determine if the project is an application or library
+        def isApplication = plugin.project.plugins.hasPlugin('com.android.application')
+        def variants = isApplication ? plugin.project.android.applicationVariants : plugin.project.android.libraryVariants
+
+        variants.all { variant ->
+
+            final buildType = variant.buildType.name
+
+            def cargoOutputDir = "${project.buildDir}/jniLibs/${buildType}";
+            def jniLibs = project.android.sourceSets.maybeCreate(buildType).jniLibs;
+            jniLibs.srcDir(new File(cargoOutputDir))
+
+            def platforms = plugin.getTargetPlatforms().collect()
+
+            // Same thing addFlutterDependencies does in flutter.gradle
+            if (buildType == "debug") {
+                platforms.add("android-x86")
+                platforms.add("android-x64")
             }
 
-            def cargoBuildDir = "${project.buildDir}/build"
-
-            // Determine if the project is an application or library
-            def isApplication = plugin.project.plugins.hasPlugin('com.android.application')
-            def variants = isApplication ? plugin.project.android.applicationVariants : plugin.project.android.libraryVariants
-
-            variants.all { variant ->
-
-                final buildType = variant.buildType.name
-
-                def cargoOutputDir = "${project.buildDir}/jniLibs/${buildType}";
-                def jniLibs = project.android.sourceSets.maybeCreate(buildType).jniLibs;
-                jniLibs.srcDir(new File(cargoOutputDir))
-
-                def platforms = plugin.getTargetPlatforms().collect()
-
-                // Same thing addFlutterDependencies does in flutter.gradle
-                if (buildType == "debug") {
-                    platforms.add("android-x86")
-                    platforms.add("android-x64")
-                }
-
+            // The task name depends on plugin properties, which are not available
+            // at this point
+            project.getGradle().afterProject {
                 def taskName = "cargokitCargoBuild${project.cargokit.libname.capitalize()}${buildType.capitalize()}";
 
                 if (project.tasks.findByName(taskName)) {
