@@ -12,6 +12,9 @@ class Platform {
   static bool get isIOS => false;
 }
 
+/// True on the desktop platforms supported by window_manager.
+bool get isDesktopPlatform => false;
+
 class Directory {
   final String path;
   Directory(this.path);

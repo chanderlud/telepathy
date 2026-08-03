@@ -76,6 +76,7 @@ pub enum Command {
     SetOutputDevice {
         id: Option<String>,
     },
+    DrainAudioFrameIndices,
     ListDevices,
 }
 

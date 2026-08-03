@@ -29,7 +29,11 @@ void showErrorDialog(BuildContext context, String title, String errorMessage) {
 }
 
 /// Prompts the user to accept an incoming call.
-Future<bool> acceptCallPrompt(BuildContext context, Contact contact) async {
+Future<bool> acceptCallPrompt(
+  BuildContext context,
+  Contact contact,
+  Future<void> cancellation,
+) async {
   const timeout = Duration(seconds: 10);
 
   if (!context.mounted) {
@@ -37,39 +41,56 @@ Future<bool> acceptCallPrompt(BuildContext context, Contact contact) async {
   }
 
   Timer? timeoutTimer;
-  bool? result = await showDialog<bool>(
-    context: context,
-    barrierDismissible: false,
-    builder: (BuildContext context) {
-      timeoutTimer = Timer(timeout, () {
-        if (context.mounted) {
-          Navigator.of(context).pop(false);
-        }
-      });
+  bool dialogOpen = true;
+  final navigator = Navigator.of(context, rootNavigator: true);
+  final themes = InheritedTheme.capture(from: context, to: navigator.context);
+  late final DialogRoute<bool> promptRoute;
 
-      return AlertDialog(
-        title: Text('Accept call from ${contact.nickname()}?'),
-        actions: <Widget>[
-          TextButton(
-            child: const Text('Deny'),
-            onPressed: () {
-              timeoutTimer?.cancel();
-              Navigator.of(context).pop(false);
-            },
-          ),
-          TextButton(
-            child: const Text('Accept'),
-            onPressed: () {
-              timeoutTimer?.cancel();
-              Navigator.of(context).pop(true);
-            },
-          ),
-        ],
-      );
-    },
-  );
+  void closePrompt(bool result) {
+    if (!dialogOpen) {
+      return;
+    }
 
-  return result ?? false;
+    dialogOpen = false;
+    timeoutTimer?.cancel();
+    navigator.removeRoute(promptRoute, result);
+  }
+
+  try {
+    promptRoute = DialogRoute<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext dialogContext) {
+        timeoutTimer = Timer(timeout, () => closePrompt(false));
+        cancellation.then((_) {
+          if (dialogContext.mounted) {
+            closePrompt(false);
+          }
+        });
+
+        return AlertDialog(
+          title: Text('Accept call from ${contact.nickname()}?'),
+          actions: <Widget>[
+            TextButton(
+              child: const Text('Deny'),
+              onPressed: () => closePrompt(false),
+            ),
+            TextButton(
+              child: const Text('Accept'),
+              onPressed: () => closePrompt(true),
+            ),
+          ],
+        );
+      },
+      themes: themes,
+    );
+    bool? result = await navigator.push(promptRoute);
+
+    return result ?? false;
+  } finally {
+    dialogOpen = false;
+    timeoutTimer?.cancel();
+  }
 }
 
 /// Confirms leaving a page with unsaved changes.

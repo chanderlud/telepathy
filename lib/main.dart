@@ -21,7 +21,7 @@ import 'package:telepathy/core/rust/flutter/logging.dart';
 
 Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
-  if (!kIsWeb) {
+  if (isDesktopPlatform) {
     await windowManager.ensureInitialized();
   }
 
@@ -141,24 +141,15 @@ Future<void> main(List<String> args) async {
       return false;
     }
 
-    Future acceptedFuture =
-        acceptCallPrompt(navigatorKey.currentState!.context, contact);
-    Future cancelFuture = cancel.notified();
-
-    final result = await Future.any([acceptedFuture, cancelFuture]);
+    final result = await acceptCallPrompt(
+      navigatorKey.currentState!.context,
+      contact,
+      cancel.notified(),
+    );
 
     handle?.cancel();
 
-    if (result == null) {
-      DebugConsole.debug('cancelled');
-
-      if (navigatorKey.currentState != null &&
-          navigatorKey.currentState!.mounted) {
-        Navigator.pop(navigatorKey.currentState!.context);
-      }
-
-      return false; // cancelled
-    } else if (result) {
+    if (result) {
       // Move through the same connecting->active gate the outgoing
       // path uses.
       stateController.setStatus('Connecting');

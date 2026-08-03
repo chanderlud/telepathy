@@ -13,13 +13,8 @@ use telepathy_core::types::{CallState, CodecConfig, Contact, NetworkConfig, Scre
 use tokio::time::{sleep, timeout};
 
 type MockHandle = TelepathyHandle<
-    telepathy_core::internal::callbacks::MockCoreCallbacks<
-        telepathy_core::internal::callbacks::MockCoreStatisticsCallback,
-    >,
-    telepathy_core::internal::callbacks::MockCoreStatisticsCallback,
+    telepathy_core::internal::callbacks::MockCoreCallbacks,
     MockAudioHost<MockAudioInput, MockAudioOutput>,
-    (),
-    (),
 >;
 
 fn host() -> MockAudioHost<MockAudioInput, MockAudioOutput> {
@@ -48,7 +43,7 @@ async fn wait_for_start_readiness(handle: &MockHandle, contact: &Contact) {
 
 async fn restartable_client(
     identity: SecretKey,
-) -> super::common::ClientHarness<MockAudioHost<MockAudioInput, MockAudioOutput>, (), ()> {
+) -> super::common::ClientHarness<MockAudioHost<MockAudioInput, MockAudioOutput>> {
     build_client_with_options(
         shared_relay_map(),
         identity,

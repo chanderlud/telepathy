@@ -15,13 +15,8 @@ use telepathy_core::types::{CallState, CodecConfig, Contact, NetworkConfig, Scre
 use tokio::time::{Duration, timeout};
 
 type MockHandle = TelepathyHandle<
-    telepathy_core::internal::callbacks::MockCoreCallbacks<
-        telepathy_core::internal::callbacks::MockCoreStatisticsCallback,
-    >,
-    telepathy_core::internal::callbacks::MockCoreStatisticsCallback,
+    telepathy_core::internal::callbacks::MockCoreCallbacks,
     MockAudioHost<MockAudioInput, MockAudioOutput>,
-    (),
-    (),
 >;
 
 fn mock_handle(network_config: &NetworkConfig, lifecycle: ManagerLifecycle) -> MockHandle {

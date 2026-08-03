@@ -221,6 +221,12 @@ jobs:
       - name: Prepare dist directory
         run: mkdir -p dist
 
+      - name: Download aarch64 artifacts from current release run
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+          pattern: telepathy_ubuntu*_aarch64
+
       - name: Rename and package files
         run: |
           set -eux
