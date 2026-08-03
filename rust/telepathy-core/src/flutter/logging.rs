@@ -94,6 +94,26 @@ pub fn rust_set_up() {
                         error
                     );
                 }
+            } else if #[cfg(target_os = "android")] {
+                // Android's working directory is read-only; file logging is
+                // desktop-only, Android logs go to the Dart stream.
+                let dart_layer = tracing_subscriber::fmt::layer()
+                    .compact()
+                    .with_ansi(false)
+                    .with_writer(DartWriter);
+
+                let env_filter =
+                    EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_level));
+                let subscriber = tracing_subscriber::registry()
+                    .with(env_filter)
+                    .with(dart_layer);
+                if let Err(error) = tracing::subscriber::set_global_default(subscriber) {
+                    warn!(
+                        "tracing subscriber already set, keeping existing subscriber (expected in hot reload / integration tests): {}",
+                        error
+                    );
+                }
+                std::panic::set_hook(Box::new(tracing_panic::panic_hook));
             } else {
                 let dart_layer = tracing_subscriber::fmt::layer()
                     .compact()
