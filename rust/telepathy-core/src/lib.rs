@@ -36,5 +36,6 @@ extern "system" fn JNI_OnLoad(
     unsafe {
         ndk_context::initialize_android_context(vm.cast(), reserved);
     }
-    jni::JNIVersion::V9.into()
+    // Android ART rejects JNI versions newer than 1.6
+    jni::JNIVersion::V1_6.into()
 }
