@@ -19,13 +19,13 @@ class SettingsMenu extends StatelessWidget {
       mainAxisAlignment: MainAxisAlignment.start,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        _buildItem(context, SettingsSection.general, 'General'),
+        const SizedBox(height: 12),
         _buildItem(context, SettingsSection.audioVideo, 'Audio & Video'),
         const SizedBox(height: 12),
         _buildItem(context, SettingsSection.profiles, 'Profiles'),
         const SizedBox(height: 12),
         _buildItem(context, SettingsSection.networking, 'Networking'),
-        const SizedBox(height: 12),
-        _buildItem(context, SettingsSection.interface, 'Interface'),
         const SizedBox(height: 12),
         _buildItem(context, SettingsSection.logs, 'View Log'),
         if (showOverlayItem) ...[

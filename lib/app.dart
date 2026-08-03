@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart' hide Overlay;
 import 'package:provider/provider.dart';
 import 'package:telepathy/core/theme/app_theme.dart';
+import 'package:telepathy/core/utils/index.dart';
 import 'package:telepathy/controllers/index.dart';
 import 'package:telepathy/screens/home/home_page.dart';
 
 import 'package:telepathy/core/rust/flutter.dart';
-import 'package:telepathy/core/utils/io_shim.dart';
 import 'package:window_manager/window_manager.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
@@ -27,6 +27,21 @@ class _TelepathyAppState extends State<TelepathyApp> with WindowListener {
     if (isDesktopPlatform) {
       windowManager.addListener(this);
       _initWindow();
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkForUpdates();
+    });
+  }
+
+  Future<void> _checkForUpdates() async {
+    if (!context.read<PreferencesController>().automaticUpdateChecks) {
+      return;
+    }
+
+    final update = (await UpdateChecker().check()).availableUpdate;
+    final navigator = navigatorKey.currentState;
+    if (update != null && navigator?.mounted == true) {
+      await showUpdateAvailableDialog(navigator!.context, update);
     }
   }
 

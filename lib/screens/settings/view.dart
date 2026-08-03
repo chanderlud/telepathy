@@ -7,16 +7,16 @@ import 'package:telepathy/screens/settings/header.dart';
 import 'package:telepathy/screens/settings/logs.dart';
 import 'package:telepathy/screens/settings/menu.dart';
 import 'package:telepathy/screens/settings/sections/audio_video.dart';
-import 'package:telepathy/screens/settings/sections/interface.dart';
+import 'package:telepathy/screens/settings/sections/general.dart';
 import 'package:telepathy/screens/settings/sections/networking.dart';
 import 'package:telepathy/screens/settings/sections/overlay.dart';
 import 'package:telepathy/screens/settings/sections/profiles.dart';
 
 enum SettingsSection {
+  general,
   audioVideo,
   profiles,
   networking,
-  interface,
   logs,
   overlay,
 }
@@ -32,7 +32,7 @@ class SettingsPage extends StatefulWidget {
 
 class SettingsPageState extends State<SettingsPage>
     with SingleTickerProviderStateMixin {
-  SettingsSection _section = SettingsSection.audioVideo;
+  SettingsSection _section = SettingsSection.general;
   bool? showMenu;
 
   final TextEditingController _searchController = TextEditingController();
@@ -131,8 +131,8 @@ class SettingsPageState extends State<SettingsPage>
                                   const ProfileSettings(),
                                 SettingsSection.networking => NetworkSettings(
                                     key: _key, constraints: constraints),
-                                SettingsSection.interface =>
-                                  InterfaceSettings(constraints: constraints),
+                                SettingsSection.general =>
+                                  GeneralSettings(constraints: constraints),
                                 SettingsSection.logs => LogsSettings(
                                     searchController: _searchController),
                                 SettingsSection.overlay =>
