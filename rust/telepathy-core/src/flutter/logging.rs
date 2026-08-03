@@ -102,19 +102,30 @@ pub fn rust_set_up() {
 
                 let env_filter =
                     EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_level));
-                let rolling = tracing_appender::rolling::daily(".", "telepathy-trace.log");
-                let (non_blocking_writer, guard) = tracing_appender::non_blocking(rolling);
-                let _ = TRACING_GUARD.set(guard);
-                let json_layer = tracing_subscriber::fmt::layer()
-                    .json()
-                    .flatten_event(true)
-                    .with_current_span(true)
-                    .with_span_list(true)
-                    .with_writer(non_blocking_writer);
+
+                // Android's working directory is read-only; file logging is
+                // desktop-only, Android logs go to the Dart stream.
+                #[cfg(not(target_os = "android"))]
+                let subscriber = {
+                    let rolling = tracing_appender::rolling::daily(".", "telepathy-trace.log");
+                    let (non_blocking_writer, guard) = tracing_appender::non_blocking(rolling);
+                    let _ = TRACING_GUARD.set(guard);
+                    let json_layer = tracing_subscriber::fmt::layer()
+                        .json()
+                        .flatten_event(true)
+                        .with_current_span(true)
+                        .with_span_list(true)
+                        .with_writer(non_blocking_writer);
+                    tracing_subscriber::registry()
+                        .with(env_filter)
+                        .with(dart_layer)
+                        .with(json_layer)
+                };
+                #[cfg(target_os = "android")]
                 let subscriber = tracing_subscriber::registry()
                     .with(env_filter)
-                    .with(dart_layer)
-                    .with(json_layer);
+                    .with(dart_layer);
+
                 if let Err(error) = tracing::subscriber::set_global_default(subscriber) {
                     warn!(
                         "tracing subscriber already set, keeping existing subscriber (expected in hot reload / integration tests): {}",
