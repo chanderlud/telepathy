@@ -1,7 +1,7 @@
 use crate::internal::callbacks::CoreCallbacks;
 use crate::internal::core::{
-    OutgoingSlotDecision, PendingDirectCallSlot, RoomControllerCleanup, RoomControllerOutcome,
-    TelepathyCore,
+    DirectAttempt, IncomingCandidateLease, OutgoingSlotDecision, PendingDirectCallSlot,
+    RoomControllerCleanup, RoomControllerOutcome, SessionAvailabilitySnapshot, TelepathyCore,
 };
 use crate::internal::error::{AudioStreamError, Error, ErrorKind};
 use crate::internal::messages::{AudioHeader, RoomMessage};
@@ -875,6 +875,97 @@ where
             Some(slot) => Ok(OutgoingSlotDecision::Acquired(slot)),
             None => Ok(OutgoingSlotDecision::Busy),
         }
+    }
+
+    pub(crate) fn begin_direct_attempt(&self, peer: PublicKey) -> u64 {
+        let mut peers = self.session_availability.peers.lock().unwrap();
+        let state = peers.entry(peer).or_default();
+        if let Some(attempt) = &state.active_attempt {
+            return attempt.id;
+        }
+        state.next_attempt_id = state.next_attempt_id.wrapping_add(1);
+        let attempt_id = state.next_attempt_id;
+        state.active_attempt = Some(DirectAttempt {
+            id: attempt_id,
+            direct_completed: false,
+            candidates: 0,
+        });
+        state.generation = state.generation.wrapping_add(1);
+        drop(peers);
+        self.session_availability.changed.notify_waiters();
+        attempt_id
+    }
+
+    pub(crate) fn clear_session_availability(&self) {
+        self.session_availability.terminalize_all();
+    }
+
+    pub(crate) fn cancel_pending_session_candidates(&self) {
+        self.pending_session_candidates.cancel_all();
+    }
+
+    pub(crate) fn complete_direct_attempt(&self, peer: PublicKey, attempt_id: u64) {
+        self.session_availability
+            .complete_direct_attempt(peer, attempt_id);
+    }
+
+    pub(crate) fn is_current_direct_attempt(&self, peer: PublicKey, attempt_id: u64) -> bool {
+        self.session_availability
+            .peers
+            .lock()
+            .unwrap()
+            .get(&peer)
+            .and_then(|state| state.active_attempt.as_ref())
+            .is_some_and(|attempt| attempt.id == attempt_id)
+    }
+
+    pub(crate) fn handoff_incoming_candidate(
+        &self,
+        peer: PublicKey,
+    ) -> Option<crate::internal::core::IncomingCandidateLease> {
+        let mut peers = self.session_availability.peers.lock().unwrap();
+        let state = peers.get_mut(&peer)?;
+        let attempt = state.active_attempt.as_mut()?;
+        let attempt_id = attempt.id;
+        attempt.candidates += 1;
+        state.generation = state.generation.wrapping_add(1);
+        drop(peers);
+        self.session_availability.changed.notify_waiters();
+        Some(IncomingCandidateLease {
+            availability: Arc::clone(&self.session_availability),
+            peer,
+            attempt_id,
+        })
+    }
+
+    pub(crate) fn publish_session_locked(&self, peer: PublicKey) {
+        let mut peers = self.session_availability.peers.lock().unwrap();
+        let state = peers.entry(peer).or_default();
+        state.generation = state.generation.wrapping_add(1);
+        drop(peers);
+        self.session_availability.changed.notify_waiters();
+    }
+
+    pub(crate) fn session_availability_snapshot(
+        &self,
+        peer: PublicKey,
+    ) -> SessionAvailabilitySnapshot {
+        let peers = self.session_availability.peers.lock().unwrap();
+        let state = peers.get(&peer);
+        SessionAvailabilitySnapshot {
+            generation: state.map_or(0, |state| state.generation),
+            waiting_for_session: state.is_some_and(|state| state.active_attempt.is_some()),
+        }
+    }
+
+    pub(crate) async fn wait_for_session_availability_change(
+        &self,
+        peer: PublicKey,
+        generation: u64,
+    ) {
+        self.session_availability
+            .wait_for_change(peer, generation)
+            .await;
     }
 }
 

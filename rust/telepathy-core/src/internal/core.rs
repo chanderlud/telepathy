@@ -2,7 +2,7 @@
 //! negotiates incoming or outgoing calls, then transitions into direct [`call_handshake`]
 //! or room [`room_handshake`] handling.
 
-use crate::direct_invitation::decode_for_peer;
+use crate::direct_invitation::{decode_for_peer, DirectInvitationError};
 use crate::internal::callbacks::CoreCallbacks;
 use crate::internal::connections::{
     ConstConnection, DynamicConnection, SharedConnections, audio_input, audio_output,
@@ -97,7 +97,7 @@ where
 
     pending_room_admission: PendingRoomAdmissionRegistry,
 
-    pending_session_candidates: PendingSessionCandidateRegistry,
+    pub(crate) pending_session_candidates: PendingSessionCandidateRegistry,
 
     /// Keeps track of and controls the sessions
     pub session_states: Arc<RwLock<HashMap<PublicKey, Arc<SessionState>>>>,
@@ -108,7 +108,7 @@ where
     /// Monotonic outbound dial generation per peer; stale attempts must not emit UI status.
     pub(crate) outbound_attempts: Arc<RwLock<HashMap<PublicKey, u64>>>,
 
-    session_availability: Arc<SessionAvailability>,
+    pub(crate) session_availability: Arc<SessionAvailability>,
 
     /// A reference to the object that controls the call overlay
     pub(crate) overlay: Overlay,
@@ -734,15 +734,7 @@ where
         self.emit_outbound_status(peer, generation, SessionStatus::Connecting)
             .await;
 
-        // TODO this is NOT allowed. cancellation on callbacks is illegal. audit FULL codebase for similar occurences; add AGENTS.md rule
-        let contact = select! {
-            biased;
-            _ = cancellation.cancelled() => {
-                debug!(event = "outbound_connection_canceled_before_lookup", peer.id = %peer);
-                return;
-            }
-            contact = self.callbacks.get_contact(peer.to_vec()) => contact,
-        };
+        let contact = self.callbacks.get_contact(peer.to_vec()).await;
         let direct_addr = match resolve_direct_addr(contact.as_ref(), peer) {
             Ok(addr) => addr,
             Err(error) => {
@@ -841,18 +833,7 @@ where
             None => self.get_outbound_generation(peer).await,
         };
 
-        let contact_option = if let Some(cancellation) = outbound_cancellation {
-            select! {
-                biased;
-                _ = cancellation.cancelled() => {
-                    connection.close(VarInt::from_u32(0), b"outbound dial canceled");
-                    return Ok(());
-                }
-                contact = self.callbacks.get_contact(peer.to_vec()) => contact,
-            }
-        } else {
-            self.callbacks.get_contact(peer.to_vec()).await
-        };
+        let contact_option = self.callbacks.get_contact(peer.to_vec()).await;
         if outbound_cancellation.is_some_and(CancellationToken::is_cancelled) {
             connection.close(VarInt::from_u32(0), b"outbound dial canceled");
             return Ok(());
@@ -3641,13 +3622,13 @@ enum ManagerDialEvent {
 }
 
 #[derive(Default)]
-struct SessionAvailability {
-    peers: StdMutex<HashMap<PublicKey, PeerSessionAvailability>>,
-    changed: Notify,
+pub(crate) struct SessionAvailability {
+    pub(crate) peers: StdMutex<HashMap<PublicKey, PeerSessionAvailability>>,
+    pub(crate) changed: Notify,
 }
 
 impl SessionAvailability {
-    fn terminalize_all(&self) {
+    pub(crate) fn terminalize_all(&self) {
         let mut peers = self.peers.lock().unwrap();
         for state in peers.values_mut() {
             if state.active_attempt.take().is_some() {
@@ -3658,7 +3639,7 @@ impl SessionAvailability {
         self.changed.notify_waiters();
     }
 
-    async fn wait_for_change(&self, peer: PublicKey, generation: u64) {
+    pub(crate) async fn wait_for_change(&self, peer: PublicKey, generation: u64) {
         loop {
             let changed = self.changed.notified();
             tokio::pin!(changed);
@@ -3677,7 +3658,7 @@ impl SessionAvailability {
         }
     }
 
-    fn complete_direct_attempt(&self, peer: PublicKey, attempt_id: u64) {
+    pub(crate) fn complete_direct_attempt(&self, peer: PublicKey, attempt_id: u64) {
         let mut peers = self.peers.lock().unwrap();
         let Some(state) = peers.get_mut(&peer) else {
             return;
@@ -3699,26 +3680,26 @@ impl SessionAvailability {
 }
 
 #[derive(Default)]
-struct PeerSessionAvailability {
-    next_attempt_id: u64,
-    active_attempt: Option<DirectAttempt>,
-    generation: u64,
+pub(crate) struct PeerSessionAvailability {
+    pub(crate) next_attempt_id: u64,
+    pub(crate) active_attempt: Option<DirectAttempt>,
+    pub(crate) generation: u64,
 }
 
-struct DirectAttempt {
-    id: u64,
-    direct_completed: bool,
-    candidates: usize,
+pub(crate) struct DirectAttempt {
+    pub(crate) id: u64,
+    pub(crate) direct_completed: bool,
+    pub(crate) candidates: usize,
 }
 
-struct IncomingCandidateLease {
-    availability: Arc<SessionAvailability>,
-    peer: PublicKey,
-    attempt_id: u64,
+pub(crate) struct IncomingCandidateLease {
+    pub(crate) availability: Arc<SessionAvailability>,
+    pub(crate) peer: PublicKey,
+    pub(crate) attempt_id: u64,
 }
 
 #[derive(Clone, Default)]
-struct PendingSessionCandidateRegistry {
+pub(crate) struct PendingSessionCandidateRegistry {
     inner: Arc<StdMutex<HashMap<PublicKey, PendingSessionCandidate>>>,
 }
 
@@ -3766,7 +3747,7 @@ impl PendingSessionCandidateRegistry {
         })
     }
 
-    fn cancel_all(&self) {
+    pub(crate) fn cancel_all(&self) {
         let candidates = std::mem::take(&mut *self.inner.lock().unwrap());
         for candidate in candidates.into_values() {
             candidate.cancellation.cancel();
@@ -3831,101 +3812,6 @@ impl Drop for IncomingCandidateLease {
 pub(crate) struct SessionAvailabilitySnapshot {
     pub(crate) generation: u64,
     pub(crate) waiting_for_session: bool,
-}
-
-// TODO is there a reason this impl block is floating around down here?
-impl<C, H> TelepathyCore<C, H>
-where
-    C: CoreCallbacks + Send + Sync + 'static,
-    H: AudioHost + Send + Sync + Clone + 'static,
-{
-    pub(crate) fn begin_direct_attempt(&self, peer: PublicKey) -> u64 {
-        let mut peers = self.session_availability.peers.lock().unwrap();
-        let state = peers.entry(peer).or_default();
-        if let Some(attempt) = &state.active_attempt {
-            return attempt.id;
-        }
-        state.next_attempt_id = state.next_attempt_id.wrapping_add(1);
-        let attempt_id = state.next_attempt_id;
-        state.active_attempt = Some(DirectAttempt {
-            id: attempt_id,
-            direct_completed: false,
-            candidates: 0,
-        });
-        state.generation = state.generation.wrapping_add(1);
-        drop(peers);
-        self.session_availability.changed.notify_waiters();
-        attempt_id
-    }
-
-    pub(crate) fn clear_session_availability(&self) {
-        self.session_availability.terminalize_all();
-    }
-
-    pub(crate) fn cancel_pending_session_candidates(&self) {
-        self.pending_session_candidates.cancel_all();
-    }
-
-    pub(crate) fn complete_direct_attempt(&self, peer: PublicKey, attempt_id: u64) {
-        self.session_availability
-            .complete_direct_attempt(peer, attempt_id);
-    }
-
-    fn is_current_direct_attempt(&self, peer: PublicKey, attempt_id: u64) -> bool {
-        self.session_availability
-            .peers
-            .lock()
-            .unwrap()
-            .get(&peer)
-            .and_then(|state| state.active_attempt.as_ref())
-            .is_some_and(|attempt| attempt.id == attempt_id)
-    }
-
-    fn handoff_incoming_candidate(&self, peer: PublicKey) -> Option<IncomingCandidateLease> {
-        let mut peers = self.session_availability.peers.lock().unwrap();
-        let state = peers.get_mut(&peer)?;
-        let attempt = state.active_attempt.as_mut()?;
-        let attempt_id = attempt.id;
-        attempt.candidates += 1;
-        state.generation = state.generation.wrapping_add(1);
-        drop(peers);
-        self.session_availability.changed.notify_waiters();
-        Some(IncomingCandidateLease {
-            availability: Arc::clone(&self.session_availability),
-            peer,
-            attempt_id,
-        })
-    }
-
-    fn publish_session_locked(&self, peer: PublicKey) {
-        let mut peers = self.session_availability.peers.lock().unwrap();
-        let state = peers.entry(peer).or_default();
-        state.generation = state.generation.wrapping_add(1);
-        drop(peers);
-        self.session_availability.changed.notify_waiters();
-    }
-
-    pub(crate) fn session_availability_snapshot(
-        &self,
-        peer: PublicKey,
-    ) -> SessionAvailabilitySnapshot {
-        let peers = self.session_availability.peers.lock().unwrap();
-        let state = peers.get(&peer);
-        SessionAvailabilitySnapshot {
-            generation: state.map_or(0, |state| state.generation),
-            waiting_for_session: state.is_some_and(|state| state.active_attempt.is_some()),
-        }
-    }
-
-    pub(crate) async fn wait_for_session_availability_change(
-        &self,
-        peer: PublicKey,
-        generation: u64,
-    ) {
-        self.session_availability
-            .wait_for_change(peer, generation)
-            .await;
-    }
 }
 
 impl RoomDialScheduler {
@@ -4134,14 +4020,14 @@ async fn is_session_still_current(
 fn resolve_direct_addr(
     contact: Option<&Contact>,
     peer: PublicKey,
-) -> std::result::Result<Option<EndpointAddr>, crate::direct_invitation::DirectInvitationError> {
+) -> std::result::Result<Option<EndpointAddr>, DirectInvitationError> {
     let Some(contact) = contact.filter(|contact| contact.is_direct) else {
         return Ok(None);
     };
     let invitation = contact
         .direct_connection_string
         .as_deref()
-        .ok_or(crate::direct_invitation::DirectInvitationError::MissingInvitation)?;
+        .ok_or(DirectInvitationError::MissingInvitation)?;
     let addresses = decode_for_peer(invitation, peer)?;
     Ok(Some(EndpointAddr::from_parts(peer, addresses)))
 }
