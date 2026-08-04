@@ -76,6 +76,25 @@ class ScenarioRunner:
                 self._capture(actor_name, event)
                 self._assert_subset(subset, event, f"{actor_name} event")
 
+            if "expect_absent" in step:
+                absent_spec = self._resolve(step["expect_absent"])
+                window = float(absent_spec.get("timeout", 5.0))
+                absent_type = absent_spec.get("type")
+                absent_subset = absent_spec.get("match", {})
+                baseline = len(actor.stdout_lines())
+                await asyncio.sleep(window)
+                for msg in actor.stdout_lines()[baseline:]:
+                    if msg.get("kind") != "event":
+                        continue
+                    if absent_type and msg.get("type") != absent_type:
+                        continue
+                    if self._matches_subset(absent_subset, msg):
+                        diagnostics = self._format_diagnostics(actors)
+                        raise AssertionError(
+                            f"unexpected event for actor '{actor_name}': "
+                            f"{json.dumps(msg)}\n{diagnostics}"
+                        )
+
     async def _run_send_step(
         self,
         actor_name: str,

@@ -782,6 +782,9 @@ async def _run_scenario(name: str, actors: dict[str, CliProcess]) -> None:
         peer_id = actor.identity_peer_id
         if isinstance(peer_id, str):
             variables[f"{actor_name}.peer_id"] = peer_id
+        identity = actor.identity
+        if isinstance(identity, Identity):
+            variables[f"{actor_name}.identity_key_b64"] = identity.secret_key_b64
     await runner.run(scenario, actors, initial_variables=variables)
 
 
@@ -1019,6 +1022,40 @@ async def test_call_simultaneous_dial(
     assert (
         "Connected" in bob_call_states
     ), f"bob did not receive call_state Connected; observed {bob_call_states}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("profile", NETWORK_PROFILES, ids=lambda profile: profile.name)
+async def test_session_simultaneous_dial_then_call(
+    topology: TopologyManager,
+    cli_pair: dict[str, CliProcess],
+    profile: NetworkProfile,
+) -> None:
+    _ = topology, profile
+    await _run_scenario("session_simultaneous_dial_then_call.yaml", cli_pair)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("profile", NETWORK_PROFILES, ids=lambda profile: profile.name)
+async def test_caller_cancel_during_glare_then_room(
+    topology: TopologyManager,
+    cli_pair: dict[str, CliProcess],
+    profile: NetworkProfile,
+) -> None:
+    _ = topology, profile
+    await _run_scenario("caller_cancel_during_glare_then_room.yaml", cli_pair)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("profile", [NETWORK_PROFILES[0]], ids=lambda profile: profile.name)
+async def test_call_prompt_survives_session_restart(
+    topology: TopologyManager,
+    cli_pair: dict[str, CliProcess],
+    profile: NetworkProfile,
+) -> None:
+    _ = topology, profile
+    await _run_scenario("call_prompt_survives_session_restart.yaml", cli_pair)
+
 
 
 @pytest.mark.asyncio

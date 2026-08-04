@@ -1,0 +1,94 @@
+name: session_simultaneous_dial_then_call
+steps:
+  # --- bootstrap ---
+  - actor: alice
+    expect_event:
+      type: ready
+      timeout: 10.0
+      match:
+        version: "*"
+  - actor: bob
+    expect_event:
+      type: ready
+      timeout: 10.0
+      match:
+        version: "*"
+  - actor: alice
+    send:
+      cmd: add_contact
+      args:
+        contact_id: bob
+        peer_id: ${bob.peer_id}
+    expect_ack:
+      ok: true
+  - actor: bob
+    send:
+      cmd: add_contact
+      args:
+        contact_id: alice
+        peer_id: ${alice.peer_id}
+    expect_ack:
+      ok: true
+
+  # --- session glare: both dial simultaneously ---
+  - concurrent:
+      - actor: alice
+        send:
+          cmd: start_session
+          args:
+            contact_id: bob
+        expect_ack:
+          ok: true
+      - actor: bob
+        send:
+          cmd: start_session
+          args:
+            contact_id: alice
+        expect_ack:
+          ok: true
+
+  # --- call during the glare window: Alice's Hello can land on a listener
+  # session that Bob's own dial then replaces. Bob's accept prompt must
+  # survive the collision (it transfers to the winning session), so his
+  # accept_call resolves against a live request_id instead of failing with
+  # "unknown accept_call request_id" (the original system-test failure). ---
+  - actor: alice
+    send:
+      cmd: start_call
+      args:
+        contact_id: bob
+    expect_ack:
+      ok: true
+  - actor: bob
+    expect_event:
+      type: accept_call_prompt
+      timeout: 30.0
+      match:
+        contact_id: alice
+  - actor: bob
+    send:
+      cmd: accept_call
+      args:
+        request_id: ${bob.request_id}
+        accept: true
+    expect_ack:
+      ok: true
+  - actor: alice
+    expect_event:
+      type: call_state
+      timeout: 20.0
+      match:
+        state: Connected
+  - actor: bob
+    expect_event:
+      type: call_state
+      timeout: 20.0
+      match:
+        state: Connected
+
+  # exactly one prompt ever: the transferred prompt must not be cancelled
+  # and re-raised on the replacement session
+  - actor: bob
+    expect_absent:
+      type: accept_call_prompt
+      timeout: 5.0

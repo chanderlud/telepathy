@@ -1,0 +1,149 @@
+name: call_prompt_survives_session_restart
+steps:
+  # --- bootstrap ---
+  - actor: alice
+    expect_event:
+      type: ready
+      timeout: 10.0
+      match:
+        version: "*"
+  - actor: bob
+    expect_event:
+      type: ready
+      timeout: 10.0
+      match:
+        version: "*"
+  - actor: alice
+    send:
+      cmd: add_contact
+      args:
+        contact_id: bob
+        peer_id: ${bob.peer_id}
+    expect_ack:
+      ok: true
+  - actor: bob
+    send:
+      cmd: add_contact
+      args:
+        contact_id: alice
+        peer_id: ${alice.peer_id}
+    expect_ack:
+      ok: true
+
+  # --- establish sessions ---
+  - concurrent:
+      - actor: alice
+        send:
+          cmd: start_session
+          args:
+            contact_id: bob
+        expect_ack:
+          ok: true
+      - actor: bob
+        send:
+          cmd: start_session
+          args:
+            contact_id: alice
+        expect_ack:
+          ok: true
+  - actor: alice
+    expect_event:
+      type: session_status
+      timeout: 45.0
+      match:
+        status: Connected
+        peer: ${bob.peer_id}
+  - actor: bob
+    expect_event:
+      type: session_status
+      timeout: 45.0
+      match:
+        status: Connected
+        peer: ${alice.peer_id}
+
+  # --- Alice calls, then her process restarts mid-prompt. Bob's prompt is
+  # cancelled (the caller's session is gone) and Alice's fresh call raises a
+  # new prompt that completes normally: exactly one cancel, one new prompt. ---
+  - actor: alice
+    send:
+      cmd: start_call
+      args:
+        contact_id: bob
+    expect_ack:
+      ok: true
+  - actor: bob
+    expect_event:
+      type: accept_call_prompt
+      timeout: 20.0
+      match:
+        contact_id: alice
+  - restart_actor: alice
+  - actor: bob
+    expect_event:
+      type: accept_call_canceled
+      timeout: 20.0
+      match:
+        request_id: ${bob.request_id}
+
+  # --- Alice re-registers and calls again on her fresh process ---
+  - actor: alice
+    expect_event:
+      type: ready
+      timeout: 10.0
+      match:
+        version: "*"
+  - actor: alice
+    send:
+      cmd: add_contact
+      args:
+        contact_id: bob
+        peer_id: ${bob.peer_id}
+    expect_ack:
+      ok: true
+  - actor: alice
+    send:
+      cmd: start_session
+      args:
+        contact_id: bob
+    expect_ack:
+      ok: true
+  - actor: alice
+    expect_event:
+      type: session_status
+      timeout: 45.0
+      match:
+        status: Connected
+        peer: ${bob.peer_id}
+  - actor: alice
+    send:
+      cmd: start_call
+      args:
+        contact_id: bob
+    expect_ack:
+      ok: true
+  - actor: bob
+    expect_event:
+      type: accept_call_prompt
+      timeout: 30.0
+      match:
+        contact_id: alice
+  - actor: bob
+    send:
+      cmd: accept_call
+      args:
+        request_id: ${bob.request_id}
+        accept: true
+    expect_ack:
+      ok: true
+  - actor: alice
+    expect_event:
+      type: call_state
+      timeout: 20.0
+      match:
+        state: Connected
+  - actor: bob
+    expect_event:
+      type: call_state
+      timeout: 20.0
+      match:
+        state: Connected
