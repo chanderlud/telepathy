@@ -10,6 +10,7 @@ import 'package:shared_preferences_platform_interface/shared_preferences_async_p
 import 'package:telepathy/controllers/profiles_controller.dart';
 import 'package:telepathy/core/rust/frb_generated.dart';
 import 'package:telepathy/core/rust/flutter.dart';
+import 'package:telepathy/core/rust/lib.dart';
 import 'package:telepathy/core/rust/types.dart';
 
 void main() {
@@ -66,6 +67,121 @@ void main() {
     expect(await fixture.storage.read(key: 'alpha-keypair'), 'not-base64');
     expect(await fixture.storage.read(key: 'beta-keypair'), isNotNull);
   });
+
+  Future<void> verifyDirectInvitationMigration() async {
+    final fixture = await _fixture();
+    final String aliceInvitation = _canonicalInvitation('alice-peer');
+    final String otherPeerInvitation = _canonicalInvitation('other-peer');
+    await fixture.storage.write(
+      key: 'alpha-contacts',
+      value: jsonEncode(<String, dynamic>{
+        'alice-contact': <String, dynamic>{
+          'nickname': 'Alice Nguyen',
+          'peerId': 'alice-peer',
+          'outputVolume': -4.5,
+          'isDirect': true,
+          'directInvitation': aliceInvitation,
+        },
+        'ben-contact': <String, dynamic>{
+          'nickname': 'Ben Ortiz',
+          'peerId': 'ben-peer',
+          'outputVolume': 2.25,
+          'isDirect': true,
+          'directConnectionString': _legacyAddresses,
+        },
+        'carol-contact': <String, dynamic>{
+          'nickname': 'Carol Smith',
+          'peerId': 'carol-peer',
+          'outputVolume': -7.0,
+          'isDirect': true,
+          'directInvitation': 'tp1:not-valid-base64',
+        },
+        'diego-contact': <String, dynamic>{
+          'nickname': 'Diego Morales',
+          'peerId': 'diego-peer',
+          'outputVolume': 1.5,
+          'isDirect': true,
+          'directInvitation': <String, dynamic>{'unexpected': 'object'},
+        },
+        'erin-contact': <String, dynamic>{
+          'nickname': 'Erin Chen',
+          'peerId': 'erin-peer',
+          'outputVolume': 3.0,
+          'isDirect': true,
+          'directInvitation': otherPeerInvitation,
+        },
+        'fatima-contact': <String, dynamic>{
+          'nickname': 'Fatima Zahra',
+          'peerId': 'fatima-peer',
+          'outputVolume': 6.75,
+          'isDirect': false,
+        },
+      }),
+    );
+    final restarted = ProfilesController(
+      storage: fixture.storage,
+      options: fixture.options,
+      roomHasher: _roomHash,
+    );
+
+    await restarted.init(const <String>[]);
+
+    final Map<String, Contact> contacts = restarted.profiles['alpha']!.contacts;
+    expect(contacts, hasLength(6));
+    expect(contacts['alice-contact']!.directInvitation(), aliceInvitation);
+    expect(contacts['alice-contact']!.isDirect(), isTrue);
+    expect(
+      contacts['ben-contact']!.directInvitation(),
+      _canonicalInvitation('ben-peer'),
+    );
+    expect(contacts['ben-contact']!.isDirect(), isTrue);
+    for (final String id in <String>[
+      'carol-contact',
+      'diego-contact',
+      'erin-contact',
+    ]) {
+      expect(contacts[id]!.directInvitation(), isNull);
+      expect(contacts[id]!.isDirect(), isFalse);
+    }
+    expect(contacts['fatima-contact']!.nickname(), 'Fatima Zahra');
+    expect(contacts['fatima-contact']!.outputVolume(), 6.75);
+
+    final Map<String, dynamic> repaired = jsonDecode(
+      (await fixture.storage.read(key: 'alpha-contacts'))!,
+    ) as Map<String, dynamic>;
+    expect(jsonEncode(repaired), isNot(contains('directConnectionString')));
+    expect(repaired['ben-contact']['directInvitation'],
+        _canonicalInvitation('ben-peer'));
+    expect(repaired['carol-contact']['isDirect'], isFalse);
+    expect(repaired['diego-contact']['isDirect'], isFalse);
+    expect(repaired['erin-contact']['isDirect'], isFalse);
+    expect(repaired['fatima-contact']['nickname'], 'Fatima Zahra');
+    expect(repaired['fatima-contact']['outputVolume'], 6.75);
+  }
+
+  Future<void> verifyInteractiveInvitationAddIsAtomic() async {
+    final fixture = await _fixture();
+
+    expect(
+      () => fixture.controller.addContact(
+        'Grace Kim',
+        'grace-peer',
+        directInvitation: _canonicalInvitation('different-peer'),
+      ),
+      throwsA(isA<DartError>()),
+    );
+    expect(fixture.controller.contacts, isEmpty);
+
+    final Contact contact = fixture.controller.addContact(
+      'Grace Kim',
+      'grace-peer',
+      directInvitation: _canonicalInvitation('grace-peer'),
+    );
+    expect(fixture.controller.contacts, hasLength(1));
+    expect(fixture.controller.contacts.values.single, same(contact));
+    expect(contact.directInvitation(), _canonicalInvitation('grace-peer'));
+    expect(contact.isDirect(), isTrue);
+  }
 
   test('persistence failure disposes prepared token and keeps active profile',
       () async {
@@ -309,6 +425,16 @@ void main() {
     expect(fixture.controller.activeProfile, replacementId);
     expect(fixture.controller.profiles.keys, <String>[replacementId]);
   });
+
+  test(
+    'interactive direct invitation add validates before profile mutation',
+    verifyInteractiveInvitationAddIsAtomic,
+  );
+
+  test(
+    'direct invitation migration preserves contacts and repairs storage',
+    verifyDirectInvitationMigration,
+  );
 }
 
 String _roomHash({required List<String> peers}) => peers.join('|');
@@ -371,11 +497,156 @@ class _Prepared implements PreparedIdentitySwitch {
 
 class _RustApi implements RustLibApi {
   @override
+  Contact crateTypesContactNew({
+    required String nickname,
+    required String peerId,
+  }) =>
+      _PersistedContact(
+        id: 'contact-$peerId',
+        nickname: nickname,
+        peerId: peerId,
+        outputVolume: 0.0,
+        isDirect: false,
+        directInvitation: null,
+      );
+
+  @override
+  Contact crateTypesContactFromParts({
+    required String id,
+    required String nickname,
+    required String peerId,
+    required double outputVolume,
+    required bool isDirect,
+    String? directInvitation,
+  }) {
+    // The native bridge is the external boundary for this controller test;
+    // Rust unit tests cover its real validation and canonicalization behavior.
+    final String? canonicalInvitation = switch (directInvitation) {
+      _legacyAddresses => _canonicalInvitation(peerId),
+      final String value when value == _canonicalInvitation(peerId) => value,
+      _ => null,
+    };
+    return _PersistedContact(
+      id: id,
+      nickname: nickname,
+      peerId: peerId,
+      outputVolume: outputVolume,
+      isDirect: isDirect && canonicalInvitation != null,
+      directInvitation: canonicalInvitation,
+    );
+  }
+
+  @override
   (String, Uint8List) crateFlutterUtilsGenerateKeys() =>
       ('replacement-peer', Uint8List.fromList(List<int>.filled(32, 4)));
 
   @override
   Object? noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+const String _legacyAddresses = '[{"Ip":"203.0.113.42:40142"}]';
+
+String _canonicalInvitation(String peerId) {
+  final String payload = jsonEncode(<String, dynamic>{
+    'version': 1,
+    'peer_id': peerId,
+    'addresses': <Map<String, String>>[
+      <String, String>{'Ip': '203.0.113.42:40142'},
+    ],
+  });
+  return 'tp1:${base64Url.encode(utf8.encode(payload)).replaceAll('=', '')}';
+}
+
+class _PersistedContact implements Contact {
+  _PersistedContact({
+    required String id,
+    required String nickname,
+    required String peerId,
+    required double outputVolume,
+    required bool isDirect,
+    required String? directInvitation,
+  })  : _id = id,
+        _nickname = nickname,
+        _peerId = peerId,
+        _outputVolume = outputVolume,
+        _isDirect = isDirect,
+        _directInvitation = directInvitation;
+
+  final String _id;
+  String _nickname;
+  final String _peerId;
+  double _outputVolume;
+  bool _isDirect;
+  String? _directInvitation;
+
+  @override
+  String? directInvitation() => _directInvitation;
+
+  @override
+  void dispose() {}
+
+  @override
+  PublicKey getPeerId() => _TestPublicKey();
+
+  @override
+  String id() => _id;
+
+  @override
+  bool idEq({required List<int> id}) => false;
+
+  @override
+  bool get isDisposed => false;
+
+  @override
+  bool isDirect() => _isDirect;
+
+  @override
+  String nickname() => _nickname;
+
+  @override
+  double outputVolume() => _outputVolume;
+
+  @override
+  String peerId() => _peerId;
+
+  @override
+  Contact pubClone() => this;
+
+  @override
+  void setDirect({required bool isDirect}) {
+    _isDirect = isDirect && _directInvitation != null;
+  }
+
+  @override
+  void setDirectInvitation({String? invitation}) {
+    if (invitation == null) {
+      _isDirect = false;
+      _directInvitation = null;
+      return;
+    }
+    if (invitation != _canonicalInvitation(_peerId)) {
+      throw const DartError(message: 'invalid direct invitation');
+    }
+    _directInvitation = invitation;
+  }
+
+  @override
+  void setNickname({required String nickname}) {
+    _nickname = nickname;
+  }
+
+  @override
+  void setOutputVolume({required double decibel}) {
+    _outputVolume = decibel;
+  }
+}
+
+class _TestPublicKey implements PublicKey {
+  @override
+  void dispose() {}
+
+  @override
+  bool get isDisposed => false;
 }
 
 class _Telepathy implements Telepathy {

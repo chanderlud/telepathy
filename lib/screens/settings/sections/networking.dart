@@ -1,6 +1,7 @@
 import 'dart:core';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart' hide Overlay;
+import 'package:flutter/services.dart' hide TextInput;
 import 'package:provider/provider.dart';
 import 'package:telepathy/controllers/index.dart';
 import 'package:telepathy/core/rust/flutter.dart';
@@ -49,6 +50,10 @@ class NetworkSettingsState extends State<NetworkSettings> {
   String _pkarrRelay = '';
   final TextEditingController _pkarrRelayInput = TextEditingController();
   String? _pkarrRelayError;
+
+  // Connection strings
+  String? _nodeAddr;
+  bool _nodeAddrLoading = false;
 
   // Critical backend error (e.g. a poisoned lock from the rust
   // runtime). Not tied to any one field; the rust atomic `update`
@@ -131,6 +136,31 @@ class NetworkSettingsState extends State<NetworkSettings> {
     _savedDnsEndpoint = _dnsEndpoint;
     _savedDnsOriginDomain = _dnsOriginDomain;
     _savedPkarrRelay = _pkarrRelay;
+
+    _fetchNodeAddr();
+  }
+
+  Future<void> _fetchNodeAddr() async {
+    if (mounted) setState(() => _nodeAddrLoading = true);
+    try {
+      final telepathy = context.read<Telepathy>();
+      final nodeAddr = await telepathy.nodeAddr();
+      if (mounted) setState(() => _nodeAddr = nodeAddr);
+    } catch (_) {
+      // A missing manager is an expected inactive state. Keep any existing
+      // invitation visible if a later refresh fails.
+    }
+    if (mounted) setState(() => _nodeAddrLoading = false);
+  }
+
+  Future<void> _refreshNodeAddrAfterRestart() async {
+    if (mounted) setState(() => _nodeAddrLoading = true);
+    try {
+      final nodeAddr = await context.read<Telepathy>().nodeAddr();
+      if (mounted) setState(() => _nodeAddr = nodeAddr);
+    } finally {
+      if (mounted) setState(() => _nodeAddrLoading = false);
+    }
   }
 
   @override
@@ -245,6 +275,8 @@ class NetworkSettingsState extends State<NetworkSettings> {
             if (!kIsWeb) _buildDnsSection(width, isRestartSafe),
             if (!kIsWeb) const SizedBox(height: 8),
             _buildPkarrSection(width, isRestartSafe),
+            const SizedBox(height: 16),
+            _buildDirectInvitationSection(),
             if (unsavedChanges || _saveSucceeded) const SizedBox(height: 20),
             if (unsavedChanges)
               Button(
@@ -469,6 +501,48 @@ class NetworkSettingsState extends State<NetworkSettings> {
           ),
         ],
       ],
+    );
+  }
+
+  Widget _buildDirectInvitationSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Text('Direct invitation',
+            style: TextStyle(fontWeight: FontWeight.w600)),
+        const SizedBox(height: 4),
+        const Text(
+          'Copy this invitation and ask recipients to paste it into Add direct contact.',
+          style: TextStyle(color: Colors.grey),
+        ),
+        const SizedBox(height: 8),
+        if (_nodeAddrLoading)
+          const SizedBox(
+            width: 20,
+            height: 20,
+            child: CircularProgressIndicator(strokeWidth: 3),
+          )
+        else if (_nodeAddr != null)
+          Button(
+            text: 'Copy invitation',
+            onPressed: _copyToClipboard,
+          )
+        else
+          const Text(
+            'Direct invitations are unavailable until the session manager is active.',
+            style: TextStyle(color: Colors.grey),
+          ),
+      ],
+    );
+  }
+
+  Future<void> _copyToClipboard() async {
+    if (_nodeAddr == null) return;
+    await Clipboard.setData(ClipboardData(text: _nodeAddr!));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Direct invitation copied to clipboard')),
     );
   }
 
@@ -854,6 +928,8 @@ class NetworkSettingsState extends State<NetworkSettings> {
     try {
       await networkSettingsController.saveNetworkConfig();
       await telepathy.restartManager();
+      if (!mounted) return;
+      await _refreshNodeAddrAfterRestart();
     } catch (error) {
       // Persistence or restart failed. The atomic `update` above
       // already mutated `networkConfig` in memory, so the visible

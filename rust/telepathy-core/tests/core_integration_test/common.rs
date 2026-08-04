@@ -21,6 +21,7 @@ use telepathy_core::types::{
 };
 use tokio::sync::{Notify, watch};
 use tokio::time::{interval, sleep};
+use tokio_util::sync::CancellationToken;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
@@ -116,6 +117,54 @@ impl ContactLookupProbe {
                 "timed out waiting for {expected} contact lookups for {peer_id:?}, got {observed}"
             );
         }
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct ContactLookupGate {
+    peer_id: Vec<u8>,
+    block_on: usize,
+    count: Arc<AtomicUsize>,
+    blocked: Arc<Notify>,
+    released: CancellationToken,
+}
+
+impl ContactLookupGate {
+    pub(super) fn new(peer_id: Vec<u8>, block_on: usize) -> Self {
+        Self {
+            peer_id,
+            block_on,
+            count: Arc::new(AtomicUsize::new(0)),
+            blocked: Arc::new(Notify::new()),
+            released: CancellationToken::new(),
+        }
+    }
+
+    async fn wait_if_target(&self, peer_id: &[u8]) {
+        if peer_id != self.peer_id {
+            return;
+        }
+        let count = self.count.fetch_add(1, Relaxed) + 1;
+        if count == self.block_on {
+            self.blocked.notify_waiters();
+            self.released.cancelled().await;
+        }
+    }
+
+    pub(super) async fn wait_blocked(&self) {
+        let blocked = self.blocked.notified();
+        tokio::pin!(blocked);
+        blocked.as_mut().enable();
+        if self.count.load(Relaxed) >= self.block_on {
+            return;
+        }
+        tokio::time::timeout(Duration::from_secs(10), blocked)
+            .await
+            .expect("timed out waiting for contact lookup gate");
+    }
+
+    pub(super) fn release(&self) {
+        self.released.cancel();
     }
 }
 
@@ -1256,6 +1305,7 @@ where
         None,
         None,
         Some(contact_lookup_probe.clone()),
+        None,
         Some(session_status_probe.clone()),
     );
 
@@ -1264,6 +1314,69 @@ where
         &network_config,
         &screenshare,
         &overlay,
+        codec_config,
+        mock,
+    );
+    *telepathy.inner.core_state.identity.write().await = Some(identity);
+    telepathy.start_manager().await;
+    telepathy.inner.core_state.manager_active.notified().await;
+
+    ClientHarness {
+        telepathy,
+        is_active,
+        contact_lookup_probe,
+        session_status_probe,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn build_client_with_contact_lookup_gate<H, I, O>(
+    relay_map: &RelayMap,
+    identity: SecretKey,
+    contacts: Vec<Contact>,
+    initial_contacts: Vec<Contact>,
+    codec_config: &CodecConfig,
+    host: H,
+    call_states: Arc<Mutex<Vec<CallState>>>,
+    lifecycle: ManagerLifecycle,
+    contact_lookup_gate: ContactLookupGate,
+) -> ClientHarness<H, I, O>
+where
+    H: AudioHost<InputStream = I, OutputStream = O> + Send + Sync + Clone + 'static,
+    I: Send + Sync + 'static,
+    O: Send + Sync + 'static,
+{
+    let network_config = NetworkConfig::mock(
+        0,
+        relay_map,
+        None,
+        None,
+        None,
+        Some(shared_address_lookup().clone()),
+    );
+    let is_active = Arc::new(AtomicBool::new(false));
+    let contact_lookup_probe = ContactLookupProbe::default();
+    let session_status_probe = SessionStatusProbe::default();
+    let mock = construct_mock_callbacks_with_contact_lookup(
+        contacts,
+        initial_contacts,
+        is_active.clone(),
+        Arc::new(AtomicBool::new(false)),
+        call_states,
+        None,
+        lifecycle,
+        None,
+        None,
+        None,
+        Some(contact_lookup_probe.clone()),
+        Some(contact_lookup_gate),
+        Some(session_status_probe.clone()),
+    );
+    let mut telepathy = TelepathyHandle::new(
+        host,
+        &network_config,
+        &ScreenshareConfig::default(),
+        &Overlay::default(),
         codec_config,
         mock,
     );
@@ -1312,6 +1425,7 @@ pub(super) fn construct_mock_callbacks(
         connected_gate,
         call_ended_park,
         None,
+        None,
         session_status_probe,
     )
 }
@@ -1329,6 +1443,7 @@ fn construct_mock_callbacks_with_contact_lookup(
     connected_gate: Option<ConnectedCallbackGate>,
     call_ended_park: Option<CallEndedPark>,
     contact_lookup_probe: Option<ContactLookupProbe>,
+    contact_lookup_gate: Option<ContactLookupGate>,
     session_status_probe: Option<SessionStatusProbe>,
 ) -> MockCoreCallbacks {
     let mut mock = MockCoreCallbacks::new();
@@ -1454,9 +1569,13 @@ fn construct_mock_callbacks_with_contact_lookup(
     mock.expect_get_contact().returning(move |peer_id| {
         let contacts_clone = contacts.clone();
         let contact_lookup_probe = contact_lookup_probe.clone();
+        let contact_lookup_gate = contact_lookup_gate.clone();
         Box::pin(async move {
             if let Some(probe) = contact_lookup_probe {
                 probe.record(&peer_id);
+            }
+            if let Some(gate) = contact_lookup_gate {
+                gate.wait_if_target(&peer_id).await;
             }
             for contact in contacts_clone.iter() {
                 if contact.get_peer_id().to_vec() == peer_id {

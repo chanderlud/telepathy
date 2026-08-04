@@ -282,6 +282,12 @@ impl Telepathy {
     pub async fn set_model(&self, model: Option<Vec<u8>>) -> Result<(), DartError> {
         self.handle.set_model(model).await.map_err(DartError::from)
     }
+
+    /// Returns the local endpoint's opaque `tp1:` direct invitation, or
+    /// `None` if the session manager is not active.
+    pub async fn node_addr(&self) -> Option<String> {
+        self.handle.node_addr().await
+    }
 }
 
 #[frb(opaque)]

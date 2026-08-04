@@ -13,6 +13,7 @@ pub mod state;
 mod utils;
 
 use crate::AudioDevice;
+use crate::direct_invitation;
 use crate::internal::callbacks::CoreCallbacks;
 use crate::internal::core::{RoomControllerStart, TelepathyCore};
 use crate::internal::error::{Error, ErrorKind};
@@ -1032,6 +1033,15 @@ where
 
         *self.inner.core_state.denoise_model.write().await = model;
         Ok(())
+    }
+
+    /// Returns the local endpoint's opaque direct invitation. Returns `None`
+    /// if the session manager is not active or has no bound addresses.
+    pub async fn node_addr(&self) -> Option<String> {
+        direct_invitation::encode(
+            self.inner.peer_id().await,
+            self.inner.core_state.get_endpoint_addrs(),
+        )
     }
 }
 

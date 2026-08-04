@@ -1,5 +1,7 @@
 use telepathy_audio::devices::AudioDeviceInfo;
 
+mod direct_invitation;
+
 #[cfg(feature = "flutter")]
 pub mod flutter;
 #[cfg(feature = "flutter")]

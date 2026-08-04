@@ -18,6 +18,7 @@ default = ["flutter"]
 [dependencies]
 atomic_float = "1"
 async-trait = { version = "0.1", optional = true }
+base64 = "0.22"
 bytes = "1"
 chrono = "*"
 cfg-if = "1"
@@ -28,6 +29,7 @@ lazy_static = "1"
 mockall = { version = "0.15", optional = true }
 regex = "1" # TODO consider removing regex dep
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 speedy = "=0.8.7"
 telepathy-audio = { path = "../telepathy-audio" }
 tracing = "0.1"

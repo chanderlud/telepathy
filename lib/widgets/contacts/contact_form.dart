@@ -23,6 +23,7 @@ class ContactForm extends StatefulWidget {
 class ContactFormState extends State<ContactForm> {
   final TextEditingController _nicknameInput = TextEditingController();
   final TextEditingController _peerIdInput = TextEditingController();
+  final TextEditingController _directConnInput = TextEditingController();
   final List<String> _peerIds = [];
   final FocusNode _nicknameFocusNode = FocusNode();
   String? selectedPeer;
@@ -31,6 +32,9 @@ class ContactFormState extends State<ContactForm> {
   @override
   void dispose() {
     _nicknameFocusNode.dispose();
+    _nicknameInput.dispose();
+    _peerIdInput.dispose();
+    _directConnInput.dispose();
     super.dispose();
   }
 
@@ -98,6 +102,17 @@ class ContactFormState extends State<ContactForm> {
                 labelText: 'Peer ID',
                 hintText: 'string encoded peer ID',
                 obscureText: true),
+            const SizedBox(height: 12),
+            TextInput(
+              controller: _directConnInput,
+              labelText: 'Direct invitation (optional)',
+              hintText: 'Paste a tp1: invitation',
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'Paste an invitation to enable direct connection for this contact.',
+              style: TextStyle(fontSize: 12, color: Colors.grey),
+            ),
             const SizedBox(height: 26),
             Center(
               child: Button(
@@ -122,17 +137,28 @@ class ContactFormState extends State<ContactForm> {
                   }
 
                   try {
-                    Contact contact =
-                        profilesController.addContact(nickname, peerId);
+                    final invitation = _directConnInput.text.trim();
+                    Contact contact = profilesController.addContact(
+                      nickname,
+                      peerId,
+                      directInvitation: invitation.isEmpty ? null : invitation,
+                    );
 
                     telepathy.startSession(contact: contact);
 
                     _nicknameInput.clear();
                     _peerIdInput.clear();
+                    _directConnInput.clear();
                     Navigator.pop(context);
-                  } on DartError catch (_) {
+                  } on DartError {
+                    final invitation = _directConnInput.text.trim();
                     showErrorDialog(
-                        context, 'Failed to add contact', 'Invalid peer ID');
+                      context,
+                      'Failed to add contact',
+                      invitation.isEmpty
+                          ? 'Invalid peer ID'
+                          : 'The direct invitation is invalid or belongs to a different contact. Paste a valid tp1: invitation.',
+                    );
                   }
                 },
               ),

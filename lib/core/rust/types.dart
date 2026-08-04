@@ -9,7 +9,7 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'types.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `clamp_contact_output_volume`, `contact_output_volume_from_parts`, `contact_output_volume_in_range`, `field_error`, `new`, `parse_bind_addresses`, `poison_field_error`, `relay_map_from_urls`, `serialize_timestamp_rfc3339_utc`
+// These functions are ignored because they are not marked as `pub`: `clamp_contact_output_volume`, `contact_output_volume_from_parts`, `contact_output_volume_in_range`, `field_error`, `group_contact`, `new`, `parse_bind_addresses`, `poison_field_error`, `relay_map_from_urls`, `serialize_timestamp_rfc3339_utc`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `minimum_bytes_needed`, `read_from`, `write_to`
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Capabilities>>
@@ -64,22 +64,32 @@ abstract class CodecConfig implements RustOpaqueInterface {
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Contact>>
 abstract class Contact implements RustOpaqueInterface {
+  String? directInvitation();
+
+  /// Reconstructs persisted contact data, discarding invalid invitation state
+  /// without discarding the contact's valid identity and preferences.
   static Contact fromParts(
           {required String id,
           required String nickname,
           required String peerId,
-          required double outputVolume}) =>
+          required double outputVolume,
+          required bool isDirect,
+          String? directInvitation}) =>
       RustLib.instance.api.crateTypesContactFromParts(
           id: id,
           nickname: nickname,
           peerId: peerId,
-          outputVolume: outputVolume);
+          outputVolume: outputVolume,
+          isDirect: isDirect,
+          directInvitation: directInvitation);
 
-  Future<PublicKey> getPeerId();
+  PublicKey getPeerId();
 
   String id();
 
   bool idEq({required List<int> id});
+
+  bool isDirect();
 
   factory Contact({required String nickname, required String peerId}) =>
       RustLib.instance.api
@@ -92,6 +102,12 @@ abstract class Contact implements RustOpaqueInterface {
   String peerId();
 
   Contact pubClone();
+
+  void setDirect({required bool isDirect});
+
+  /// Strictly validates interactive invitation input before changing state.
+  /// Passing `None` removes the current invitation and disables direct mode.
+  void setDirectInvitation({String? invitation});
 
   void setNickname({required String nickname});
 

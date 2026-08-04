@@ -2,6 +2,7 @@
 //! negotiates incoming or outgoing calls, then transitions into direct [`call_handshake`]
 //! or room [`room_handshake`] handling.
 
+use crate::direct_invitation::{decode_for_peer, DirectInvitationError};
 use crate::internal::callbacks::CoreCallbacks;
 use crate::internal::connections::{
     ConstConnection, DynamicConnection, SharedConnections, audio_input, audio_output,
@@ -36,6 +37,7 @@ use crate::types::{
     SessionStatus,
 };
 use chrono::Local;
+use iroh::EndpointAddr;
 use iroh::endpoint::{
     ConnectError, ConnectingError, Connection, ConnectionError, RecvStream, SendStream, VarInt,
 };
@@ -95,7 +97,7 @@ where
 
     pending_room_admission: PendingRoomAdmissionRegistry,
 
-    pending_session_candidates: PendingSessionCandidateRegistry,
+    pub(crate) pending_session_candidates: PendingSessionCandidateRegistry,
 
     /// Keeps track of and controls the sessions
     pub session_states: Arc<RwLock<HashMap<PublicKey, Arc<SessionState>>>>,
@@ -103,12 +105,10 @@ where
     /// Signals the session manager to start a new session
     pub start_session: Option<Sender<(PublicKey, u64)>>,
 
-    pub(crate) cancel_outbound_connections: Arc<Notify>,
-
     /// Monotonic outbound dial generation per peer; stale attempts must not emit UI status.
     pub(crate) outbound_attempts: Arc<RwLock<HashMap<PublicKey, u64>>>,
 
-    session_availability: Arc<SessionAvailability>,
+    pub(crate) session_availability: Arc<SessionAvailability>,
 
     /// A reference to the object that controls the call overlay
     pub(crate) overlay: Overlay,
@@ -238,7 +238,6 @@ where
             pending_session_candidates: Default::default(),
             session_states: Default::default(),
             start_session: None,
-            cancel_outbound_connections: Default::default(),
             outbound_attempts: Default::default(),
             session_availability: Default::default(),
             overlay: overlay.clone(),
@@ -364,6 +363,10 @@ where
             elapsed_ms = setup_started.elapsed().as_millis() as u64
         );
 
+        // Store the bound endpoint's addresses so the frontend can display
+        // connection information (direct addresses + relay URL) in settings.
+        self.core_state
+            .set_endpoint_addrs(endpoint.addr().addrs.iter().cloned().collect());
         *self.core_state.identity.write().await = runtime.identity.clone();
         self.reset_sessions().await;
         self.core_state.reset_peer_output_volumes()?;
@@ -373,6 +376,7 @@ where
         let (dial_events, mut dial_event_receiver) = unbounded_channel();
         let mut direct_dials = HashSet::new();
         let mut room_dials = RoomDialScheduler::default();
+        let outbound_cancellation = CancellationToken::new();
         let mut room_reconcile_timer = interval(ROOM_DIAL_RECONCILE_INTERVAL);
         room_reconcile_timer.tick().await;
         // preload public identity
@@ -395,8 +399,11 @@ where
                     let self_clone = self.clone();
                     let endpoint_clone = endpoint.clone();
                     let events = dial_events.clone();
+                    let cancellation = outbound_cancellation.clone();
                     handles.push(spawn_task(async move {
-                        self_clone.open_session(peer_id, endpoint_clone).await;
+                        self_clone
+                            .open_session(peer_id, endpoint_clone, cancellation)
+                            .await;
                         let _ = events.send(ManagerDialEvent::DirectCompleted(peer_id, attempt_id));
                     }));
                 }
@@ -462,7 +469,13 @@ where
                             let self_clone = self.clone();
                             handles.push(spawn_task(async move {
                                 if let Err(error) = self_clone
-                                    .initialize_session(peer_id, connection, None, candidate_attempt)
+                                    .initialize_session(
+                                        peer_id,
+                                        connection,
+                                        None,
+                                        candidate_attempt,
+                                        None,
+                                    )
                                     .await
                                 {
                                     error!(event = "session_init_failed", error = %error);
@@ -541,9 +554,10 @@ where
                         let self_clone = self.clone();
                         let endpoint_clone = endpoint.clone();
                         let events = dial_events.clone();
+                        let cancellation = outbound_cancellation.clone();
                         handles.push(spawn_task(async move {
                             self_clone
-                                .open_session(peer_id, endpoint_clone)
+                                .open_session(peer_id, endpoint_clone, cancellation)
                                 .await;
                             let _ = events.send(ManagerDialEvent::DirectCompleted(peer_id, attempt_id));
                         }));
@@ -557,11 +571,13 @@ where
         };
 
         debug!(event = "manager_teardown_start");
+        outbound_cancellation.cancel();
         room_dials.cancel_all();
         self.pending_room_admission.cancel_current();
         self.callbacks.manager_state(ManagerState::Stopped).await;
-        self.cancel_outbound_connections.notify_waiters();
         self.outbound_attempts.write().await.clear();
+        // Clear endpoint addresses so stale connection info is not served
+        self.core_state.set_endpoint_addrs(Vec::new());
         self.reset_sessions().await;
         // reset room state
         if let Some(state) = self.room_state.write().await.take() {
@@ -661,11 +677,9 @@ where
             .await;
 
         select! {
+            biased;
             _ = launch.cancel.cancelled() => {
                 debug!(event = "room_outbound_connection_canceled", peer.id = %peer);
-            }
-            _ = self.cancel_outbound_connections.notified() => {
-                debug!(event = "room_outbound_connection_manager_canceled", peer.id = %peer);
             }
             result = endpoint.connect(peer, ALPN) => {
                 match result {
@@ -676,7 +690,13 @@ where
                         {
                             connection.close(VarInt::from_u32(0), b"room dial canceled");
                         } else if let Err(error) = self
-                            .initialize_session(peer, connection, Some(outbound_generation), None)
+                            .initialize_session(
+                                peer,
+                                connection,
+                                Some(outbound_generation),
+                                None,
+                                Some(&launch.cancel),
+                            )
                             .await
                         {
                             error!(event = "room_session_init_failed", error = %error);
@@ -704,15 +724,36 @@ where
         skip_all,
         fields(peer.id = %peer)
     )]
-    async fn open_session(&self, peer: PublicKey, endpoint: Endpoint) {
+    async fn open_session(
+        &self,
+        peer: PublicKey,
+        endpoint: Endpoint,
+        cancellation: CancellationToken,
+    ) {
         let generation = self.begin_outbound_attempt(peer).await;
         self.emit_outbound_status(peer, generation, SessionStatus::Connecting)
             .await;
 
+        let contact = self.callbacks.get_contact(peer.to_vec()).await;
+        let direct_addr = match resolve_direct_addr(contact.as_ref(), peer) {
+            Ok(addr) => addr,
+            Err(error) => {
+                warn!(event = "direct_invitation_rejected", peer.id = %peer, ?error);
+                self.emit_outbound_status(peer, generation, SessionStatus::Inactive)
+                    .await;
+                return;
+            }
+        };
+
         let connect_future = async {
             let mut retries = 0;
             loop {
-                match endpoint.connect(peer, ALPN).await {
+                let result = if let Some(ref addr) = direct_addr {
+                    endpoint.connect(addr.clone(), ALPN).await
+                } else {
+                    endpoint.connect(peer, ALPN).await
+                };
+                match result {
                     Ok(connection) => {
                         break Some(connection);
                     }
@@ -741,14 +782,25 @@ where
         };
 
         select! {
-            _ = self.cancel_outbound_connections.notified() => {
+            biased;
+            _ = cancellation.cancelled() => {
                 warn!(event = "outbound_connection_canceled", peer = %peer);
             }
             result = connect_future => {
                 if let Some(connection) = result {
                     info!(event = "connect_succeeded", peer.id = %peer);
+                    if cancellation.is_cancelled() {
+                        connection.close(VarInt::from_u32(0), b"outbound dial canceled");
+                        return;
+                    }
                     if let Err(error) = self
-                        .initialize_session(peer, connection, Some(generation), None)
+                        .initialize_session(
+                            peer,
+                            connection,
+                            Some(generation),
+                            None,
+                            Some(&cancellation),
+                        )
                         .await
                     {
                         error!(event = "session_init_failed", error = %error);
@@ -774,6 +826,7 @@ where
         connection: Connection,
         outbound_generation: Option<u64>,
         incoming_candidate: Option<IncomingCandidateLease>,
+        outbound_cancellation: Option<&CancellationToken>,
     ) -> Result<()> {
         let session_generation = match outbound_generation {
             Some(generation) => generation,
@@ -781,16 +834,14 @@ where
         };
 
         let contact_option = self.callbacks.get_contact(peer.to_vec()).await;
+        if outbound_cancellation.is_some_and(CancellationToken::is_cancelled) {
+            connection.close(VarInt::from_u32(0), b"outbound dial canceled");
+            return Ok(());
+        }
         let contact = contact_option.unwrap_or_else(|| {
             // there may be no contact for members of a group
             debug!(event = "group_contact_created", peer.id = %peer);
-            Contact {
-                id: Uuid::new_v4().to_string(),
-                nickname: String::from("GroupContact"),
-                peer_id: peer,
-                output_volume: 0_f32,
-                is_room_only: true,
-            }
+            Contact::group_contact(peer)
         });
 
         self.core_state.set_peer_output_volume(&contact)?;
@@ -805,6 +856,11 @@ where
         let keep_new_session =
             should_keep_new_session(&local_peer, &peer, connection.side().is_client());
         let mut states = self.session_states.write().await;
+        if outbound_cancellation.is_some_and(CancellationToken::is_cancelled) {
+            drop(states);
+            connection.close(VarInt::from_u32(0), b"outbound dial canceled");
+            return Ok(());
+        }
         let mut deferred_candidate = None;
         let old_state_option = if let Some(old_state) = states.get(&peer).cloned() {
             if keep_new_session {
@@ -3111,7 +3167,6 @@ where
             pending_session_candidates: self.pending_session_candidates.clone(),
             session_states: Arc::clone(&self.session_states),
             start_session: self.start_session.clone(),
-            cancel_outbound_connections: Arc::clone(&self.cancel_outbound_connections),
             outbound_attempts: Arc::clone(&self.outbound_attempts),
             session_availability: Arc::clone(&self.session_availability),
             overlay: self.overlay.clone(),
@@ -3567,13 +3622,13 @@ enum ManagerDialEvent {
 }
 
 #[derive(Default)]
-struct SessionAvailability {
-    peers: StdMutex<HashMap<PublicKey, PeerSessionAvailability>>,
-    changed: Notify,
+pub(crate) struct SessionAvailability {
+    pub(crate) peers: StdMutex<HashMap<PublicKey, PeerSessionAvailability>>,
+    pub(crate) changed: Notify,
 }
 
 impl SessionAvailability {
-    fn terminalize_all(&self) {
+    pub(crate) fn terminalize_all(&self) {
         let mut peers = self.peers.lock().unwrap();
         for state in peers.values_mut() {
             if state.active_attempt.take().is_some() {
@@ -3584,7 +3639,7 @@ impl SessionAvailability {
         self.changed.notify_waiters();
     }
 
-    async fn wait_for_change(&self, peer: PublicKey, generation: u64) {
+    pub(crate) async fn wait_for_change(&self, peer: PublicKey, generation: u64) {
         loop {
             let changed = self.changed.notified();
             tokio::pin!(changed);
@@ -3603,7 +3658,7 @@ impl SessionAvailability {
         }
     }
 
-    fn complete_direct_attempt(&self, peer: PublicKey, attempt_id: u64) {
+    pub(crate) fn complete_direct_attempt(&self, peer: PublicKey, attempt_id: u64) {
         let mut peers = self.peers.lock().unwrap();
         let Some(state) = peers.get_mut(&peer) else {
             return;
@@ -3625,26 +3680,26 @@ impl SessionAvailability {
 }
 
 #[derive(Default)]
-struct PeerSessionAvailability {
-    next_attempt_id: u64,
-    active_attempt: Option<DirectAttempt>,
-    generation: u64,
+pub(crate) struct PeerSessionAvailability {
+    pub(crate) next_attempt_id: u64,
+    pub(crate) active_attempt: Option<DirectAttempt>,
+    pub(crate) generation: u64,
 }
 
-struct DirectAttempt {
-    id: u64,
-    direct_completed: bool,
-    candidates: usize,
+pub(crate) struct DirectAttempt {
+    pub(crate) id: u64,
+    pub(crate) direct_completed: bool,
+    pub(crate) candidates: usize,
 }
 
-struct IncomingCandidateLease {
-    availability: Arc<SessionAvailability>,
-    peer: PublicKey,
-    attempt_id: u64,
+pub(crate) struct IncomingCandidateLease {
+    pub(crate) availability: Arc<SessionAvailability>,
+    pub(crate) peer: PublicKey,
+    pub(crate) attempt_id: u64,
 }
 
 #[derive(Clone, Default)]
-struct PendingSessionCandidateRegistry {
+pub(crate) struct PendingSessionCandidateRegistry {
     inner: Arc<StdMutex<HashMap<PublicKey, PendingSessionCandidate>>>,
 }
 
@@ -3692,7 +3747,7 @@ impl PendingSessionCandidateRegistry {
         })
     }
 
-    fn cancel_all(&self) {
+    pub(crate) fn cancel_all(&self) {
         let candidates = std::mem::take(&mut *self.inner.lock().unwrap());
         for candidate in candidates.into_values() {
             candidate.cancellation.cancel();
@@ -3757,100 +3812,6 @@ impl Drop for IncomingCandidateLease {
 pub(crate) struct SessionAvailabilitySnapshot {
     pub(crate) generation: u64,
     pub(crate) waiting_for_session: bool,
-}
-
-impl<C, H> TelepathyCore<C, H>
-where
-    C: CoreCallbacks + Send + Sync + 'static,
-    H: AudioHost + Send + Sync + Clone + 'static,
-{
-    pub(crate) fn begin_direct_attempt(&self, peer: PublicKey) -> u64 {
-        let mut peers = self.session_availability.peers.lock().unwrap();
-        let state = peers.entry(peer).or_default();
-        if let Some(attempt) = &state.active_attempt {
-            return attempt.id;
-        }
-        state.next_attempt_id = state.next_attempt_id.wrapping_add(1);
-        let attempt_id = state.next_attempt_id;
-        state.active_attempt = Some(DirectAttempt {
-            id: attempt_id,
-            direct_completed: false,
-            candidates: 0,
-        });
-        state.generation = state.generation.wrapping_add(1);
-        drop(peers);
-        self.session_availability.changed.notify_waiters();
-        attempt_id
-    }
-
-    pub(crate) fn clear_session_availability(&self) {
-        self.session_availability.terminalize_all();
-    }
-
-    pub(crate) fn cancel_pending_session_candidates(&self) {
-        self.pending_session_candidates.cancel_all();
-    }
-
-    pub(crate) fn complete_direct_attempt(&self, peer: PublicKey, attempt_id: u64) {
-        self.session_availability
-            .complete_direct_attempt(peer, attempt_id);
-    }
-
-    fn is_current_direct_attempt(&self, peer: PublicKey, attempt_id: u64) -> bool {
-        self.session_availability
-            .peers
-            .lock()
-            .unwrap()
-            .get(&peer)
-            .and_then(|state| state.active_attempt.as_ref())
-            .is_some_and(|attempt| attempt.id == attempt_id)
-    }
-
-    fn handoff_incoming_candidate(&self, peer: PublicKey) -> Option<IncomingCandidateLease> {
-        let mut peers = self.session_availability.peers.lock().unwrap();
-        let state = peers.get_mut(&peer)?;
-        let attempt = state.active_attempt.as_mut()?;
-        let attempt_id = attempt.id;
-        attempt.candidates += 1;
-        state.generation = state.generation.wrapping_add(1);
-        drop(peers);
-        self.session_availability.changed.notify_waiters();
-        Some(IncomingCandidateLease {
-            availability: Arc::clone(&self.session_availability),
-            peer,
-            attempt_id,
-        })
-    }
-
-    fn publish_session_locked(&self, peer: PublicKey) {
-        let mut peers = self.session_availability.peers.lock().unwrap();
-        let state = peers.entry(peer).or_default();
-        state.generation = state.generation.wrapping_add(1);
-        drop(peers);
-        self.session_availability.changed.notify_waiters();
-    }
-
-    pub(crate) fn session_availability_snapshot(
-        &self,
-        peer: PublicKey,
-    ) -> SessionAvailabilitySnapshot {
-        let peers = self.session_availability.peers.lock().unwrap();
-        let state = peers.get(&peer);
-        SessionAvailabilitySnapshot {
-            generation: state.map_or(0, |state| state.generation),
-            waiting_for_session: state.is_some_and(|state| state.active_attempt.is_some()),
-        }
-    }
-
-    pub(crate) async fn wait_for_session_availability_change(
-        &self,
-        peer: PublicKey,
-        generation: u64,
-    ) {
-        self.session_availability
-            .wait_for_change(peer, generation)
-            .await;
-    }
 }
 
 impl RoomDialScheduler {
@@ -4056,6 +4017,21 @@ async fn is_session_still_current(
         .unwrap_or(false)
 }
 
+fn resolve_direct_addr(
+    contact: Option<&Contact>,
+    peer: PublicKey,
+) -> std::result::Result<Option<EndpointAddr>, DirectInvitationError> {
+    let Some(contact) = contact.filter(|contact| contact.is_direct) else {
+        return Ok(None);
+    };
+    let invitation = contact
+        .direct_connection_string
+        .as_deref()
+        .ok_or(DirectInvitationError::MissingInvitation)?;
+    let addresses = decode_for_peer(invitation, peer)?;
+    Ok(Some(EndpointAddr::from_parts(peer, addresses)))
+}
+
 /// Releases a pending direct-call slot only if the owning session is still the current
 /// map entry for `peer` in `session_states`.
 ///
@@ -4113,9 +4089,56 @@ fn ringtone_is_within_limit(ringtone: &Option<Vec<u8>>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::direct_invitation::{DirectInvitationError, encode};
     use crate::internal::messages::AudioHeader;
-    use iroh::SecretKey;
+    use iroh::{SecretKey, TransportAddr};
     use speedy::{Readable, Writable};
+    use std::net::{Ipv4Addr, SocketAddr};
+
+    fn direct_test_invitation(peer: PublicKey) -> String {
+        encode(
+            peer,
+            vec![TransportAddr::Ip(SocketAddr::from((
+                Ipv4Addr::LOCALHOST,
+                40142,
+            )))],
+        )
+        .expect("test invitation has an address")
+    }
+
+    #[test]
+    fn dial_resolution_uses_discovery_for_normal_contacts() {
+        let peer = SecretKey::generate().public();
+        let contact = Contact::new("Eve".to_string(), peer.to_string())
+            .expect("valid peer should create contact");
+
+        assert!(resolve_direct_addr(Some(&contact), peer).unwrap().is_none());
+        assert!(resolve_direct_addr(None, peer).unwrap().is_none());
+    }
+
+    #[test]
+    fn dial_resolution_accepts_only_matching_direct_invitations() {
+        let peer = SecretKey::generate().public();
+        let mut contact = Contact::new("Frank".to_string(), peer.to_string())
+            .expect("valid peer should create contact");
+        contact.direct_connection_string = Some(direct_test_invitation(peer));
+        contact.is_direct = true;
+
+        assert!(resolve_direct_addr(Some(&contact), peer).unwrap().is_some());
+
+        contact.direct_connection_string = None;
+        assert_eq!(
+            resolve_direct_addr(Some(&contact), peer),
+            Err(DirectInvitationError::MissingInvitation)
+        );
+
+        let other_peer = SecretKey::generate().public();
+        contact.direct_connection_string = Some(direct_test_invitation(other_peer));
+        assert_eq!(
+            resolve_direct_addr(Some(&contact), peer),
+            Err(DirectInvitationError::PeerMismatch)
+        );
+    }
 
     #[test]
     fn oversized_hello_ringtone_is_rejected_before_prompting() {

@@ -22,6 +22,7 @@ import 'package:telepathy/models/index.dart';
 import 'package:telepathy/widgets/call/call_controls.dart';
 import 'package:telepathy/widgets/call/room_details_widget.dart';
 import 'package:telepathy/widgets/common/text_input.dart' as common_widgets;
+import 'package:telepathy/widgets/contacts/contact_form.dart';
 import 'package:telepathy/widgets/contacts/contact_widget.dart';
 import 'package:telepathy/widgets/contacts/room_widget.dart';
 
@@ -907,6 +908,157 @@ void main() {
     });
   });
 
+  group('ContactWidget direct invitations', () {
+    late ProfilesController profilesController;
+    late StateController stateController;
+    late _RecordingTelepathy telepathy;
+    late _FakeSoundPlayer player;
+
+    setUp(() {
+      FlutterSecureStorage.setMockInitialValues(<String, String>{});
+      SharedPreferencesAsyncPlatform.instance =
+          InMemorySharedPreferencesAsync.empty();
+      profilesController = ProfilesController(
+        storage: const FlutterSecureStorage(),
+        options: SharedPreferencesAsync(),
+        roomHasher: ({required List<String> peers}) => peers.join('|'),
+      );
+      stateController = StateController();
+      telepathy = _RecordingTelepathy();
+      player = _FakeSoundPlayer(_FakeSoundHandle());
+    });
+
+    testWidgets('valid pasted invitation enables direct connection',
+        (WidgetTester tester) async {
+      final contact = FakeContact(
+        id: 'direct-paste-peer',
+        contactNickname: 'Direct Paste',
+      );
+      await tester.pumpWidget(_harness(
+        stateController: stateController,
+        profilesController: profilesController,
+        telepathy: telepathy,
+        player: player,
+        child: ContactWidget(contact: contact),
+      ));
+
+      await tester.tap(find.text('Direct Paste'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.widgetWithText(TextField, 'Direct invitation'),
+        'tp1:valid-invitation',
+      );
+      await tester.tap(find.widgetWithText(ElevatedButton, 'Use invitation'));
+      await tester.pumpAndSettle();
+
+      expect(contact.isDirect(), isTrue);
+      expect(contact.directInvitation(), 'tp1:valid-invitation');
+      expect(find.text('Direct connection is enabled'), findsOneWidget);
+    });
+
+    testWidgets('invalid pasted invitation preserves the editable form',
+        (WidgetTester tester) async {
+      final contact = FakeContact(
+        id: 'invalid-invitation-peer',
+        contactNickname: 'Invalid Paste',
+      );
+      await tester.pumpWidget(_harness(
+        stateController: stateController,
+        profilesController: profilesController,
+        telepathy: telepathy,
+        player: player,
+        child: ContactWidget(contact: contact),
+      ));
+
+      await tester.tap(find.text('Invalid Paste'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.widgetWithText(TextField, 'Direct invitation'),
+        'not-an-invitation',
+      );
+      await tester.tap(find.widgetWithText(ElevatedButton, 'Use invitation'));
+      await tester.pumpAndSettle();
+
+      expect(contact.isDirect(), isFalse);
+      expect(contact.directInvitation(), isNull);
+      expect(find.text('Invalid direct invitation'), findsOneWidget);
+      expect(
+        find.widgetWithText(TextField, 'not-an-invitation'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('removing an invitation restores normal contact behavior',
+        (WidgetTester tester) async {
+      final contact = FakeContact(
+        id: 'remove-invitation-peer',
+        contactNickname: 'Remove Invitation',
+        isDirect: true,
+        directInvitation: 'tp1:remove-me',
+      );
+      await tester.pumpWidget(_harness(
+        stateController: stateController,
+        profilesController: profilesController,
+        telepathy: telepathy,
+        player: player,
+        child: ContactWidget(contact: contact),
+      ));
+
+      await tester.tap(find.text('Remove Invitation'));
+      await tester.pumpAndSettle();
+      await tester
+          .tap(find.widgetWithText(ElevatedButton, 'Remove direct invitation'));
+      await tester.pumpAndSettle();
+
+      expect(contact.isDirect(), isFalse);
+      expect(contact.directInvitation(), isNull);
+      expect(find.text('Paste a tp1: invitation'), findsOneWidget);
+    });
+  });
+
+  testWidgets('invalid invitation add preserves fields and adds no contact',
+      (WidgetTester tester) async {
+    FlutterSecureStorage.setMockInitialValues(<String, String>{});
+    SharedPreferencesAsyncPlatform.instance =
+        InMemorySharedPreferencesAsync.empty();
+    final profilesController = _InvitationProfilesController();
+    final telepathy = _RecordingTelepathy();
+    await tester.pumpWidget(_harness(
+      stateController: StateController(),
+      profilesController: profilesController,
+      telepathy: telepathy,
+      player: _FakeSoundPlayer(_FakeSoundHandle()),
+      child: const ContactForm(),
+    ));
+
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Add Contact'));
+    await tester.pump();
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Nickname'),
+      'Hana Suzuki',
+    );
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Peer ID'),
+      'hana-peer',
+    );
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Direct invitation (optional)'),
+      'tp1:mismatched-invitation',
+    );
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Add Contact'));
+    await tester.pumpAndSettle();
+
+    expect(profilesController.contacts, isEmpty);
+    expect(telepathy.startSessionCalls, 0);
+    expect(find.text('Failed to add contact'), findsOneWidget);
+    expect(find.widgetWithText(TextField, 'Hana Suzuki'), findsOneWidget);
+    expect(find.widgetWithText(TextField, 'hana-peer'), findsOneWidget);
+    expect(
+      find.widgetWithText(TextField, 'tp1:mismatched-invitation'),
+      findsOneWidget,
+    );
+  });
+
   group('RoomWidget call-target capture across rebuilds', () {
     late _FakeSoundHandle handle;
     late _FakeSoundPlayer player;
@@ -1579,7 +1731,7 @@ void main() {
 
       final common_widgets.TextInput input =
           tester.widget<common_widgets.TextInput>(
-              find.byType(common_widgets.TextInput));
+              find.widgetWithText(common_widgets.TextInput, 'Nickname'));
       expect(input.enabled, isFalse,
           reason: 'pending target must not allow identity-changing edits '
               'while the backend start request is in flight');
@@ -1694,4 +1846,37 @@ void main() {
           reason: 'pending target must not allow identity-changing edits');
     });
   });
+}
+
+// Isolates the form's DartError path; the real controller's insertion ordering
+// is covered by profiles_controller_test.dart against the generated API shape.
+class _InvitationProfilesController extends ProfilesController {
+  _InvitationProfilesController()
+      : super(
+          storage: const FlutterSecureStorage(),
+          options: SharedPreferencesAsync(),
+          roomHasher: ({required List<String> peers}) => peers.join('|'),
+        );
+
+  final Map<String, Contact> _contacts = <String, Contact>{};
+
+  @override
+  Map<String, Contact> get contacts => _contacts;
+
+  @override
+  String get peerId => 'local-peer';
+
+  @override
+  Contact addContact(
+    String nickname,
+    String peerId, {
+    String? directInvitation,
+  }) {
+    if (directInvitation == 'tp1:mismatched-invitation') {
+      throw const DartError(message: 'invitation belongs to another contact');
+    }
+    final contact = FakeContact(id: peerId, contactNickname: nickname);
+    _contacts[peerId] = contact;
+    return contact;
+  }
 }

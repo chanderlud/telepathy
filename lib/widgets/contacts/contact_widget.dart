@@ -23,11 +23,13 @@ class ContactWidget extends StatefulWidget {
 class ContactWidgetState extends State<ContactWidget> {
   bool isHovered = false;
   late TextEditingController _nicknameInput;
+  late TextEditingController _directConnInput;
 
   @override
   void initState() {
     super.initState();
     _nicknameInput = TextEditingController(text: widget.contact.nickname());
+    _directConnInput = TextEditingController();
   }
 
   @override
@@ -35,12 +37,14 @@ class ContactWidgetState extends State<ContactWidget> {
     super.didUpdateWidget(oldWidget);
     if (widget.contact != oldWidget.contact) {
       _nicknameInput.text = widget.contact.nickname();
+      _directConnInput.clear();
     }
   }
 
   @override
   void dispose() {
     _nicknameInput.dispose();
+    _directConnInput.dispose();
     super.dispose();
   }
 
@@ -171,6 +175,67 @@ class ContactWidgetState extends State<ContactWidget> {
                         onChanged: (value) {
                           widget.contact.setNickname(nickname: value);
                         }),
+                    const SizedBox(height: 12),
+                    StatefulBuilder(builder: (context, setLocalState) {
+                      final bool isDirect = widget.contact.isDirect();
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            isDirect
+                                ? 'Direct connection is enabled'
+                                : 'Use a direct invitation to enable direct connection.',
+                          ),
+                          const SizedBox(height: 12),
+                          if (!isDirect) ...[
+                            TextInput(
+                              controller: _directConnInput,
+                              labelText: 'Direct invitation',
+                              hintText: 'Paste a tp1: invitation',
+                            ),
+                            const SizedBox(height: 8),
+                            Button(
+                              text: 'Use invitation',
+                              onPressed: () {
+                                final invitation = _directConnInput.text.trim();
+                                if (invitation.isEmpty) {
+                                  showErrorDialog(
+                                    context,
+                                    'Direct invitation required',
+                                    'Paste a tp1: invitation to enable direct connection.',
+                                  );
+                                  return;
+                                }
+                                try {
+                                  widget.contact.setDirectInvitation(
+                                    invitation: invitation,
+                                  );
+                                  widget.contact.setDirect(isDirect: true);
+                                  _directConnInput.clear();
+                                  setLocalState(() {});
+                                  setDialogState(() {});
+                                } on DartError catch (_) {
+                                  showErrorDialog(
+                                    context,
+                                    'Invalid direct invitation',
+                                    'This invitation is invalid or belongs to a different contact. Paste a valid tp1: invitation.',
+                                  );
+                                }
+                              },
+                            ),
+                          ] else
+                            Button(
+                              text: 'Remove direct invitation',
+                              onPressed: () {
+                                widget.contact.setDirectInvitation();
+                                widget.contact.setDirect(isDirect: false);
+                                setLocalState(() {});
+                                setDialogState(() {});
+                              },
+                            ),
+                        ],
+                      );
+                    }),
                     const SizedBox(height: 20),
                     const Text('Output Volume', style: TextStyle(fontSize: 15)),
                     Slider(

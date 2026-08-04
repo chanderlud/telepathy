@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize};
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::{Arc, Mutex as StdMutex, RwLock as StdRwLock};
 use std::time::Duration;
 use telepathy_audio::RnnModel;
 use telepathy_audio::internal::utils::db_to_multiplier;
@@ -531,6 +531,12 @@ pub struct CoreState {
 
     /// global audio sequence number
     pub(crate) audio_sequence: Arc<AtomicU32>,
+
+    /// The local endpoint's current transport addrs, populated when the
+    /// session manager binds the endpoint and cleared on teardown. Used
+    /// to expose connection information to the frontend (networking settings)
+    /// so users can share their direct addresses with contacts.
+    pub(crate) endpoint_addrs: Arc<StdRwLock<Vec<TransportAddr>>>,
 }
 
 /// Immutable runtime target captured by one manager generation.
@@ -911,6 +917,24 @@ impl CoreState {
             // peers from rooms will not have a cached output volume
             .or_insert_with(|| PeerVolume::new(self.output_volume.load(Relaxed)))
             .clone())
+    }
+
+    /// Returns the local endpoint's current [`EndpointAddr`] if the session
+    /// manager is active and the endpoint has been bound.
+    pub(crate) fn get_endpoint_addrs(&self) -> Vec<TransportAddr> {
+        self.endpoint_addrs
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    /// Stores the local endpoint's [`EndpointAddr`] after the session manager
+    /// binds the endpoint. Cleared on manager teardown.
+    pub(crate) fn set_endpoint_addrs(&self, addrs: Vec<TransportAddr>) {
+        *self
+            .endpoint_addrs
+            .write()
+            .expect("endpoint_addrs lock poisoned") = addrs;
     }
 }
 

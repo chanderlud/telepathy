@@ -89,6 +89,10 @@ abstract class Telepathy implements RustOpaqueInterface {
   /// Creates an operation token that can cancel one pending call or room start.
   StartOperation newStartOperation();
 
+  /// Returns the local endpoint's opaque `tp1:` direct invitation, or
+  /// `None` if the session manager is not active.
+  Future<String?> nodeAddr();
+
   void pauseStatistics();
 
   Future<PreparedIdentitySwitch> prepareIdentitySwitch(
@@ -140,7 +144,10 @@ abstract class Telepathy implements RustOpaqueInterface {
       {required Contact contact, required StartOperation operation});
 
   /// Non-blocking: spawns the manager task and returns. The Dart side observes
-  /// the eventual `Active` transition via the `managerActive` callback.
+  /// the eventual `Active` transition via the `managerActive` callback. The
+  /// non-blocking contract is validated by the CLI system test
+  /// `test_start_manager_ack_precedes_active_event`; the `()` return type
+  /// prevents silent reintroduction of blocking semantics.
   Future<void> startManager();
 
   Future<void> startScreenshare({required Contact contact});

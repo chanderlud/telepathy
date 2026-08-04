@@ -5,21 +5,35 @@ import 'package:telepathy/core/rust/types.dart';
 /// `RustOpaqueInterface` marker — the native bridge is not initialized in the
 /// test harness, so production callers cannot construct one.
 class FakeContact implements Contact {
-  FakeContact({required String id, required String contactNickname})
-      : _id = id,
-        _contactNickname = contactNickname;
+  FakeContact({
+    required String id,
+    required String contactNickname,
+    bool isDirect = false,
+    String? directInvitation,
+  })  : _id = id,
+        _contactNickname = contactNickname,
+        _isDirect = isDirect,
+        _directInvitation = directInvitation;
 
   final String _id;
   final String _contactNickname;
+  bool _isDirect;
+  String? _directInvitation;
 
   @override
   String id() => _id;
 
   @override
-  Future<PublicKey> getPeerId() async => FakePublicKey();
+  PublicKey getPeerId() => FakePublicKey();
 
   @override
   bool idEq({required List<int> id}) => false;
+
+  @override
+  String? directInvitation() => _directInvitation;
+
+  @override
+  bool isDirect() => _isDirect;
 
   @override
   String nickname() => _contactNickname;
@@ -32,6 +46,19 @@ class FakeContact implements Contact {
 
   @override
   Contact pubClone() => this;
+
+  @override
+  void setDirect({required bool isDirect}) {
+    _isDirect = isDirect;
+  }
+
+  @override
+  void setDirectInvitation({String? invitation}) {
+    if (invitation != null && !invitation.startsWith('tp1:')) {
+      throw const DartError(message: 'invalid direct invitation');
+    }
+    _directInvitation = invitation;
+  }
 
   @override
   void setNickname({required String nickname}) {}

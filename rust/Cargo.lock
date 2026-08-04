@@ -4381,6 +4381,7 @@ version = "2.8.2"
 dependencies = [
  "async-trait",
  "atomic_float",
+ "base64",
  "bytes",
  "cfg-if",
  "chrono",
@@ -4399,6 +4400,7 @@ dependencies = [
  "ring",
  "rustls",
  "serde",
+ "serde_json",
  "speedy",
  "telepathy-audio",
  "tokio",

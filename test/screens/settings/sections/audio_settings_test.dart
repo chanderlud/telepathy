@@ -340,6 +340,9 @@ class _FakeTelepathy implements Telepathy {
   @override
   Future<void> audioTest() => _audioTestCompleter.future;
 
+  @override
+  Future<String?> nodeAddr() async => null;
+
   void completeAudioTestError() {
     _audioTestCompleter.completeError(
       const DartError(message: 'microphone unavailable'),

@@ -77,6 +77,8 @@ System tests must be run manually by the developer in WSL. Prompt them when rele
 
 ## Flutter Rust Bridge
 
+FRB callback futures are NOT cancellation safe and must NOT be used as select branches.
+
 After changing public `telepathy-core` members, run exactly:
 
 ```sh
