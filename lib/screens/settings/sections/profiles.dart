@@ -148,7 +148,7 @@ class ProfileSettingsState extends State<ProfileSettings> {
                           text: (profilesController.activeProfile == profile.id)
                               ? 'Active'
                               : 'Set Active',
-                          width: 65,
+                          width: 68,
                           height: 25,
                           disabled: stateController.blockAudioChanges ||
                               profilesController.isIdentitySwitchPending ||

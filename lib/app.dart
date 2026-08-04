@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart' hide Overlay;
 import 'package:provider/provider.dart';
 import 'package:telepathy/core/theme/app_theme.dart';
@@ -6,6 +5,7 @@ import 'package:telepathy/controllers/index.dart';
 import 'package:telepathy/screens/home/home_page.dart';
 
 import 'package:telepathy/core/rust/flutter.dart';
+import 'package:telepathy/core/utils/io_shim.dart';
 import 'package:window_manager/window_manager.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
@@ -24,19 +24,21 @@ class _TelepathyAppState extends State<TelepathyApp> with WindowListener {
   @override
   void initState() {
     super.initState();
-    windowManager.addListener(this);
-    _initWindow();
+    if (isDesktopPlatform) {
+      windowManager.addListener(this);
+      _initWindow();
+    }
   }
 
   Future<void> _initWindow() async {
-    if (!kIsWeb) {
-      await windowManager.setPreventClose(true);
-    }
+    await windowManager.setPreventClose(true);
   }
 
   @override
   void dispose() {
-    windowManager.removeListener(this);
+    if (isDesktopPlatform) {
+      windowManager.removeListener(this);
+    }
     super.dispose();
   }
 
