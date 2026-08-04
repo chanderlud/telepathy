@@ -64,7 +64,7 @@ use uuid::Uuid;
 #[cfg(target_family = "wasm")]
 use wasmtimer::std::Instant;
 #[cfg(target_family = "wasm")]
-use wasmtimer::tokio::{Interval, interval, sleep_until, timeout};
+use wasmtimer::tokio::{Interval, interval, sleep, sleep_until, timeout};
 
 const MANAGER_RETRY_BASE_MS: u64 = 500;
 const MANAGER_RETRY_MAX_MS: u64 = 30_000;
@@ -1814,7 +1814,7 @@ where
                 }
                 _ = async {
                     match room_goodbye_grace_deadline {
-                        Some(deadline) => tokio::time::sleep_until(deadline).await,
+                        Some(deadline) => sleep_until(deadline).await,
                         None => std::future::pending::<()>().await,
                     }
                 } => {
