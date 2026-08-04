@@ -56,7 +56,7 @@ use tokio::sync::mpsc::{
 };
 use tokio::sync::{Notify, RwLock, oneshot};
 #[cfg(not(target_family = "wasm"))]
-use tokio::time::{Instant, Interval, interval, sleep_until, timeout};
+use tokio::time::{Instant, Interval, interval, sleep, sleep_until, timeout};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, Span, debug, error, field, info, instrument, warn};
@@ -990,7 +990,7 @@ where
                 }
             }
         }
-        let still_current = states.get(&peer).map(|s| s.id == state.id).unwrap_or(false);
+        let still_current = states.get(&peer).is_some_and(|s| s.id == state.id);
         let deferred_pending_call_ended = if still_current && candidate_aborted_with_terminal {
             let snapshot = self.core_state.call_slot.snapshot()?;
             if snapshot.state == CallSlotState::PendingOutgoing
@@ -1355,10 +1355,6 @@ where
                     HandshakeDispatch::SessionStopped => Ok(HelloResponse::SessionStopped),
                 }
             }
-            ProtocolMessage::Goodbye { reason } if is_in_room => {
-                info!(event = "room_peer_goodbye_during_negotiation", ?reason);
-                Ok(HelloResponse::EndedSilently)
-            }
             ProtocolMessage::Goodbye { reason } => {
                 // A session-stopped goodbye means the peer's session was torn down
                 // mid-negotiation; in a dial glare its replacement session is already
@@ -1551,6 +1547,7 @@ where
         let mut prompt_guard = accept_handle.map(|handle| {
             AcceptPromptGuard::new(
                 self.pending_accept_transfers.clone(),
+                self.core_state.call_slot.clone(),
                 Arc::clone(io.state),
                 peer,
                 prompt_generation,
@@ -1795,6 +1792,13 @@ where
         )
         .await?;
 
+        // Set when a Goodbye arrives mid-negotiation: a room teardown goodbye from the
+        // previous generation can cross with a fresh join (end_call followed by an
+        // immediate rejoin), so goodbyes no longer terminate the negotiation outright.
+        // The peer's affirmative response (HelloAck/Hello) gets until this deadline to
+        // arrive; only an elapsed deadline ends the negotiation silently.
+        let mut room_goodbye_grace_deadline: Option<Instant> = None;
+
         loop {
             select! {
                 _ = io.state.stop_session.cancelled() => {
@@ -1807,6 +1811,25 @@ where
                     )
                     .await?;
                     return Ok(OutgoingNegotiationOutcome::SessionStopped);
+                }
+                _ = async {
+                    match room_goodbye_grace_deadline {
+                        Some(deadline) => tokio::time::sleep_until(deadline).await,
+                        None => std::future::pending::<()>().await,
+                    }
+                } => {
+                    // No affirmative response followed the goodbye(s): the peer is
+                    // genuinely absent from this room, so end the leg silently exactly
+                    // as an immediate goodbye did before.
+                    info!(event = "room_goodbye_grace_elapsed", peer.id = %peer);
+                    release_pending(
+                        &self.session_states,
+                        peer,
+                        io.state.id,
+                        &mut pending_slot,
+                    )
+                    .await?;
+                    return Ok(OutgoingNegotiationOutcome::CallEnded);
                 }
                 _ = io.state.end_call.notified() => {
                     info!(event = "end_call_notified_waiting_hello_ack");
@@ -1862,6 +1885,23 @@ where
                             return Err(error);
                         }
                         Ok(Ok(message)) => {
+                            // Intercept room goodbyes before the handler: one may be a stale
+                            // teardown goodbye from the previous room generation, so the
+                            // negotiation waits out the grace deadline for an affirmative
+                            // response instead of ending on the first goodbye.
+                            if is_in_room
+                                && matches!(message, ProtocolMessage::Goodbye { .. })
+                            {
+                                if room_goodbye_grace_deadline.is_none() {
+                                    info!(event = "room_goodbye_during_negotiation_grace", peer.id = %peer);
+                                    room_goodbye_grace_deadline = Some(
+                                        Instant::now() + ROOM_GOODBYE_NEGOTIATION_GRACE,
+                                    );
+                                } else {
+                                    info!(event = "room_goodbye_during_grace_window", peer.id = %peer);
+                                }
+                                continue;
+                            }
                             match self
                                 .handle_outgoing_hello_response(
                                     io,
@@ -3806,6 +3846,15 @@ struct DirectAttempt {
 const PENDING_OUTGOING_REPLACEMENT_GRACE: Duration = Duration::from_millis(500);
 const PENDING_OUTGOING_REPLACEMENT_POLL: Duration = Duration::from_millis(10);
 
+/// How long an outgoing room negotiation waits for an affirmative response after a
+/// goodbye arrives mid-negotiation; covers teardown goodbyes from a previous room
+/// generation crossing with an immediate rejoin.
+const ROOM_GOODBYE_NEGOTIATION_GRACE: Duration = Duration::from_millis(500);
+
+/// How long a parked accept prompt waits for adoption before expiring; matches the
+/// caller's own offer window, after which no re-driven Hello can legitimately arrive.
+const PARKED_ACCEPT_TRANSFER_TIMEOUT: Duration = HELLO_TIMEOUT;
+
 /// Outcome of waiting for a pending outgoing call's replacement to materialize.
 enum PendingOutgoingWait {
     /// a replacement session installed for the peer
@@ -3827,6 +3876,7 @@ struct IncomingCandidateLease {
 /// down the session that owned the negotiation. The platform prompt stays open; the
 /// replacement session's re-driven incoming negotiation adopts the handle.
 struct PendingAcceptTransfer {
+    id: Uuid,
     generation: Option<CallSlotSnapshot>,
     handle: JoinHandle<bool>,
     cancel: Arc<Notify>,
@@ -3844,6 +3894,7 @@ struct PendingAcceptTransferRegistry {
 /// drop a no-op so a stale answer is never parked.
 struct AcceptPromptGuard {
     registry: PendingAcceptTransferRegistry,
+    call_slot: CallSlot,
     state: Arc<SessionState>,
     peer: PublicKey,
     generation: Option<CallSlotSnapshot>,
@@ -3854,6 +3905,7 @@ struct AcceptPromptGuard {
 impl AcceptPromptGuard {
     fn new(
         registry: PendingAcceptTransferRegistry,
+        call_slot: CallSlot,
         state: Arc<SessionState>,
         peer: PublicKey,
         generation: Option<CallSlotSnapshot>,
@@ -3862,6 +3914,7 @@ impl AcceptPromptGuard {
     ) -> Self {
         Self {
             registry,
+            call_slot,
             state,
             peer,
             generation,
@@ -3889,7 +3942,7 @@ impl Drop for AcceptPromptGuard {
         };
         if self.state.was_replaced_by_outbound() {
             self.registry
-                .park(self.peer, self.generation, handle, cancel);
+                .park(self.peer, self.generation, handle, cancel, &self.call_slot);
         } else {
             cancel.notify_one();
         }
@@ -3903,18 +3956,47 @@ impl PendingAcceptTransferRegistry {
         generation: Option<CallSlotSnapshot>,
         handle: JoinHandle<bool>,
         cancel: Arc<Notify>,
+        call_slot: &CallSlot,
     ) {
-        let mut transfers = self.inner.lock().unwrap();
-        if let Some(previous) = transfers.insert(
+        let id = Uuid::new_v4();
+        let previous = self.inner.lock().unwrap().insert(
             peer,
             PendingAcceptTransfer {
+                id,
                 generation,
                 handle,
                 cancel,
             },
-        ) {
+        );
+        if let Some(previous) = previous {
             previous.cancel.notify_one();
         }
+        // If no replacement session ever adopts the parked prompt (the caller hung up,
+        // crashed, or its re-drive never arrives), the prompt and its retained pending
+        // generation would leak: the prompt would stay open and the slot held forever.
+        // Expire the transfer once the caller's own offer window has elapsed.
+        let registry = self.clone();
+        let call_slot = call_slot.clone();
+        spawn_task(async move {
+            sleep(PARKED_ACCEPT_TRANSFER_TIMEOUT).await;
+            let expired = {
+                let mut transfers = registry.inner.lock().unwrap();
+                transfers
+                    .get(&peer)
+                    .is_some_and(|transfer| transfer.id == id)
+                    .then(|| transfers.remove(&peer))
+                    .flatten()
+            };
+            if let Some(expired) = expired {
+                info!(event = "parked_accept_transfer_expired", peer.id = %peer);
+                if let Some(generation) = expired.generation
+                    && let Err(error) = call_slot.release_if_match(generation)
+                {
+                    warn!(event = "parked_accept_transfer_release_failed", ?error);
+                }
+                expired.cancel.notify_one();
+            }
+        });
     }
 
     /// Takes the parked prompt for `peer` when the current slot still owns the same
@@ -4503,16 +4585,25 @@ enum SessionRelation {
     Replaced,
 }
 
+fn relation_in(
+    states: &HashMap<PublicKey, Arc<SessionState>>,
+    peer: PublicKey,
+    session_id: Uuid,
+) -> SessionRelation {
+    match states.get(&peer) {
+        Some(session) if session.id == session_id => SessionRelation::Current,
+        Some(_) => SessionRelation::Replaced,
+        None => SessionRelation::Absent,
+    }
+}
+
 async fn session_relation(
     session_states: &Arc<RwLock<HashMap<PublicKey, Arc<SessionState>>>>,
     peer: PublicKey,
     session_id: Uuid,
 ) -> SessionRelation {
-    match session_states.read().await.get(&peer) {
-        Some(session) if session.id == session_id => SessionRelation::Current,
-        Some(_) => SessionRelation::Replaced,
-        None => SessionRelation::Absent,
-    }
+    let states = session_states.read().await;
+    relation_in(&states, peer, session_id)
 }
 
 async fn is_session_still_current(
@@ -4539,12 +4630,7 @@ async fn release_pending(
     // lock and retains matched generations, so dropping this guard first would let stale cleanup
     // release ownership after replacement became current.
     let states = session_states.read().await;
-    let relation = match states.get(&peer) {
-        Some(session) if session.id == session_id => SessionRelation::Current,
-        Some(_) => SessionRelation::Replaced,
-        None => SessionRelation::Absent,
-    };
-    let release = match relation {
+    let release = match relation_in(&states, peer, session_id) {
         SessionRelation::Current => true,
         SessionRelation::Absent => slot.release_if_session_absent,
         SessionRelation::Replaced => false,
@@ -5131,5 +5217,147 @@ mod tests {
 
         let predecessor = replacement.take_deferred_room_predecessor().await.unwrap();
         assert!(!predecessor.can_restore_room_predecessor());
+    }
+
+    fn parked_prompt() -> (JoinHandle<bool>, Arc<Notify>) {
+        let cancel = Arc::new(Notify::new());
+        let waiter = Arc::clone(&cancel);
+        let handle = tokio::spawn(async move {
+            waiter.notified().await;
+            false
+        });
+        (handle, cancel)
+    }
+
+    #[tokio::test]
+    async fn park_replacing_previous_cancels_previous_prompt() {
+        let registry = PendingAcceptTransferRegistry::default();
+        let call_slot = CallSlot::default();
+        let peer = SecretKey::generate().public();
+        let (first_handle, first_cancel) = parked_prompt();
+        let (second_handle, _second_cancel) = parked_prompt();
+
+        registry.park(peer, None, first_handle, first_cancel.clone(), &call_slot);
+        registry.park(
+            peer,
+            None,
+            second_handle,
+            Arc::new(Notify::new()),
+            &call_slot,
+        );
+
+        timeout(Duration::from_secs(1), first_cancel.notified())
+            .await
+            .expect("a newer park must cancel the displaced prompt");
+    }
+
+    #[tokio::test]
+    async fn take_valid_adopts_matching_pending_incoming_generation() {
+        let registry = PendingAcceptTransferRegistry::default();
+        let call_slot = CallSlot::default();
+        let peer = SecretKey::generate().public();
+        call_slot
+            .try_acquire_or_match(CallSlotState::PendingIncoming, peer)
+            .unwrap();
+        let owner = call_slot.snapshot().unwrap();
+        let (handle, _cancel) = parked_prompt();
+
+        registry.park(
+            peer,
+            Some(owner),
+            handle,
+            Arc::new(Notify::new()),
+            &call_slot,
+        );
+
+        let adopted = registry.take_valid(peer, call_slot.snapshot().ok());
+        assert!(
+            adopted.is_some(),
+            "a matching pending incoming generation must adopt the parked prompt"
+        );
+    }
+
+    #[tokio::test]
+    async fn take_valid_cancels_stale_generation_after_slot_reacquire() {
+        let registry = PendingAcceptTransferRegistry::default();
+        let call_slot = CallSlot::default();
+        let peer = SecretKey::generate().public();
+        call_slot
+            .try_acquire_or_match(CallSlotState::PendingIncoming, peer)
+            .unwrap();
+        let stale = call_slot.snapshot().unwrap();
+        let (handle, cancel) = parked_prompt();
+        registry.park(peer, Some(stale), handle, cancel.clone(), &call_slot);
+
+        call_slot.release_if_match(stale).unwrap();
+        call_slot
+            .try_acquire_or_match(CallSlotState::PendingIncoming, peer)
+            .unwrap();
+
+        let adopted = registry.take_valid(peer, call_slot.snapshot().ok());
+        assert!(
+            adopted.is_none(),
+            "a re-acquired slot owns a different generation; the stale prompt must not transfer"
+        );
+        timeout(Duration::from_secs(1), cancel.notified())
+            .await
+            .expect("the stale parked prompt must be cancelled");
+    }
+
+    #[tokio::test]
+    async fn take_valid_cancels_parked_prompt_when_slot_is_idle() {
+        let registry = PendingAcceptTransferRegistry::default();
+        let call_slot = CallSlot::default();
+        let peer = SecretKey::generate().public();
+        call_slot
+            .try_acquire_or_match(CallSlotState::PendingIncoming, peer)
+            .unwrap();
+        let released = call_slot.snapshot().unwrap();
+        let (handle, cancel) = parked_prompt();
+        registry.park(peer, Some(released), handle, cancel.clone(), &call_slot);
+
+        call_slot.release_if_match(released).unwrap();
+
+        let adopted = registry.take_valid(peer, call_slot.snapshot().ok());
+        assert!(
+            adopted.is_none(),
+            "an idle slot cannot back the parked prompt's generation"
+        );
+        timeout(Duration::from_secs(1), cancel.notified())
+            .await
+            .expect("the orphaned parked prompt must be cancelled");
+    }
+
+    #[tokio::test]
+    async fn take_valid_none_generation_requires_pending_slot_for_peer() {
+        let registry = PendingAcceptTransferRegistry::default();
+        let call_slot = CallSlot::default();
+        let peer = SecretKey::generate().public();
+        let other = SecretKey::generate().public();
+        let (handle, cancel) = parked_prompt();
+        registry.park(peer, None, handle, cancel, &call_slot);
+
+        call_slot
+            .try_acquire_or_match(CallSlotState::PendingOutgoing, other)
+            .unwrap();
+        let adopted = registry.take_valid(peer, call_slot.snapshot().ok());
+        assert!(
+            adopted.is_none(),
+            "a slot pending for a different peer must not adopt the parked prompt"
+        );
+
+        let (handle, _cancel) = parked_prompt();
+        registry.park(peer, None, handle, Arc::new(Notify::new()), &call_slot);
+        call_slot
+            .release_if_match(call_slot.snapshot().unwrap())
+            .unwrap();
+        call_slot
+            .try_acquire_or_match(CallSlotState::PendingOutgoing, peer)
+            .unwrap();
+        let adopted = registry.take_valid(peer, call_slot.snapshot().ok());
+        assert!(
+            adopted.is_some(),
+            "a simultaneous-dial pending slot for the peer must adopt the parked prompt"
+        );
     }
 }

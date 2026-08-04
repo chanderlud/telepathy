@@ -936,10 +936,78 @@ impl PendingAcceptProbe {
     }
 }
 
+static LOG_CAPTURE: std::sync::OnceLock<Arc<Mutex<Vec<String>>>> = std::sync::OnceLock::new();
+
+fn log_capture() -> &'static Arc<Mutex<Vec<String>>> {
+    LOG_CAPTURE.get_or_init(|| Arc::new(Mutex::new(Vec::new())))
+}
+
+/// Tee writer: forwards formatted log lines to stdout and captures them for
+/// assertions on emitted events (e.g. race paths that produce no callback).
+struct LogTeeWriter;
+
+impl std::io::Write for LogTeeWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let text = String::from_utf8_lossy(buf);
+        {
+            let mut capture = log_capture().lock().unwrap();
+            for line in text.lines() {
+                capture.push(line.to_string());
+            }
+        }
+        std::io::stdout().write_all(buf)?;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        std::io::stdout().flush()
+    }
+}
+
+struct LogTeeMakeWriter;
+
+impl tracing_subscriber::fmt::MakeWriter<'_> for LogTeeMakeWriter {
+    type Writer = LogTeeWriter;
+
+    fn make_writer(&self) -> Self::Writer {
+        LogTeeWriter
+    }
+}
+
+pub(super) fn log_lines_containing(markers: &[&str]) -> Vec<String> {
+    log_capture()
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|line| markers.iter().all(|marker| line.contains(marker)))
+        .cloned()
+        .collect()
+}
+
+pub(super) async fn wait_for_log_line(markers: &[&str], label: &str) {
+    wait_for_log_line_count(markers, 1, label).await;
+}
+
+pub(super) async fn wait_for_log_line_count(markers: &[&str], minimum: usize, label: &str) {
+    let mut poll = interval(Duration::from_millis(25));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        poll.tick().await;
+        if log_lines_containing(markers).len() >= minimum {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for {minimum} log lines containing {markers:?} ({label})"
+        );
+    }
+}
+
 pub(super) fn init_test_tracing() {
     TEST_TRACING_INIT.call_once(|| {
         let _ = tracing_subscriber::fmt()
-            .with_test_writer()
+            .with_writer(LogTeeMakeWriter)
+            .with_ansi(false)
             .with_env_filter(
                 EnvFilter::try_from_default_env()
                     .unwrap_or_else(|_| EnvFilter::new("telepathy_core=info")),
