@@ -166,13 +166,14 @@ class _MemberSection extends StatelessWidget {
   }
 }
 
-/// A pill showing one room member: a status dot plus their nickname.
+/// A pill showing one room member: their nickname, with an optional status
+/// dot. The dot is only shown where online state is authoritative (the
+/// active room panel); callers working from session guesses omit it.
 class MemberStatusChip extends StatelessWidget {
   final String name;
-  final Color dotColor;
+  final Color? dotColor;
 
-  const MemberStatusChip(
-      {super.key, required this.name, required this.dotColor});
+  const MemberStatusChip({super.key, required this.name, this.dotColor});
 
   @override
   Widget build(BuildContext context) {
@@ -185,12 +186,15 @@ class MemberStatusChip extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Container(
-            width: 8,
-            height: 8,
-            decoration: BoxDecoration(color: dotColor, shape: BoxShape.circle),
-          ),
-          const SizedBox(width: 7),
+          if (dotColor != null) ...[
+            Container(
+              width: 8,
+              height: 8,
+              decoration:
+                  BoxDecoration(color: dotColor, shape: BoxShape.circle),
+            ),
+            const SizedBox(width: 7),
+          ],
           Flexible(
             child: Text(
               name,

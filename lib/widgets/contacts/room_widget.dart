@@ -7,7 +7,6 @@ import 'package:telepathy/core/utils/index.dart';
 import 'package:telepathy/models/index.dart';
 import 'package:telepathy/core/rust/player.dart';
 import 'package:telepathy/core/rust/flutter.dart';
-import 'package:telepathy/core/rust/types.dart';
 import 'package:telepathy/widgets/call/room_details_widget.dart';
 import 'package:telepathy/widgets/common/index.dart';
 
@@ -262,12 +261,11 @@ class RoomWidgetState extends State<RoomWidget> {
               runSpacing: 8,
               children: [
                 for (final String peerId in widget.room.peerIds)
+                  // No status dots here: online state from sessions is a
+                  // guess for anonymous members, so the edit dialog shows
+                  // names only. The active room panel owns status display.
                   MemberStatusChip(
                     name: _memberName(profilesController, peerId),
-                    dotColor: peerId == profilesController.peerId ||
-                            _isOnline(stateController, peerId)
-                        ? onlineDotColor
-                        : offlineDotColor,
                   ),
               ],
             ),
@@ -305,13 +303,6 @@ class RoomWidgetState extends State<RoomWidget> {
   String _memberName(ProfilesController profilesController, String peerId) {
     if (peerId == profilesController.peerId) return 'You';
     return profilesController.contacts[peerId]?.nickname() ?? 'Anonymous';
-  }
-
-  bool _isOnline(StateController stateController, String peerId) {
-    if (stateController.isActiveRoom(widget.room)) {
-      return widget.room.online.contains(peerId);
-    }
-    return stateController.sessions[peerId] is SessionStatus_Connected;
   }
 
   Future<bool> _confirmDelete(BuildContext context) async {
