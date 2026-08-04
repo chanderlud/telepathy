@@ -58,16 +58,6 @@ class RoomWidgetState extends State<RoomWidget> {
     final active = stateController.isActiveRoom(widget.room);
     final pending = stateController.pendingRoom?.id == widget.room.id;
 
-    // Members (excluding the local user, who is always "online" from their
-    // own perspective) whose session is currently connected; drives the
-    // "N online" badge so rooms surface their reachability at a glance.
-    final List<String> otherPeers = widget.room.peerIds
-        .where((p) => p != profilesController.peerId)
-        .toList();
-    final int onlineCount = otherPeers
-        .where((p) => stateController.sessions[p] is SessionStatus_Connected)
-        .length;
-
     return InkWell(
       mouseCursor: SystemMouseCursors.click,
       onHover: (hover) {
@@ -106,22 +96,6 @@ class RoomWidgetState extends State<RoomWidget> {
                   overflow: TextOverflow.ellipsis,
                   maxLines: 1),
             ),
-            if (!active && !pending) ...[
-              Container(
-                width: 7,
-                height: 7,
-                decoration: BoxDecoration(
-                  color: onlineCount > 0 ? onlineDotColor : offlineDotColor,
-                  shape: BoxShape.circle,
-                ),
-              ),
-              const SizedBox(width: 5),
-              Text(
-                '$onlineCount/${otherPeers.length}',
-                style: TextStyle(fontSize: 12, color: Colors.grey.shade400),
-              ),
-              const SizedBox(width: 6),
-            ],
             IconButton(
               visualDensity: VisualDensity.comfortable,
               icon: SvgPicture.asset(
@@ -280,7 +254,7 @@ class RoomWidgetState extends State<RoomWidget> {
                 controller: _nicknameInput,
                 labelText: 'Nickname'),
             const SizedBox(height: 16),
-            Text('Members — ${widget.room.peerIds.length}',
+            Text('${widget.room.peerIds.length} members',
                 style: TextStyle(fontSize: 13, color: Colors.grey.shade400)),
             const SizedBox(height: 8),
             Wrap(

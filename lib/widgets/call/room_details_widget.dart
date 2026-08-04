@@ -147,7 +147,8 @@ class _MemberSection extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           Text(
-            '$label — ${names.length}',
+            // Count-first phrasing matches the header's "N/M online" counter.
+            '${names.length} ${label.toLowerCase()}',
             style: TextStyle(fontSize: 12, color: Colors.grey.shade400),
           ),
           const SizedBox(height: 6),

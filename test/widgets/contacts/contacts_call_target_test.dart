@@ -413,8 +413,8 @@ Future<void> _flushAsync(WidgetTester tester) async {
 
 /// Seeds a minimal profile and returns an initialized controller.
 ///
-/// `RoomWidget` reads `profilesController.peerId` while building (the online
-/// badge excludes the local user), which throws unless `init()` has run.
+/// `RoomWidget` reads `profilesController` while building, which throws
+/// unless `init()` has run.
 /// Must be called after the mock storage/preferred platforms are installed.
 Future<ProfilesController> _seededProfilesController() async {
   const String profileId = 'call-target-test-profile';

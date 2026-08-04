@@ -200,8 +200,8 @@ void main() {
 
     expect(find.text('Weekend Gaming'), findsOneWidget);
     expect(find.text('3/4 online'), findsOneWidget);
-    expect(find.text('Online — 3'), findsOneWidget);
-    expect(find.text('Offline — 1'), findsOneWidget);
+    expect(find.text('3 online'), findsOneWidget);
+    expect(find.text('1 offline'), findsOneWidget);
     expect(find.text('You'), findsOneWidget);
     expect(find.text('Ada'), findsOneWidget);
     expect(find.text('Grace'), findsOneWidget);

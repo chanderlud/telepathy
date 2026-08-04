@@ -5,7 +5,6 @@ import 'package:telepathy/controllers/index.dart';
 import 'package:telepathy/core/utils/index.dart';
 import 'package:telepathy/core/rust/player.dart';
 import 'package:telepathy/core/rust/flutter.dart';
-import 'package:telepathy/widgets/call/room_details_widget.dart';
 import 'package:telepathy/widgets/common/index.dart';
 import 'package:telepathy/core/rust/types.dart';
 
@@ -266,19 +265,6 @@ class ContactWidgetState extends State<ContactWidget> {
                   mainAxisAlignment: MainAxisAlignment.end,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Container(
-                      width: 7,
-                      height: 7,
-                      decoration: BoxDecoration(
-                        // direct connections are lower latency than relayed
-                        // ones, so they get the "good" color
-                        color: connectedStatus.relayed
-                            ? const Color(0xFFf59e0b)
-                            : onlineDotColor,
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                    const SizedBox(width: 6),
                     Text(connectedStatus.relayed ? 'relayed' : 'direct'),
                     const SizedBox(width: 5),
                     Flexible(
