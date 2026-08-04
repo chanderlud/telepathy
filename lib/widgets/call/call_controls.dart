@@ -62,90 +62,98 @@ class _CallControlsState extends State<CallControls> {
             child: Center(child: body),
           );
         }),
-        Padding(
-          padding:
-              EdgeInsets.only(left: 25, right: 25, top: isCompact ? 4 : 20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Selector<AudioSettingsController, double>(
-                selector: (context, c) => c.outputVolume,
-                builder: (context, outputVolume, child) {
-                  final audioSettingsController =
-                      context.read<AudioSettingsController>();
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text('Output Volume',
-                          style: TextStyle(fontSize: 15)),
-                      Slider(
-                          value: outputVolume,
-                          onChanged: (value) async {
-                            await audioSettingsController
-                                .updateOutputVolume(value);
-                            telepathy.setOutputVolume(decibel: value);
-                          },
-                          min: -15,
-                          max: 15,
-                          label: '${outputVolume.toStringAsFixed(2)} db'),
-                      SizedBox(height: isCompact ? 0 : 2),
-                    ],
-                  );
-                },
+        // The sliders live in a scrollable region so the bottom control bar
+        // is never pushed out of view on short layouts (issue #58, case 2).
+        // When everything fits, the scroll view simply fills the space the
+        // old Spacer absorbed.
+        Expanded(
+          child: SingleChildScrollView(
+            child: Padding(
+              padding:
+                  EdgeInsets.only(left: 25, right: 25, top: isCompact ? 4 : 20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Selector<AudioSettingsController, double>(
+                    selector: (context, c) => c.outputVolume,
+                    builder: (context, outputVolume, child) {
+                      final audioSettingsController =
+                          context.read<AudioSettingsController>();
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('Output Volume',
+                              style: TextStyle(fontSize: 15)),
+                          Slider(
+                              value: outputVolume,
+                              onChanged: (value) async {
+                                await audioSettingsController
+                                    .updateOutputVolume(value);
+                                telepathy.setOutputVolume(decibel: value);
+                              },
+                              min: -15,
+                              max: 15,
+                              label: '${outputVolume.toStringAsFixed(2)} db'),
+                          SizedBox(height: isCompact ? 0 : 2),
+                        ],
+                      );
+                    },
+                  ),
+                  Selector<AudioSettingsController, double>(
+                    selector: (context, c) => c.inputVolume,
+                    builder: (context, inputVolume, child) {
+                      final audioSettingsController =
+                          context.read<AudioSettingsController>();
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('Input Volume',
+                              style: TextStyle(fontSize: 15)),
+                          Slider(
+                              value: inputVolume,
+                              onChanged: (value) async {
+                                await audioSettingsController
+                                    .updateInputVolume(value);
+                                telepathy.setInputVolume(decibel: value);
+                              },
+                              min: -15,
+                              max: 15,
+                              label: '${inputVolume.toStringAsFixed(2)} db'),
+                          SizedBox(height: isCompact ? 0 : 2),
+                        ],
+                      );
+                    },
+                  ),
+                  Selector<AudioSettingsController, double>(
+                    selector: (context, c) => c.inputSensitivity,
+                    builder: (context, inputSensitivity, child) {
+                      final audioSettingsController =
+                          context.read<AudioSettingsController>();
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('Input Sensitivity',
+                              style: TextStyle(fontSize: 15)),
+                          Slider(
+                              value: inputSensitivity,
+                              onChanged: (value) async {
+                                await audioSettingsController
+                                    .updateInputSensitivity(value);
+                                telepathy.setRmsThreshold(decimal: value);
+                              },
+                              min: -16,
+                              max: 50,
+                              label:
+                                  '${inputSensitivity.toStringAsFixed(2)} db'),
+                        ],
+                      );
+                    },
+                  ),
+                ],
               ),
-              Selector<AudioSettingsController, double>(
-                selector: (context, c) => c.inputVolume,
-                builder: (context, inputVolume, child) {
-                  final audioSettingsController =
-                      context.read<AudioSettingsController>();
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text('Input Volume',
-                          style: TextStyle(fontSize: 15)),
-                      Slider(
-                          value: inputVolume,
-                          onChanged: (value) async {
-                            await audioSettingsController
-                                .updateInputVolume(value);
-                            telepathy.setInputVolume(decibel: value);
-                          },
-                          min: -15,
-                          max: 15,
-                          label: '${inputVolume.toStringAsFixed(2)} db'),
-                      SizedBox(height: isCompact ? 0 : 2),
-                    ],
-                  );
-                },
-              ),
-              Selector<AudioSettingsController, double>(
-                selector: (context, c) => c.inputSensitivity,
-                builder: (context, inputSensitivity, child) {
-                  final audioSettingsController =
-                      context.read<AudioSettingsController>();
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text('Input Sensitivity',
-                          style: TextStyle(fontSize: 15)),
-                      Slider(
-                          value: inputSensitivity,
-                          onChanged: (value) async {
-                            await audioSettingsController
-                                .updateInputSensitivity(value);
-                            telepathy.setRmsThreshold(decimal: value);
-                          },
-                          min: -16,
-                          max: 50,
-                          label: '${inputSensitivity.toStringAsFixed(2)} db'),
-                    ],
-                  );
-                },
-              ),
-            ],
+            ),
           ),
         ),
-        const Spacer(),
         Container(
             decoration: BoxDecoration(
               color: Theme.of(context).colorScheme.secondaryContainer,

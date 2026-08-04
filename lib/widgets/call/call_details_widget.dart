@@ -10,112 +10,129 @@ class CallDetailsWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 15.0, horizontal: 20.0),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.secondaryContainer,
-        borderRadius: BorderRadius.circular(10.0),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Consumer<StateController>(builder:
-              (BuildContext context, StateController stateController, _) {
-            return Text(
-                '${stateController.activeRoom != null ? "Room" : "Call"} ${stateController.status.toLowerCase()}',
-                style: const TextStyle(fontSize: 20));
-          }),
-          const SizedBox(height: 8),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                RepaintBoundary(
-                  child: Selector<StatisticsController, int>(
-                    selector: (context, c) => c.lossWindowVersion,
-                    builder: (context, version, child) {
-                      final controller = context.read<StatisticsController>();
-                      return GradientMiniLineChart(
-                        values: controller.lossWindow,
-                        version: version,
-                        maxValue: controller.lossWindowMax,
-                        strokeWidth: 2,
-                      );
-                    },
-                  ),
-                ),
-                const SizedBox(height: 6),
-                const Text('Input level'),
-                const SizedBox(height: 7),
-                RepaintBoundary(
-                  child: Selector<StatisticsController, double>(
-                    selector: (context, c) => c.inputLevel,
-                    builder: (context, inputLevel, child) {
-                      return AudioLevel(level: inputLevel, numRectangles: 20);
-                    },
-                  ),
-                ),
-                const SizedBox(height: 9),
-                const Text('Output level'),
-                const SizedBox(height: 7),
-                RepaintBoundary(
-                  child: Selector<StatisticsController, double>(
-                    selector: (context, c) => c.outputLevel,
-                    builder: (context, outputLevel, child) {
-                      return AudioLevel(level: outputLevel, numRectangles: 20);
-                    },
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Selector<StatisticsController, int>(
-                      selector: (context, c) => c.latency,
-                      builder: (context, latency, child) {
-                        Color color = getColor(latency / 200);
-                        return Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            SvgPicture.asset('assets/icons/Latency.svg',
-                                colorFilter:
-                                    ColorFilter.mode(color, BlendMode.srcIn),
-                                semanticsLabel: 'Latency icon'),
-                            const SizedBox(width: 7),
-                            Text('$latency ms',
-                                style: const TextStyle(height: 0)),
-                          ],
-                        );
-                      },
+    return LayoutBuilder(
+        builder: (BuildContext context, BoxConstraints constraints) {
+      // The loss chart is the only dispensable element; drop it when the
+      // vertical space cannot fit it plus the levels and stats row. Without
+      // this the fixed-size children overflow below the card on short
+      // layouts (issue #58, case 4).
+      final bool showChart = constraints.maxHeight >= 240;
+
+      return Container(
+        padding: const EdgeInsets.symmetric(vertical: 15.0, horizontal: 20.0),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.secondaryContainer,
+          borderRadius: BorderRadius.circular(10.0),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Consumer<StateController>(builder:
+                (BuildContext context, StateController stateController, _) {
+              return Text(
+                  '${stateController.activeRoom != null ? "Room" : "Call"} ${stateController.status.toLowerCase()}',
+                  style: const TextStyle(fontSize: 20));
+            }),
+            const SizedBox(height: 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (showChart) ...[
+                    Flexible(
+                      fit: FlexFit.loose,
+                      child: RepaintBoundary(
+                        child: Selector<StatisticsController, int>(
+                          selector: (context, c) => c.lossWindowVersion,
+                          builder: (context, version, child) {
+                            final controller =
+                                context.read<StatisticsController>();
+                            return GradientMiniLineChart(
+                              values: controller.lossWindow,
+                              version: version,
+                              maxValue: controller.lossWindowMax,
+                              strokeWidth: 2,
+                            );
+                          },
+                        ),
+                      ),
                     ),
-                    const Spacer(),
-                    SvgPicture.asset('assets/icons/Upload.svg',
-                        semanticsLabel: 'Upload icon'),
-                    const SizedBox(width: 4),
-                    Selector<StatisticsController, String>(
-                      selector: (context, c) => c.upload,
-                      builder: (context, upload, child) {
-                        return Text(upload, style: const TextStyle(height: 0));
-                      },
-                    ),
-                    const Spacer(),
-                    SvgPicture.asset('assets/icons/Download.svg',
-                        semanticsLabel: 'Download icon'),
-                    const SizedBox(width: 4),
-                    Selector<StatisticsController, String>(
-                      selector: (context, c) => c.download,
-                      builder: (context, download, child) {
-                        return Text(download,
-                            style: const TextStyle(height: 0));
-                      },
-                    ),
+                    const SizedBox(height: 6),
                   ],
-                ),
-              ],
+                  const Text('Input level'),
+                  const SizedBox(height: 7),
+                  RepaintBoundary(
+                    child: Selector<StatisticsController, double>(
+                      selector: (context, c) => c.inputLevel,
+                      builder: (context, inputLevel, child) {
+                        return AudioLevel(level: inputLevel, numRectangles: 20);
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 9),
+                  const Text('Output level'),
+                  const SizedBox(height: 7),
+                  RepaintBoundary(
+                    child: Selector<StatisticsController, double>(
+                      selector: (context, c) => c.outputLevel,
+                      builder: (context, outputLevel, child) {
+                        return AudioLevel(
+                            level: outputLevel, numRectangles: 20);
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Selector<StatisticsController, int>(
+                        selector: (context, c) => c.latency,
+                        builder: (context, latency, child) {
+                          Color color = getColor(latency / 200);
+                          return Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              SvgPicture.asset('assets/icons/Latency.svg',
+                                  colorFilter:
+                                      ColorFilter.mode(color, BlendMode.srcIn),
+                                  semanticsLabel: 'Latency icon'),
+                              const SizedBox(width: 7),
+                              Text('$latency ms',
+                                  style: const TextStyle(height: 0)),
+                            ],
+                          );
+                        },
+                      ),
+                      const Spacer(),
+                      SvgPicture.asset('assets/icons/Upload.svg',
+                          semanticsLabel: 'Upload icon'),
+                      const SizedBox(width: 4),
+                      Selector<StatisticsController, String>(
+                        selector: (context, c) => c.upload,
+                        builder: (context, upload, child) {
+                          return Text(upload,
+                              style: const TextStyle(height: 0));
+                        },
+                      ),
+                      const Spacer(),
+                      SvgPicture.asset('assets/icons/Download.svg',
+                          semanticsLabel: 'Download icon'),
+                      const SizedBox(width: 4),
+                      Selector<StatisticsController, String>(
+                        selector: (context, c) => c.download,
+                        builder: (context, download, child) {
+                          return Text(download,
+                              style: const TextStyle(height: 0));
+                        },
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
-          ),
-        ],
-      ),
-    );
+          ],
+        ),
+      );
+    });
   }
 }
