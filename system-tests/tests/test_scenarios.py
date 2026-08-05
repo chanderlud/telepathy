@@ -1054,8 +1054,91 @@ async def test_call_prompt_survives_session_restart(
     profile: NetworkProfile,
 ) -> None:
     _ = topology, profile
-    await _run_scenario("call_prompt_survives_session_restart.yaml", cli_pair)
+    alice = cli_pair["alice"]
+    bob = cli_pair["bob"]
+    alice_peer_id = alice.identity_peer_id
+    bob_peer_id = bob.identity_peer_id
+    assert isinstance(alice_peer_id, str) and isinstance(bob_peer_id, str)
 
+    await _add_contact(alice, "bob", bob_peer_id)
+    await _add_contact(bob, "alice", alice_peer_id)
+    for owner, peer in ((alice, bob_peer_id), (bob, alice_peer_id)):
+        response = await owner.send({"cmd": "start_session", "args": {"contact_id": "bob" if owner is alice else "alice"}})
+        assert response.get("ok") is True, f"start_session failed: {response}"
+    await asyncio.gather(
+        alice.expect_event(
+            lambda event: event.get("type") == "session_status"
+            and isinstance(event.get("status"), dict)
+            and "Connected" in event["status"],
+            timeout=45.0,
+        ),
+        bob.expect_event(
+            lambda event: event.get("type") == "session_status"
+            and isinstance(event.get("status"), dict)
+            and "Connected" in event["status"],
+            timeout=45.0,
+        ),
+    )
+
+    response = await alice.send({"cmd": "start_call", "args": {"contact_id": "bob"}})
+    assert response.get("ok") is True, f"start_call failed: {response}"
+    original_prompt = await bob.expect_event(
+        lambda event: event.get("type") == "accept_call_prompt",
+        timeout=20.0,
+    )
+    original_request_id = original_prompt.get("request_id")
+
+    alice_identity = alice.identity
+    assert isinstance(alice_identity, Identity)
+    await alice.restart()
+    await _set_identity_on_actor(alice, alice_identity)
+    restart_manager_response = await alice.send({"cmd": "start_manager", "args": {}})
+    assert restart_manager_response.get("ok") is True, (
+        f"start_manager after restart failed: {restart_manager_response}"
+    )
+
+    # The caller's process is gone, so Bob's original prompt must be cancelled
+    # (directly or once the offer window elapses).
+    await bob.expect_event(
+        lambda event: event.get("type") == "accept_call_canceled"
+        and event.get("request_id") == original_request_id,
+        timeout=30.0,
+    )
+
+    await _add_contact(alice, "bob", bob_peer_id)
+    response = await alice.send({"cmd": "start_session", "args": {"contact_id": "bob"}})
+    assert response.get("ok") is True, f"start_session after restart failed: {response}"
+    await alice.expect_event(
+        lambda event: event.get("type") == "session_status"
+        and isinstance(event.get("status"), dict)
+        and "Connected" in event["status"],
+        timeout=45.0,
+    )
+    response = await alice.send({"cmd": "start_call", "args": {"contact_id": "bob"}})
+    assert response.get("ok") is True, f"start_call after restart failed: {response}"
+
+    # Session churn can cancel a raised prompt before the accept lands; accept
+    # the first prompt that is still open.
+    for _ in range(4):
+        prompt = await bob.expect_event(
+            lambda event: event.get("type") == "accept_call_prompt",
+            timeout=30.0,
+        )
+        accept_response = await bob.send(
+            {
+                "cmd": "accept_call",
+                "args": {"request_id": prompt.get("request_id"), "accept": True},
+            }
+        )
+        if accept_response.get("ok") is True:
+            break
+    else:
+        raise AssertionError("no accept_call succeeded across raised prompts")
+
+    await asyncio.gather(
+        alice.expect_event(lambda event: _is_call_state(event, "Connected"), timeout=20.0),
+        bob.expect_event(lambda event: _is_call_state(event, "Connected"), timeout=20.0),
+    )
 
 
 @pytest.mark.asyncio
