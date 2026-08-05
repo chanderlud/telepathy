@@ -84,6 +84,28 @@ Then `widget_inspector`, `get_runtime_errors`, `hot_reload`, and
 `flutter_driver_command` (e.g. `get_offset` by semantics label) are
 available.
 
+## Mock Mode (no Rust backend)
+
+`lib/mock_main.dart` boots the real app UI against the fake backend in
+`lib/core/testing/mock_backend.dart` — seeded contacts, rooms, session
+states, and a simulated call lifecycle (`MockTelepathy` drives
+`StateController` through the same public transitions the real callbacks
+use). No Rust build, no network, no keyring profile needed. Run it with:
+
+```sh
+TARGET=lib/mock_main.dart ./scripts/run-linux-debug.sh \
+  --dart-define=MOCK_SCENARIO=<demo|room-active|empty>
+```
+
+- `demo` (default): 5 contacts (online/connecting/offline/inactive) + 2 rooms
+- `room-active`: starts already inside a room call with peers online
+- `empty`: fresh profile, no contacts
+
+Calls and room joins succeed after a short delay; room members trickle in.
+Use this for visual iteration on contacts/rooms/call UI without two real
+instances. Text entry does not work through `xdotool` (GTK input method);
+drive text-dependent flows with widget tests or the clipboard paste paths.
+
 ## Two Instances (P2P flows)
 
 Calls/sessions need two real peers. Run a second, fully isolated instance

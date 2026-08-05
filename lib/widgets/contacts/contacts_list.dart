@@ -7,7 +7,7 @@ import 'package:telepathy/core/utils/index.dart';
 import 'package:telepathy/core/rust/flutter.dart';
 import 'package:telepathy/models/index.dart';
 import 'package:telepathy/core/rust/types.dart';
-import 'package:telepathy/widgets/contacts/contact_form.dart';
+import 'package:telepathy/widgets/contacts/add_entry_dialog.dart';
 import 'package:telepathy/widgets/contacts/contact_widget.dart';
 import 'package:telepathy/widgets/contacts/room_widget.dart';
 import 'package:telepathy/widgets/contacts/snap_scroll_physics.dart';
@@ -38,8 +38,10 @@ class ContactsList extends StatelessWidget {
     final ManagerState managerState = stateController.sessionManagerState;
     final bool isCompact = context.isCompactContacts || context.isCompactWide;
     final List<Object> items = [
-      ...contacts,
+      // Rooms lead the list: there are usually few of them, and below a
+      // long contact list they would never scroll into view.
       ...rooms,
+      ...contacts,
     ];
 
     return Container(
@@ -108,19 +110,7 @@ class ContactsList extends StatelessWidget {
                           SizedBox.square(
                             dimension: addButtonSize,
                             child: IconButton(
-                              onPressed: () {
-                                showDialog(
-                                  context: context,
-                                  builder: (BuildContext context) {
-                                    return SimpleDialog(
-                                      backgroundColor: Theme.of(context)
-                                          .colorScheme
-                                          .secondaryContainer,
-                                      children: const [ContactForm()],
-                                    );
-                                  },
-                                );
-                              },
+                              onPressed: () => showAddEntryDialog(context),
                               constraints: const BoxConstraints.tightFor(
                                 width: addButtonSize,
                                 height: addButtonSize,

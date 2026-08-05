@@ -19,6 +19,8 @@ import 'package:telepathy/core/rust/player.dart';
 import 'package:telepathy/models/index.dart';
 import 'package:telepathy/screens/home/home_page.dart';
 
+import '../../../support/fake_contact.dart';
+
 /// Shared harness for the home-layout regression suites
 /// (https://github.com/chanderlud/telepathy/issues/58).
 ///
@@ -145,6 +147,9 @@ class Harness {
       storage: storage,
       options: options,
       roomHasher: ({required List<String> peers}) => peers.join('|'),
+      contactFactory: ({required nickname, required peerId}) =>
+          FakeContact(id: peerId, contactNickname: nickname),
+      peerIdValidator: (String peerId) => peerId.trim().isNotEmpty,
     );
     await profilesController.init(const <String>[]);
 
