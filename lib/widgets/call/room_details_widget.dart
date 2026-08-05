@@ -182,6 +182,12 @@ class MemberStatusChip extends StatelessWidget {
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.tertiaryContainer,
         borderRadius: BorderRadius.circular(14),
+        // The dialog surface tint matches tertiaryContainer, so the fill
+        // alone is invisible in dialogs; the outline keeps the chip legible
+        // in every context.
+        border: Border.all(
+          color: Theme.of(context).colorScheme.outline.withValues(alpha: 0.35),
+        ),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
