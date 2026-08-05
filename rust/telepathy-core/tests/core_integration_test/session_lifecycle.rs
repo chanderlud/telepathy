@@ -835,3 +835,170 @@ async fn session_collision_kept_new_preserves_pending_accept_prompt() {
     client_a.telepathy.shutdown().await;
     client_b.telepathy.shutdown().await;
 }
+
+/// Recreates the system-test strand (`test_session_simultaneous_dial_then_call`,
+/// caller `CallEnded: "did not respond"` while the callee Connected): a call
+/// Hello that arrives on a deferred same-identity candidate connection has no
+/// reader — the candidate parks until the predecessor session finishes — so the
+/// caller waits out its full HelloAck timeout even though the callee is right
+/// there holding an active call with the same identity. The correct behavior
+/// is a prompt terminal answer (Busy) from the parked candidate.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "recreation for the deferred-candidate starvation follow-up; fails until the parked candidate answers"]
+async fn call_on_deferred_same_identity_candidate_starves_without_reader() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+    let codec_config = CodecConfig::new(true, true, 5.0);
+
+    // Alice sorts before Bob so Alice-dialed connections become deferred
+    // candidates on Bob (`should_keep_new_session` keeps Bob's existing session).
+    let (key_a, key_b) = loop {
+        let key_a = SecretKey::generate();
+        let key_b = SecretKey::generate();
+        if key_a.public() < key_b.public() {
+            break (key_a, key_b);
+        }
+    };
+    let replacement_key_a = key_a.clone();
+    let contact_a = Contact::new(
+        "deferred-candidate-caller-a".to_string(),
+        key_a.public().to_string(),
+    )
+    .expect("contact a invalid");
+    let contact_b = Contact::new(
+        "deferred-candidate-callee-b".to_string(),
+        key_b.public().to_string(),
+    )
+    .expect("contact b invalid");
+    let peer_b = contact_b.get_peer_id();
+
+    let call_states_a = Arc::new(Mutex::new(Vec::new()));
+    let call_states_b = Arc::new(Mutex::new(Vec::new()));
+    let call_states_replacement_a = Arc::new(Mutex::new(Vec::new()));
+    let accept_probe_b = PendingAcceptProbe::default();
+
+    let client_a = build_client(
+        relay_map,
+        key_a,
+        vec![contact_b.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_a.clone(),
+    )
+    .await;
+    let client_b = build_client_with_accept_probe(
+        relay_map,
+        key_b,
+        vec![contact_a.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_b.clone(),
+        accept_probe_b.clone(),
+    )
+    .await;
+
+    client_a.telepathy.start_session(&contact_b).await;
+    client_b.telepathy.start_session(&contact_a).await;
+    wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
+
+    // Establish the active call on the session Bob will keep.
+    client_a
+        .telepathy
+        .start_call(&contact_b)
+        .await
+        .expect("alice should start the call");
+    accept_probe_b.wait_opened().await;
+    accept_probe_b.accept();
+    wait_for_connected(&call_states_a, "alice original call").await;
+    wait_for_connected(&call_states_b, "bob original call").await;
+
+    // The same identity reconnects (new process instance); on Bob it defers
+    // behind the session that owns the active call.
+    let replacement_client_a = build_client(
+        relay_map,
+        replacement_key_a,
+        vec![contact_b.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_replacement_a.clone(),
+    )
+    .await;
+    replacement_client_a
+        .telepathy
+        .start_session(&contact_b)
+        .await;
+    replacement_client_a
+        .session_status_probe
+        .wait_for(
+            peer_b.as_bytes(),
+            SessionStatus::Connected {
+                relayed: false,
+                remote_address: String::new(),
+            },
+        )
+        .await;
+
+    // A call on the deferred candidate connection must be answered, not
+    // starved: the caller should terminalize promptly (Busy), not after the
+    // full HelloAck timeout.
+    let started = std::time::Instant::now();
+    replacement_client_a
+        .telepathy
+        .start_call(&contact_b)
+        .await
+        .expect("replacement should start its call");
+    let terminal = async {
+        loop {
+            let states = call_state_snapshot(&call_states_replacement_a);
+            if states
+                .iter()
+                .any(|state| matches!(state, CallState::CallEnded(_, _)))
+            {
+                return states;
+            }
+            sleep(Duration::from_millis(50)).await;
+        }
+    };
+    let states = tokio::time::timeout(Duration::from_secs(12), terminal)
+        .await
+        .unwrap_or_else(|_| panic!("replacement call should terminalize"));
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "a call on a deferred candidate must be answered promptly (Busy), not starve for the full HelloAck timeout; states={states:?}"
+    );
+    assert!(
+        states.iter().any(|state| matches!(
+            state,
+            CallState::CallEnded(message, _) if message.contains("busy")
+        )),
+        "the deferred candidate should answer Busy while the predecessor owns an active call; states={states:?}"
+    );
+
+    // Bob's original call is unaffected.
+    assert!(
+        !call_state_snapshot(&call_states_b)
+            .iter()
+            .any(|state| matches!(state, CallState::CallEnded(_, _))),
+        "bob's active call must survive the deferred candidate"
+    );
+
+    client_a.telepathy.end_call().await;
+    replacement_client_a.telepathy.shutdown().await;
+    client_b.telepathy.shutdown().await;
+    client_a.telepathy.shutdown().await;
+}
