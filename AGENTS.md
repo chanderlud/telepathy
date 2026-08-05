@@ -11,7 +11,7 @@
 * System tests: `system-tests/`
 * Generated, never read/edit: `lib/core/rust/*`, `frb_generated.rs`
 
-`docs/solutions/` holds documented solutions to past problems (bugs, best practices, workflow patterns), organized by category with YAML frontmatter (`module`, `tags`, `problem_type`) — relevant when implementing or debugging in documented areas. `docs/concepts.md` is the shared domain vocabulary for the session/call/room machinery.
+`docs/solutions/` holds documented solutions to past problems (bugs, best practices, workflow patterns), organized by category with YAML frontmatter (`module`, `tags`, `problem_type`) — relevant when implementing or debugging in documented areas. `docs/CONCEPTS.md` is the shared domain vocabulary for the session/call/room machinery.
 
 Run all commands from the repository root.
 
