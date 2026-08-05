@@ -93,6 +93,12 @@ steps:
       match:
         version: "*"
   - actor: alice
+    expect_event:
+      type: manager_active
+      timeout: 15.0
+      match:
+        Active:
+  - actor: alice
     send:
       cmd: add_contact
       args:
