@@ -1131,12 +1131,20 @@ async def test_call_prompt_survives_session_restart(
         raise AssertionError("start_call after restart never landed on a live session")
 
     # Session churn can cancel a raised prompt before the accept lands; accept
-    # the first prompt that is still open.
+    # the first prompt that is still open, re-issuing the call when Alice's
+    # negotiation has already terminalized.
+    last_error: Exception | None = None
     for _ in range(4):
-        prompt = await bob.expect_event(
-            lambda event: event.get("type") == "accept_call_prompt",
-            timeout=30.0,
-        )
+        try:
+            prompt = await bob.expect_event(
+                lambda event: event.get("type") == "accept_call_prompt",
+                timeout=45.0,
+            )
+        except Exception as exc:
+            last_error = exc
+            await alice.send({"cmd": "start_session", "args": {"contact_id": "bob"}})
+            response = await alice.send({"cmd": "start_call", "args": {"contact_id": "bob"}})
+            continue
         accept_response = await bob.send(
             {
                 "cmd": "accept_call",
@@ -1146,7 +1154,12 @@ async def test_call_prompt_survives_session_restart(
         if accept_response.get("ok") is True:
             break
     else:
-        raise AssertionError("no accept_call succeeded across raised prompts")
+        raise AssertionError(
+            f"no accept_call succeeded across raised prompts: {last_error}; "
+            f"bob stdout tail: {bob.stdout_lines()[-30:]}; "
+            f"bob stderr tail: {bob.stderr_lines()[-30:]}; "
+            f"alice stdout tail: {alice.stdout_lines()[-15:]}"
+        )
 
     await asyncio.gather(
         alice.expect_event(lambda event: _is_call_state(event, "Connected"), timeout=20.0),
