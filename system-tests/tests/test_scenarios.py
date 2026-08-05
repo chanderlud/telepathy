@@ -1099,11 +1099,18 @@ async def test_call_prompt_survives_session_restart(
 
     # The caller's process is gone, so Bob's original prompt must be cancelled
     # (directly or once the offer window elapses).
-    await bob.expect_event(
-        lambda event: event.get("type") == "accept_call_canceled"
-        and event.get("request_id") == original_request_id,
-        timeout=30.0,
-    )
+    try:
+        await bob.expect_event(
+            lambda event: event.get("type") == "accept_call_canceled"
+            and event.get("request_id") == original_request_id,
+            timeout=30.0,
+        )
+    except Exception as exc:
+        raise AssertionError(
+            "original prompt not cancelled after caller restart; "
+            f"bob stdout tail: {bob.stdout_lines()[-30:]}; "
+            f"bob stderr tail: {bob.stderr_lines()[-15:]}"
+        ) from exc
 
     await _add_contact(alice, "bob", bob_peer_id)
     response = await alice.send({"cmd": "start_session", "args": {"contact_id": "bob"}})
