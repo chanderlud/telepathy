@@ -1686,9 +1686,6 @@ where
                     Err(error) => {
                         error!(event = "setup_call_failed", ?error);
                         let message = CallEndMessage::from_error(&error);
-                        self.callbacks
-                            .call_state(CallState::CallEnded(message.into_string(), false))
-                            .await;
                         // Release local ownership before the best-effort peer notification.
                         // A closed control stream must not leave the direct-call slot pending.
                         release_pending(
@@ -1698,6 +1695,9 @@ where
                             &mut pending_slot,
                         )
                         .await?;
+                        self.callbacks
+                            .call_state(CallState::CallEnded(message.into_string(), false))
+                            .await;
                         _ = write_message(
                             io.send,
                             &ProtocolMessage::Goodbye {
@@ -1870,6 +1870,13 @@ where
                                 hello_timeout_ms = hello_timeout.as_millis() as u64,
                                 peer.id = %args.contact.peer_id
                             );
+                            release_pending(
+                                &self.session_states,
+                                peer,
+                                io.state.id,
+                                &mut pending_slot,
+                            )
+                            .await?;
                             if !is_in_room {
                                 let message = CallEndMessage::from_text(peer_no_response_message(
                                     &args.contact.nickname,
@@ -1878,13 +1885,6 @@ where
                                     .call_state(CallState::CallEnded(message.into_string(), true))
                                     .await;
                             }
-                            release_pending(
-                                &self.session_states,
-                                peer,
-                                io.state.id,
-                                &mut pending_slot,
-                            )
-                            .await?;
                             return Ok(OutgoingNegotiationOutcome::CallEnded);
                         }
                         Ok(Err(error)) => {
@@ -1938,9 +1938,6 @@ where
                                     return Ok(OutgoingNegotiationOutcome::SessionStopped);
                                 }
                                 HelloResponse::EndedWith(message) => {
-                                    self.callbacks
-                                        .call_state(CallState::CallEnded(message, true))
-                                        .await;
                                     release_pending(
                                         &self.session_states,
                                         peer,
@@ -1948,6 +1945,9 @@ where
                                         &mut pending_slot,
                                     )
                                     .await?;
+                                    self.callbacks
+                                        .call_state(CallState::CallEnded(message, true))
+                                        .await;
                                     return Ok(OutgoingNegotiationOutcome::CallEnded);
                                 }
                                 HelloResponse::EndedSilently => {

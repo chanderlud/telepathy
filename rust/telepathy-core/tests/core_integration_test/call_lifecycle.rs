@@ -2723,12 +2723,13 @@ async fn reset_sessions_cancels_parked_accept_prompt() {
         },
         async {
             accept_probe_b.wait_cancelled().await;
-            assert_call_slot_idle(
-                &client_b,
-                "reset must release the parked prompt's retained pending generation",
-            );
         }
     );
+    wait_for_slot_idle(
+        &client_b,
+        "reset must release the parked prompt's retained pending generation",
+    )
+    .await;
 
     assert_eq!(accept_probe_b.opened.load(Relaxed), 1);
     assert_eq!(accept_probe_b.cancelled.load(Relaxed), 1);
