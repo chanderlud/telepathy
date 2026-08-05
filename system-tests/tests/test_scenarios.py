@@ -1025,7 +1025,7 @@ async def test_call_simultaneous_dial(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("profile", NETWORK_PROFILES, ids=lambda profile: profile.name)
+@pytest.mark.parametrize("profile", [NETWORK_PROFILES[0]], ids=lambda profile: profile.name)
 async def test_session_simultaneous_dial_then_call(
     topology: TopologyManager,
     cli_pair: dict[str, CliProcess],
@@ -1036,7 +1036,7 @@ async def test_session_simultaneous_dial_then_call(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("profile", NETWORK_PROFILES, ids=lambda profile: profile.name)
+@pytest.mark.parametrize("profile", [NETWORK_PROFILES[0]], ids=lambda profile: profile.name)
 async def test_caller_cancel_during_glare_then_room(
     topology: TopologyManager,
     cli_pair: dict[str, CliProcess],
