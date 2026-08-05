@@ -93,6 +93,12 @@ steps:
       match:
         version: "*"
   - actor: alice
+    send:
+      cmd: start_manager
+      args: {}
+    expect_ack:
+      ok: true
+  - actor: alice
     expect_event:
       type: manager_active
       timeout: 15.0
