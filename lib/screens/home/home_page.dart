@@ -106,7 +106,12 @@ class HomePage extends StatelessWidget {
                     ],
                   );
                 } else {
-                  final bool isCompact = context.isCompactContacts;
+                  // Use only the height for the compact decision: this branch
+                  // is chosen from the padded LayoutBuilder width while
+                  // `isCompactContacts` reads the unpadded MediaQuery width,
+                  // so at canvas widths of 620–640px they disagree and the
+                  // non-compact cap ends up crushing the tab view below.
+                  final bool isCompact = context.isCompactControls;
                   return Column(children: [
                     Container(
                       constraints: BoxConstraints(

@@ -86,8 +86,14 @@ class RoomWidgetState extends State<RoomWidget> {
                   : 'assets/icons/Group.svg'),
             ),
             const SizedBox(width: 10),
-            Text(widget.room.nickname, style: const TextStyle(fontSize: 16)),
-            const Spacer(),
+            // Slack absorber, same pattern as ContactWidget: tight slot
+            // keeps the buttons flush right, text ellipsizes when narrow.
+            Expanded(
+              child: Text(widget.room.nickname,
+                  style: const TextStyle(fontSize: 16),
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1),
+            ),
             IconButton(
               visualDensity: VisualDensity.comfortable,
               icon: SvgPicture.asset(

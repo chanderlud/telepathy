@@ -671,6 +671,9 @@ async def cli_pair(
 ) -> AsyncIterator[dict[str, CliProcess]]:
     alice_namespace = topology.client_namespaces[0]
     bob_namespace = topology.client_namespaces[1]
+    capture_audio_frame_indices = (
+        request.node.get_closest_marker("capture_audio_frame_indices") is not None
+    )
 
     alice = CliProcess(
         binary_path=binaries["cli"],
@@ -681,6 +684,7 @@ async def cli_pair(
         dns_endpoint=topology.dns_endpoint(alice_namespace),
         dns_origin_domain=topology.dns_origin_domain(alice_namespace),
         pkarr_relay=topology.pkarr_relay(alice_namespace),
+        capture_audio_frame_indices=capture_audio_frame_indices,
     )
     bob = CliProcess(
         binary_path=binaries["cli"],
@@ -691,6 +695,7 @@ async def cli_pair(
         dns_endpoint=topology.dns_endpoint(bob_namespace),
         dns_origin_domain=topology.dns_origin_domain(bob_namespace),
         pkarr_relay=topology.pkarr_relay(bob_namespace),
+        capture_audio_frame_indices=capture_audio_frame_indices,
     )
     test_failed = False
     try:
@@ -1250,6 +1255,73 @@ async def test_call_repeated_without_restart_keeps_remote_audio(
     assert max_second_call_output > 0.0, (
         "bob did not observe nonzero output_level during second call; "
         f"max_output_level={max_second_call_output}, stats={second_call_bob_stats}"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.capture_audio_frame_indices
+@pytest.mark.parametrize("profile", NETWORK_PROFILES, ids=lambda profile: profile.name)
+async def test_call_drain_audio_frame_indices_strictly_increasing(
+    cli_pair: dict[str, CliProcess],
+    profile: NetworkProfile,
+) -> None:
+    alice = cli_pair["alice"]
+    bob = cli_pair["bob"]
+
+    alice_peer_id = alice.identity_peer_id
+    bob_peer_id = bob.identity_peer_id
+    if not isinstance(alice_peer_id, str) or not isinstance(bob_peer_id, str):
+        raise AssertionError("missing CLI identity peer ID")
+    await asyncio.gather(
+        _add_contact(alice, "bob", bob_peer_id),
+        _add_contact(bob, "alice", alice_peer_id),
+    )
+
+    start_responses = await asyncio.gather(
+        alice.send({"cmd": "start_session", "args": {"contact_id": "bob"}}),
+        bob.send({"cmd": "start_session", "args": {"contact_id": "alice"}}),
+    )
+    assert all(response.get("ok") is True for response in start_responses)
+    await asyncio.gather(
+        alice.expect_event(
+            lambda event: event.get("type") == "session_status"
+            and _status_name(event.get("status")) == "Connected",
+            timeout=20.0,
+        ),
+        bob.expect_event(
+            lambda event: event.get("type") == "session_status"
+            and _status_name(event.get("status")) == "Connected",
+            timeout=20.0,
+        ),
+    )
+
+    await _start_call_and_wait_connected(
+        alice,
+        bob,
+        caller_contact_id="bob",
+        callee_contact_id="alice",
+    )
+
+    await asyncio.sleep(3.0)
+
+    response = await bob.send({"cmd": "drain_audio_frame_indices", "args": {}})
+    data = response.get("data")
+    indices = data.get("indices") if isinstance(data, dict) else None
+    assert response.get("kind") == "result", (
+        f"profile={profile.name}, observed_indices={indices}, response={response}"
+    )
+
+    assert isinstance(indices, list), (
+        f"profile={profile.name} drain_audio_frame_indices returned non-list indices: {response}"
+    )
+    assert 1 < len(indices) <= 512, (
+        f"profile={profile.name}, observed_indices={indices}"
+    )
+    assert all(isinstance(index, int) for index in indices), (
+        f"profile={profile.name}, observed_indices={indices}"
+    )
+    assert all(right > left for left, right in zip(indices, indices[1:])), (
+        f"profile={profile.name}, observed_indices={indices}"
     )
 
 

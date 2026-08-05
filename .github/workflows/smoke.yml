@@ -1,0 +1,356 @@
+name: Smoke
+
+# Proves the built app launches on every platform without crashing at
+# startup. Exists because months of Android breakage (missing native
+# library, bad JNI version, desktop-only plugins, read-only log path)
+# shipped untested; see docs/solutions/runtime-errors/android-native-build-and-startup-chain-2026-08-03.md
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  STARTUP_SECONDS: 30
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    name: Launch on Android emulator
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Flutter SDK
+        uses: flutter-actions/setup-flutter@v4
+        with:
+          channel: stable
+          version: 3.35.7
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: 'stable'
+          cache: true
+          cache-workspaces: rust
+
+      - name: Cache Flutter pub
+        uses: actions/cache@v5
+        with:
+          path: ~/.pub-cache
+          key: pub-${{ runner.os }}-${{ hashFiles('pubspec.lock') }}
+          restore-keys: pub-${{ runner.os }}-
+
+      - name: Get Packages
+        run: flutter pub get
+
+      - name: Build APK
+        run: flutter build apk --debug
+
+      - name: Launch app and assert clean startup
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: default
+          arch: x86_64
+          profile: pixel_6
+          emulator-options: -no-window -gpu swiftshader_indirect -no-audio -no-boot-anim
+          script: |
+            set -eux
+            adb install -r build/app/outputs/flutter-apk/app-debug.apk
+            adb logcat -c
+            adb shell monkey -p com.cflmstudios.telepathy -c android.intent.category.LAUNCHER 1
+            sleep $STARTUP_SECONDS
+            adb shell pidof com.cflmstudios.telepathy
+            adb logcat -d > logcat.txt
+            ! grep -E 'FATAL EXCEPTION|UnsatisfiedLinkError|PanicException|MissingPluginException' logcat.txt
+
+  ios:
+    runs-on: macos-15
+    name: Launch on iOS simulator
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Flutter SDK
+        uses: flutter-actions/setup-flutter@v4
+        with:
+          channel: stable
+          version: 3.35.7
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: 'stable'
+          cache: true
+          cache-workspaces: rust
+
+      - name: Install Apple Rust targets
+        run: |
+          rustup target add aarch64-apple-darwin
+          rustup target add aarch64-apple-ios
+          rustup target add aarch64-apple-ios-sim
+
+      - name: Cache Flutter pub
+        uses: actions/cache@v5
+        with:
+          path: ~/.pub-cache
+          key: pub-${{ runner.os }}-${{ hashFiles('pubspec.lock') }}
+          restore-keys: pub-${{ runner.os }}-
+
+      - name: Get Packages
+        run: flutter pub get
+
+      - name: Build iOS simulator app
+        run: flutter build ios --simulator --debug --no-codesign
+
+      - name: Launch app and assert clean startup
+        run: |
+          set -eux
+          RUNTIME=$(xcrun simctl list runtimes -j | python3 -c "import json,sys; rs=[r for r in json.load(sys.stdin)['runtimes'] if r['platform']=='iOS' and r['isAvailable']]; print(rs[-1]['identifier'])")
+          DEVICE=$(xcrun simctl create ci-smoke com.apple.CoreSimulator.SimDeviceType.iPhone-16 "$RUNTIME" || xcrun simctl create ci-smoke com.apple.CoreSimulator.SimDeviceType.iPhone-15 "$RUNTIME")
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl install "$DEVICE" build/ios/iphonesimulator/Runner.app
+          xcrun simctl launch "$DEVICE" com.cflm-studios.telepathy
+          sleep $STARTUP_SECONDS
+          xcrun simctl spawn "$DEVICE" launchctl list | grep telepathy
+
+  macos:
+    runs-on: macos-14
+    name: Launch on macOS
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Flutter SDK
+        uses: flutter-actions/setup-flutter@v4
+        with:
+          channel: stable
+          version: 3.35.7
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: 'stable'
+          cache: true
+          cache-workspaces: rust
+
+      - name: Install macOS Rust target
+        run: rustup target add aarch64-apple-darwin
+
+      - name: Cache Flutter pub
+        uses: actions/cache@v5
+        with:
+          path: ~/.pub-cache
+          key: pub-${{ runner.os }}-${{ hashFiles('pubspec.lock') }}
+          restore-keys: pub-${{ runner.os }}-
+
+      - name: Get Packages
+        run: flutter pub get
+
+      - name: Build macOS app unsigned
+        run: |
+          set -eux
+          BUILD_DIR="$PWD/build/macos"
+          flutter build macos --config-only --debug
+          xcodebuild \
+            -workspace macos/Runner.xcworkspace \
+            -scheme Runner \
+            -configuration Debug \
+            -derivedDataPath "$BUILD_DIR" \
+            -destination platform=macOS \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            MACOSX_DEPLOYMENT_TARGET=10.15 \
+            OBJROOT="$BUILD_DIR/Build/Intermediates.noindex" \
+            SYMROOT="$BUILD_DIR/Build/Products" \
+            build
+
+      - name: Launch app and assert clean startup
+        run: |
+          set -eux
+          APP=$(find build/macos -name '*.app' -maxdepth 4 | head -1)
+          test -n "$APP"
+          BINARY="$APP/Contents/MacOS/$(/usr/libexec/PlistBuddy -c 'Print CFBundleExecutable' "$APP/Contents/Info.plist")"
+          "$BINARY" > app.log 2>&1 &
+          APP_PID=$!
+          sleep $STARTUP_SECONDS
+          kill -0 $APP_PID
+          ! grep -E 'Unhandled Exception|PanicException|MissingPluginException|Segmentation fault' app.log
+          kill $APP_PID || true
+
+  linux:
+    runs-on: ubuntu-24.04
+    name: Launch on Linux
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Linux Prerequisites
+        run: sudo apt-get update && sudo apt-get install clang cmake git ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev libasound2-dev libsecret-1-dev xvfb dbus-x11 gnome-keyring
+
+      - name: Setup Flutter SDK
+        uses: flutter-actions/setup-flutter@v4
+        with:
+          channel: stable
+          version: 3.35.7
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: 'stable'
+          cache: true
+          cache-workspaces: rust
+
+      - name: Cache Flutter pub
+        uses: actions/cache@v5
+        with:
+          path: ~/.pub-cache
+          key: pub-${{ runner.os }}-${{ hashFiles('pubspec.lock') }}
+          restore-keys: pub-${{ runner.os }}-
+
+      - name: Get Packages
+        run: flutter pub get
+
+      - name: Build Linux bundle
+        run: flutter build linux --debug
+
+      - name: Launch app and assert clean startup
+        run: |
+          set -eux
+          cat > /tmp/smoke.sh <<'EOF'
+          #!/bin/bash
+          set -ux
+          echo "" | gnome-keyring-daemon --unlock > /dev/null 2>&1 || true
+          xvfb-run -a -s "-screen 0 1280x800x24" ./build/linux/x64/debug/bundle/telepathy > app.log 2>&1 &
+          APP_PID=$!
+          sleep $STARTUP_SECONDS
+          if ! kill -0 $APP_PID 2>/dev/null; then
+            echo "app exited before $STARTUP_SECONDS seconds"
+            cat app.log
+            exit 1
+          fi
+          if grep -E 'Unhandled Exception|PanicException|MissingPluginException|Segmentation fault' app.log; then
+            exit 1
+          fi
+          pkill -f 'bundle/telepathy' || true
+          EOF
+          chmod +x /tmp/smoke.sh
+          dbus-run-session -- /tmp/smoke.sh
+
+  windows:
+    runs-on: windows-2022
+    name: Launch on Windows
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Flutter SDK
+        uses: flutter-actions/setup-flutter@v4
+        with:
+          channel: stable
+          version: 3.35.7
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: 'stable'
+          cache: true
+          cache-workspaces: rust
+
+      - name: Cache Flutter pub
+        uses: actions/cache@v5
+        with:
+          path: ~/.pub-cache
+          key: pub-${{ runner.os }}-${{ hashFiles('pubspec.lock') }}
+          restore-keys: pub-${{ runner.os }}-
+
+      - name: Get Packages
+        run: flutter pub get
+
+      - name: Build Windows bundle
+        run: flutter build windows --debug
+
+      - name: Launch app and assert clean startup
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = "build\windows\x64\runner\Debug\telepathy.exe"
+          if (!(Test-Path $exe)) { throw "binary not found: $exe" }
+          $p = Start-Process -FilePath $exe -RedirectStandardOutput app.log -RedirectStandardError app-err.log -PassThru
+          Start-Sleep -Seconds $env:STARTUP_SECONDS
+          $p.Refresh()
+          if ($p.HasExited) {
+            Write-Host "app exited early with code $($p.ExitCode)"
+            Get-Content app.log, app-err.log -ErrorAction SilentlyContinue
+            exit 1
+          }
+          $bad = Select-String -Path app.log, app-err.log -Pattern 'Unhandled Exception|PanicException|MissingPluginException' -ErrorAction SilentlyContinue
+          if ($bad) { $bad; exit 1 }
+          Stop-Process -Id $p.Id -Force
+
+  web:
+    runs-on: ubuntu-24.04
+    name: Launch on Web (headless Chrome)
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Flutter SDK
+        uses: flutter-actions/setup-flutter@v4
+        with:
+          channel: stable
+          version: 3.35.7
+
+      - name: Cache cargo install binaries
+        id: cache-cargo-tools
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/bin/flutter_rust_bridge_codegen
+            ~/.cargo/bin/wasm-pack
+          key: cargo-tools-${{ runner.os }}-${{ hashFiles('pubspec.lock', '.github/workflows/smoke.yml', 'web/build_web.sh') }}
+
+      - name: Cache Flutter pub
+        uses: actions/cache@v5
+        with:
+          path: ~/.pub-cache
+          key: pub-${{ runner.os }}-${{ hashFiles('pubspec.lock') }}
+          restore-keys: pub-${{ runner.os }}-
+
+      - name: Install Web Tools
+        if: steps.cache-cargo-tools.outputs.cache-hit != 'true'
+        run: cargo install flutter_rust_bridge_codegen@2.12.0 wasm-pack
+
+      - name: Setup Rust nightly for Web
+        run: rustup component add rust-src --toolchain nightly-x86_64-unknown-linux-gnu
+
+      - name: Get Packages
+        run: flutter pub get
+
+      - name: Build Web
+        run: |
+          ./web/build_web.sh
+          flutter build web --debug
+
+      - name: Launch app and assert clean startup
+        run: |
+          set -eux
+          python3 -m http.server 8080 --directory build/web > /dev/null 2>&1 &
+          SERVER_PID=$!
+          google-chrome --headless=new --no-sandbox --disable-gpu \
+            --enable-logging=stderr --v=0 --virtual-time-budget=20000 \
+            --dump-dom http://localhost:8080 > dom.html 2> console.log || true
+          kill $SERVER_PID || true
+          grep -qE 'flt-scene-host|flutter-view|flt-glass-pane' dom.html
+          ! grep -E 'Uncaught|MissingPluginException|Panicked' console.log

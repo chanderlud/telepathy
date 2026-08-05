@@ -21,7 +21,7 @@ import 'package:telepathy/core/rust/flutter/logging.dart';
 
 Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
-  if (!kIsWeb) {
+  if (isDesktopPlatform) {
     await windowManager.ensureInitialized();
   }
 
