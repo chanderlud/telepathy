@@ -118,9 +118,22 @@ def pytest_configure_node(node: pytest.Node) -> None:
         node.workerinput[SYSTEM_TEST_ORDER_SEED_PROPERTY] = seed
 
 
+# Failure signatures from environment startup, not from code under test:
+# relay registration and DNS publish can lose to the hostile network profiles
+# (burst loss can strand the handshake past the readiness timeout).
+_INFRA_FLAKY_PATTERNS = (
+    r"manager_active Active event not observed",
+    r"pkarr records not published",
+)
+
+
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     seed = getattr(config, "_system_test_order_seed", None)
     _seeded_shuffle(items, seed)
+    for item in items:
+        item.add_marker(
+            pytest.mark.flaky(reruns=2, reruns_delay=5, only_rerun=list(_INFRA_FLAKY_PATTERNS))
+        )
 
 
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
