@@ -1113,16 +1113,22 @@ async def test_call_prompt_survives_session_restart(
         ) from exc
 
     await _add_contact(alice, "bob", bob_peer_id)
-    response = await alice.send({"cmd": "start_session", "args": {"contact_id": "bob"}})
-    assert response.get("ok") is True, f"start_session after restart failed: {response}"
-    await alice.expect_event(
-        lambda event: event.get("type") == "session_status"
-        and isinstance(event.get("status"), dict)
-        and "Connected" in event["status"],
-        timeout=45.0,
-    )
-    response = await alice.send({"cmd": "start_call", "args": {"contact_id": "bob"}})
-    assert response.get("ok") is True, f"start_call after restart failed: {response}"
+    # Churn can drop a fresh session between its Connected emission and the
+    # start_call lookup; retry the pair until the call lands.
+    for _ in range(4):
+        response = await alice.send({"cmd": "start_session", "args": {"contact_id": "bob"}})
+        assert response.get("ok") is True, f"start_session after restart failed: {response}"
+        await alice.expect_event(
+            lambda event: event.get("type") == "session_status"
+            and isinstance(event.get("status"), dict)
+            and "Connected" in event["status"],
+            timeout=45.0,
+        )
+        response = await alice.send({"cmd": "start_call", "args": {"contact_id": "bob"}})
+        if response.get("ok") is True:
+            break
+    else:
+        raise AssertionError("start_call after restart never landed on a live session")
 
     # Session churn can cancel a raised prompt before the accept lands; accept
     # the first prompt that is still open.
