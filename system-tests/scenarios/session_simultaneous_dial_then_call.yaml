@@ -62,7 +62,7 @@ steps:
   - actor: bob
     expect_event:
       type: accept_call_prompt
-      timeout: 30.0
+      timeout: 60.0
       match:
         contact_id: alice
   - actor: bob

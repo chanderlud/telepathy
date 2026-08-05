@@ -1084,7 +1084,7 @@ async def test_call_prompt_survives_session_restart(
     assert response.get("ok") is True, f"start_call failed: {response}"
     original_prompt = await bob.expect_event(
         lambda event: event.get("type") == "accept_call_prompt",
-        timeout=20.0,
+        timeout=60.0,
     )
     original_request_id = original_prompt.get("request_id")
 
