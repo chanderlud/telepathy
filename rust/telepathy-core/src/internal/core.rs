@@ -1636,7 +1636,11 @@ where
                         call_state.remote_configuration = args.remote_audio_header;
                         // The accept prompt can span a session collision; answering on a
                         // replaced session strands the caller (its re-driven Hello lands on
-                        // the replacement, which no longer owns this negotiation).
+                        // the replacement, which no longer owns this negotiation). Release
+                        // without a goodbye: the stale session's connection teardown already
+                        // informs the caller through its critical-error path, and an
+                        // explicit session-stopped goodbye is re-driven as "superseded"
+                        // forever while collisions keep replacing sessions.
                         if !is_session_still_current(
                             &self.session_states,
                             peer,
@@ -1644,11 +1648,10 @@ where
                         )
                         .await
                         {
-                            abort_negotiation_session_stopped(
+                            release_pending(
                                 &self.session_states,
                                 peer,
                                 io.state.id,
-                                io.send,
                                 &mut pending_slot,
                             )
                             .await?;
