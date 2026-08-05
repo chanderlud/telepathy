@@ -1590,6 +1590,20 @@ where
                 drop(prompt_guard);
                 Ok(IncomingNegotiationOutcome::SessionStopped)
             }
+            _ = sleep(HELLO_TIMEOUT) => {
+                // An open offer cannot outlive the caller's own negotiation timeout;
+                // without this, a prompt whose caller died after a collision transfer
+                // would wait on user input forever.
+                info!(event = "accept_prompt_offer_expired", peer.id = %peer);
+                release_pending(
+                    &self.session_states,
+                    peer,
+                    io.state.id,
+                    &mut pending_slot,
+                )
+                .await?;
+                Ok(IncomingNegotiationOutcome::ContinueSession)
+            }
             accept_result = accept_future => {
                 if let Some(guard) = prompt_guard.as_mut() {
                     guard.disarm();
@@ -1620,13 +1634,15 @@ where
                 match self.setup_call(peer).await {
                     Ok(mut call_state) => {
                         call_state.remote_configuration = args.remote_audio_header;
-                        if args.is_in_room
-                            && !is_session_still_current(
-                                &self.session_states,
-                                peer,
-                                io.state.id,
-                            )
-                            .await
+                        // The accept prompt can span a session collision; answering on a
+                        // replaced session strands the caller (its re-driven Hello lands on
+                        // the replacement, which no longer owns this negotiation).
+                        if !is_session_still_current(
+                            &self.session_states,
+                            peer,
+                            io.state.id,
+                        )
+                        .await
                         {
                             abort_negotiation_session_stopped(
                                 &self.session_states,

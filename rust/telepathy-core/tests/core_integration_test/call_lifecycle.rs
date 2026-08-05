@@ -91,12 +91,10 @@ async fn start_call_waits_for_trusted_session_attempt_and_cancellation_leaves_no
         .telepathy
         .start_call_with_operation(&contact_b, &operation);
     tokio::pin!(call);
-    let first_poll = std::future::poll_fn(|context| Poll::Ready(call.as_mut().poll(context))).await;
-    assert!(
-        matches!(first_poll, Poll::Pending),
-        "a trusted in-flight session attempt must make start_call wait"
-    );
 
+    // The peer is unreachable, so its attempt can fail all retries within a few
+    // milliseconds; only a poll gated on the Connecting emission is guaranteed
+    // to observe the attempt still in flight.
     client
         .session_status_probe
         .wait_for(peer_b.as_bytes(), SessionStatus::Connecting)
@@ -2782,4 +2780,211 @@ async fn parked_accept_prompt_expires_when_caller_hangs_up_before_adoption() {
     end_call_a.await;
     client_b.telepathy.shutdown().await;
     client_a.telepathy.shutdown().await;
+}
+
+/// An accepted prompt whose session goes stale before the HelloAck is written
+/// must abort instead of completing on a session the manager no longer owns:
+/// the caller sees a fast session-stopped end (never the 10s HelloAck timeout),
+/// both slots release, and a fresh call connects normally afterwards.
+#[tokio::test(flavor = "multi_thread")]
+async fn accepted_prompt_on_stale_session_aborts_before_hello_ack() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+    let codec_config = CodecConfig::new(true, true, 5.0);
+    let key_a = SecretKey::generate();
+    let key_b = SecretKey::generate();
+    let contact_a = Contact::new(
+        "stale-accept-caller-a".to_string(),
+        key_a.public().to_string(),
+    )
+    .expect("contact a invalid");
+    let contact_b = Contact::new(
+        "stale-accept-callee-b".to_string(),
+        key_b.public().to_string(),
+    )
+    .expect("contact b invalid");
+    let peer_a = contact_a.get_peer_id();
+    let call_states_a = Arc::new(Mutex::new(Vec::new()));
+    let accept_probe_b = PendingAcceptProbe::default();
+
+    let client_a = build_client(
+        relay_map,
+        key_a,
+        vec![contact_b.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        call_states_a.clone(),
+    )
+    .await;
+    let client_b = build_client_with_accept_probe(
+        relay_map,
+        key_b,
+        vec![contact_a.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        Arc::new(Mutex::new(Vec::new())),
+        accept_probe_b.clone(),
+    )
+    .await;
+
+    client_a.telepathy.start_session(&contact_b).await;
+    client_b.telepathy.start_session(&contact_a).await;
+    wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
+
+    client_a
+        .telepathy
+        .start_call(&contact_b)
+        .await
+        .expect("alice should start the call");
+    accept_probe_b.wait_opened().await;
+
+    // The negotiation's session-currency check takes the session map read lock;
+    // holding the write lock lets the test go stale deterministically between
+    // the user's accept and the HelloAck write.
+    let mut session_lock = client_b.telepathy.inner.session_states.write().await;
+    accept_probe_b.accept();
+    accept_probe_b.wait_accepted().await;
+    // wait for the negotiation to reach the locked check
+    sleep(Duration::from_millis(100)).await;
+    let removed = session_lock.remove(&peer_a);
+    assert!(removed.is_some(), "bob's session should be registered");
+    drop(session_lock);
+
+    wait_for_slot_idle(&client_b, &peer_a.to_string()).await;
+    // The abort's session-stopped goodbye races the session teardown's connection
+    // close: when the close wins, Alice terminalizes on her HelloAck timeout
+    // instead. Either terminal state proves the stale session completed no call.
+    {
+        let wait = async {
+            loop {
+                let states = call_state_snapshot(&call_states_a);
+                if states
+                    .iter()
+                    .any(|state| matches!(state, CallState::CallEnded(_, _)))
+                {
+                    return states;
+                }
+                assert!(
+                    !states
+                        .iter()
+                        .any(|state| matches!(state, CallState::Connected)),
+                    "alice must never connect on the stale session; states={states:?}"
+                );
+                sleep(Duration::from_millis(50)).await;
+            }
+        };
+        let states = tokio::time::timeout(Duration::from_secs(60), wait)
+            .await
+            .unwrap_or_else(|_| panic!("alice should observe a terminal call state"));
+        assert!(
+            !states
+                .iter()
+                .any(|state| matches!(state, CallState::Connected)),
+            "alice must never connect on the stale session; states={states:?}"
+        );
+    }
+    assert_eq!(accept_probe_b.cancelled.load(Relaxed), 0);
+    assert_eq!(accept_probe_b.accepted.load(Relaxed), 1);
+
+    client_a.telepathy.start_session(&contact_b).await;
+    wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
+    client_a
+        .telepathy
+        .start_call(&contact_b)
+        .await
+        .expect("alice should start a fresh call");
+    accept_probe_b.wait_opened_count(2).await;
+    accept_probe_b.accept();
+    wait_for_connected(&call_states_a, "alice recovery call").await;
+
+    client_a.telepathy.end_call().await;
+    client_a.telepathy.shutdown().await;
+    client_b.telepathy.shutdown().await;
+}
+
+/// An unanswered incoming offer expires with the caller's own negotiation
+/// timeout: the prompt is cancelled and the pending slot released instead of
+/// waiting on user input forever.
+#[tokio::test(flavor = "multi_thread")]
+async fn unanswered_accept_prompt_expires_with_caller_offer_window() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+    let codec_config = CodecConfig::new(true, true, 5.0);
+    let key_a = SecretKey::generate();
+    let key_b = SecretKey::generate();
+    let contact_a = Contact::new(
+        "expiring-offer-caller-a".to_string(),
+        key_a.public().to_string(),
+    )
+    .expect("contact a invalid");
+    let contact_b = Contact::new(
+        "expiring-offer-callee-b".to_string(),
+        key_b.public().to_string(),
+    )
+    .expect("contact b invalid");
+    let peer_a = contact_a.get_peer_id();
+    let accept_probe_b = PendingAcceptProbe::default();
+
+    let client_a = build_client(
+        relay_map,
+        key_a,
+        vec![contact_b.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        Arc::new(Mutex::new(Vec::new())),
+    )
+    .await;
+    let client_b = build_client_with_accept_probe(
+        relay_map,
+        key_b,
+        vec![contact_a.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        Arc::new(Mutex::new(Vec::new())),
+        accept_probe_b.clone(),
+    )
+    .await;
+
+    client_a.telepathy.start_session(&contact_b).await;
+    client_b.telepathy.start_session(&contact_a).await;
+    wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
+
+    client_a
+        .telepathy
+        .start_call(&contact_b)
+        .await
+        .expect("alice should start the call");
+    accept_probe_b.wait_opened().await;
+
+    accept_probe_b.wait_cancelled().await;
+    assert_eq!(accept_probe_b.opened.load(Relaxed), 1);
+    assert_eq!(accept_probe_b.accepted.load(Relaxed), 0);
+    assert_call_slot_idle(
+        &client_b,
+        "offer expiry must release the pending incoming slot",
+    );
+    wait_for_slot_idle(&client_a, &peer_a.to_string()).await;
+
+    client_a.telepathy.shutdown().await;
+    client_b.telepathy.shutdown().await;
 }

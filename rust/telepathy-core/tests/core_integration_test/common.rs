@@ -170,37 +170,6 @@ impl SessionStatusProbe {
         is_connecting && self.park_connecting.load(Relaxed)
     }
 
-    pub(super) fn connected_count(&self, peer_id: &[u8]) -> usize {
-        self.connected_counts
-            .lock()
-            .unwrap()
-            .get(peer_id)
-            .copied()
-            .unwrap_or_default()
-    }
-
-    pub(super) async fn wait_for_connected_after(&self, peer_id: &[u8], previous: usize) {
-        let wait = async {
-            loop {
-                let changed = self.changed.notified();
-                tokio::pin!(changed);
-                changed.as_mut().enable();
-                if self.connected_count(peer_id) > previous {
-                    return;
-                }
-                changed.await;
-            }
-        };
-        tokio::time::timeout(Duration::from_secs(60), wait)
-            .await
-            .unwrap_or_else(|_| {
-                panic!(
-                    "timed out waiting for a new Connected session status for {peer_id:?}; previous={previous}, current={}",
-                    self.connected_count(peer_id)
-                )
-            });
-    }
-
     pub(super) fn park_connecting(&self) {
         self.park_connecting.store(true, Relaxed);
         // `send` drops the value when no receiver exists (the initial receiver
@@ -1899,6 +1868,27 @@ pub(super) fn assert_room_event_sequence(
         actual.as_slice(),
         expected,
         "expected room events for {peer} to be {expected:?}, got {actual:?}"
+    );
+}
+
+/// Locks the end_call -> join_room rejoin sequence: exactly two Joins, with no
+/// Leave after the final one. A Leave sandwiched between the Joins is
+/// legitimate: the peer's teardown goodbye can reach the controller before the
+/// local end_call does, and observing that Leave is correct behavior.
+pub(super) fn assert_room_rejoin_sequence(states: &[CallState], peer: &str) {
+    let sequence = room_event_sequence(states, peer);
+    let joins = sequence
+        .iter()
+        .filter(|kind| **kind == RoomEventKind::Join)
+        .count();
+    assert_eq!(joins, 2, "expected two joins for {peer}, got {sequence:?}");
+    let final_join = sequence
+        .iter()
+        .rposition(|kind| *kind == RoomEventKind::Join)
+        .expect("two joins present");
+    assert!(
+        !sequence[final_join + 1..].contains(&RoomEventKind::Leave),
+        "no RoomLeave for {peer} after the final rejoin, got {sequence:?}"
     );
 }
 

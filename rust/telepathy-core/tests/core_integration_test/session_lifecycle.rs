@@ -180,9 +180,6 @@ async fn stale_predecessor_promotes_same_identity_replacement_and_allows_call() 
         .get(&peer_b)
         .map(|state| state.id())
         .expect("client_a should register the predecessor");
-    let connected_before_replacement = client_a
-        .session_status_probe
-        .connected_count(peer_b.as_bytes());
 
     let replacement_client_b = build_client_with_lookup_contacts(
         relay_map,
@@ -227,20 +224,32 @@ async fn stale_predecessor_promotes_same_identity_replacement_and_allows_call() 
     );
 
     old_client_b.telepathy.shutdown().await;
-    client_a
-        .session_status_probe
-        .wait_for_connected_after(peer_b.as_bytes(), connected_before_replacement)
-        .await;
 
-    let promoted_id = client_a
-        .telepathy
-        .inner
-        .session_states
-        .read()
-        .await
-        .get(&peer_b)
-        .map(|state| state.id())
-        .expect("client_a should promote the retained candidate");
+    // Poll the session map directly: the connection-level Connected status can
+    // precede the retained candidate's promotion, so it cannot gate this assert.
+    let promoted_id = {
+        let promoted = async {
+            loop {
+                let current = client_a
+                    .telepathy
+                    .inner
+                    .session_states
+                    .read()
+                    .await
+                    .get(&peer_b)
+                    .map(|state| state.id());
+                if current != Some(predecessor_id) {
+                    return current.expect("client_a should promote the retained candidate");
+                }
+                sleep(Duration::from_millis(25)).await;
+            }
+        };
+        tokio::time::timeout(Duration::from_secs(60), promoted)
+            .await
+            .unwrap_or_else(|_| {
+                panic!("the completed predecessor must be replaced by the fresh candidate")
+            })
+    };
     assert_ne!(
         promoted_id, predecessor_id,
         "the completed predecessor must be replaced by the fresh candidate"

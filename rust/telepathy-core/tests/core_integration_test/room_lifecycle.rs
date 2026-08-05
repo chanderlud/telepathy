@@ -3,9 +3,9 @@ use super::common::{
     DeviceSelectionOperation, DeviceSelectionProbe, InputSampleRateGate, MOCK_DEVICE_ID,
     ManagerLifecycle, OutputOpenGate, PendingAcceptProbe, RoomEventKind, StreamErrorProbe,
     TwoClientShutdownGuard, WaitingCallbackGate, assert_call_slot_idle, assert_room_event_sequence,
-    assert_slot_remains_outside_direct_call_states, build_client, build_client_with_accept_probe,
-    build_client_with_call_ended_park, build_client_with_connected_gate,
-    build_client_with_lookup_contacts, build_client_with_options,
+    assert_room_rejoin_sequence, assert_slot_remains_outside_direct_call_states, build_client,
+    build_client_with_accept_probe, build_client_with_call_ended_park,
+    build_client_with_connected_gate, build_client_with_lookup_contacts, build_client_with_options,
     build_client_with_options_and_initial_contacts, build_client_with_waiting_gate,
     call_state_snapshot, init_test_tracing, log_lines_containing, room_join_count,
     room_leave_count, shared_relay_map, sorted_room_members, wait_for_call_ended_contains,
@@ -1784,36 +1784,12 @@ async fn concurrent_room_end_immediately_rejoins_without_direct_negotiation() {
             "{label} must not observe a direct-call timeout or terminal state; states={states:?}"
         );
     }
-    assert_room_event_sequence(
-        &states_a,
-        &peer_b,
-        [RoomEventKind::Join, RoomEventKind::Join],
-    );
-    assert_room_event_sequence(
-        &states_a,
-        &peer_c,
-        [RoomEventKind::Join, RoomEventKind::Join],
-    );
-    assert_room_event_sequence(
-        &states_b,
-        &peer_a,
-        [RoomEventKind::Join, RoomEventKind::Join],
-    );
-    assert_room_event_sequence(
-        &states_b,
-        &peer_c,
-        [RoomEventKind::Join, RoomEventKind::Join],
-    );
-    assert_room_event_sequence(
-        &states_c,
-        &peer_a,
-        [RoomEventKind::Join, RoomEventKind::Join],
-    );
-    assert_room_event_sequence(
-        &states_c,
-        &peer_b,
-        [RoomEventKind::Join, RoomEventKind::Join],
-    );
+    assert_room_rejoin_sequence(&states_a, &peer_b);
+    assert_room_rejoin_sequence(&states_a, &peer_c);
+    assert_room_rejoin_sequence(&states_b, &peer_a);
+    assert_room_rejoin_sequence(&states_b, &peer_c);
+    assert_room_rejoin_sequence(&states_c, &peer_a);
+    assert_room_rejoin_sequence(&states_c, &peer_b);
 
     tokio::join!(
         client_a.telepathy.end_call(),
