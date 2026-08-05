@@ -64,8 +64,29 @@ scrot /tmp/shot.png                    # screenshot
 
 Always screenshot after resizing/clicking to confirm coordinates — dialogs
 recenter when the window size changes, so re-measure instead of reusing
-old coordinates. `look_at` on a screenshot is a fast way to get widget
-coordinates.
+old coordinates. Dialogs also recenter when their *content* changes
+(e.g. adding a member chip in Add Room), so re-screenshot after any
+state-changing click before aiming the next one.
+
+`look_at` on a screenshot is a fast way to get widget coordinates, but it
+can time out waiting on its analysis session. The `Read` tool renders
+PNGs directly and is the reliable fallback.
+
+### Text input and finder pitfalls (flutter_driver over MCP)
+
+- `xdotool type` is a silent no-op against Flutter `TextField`s — the
+  keystrokes never reach the framework. Instead: focus the field with an
+  `xdotool` click, then use the dart-mcp-server
+  `flutter_driver_command` with `command=enter_text`. Called with only
+  `text` (no finder) it types into the currently focused field, which
+  sidesteps finder ambiguity entirely.
+- `ByType` finders fail with `Bad state: Too many elements` whenever more
+  than one widget of that type is on screen (multiple `TextField`s,
+  `IconButton`s). Prefer `ByText` on unique labels, or fall back to
+  screenshot + `xdotool` coordinates.
+- `Descendant`/`Ancestor` finders passed through the MCP tool can hang
+  ("Timed out waiting for Flutter Driver response") even when the driver
+  is healthy (`get_health` ok). Don't retry them; use coordinates.
 
 Clipboard (for peer IDs etc.):
 
@@ -159,7 +180,10 @@ note both instances write to the same file when run from one worktree.
 ## Local .deb extraction (no root)
 
 If `Xvfb`, `gnome-keyring-daemon`, or `xclip` are missing and there is no
-sudo, extract packages locally:
+sudo, extract packages locally. Do not assume `/tmp/xvfb-local` already
+exists — check first (`ls /tmp/xvfb-local/root/usr/bin/`); on a fresh box
+you must run the extraction below before `run-linux-debug.sh` can find a
+keyring daemon:
 
 ```sh
 mkdir -p /tmp/xvfb-local && cd /tmp/xvfb-local
