@@ -38,6 +38,7 @@ Download Telepathy from [GitHub Releases](https://github.com/chanderlud/telepath
 - For development, use `flutter run -d <device>` or `flutter build <device> --debug`.
 - Live reload is supported in JetBrains and other IDEs with the Flutter plugin.
 - For release builds, use `flutter build <device>`.
+- For local desktop installers, see [Local Desktop Distribution Builds](docs/DISTRIBUTION.md).
 
 ### Additional Requirements
 - Android development requires Android Studio.
