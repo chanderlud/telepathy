@@ -16,6 +16,7 @@ import 'package:telepathy/controllers/state_controller.dart';
 import 'package:telepathy/controllers/statistics_controller.dart';
 import 'package:telepathy/core/rust/flutter.dart';
 import 'package:telepathy/core/rust/player.dart';
+import 'package:telepathy/core/theme/app_theme.dart';
 import 'package:telepathy/models/index.dart';
 import 'package:telepathy/screens/home/home_page.dart';
 
@@ -201,7 +202,7 @@ class Harness {
         ],
         child: MaterialApp(
           // Match production text metrics (bundled app font).
-          theme: ThemeData(fontFamily: 'Nunito'),
+          theme: ThemeData(fontFamily: 'Nunito', textTheme: AppTheme.textTheme),
           home: const HomePage(),
         ),
       ),

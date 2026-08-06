@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:provider/provider.dart';
@@ -31,8 +30,6 @@ class ContactsList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final bool isWindowsDesktop =
-        !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
     final stateController = context.watch<StateController>();
     final telepathy = context.read<Telepathy>();
     final ManagerState managerState = stateController.sessionManagerState;
@@ -87,24 +84,9 @@ class ContactsList extends StatelessWidget {
                         mainAxisSize: MainAxisSize.min,
                         crossAxisAlignment: CrossAxisAlignment.center,
                         children: [
-                          const Text(
+                          Text(
                             'Contacts',
-                            style: TextStyle(
-                              fontSize: 20,
-                              height: 1.0,
-                              leadingDistribution: TextLeadingDistribution.even,
-                            ),
-                            strutStyle: StrutStyle(
-                              fontSize: 20,
-                              height: 1.0,
-                              leading: 0,
-                              forceStrutHeight: true,
-                            ),
-                            textHeightBehavior: TextHeightBehavior(
-                              applyHeightToFirstAscent: false,
-                              applyHeightToLastDescent: false,
-                              leadingDistribution: TextLeadingDistribution.even,
-                            ),
+                            style: Theme.of(context).textTheme.titleLarge,
                           ),
                           const SizedBox(width: 10),
                           SizedBox.square(
@@ -115,9 +97,7 @@ class ContactsList extends StatelessWidget {
                                 width: addButtonSize,
                                 height: addButtonSize,
                               ),
-                              padding: isWindowsDesktop
-                                  ? const EdgeInsets.only(top: 2.0)
-                                  : EdgeInsets.zero,
+                              padding: EdgeInsets.zero,
                               icon: SvgPicture.asset(
                                 'assets/icons/Plus.svg',
                                 width: addIconSize,
@@ -146,26 +126,12 @@ class ContactsList extends StatelessWidget {
                             crossAxisAlignment: CrossAxisAlignment.center,
                             children: [
                               if (showManagerLabel)
-                                const Flexible(
+                                Flexible(
                                   fit: FlexFit.loose,
                                   child: Text(
                                     'Session Manager',
-                                    style: TextStyle(
-                                      height: 1.0,
-                                      leadingDistribution:
-                                          TextLeadingDistribution.even,
-                                    ),
-                                    strutStyle: StrutStyle(
-                                      height: 1.0,
-                                      leading: 0,
-                                      forceStrutHeight: true,
-                                    ),
-                                    textHeightBehavior: TextHeightBehavior(
-                                      applyHeightToFirstAscent: false,
-                                      applyHeightToLastDescent: false,
-                                      leadingDistribution:
-                                          TextLeadingDistribution.even,
-                                    ),
+                                    style:
+                                        Theme.of(context).textTheme.labelLarge,
                                     overflow: TextOverflow.ellipsis,
                                     maxLines: 1,
                                   ),
