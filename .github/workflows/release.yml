@@ -194,6 +194,7 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+      actions: read
       # Mint the OIDC token Sigstore signs, and publish the attestation.
       id-token: write
       attestations: write
@@ -250,8 +251,8 @@ jobs:
           zip -r "../../dist/telepathy-${VER}-windows-standalone-x86_64.zip" telepathy
           cd ../../
 
-          mv "artifacts/telepathy_macos-14_macos/telepathy-macos-unsigned.zip" \
-             "dist/telepathy-${VER}-macos-arm64-unsigned.zip"
+          mv "artifacts/telepathy_macos-14_macos/telepathy-macos-universal-unsigned.dmg" \
+             "dist/telepathy-${VER}-macos-universal-unsigned.dmg"
 
           mv "artifacts/telepathy_macos-15_ios/telepathy-ios-unsigned-app.zip" \
              "dist/telepathy-${VER}-ios-arm64-unsigned-app.zip"
