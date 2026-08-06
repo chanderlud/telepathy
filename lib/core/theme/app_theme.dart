@@ -1,6 +1,14 @@
 import 'package:flutter/material.dart';
 
 class AppTheme {
+  static const TextTheme textTheme = TextTheme(
+    titleLarge: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
+    titleMedium: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+    labelLarge: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+    bodyMedium: TextStyle(fontSize: 14, fontWeight: FontWeight.w400),
+    bodySmall: TextStyle(fontSize: 12, fontWeight: FontWeight.w400),
+  );
+
   static ThemeData dark(
     BuildContext context, {
     required int primaryColor,
@@ -18,6 +26,7 @@ class AppTheme {
 
     return ThemeData(
       fontFamily: 'Nunito',
+      textTheme: textTheme,
       dialogTheme: const DialogThemeData(
         surfaceTintColor: Color(0xFF27292A),
       ),

@@ -163,6 +163,35 @@ void main() {
         reason: 'the pill must drop its label before it can overflow');
     expectRowButtonsFlushRight(tester);
   });
+
+  testWidgets('enlarged text keeps long contact content inside its row',
+      (WidgetTester tester) async {
+    final harness = await Harness.create();
+    final contact = FakeContact(
+      id: 'contact-1',
+      contactNickname:
+          'A long contact nickname that must ellipsize before controls move',
+    );
+    harness.addContact(contact);
+    harness.stateController.updateSession((
+      contact.peerId(),
+      const SessionStatus.connected(
+        relayed: true,
+        remoteAddress: 'a-relay-address-that-must-also-ellipsize',
+      ),
+    ));
+    harness.startCallWith(contact);
+
+    tester.binding.platformDispatcher.textScaleFactorTestValue = 1.3;
+    addTearDown(
+        tester.binding.platformDispatcher.clearTextScaleFactorTestValue);
+    setCanvasSize(tester, const Size(807, 910));
+    await pumpApp(tester, harness);
+
+    expect(find.text('Contacts'), findsOneWidget);
+    expectRowButtonsFlushRight(tester);
+    expect(tester.takeException(), isNull);
+  });
 }
 
 /// Asserts every end-call button in the contacts list sits flush against

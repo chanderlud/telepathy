@@ -75,4 +75,32 @@ void main() {
     expect(find.byType(GradientMiniLineChart), findsNothing,
         reason: 'the chart must be the element dropped when space is tight');
   });
+
+  testWidgets('enlarged text keeps labels and stats in the wide card',
+      (WidgetTester tester) async {
+    final harness = await activeCallHarness();
+    tester.binding.platformDispatcher.textScaleFactorTestValue = 1.3;
+    addTearDown(
+        tester.binding.platformDispatcher.clearTextScaleFactorTestValue);
+    setCanvasSize(tester, const Size(1002, 848));
+    await pumpApp(tester, harness);
+
+    expectDetailsComplete(tester);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('enlarged text keeps compact wide card overflow-free',
+      (WidgetTester tester) async {
+    final harness = await activeCallHarness();
+    tester.binding.platformDispatcher.textScaleFactorTestValue = 1.3;
+    addTearDown(
+        tester.binding.platformDispatcher.clearTextScaleFactorTestValue);
+    setCanvasSize(tester, const Size(1002, 620));
+    await pumpApp(tester, harness);
+
+    expectDetailsComplete(tester);
+    expect(find.byType(GradientMiniLineChart), findsNothing,
+        reason: 'the chart must stay hidden in the compact wide card');
+    expect(tester.takeException(), isNull);
+  });
 }
