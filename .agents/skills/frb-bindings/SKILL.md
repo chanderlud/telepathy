@@ -30,6 +30,11 @@ cargo fmt --manifest-path rust/Cargo.toml --all
 `cargo fmt` is required: raw codegen output is not rustfmt-clean (import
 ordering), and the repo standard is the formatted form.
 
+Codegen compiles the crate's dependency tree when expanding macros (without
+`cargo-expand` it falls back to a real build), so the host needs the Linux
+build prerequisites — notably `libasound2-dev` and `pkg-config`, without
+which the expansion build fails in `alsa-sys`.
+
 Then verify and commit every generated change:
 
 ```sh

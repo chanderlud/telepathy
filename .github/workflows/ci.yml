@@ -72,6 +72,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Linux Prerequisites
+        run: sudo apt-get update && sudo apt-get install clang cmake git ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev libasound2-dev
+
       - name: Setup Flutter SDK
         uses: flutter-actions/setup-flutter@v4
         with:
