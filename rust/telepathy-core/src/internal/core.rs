@@ -965,6 +965,13 @@ where
             })
             .flatten();
         let mut candidate_aborted_with_terminal = false;
+        if candidate_resolution.is_some() {
+            info!(
+                event = "session_candidate_resolution_wait",
+                peer.id = %peer,
+                session.id = %state.id
+            );
+        }
         while let Some(resolution) = candidate_resolution {
             drop(states);
             resolution.completed().await;
@@ -1810,6 +1817,7 @@ where
             },
         )
         .await?;
+        info!(event = "outgoing_negotiation_waiting_hello_ack", peer.id = %peer);
 
         // Set when a Goodbye arrives mid-negotiation: a room teardown goodbye from the
         // previous generation can cross with a fresh join (end_call followed by an
