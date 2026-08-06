@@ -89,6 +89,10 @@ If missing:
 cargo install flutter_rust_bridge_codegen
 ```
 
+CI regenerates the bindings and fails on any diff, so always commit the
+regenerated output. The codegen version must match the pinned
+`flutter_rust_bridge` version.
+
 ## Test Quality Policy
 
 - Tests must verify real behavior through the full stack where possible

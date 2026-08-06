@@ -7236,7 +7236,7 @@ class OverlayImpl extends RustOpaque implements Overlay {
       RustLib.instance.api.crateOverlayOverlayMoveOverlay(
           that: this, x: x, y: y, width: width, height: height);
 
-  /// access the screen resolution for overlay positioning in the front end
+  /// non-windows platforms don't have an overlay
   (int, int) screenResolution() =>
       RustLib.instance.api.crateOverlayOverlayScreenResolution(
         that: this,
@@ -7627,7 +7627,10 @@ class TelepathyImpl extends RustOpaque implements Telepathy {
           that: this, contact: contact, operation: operation);
 
   /// Non-blocking: spawns the manager task and returns. The Dart side observes
-  /// the eventual `Active` transition via the `managerActive` callback.
+  /// the eventual `Active` transition via the `managerActive` callback. The
+  /// non-blocking contract is validated by the CLI system test
+  /// `test_start_manager_ack_precedes_active_event`; the `()` return type
+  /// prevents silent reintroduction of blocking semantics.
   Future<void> startManager() =>
       RustLib.instance.api.crateFlutterTelepathyStartManager(
         that: this,
