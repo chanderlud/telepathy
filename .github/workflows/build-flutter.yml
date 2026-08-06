@@ -193,7 +193,7 @@ jobs:
         run: |
           set -eux
           EXECUTABLE_NAME="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' telepathy-macos.app/Contents/Info.plist)"
-          lipo -verify_arch arm64 x86_64 "telepathy-macos.app/Contents/MacOS/$EXECUTABLE_NAME"
+          lipo "telepathy-macos.app/Contents/MacOS/$EXECUTABLE_NAME" -verify_arch arm64 x86_64
           hdiutil create -volname Telepathy -srcfolder telepathy-macos.app -ov -format UDZO telepathy-macos-universal-unsigned.dmg
           hdiutil verify telepathy-macos-universal-unsigned.dmg
 
