@@ -55,7 +55,7 @@ The current flow also has no direct screenshare tests and represents ownership w
 - Additional video sources: implement against the source and adapter seams established here.
 - Mobile/web video: add target adapters after platform capture/playback and permission requirements are defined.
 - Connection-wide dynamic uni-stream dispatch: revisit if multiple post-call stream kinds can race for `accept_uni`; this plan keeps one authoritative video-stream acceptor and validates its preamble.
-- Automated system-test execution: system tests remain a manual WSL developer step under current repository policy.
+- Automated system-test execution: covered by the hybrid Compose system-test workflow; use the local unprivileged entrypoint or CI privileged entrypoint rather than adding another runner.
 
 ---
 
@@ -648,7 +648,7 @@ Lifecycle mapping preserves current interaction:
 **Verification:**
 - Focused video-session integration coverage passes repeatedly.
 - Required main Rust and core integration stress passes complete without leaked state or process probes.
-- Manual WSL system-test requirement is called out at handoff with desktop FFmpeg sender/receiver scenarios.
+- System-test requirement is called out at handoff with desktop FFmpeg sender/receiver scenarios through the current Compose-backed entrypoints.
 
 ---
 
@@ -760,7 +760,7 @@ flowchart TB
 - Regenerate bridge output only after public Rust contract stabilizes; never edit generated files manually.
 - Treat protocol migration as coordinated: all peers in a test/deployment set must use the new wire version.
 - Verify desktop FFmpeg behavior on Windows, macOS, and Linux where available. Unsupported mobile/web targets must still build and expose capability results.
-- Developer must run system tests manually in WSL after automated Rust/Flutter validation.
+- Run system tests through `system-tests/run-in-user-namespace.sh` locally or `system-tests/run-privileged.sh` on an authorized CI host after automated Rust/Flutter validation.
 
 ---
 
