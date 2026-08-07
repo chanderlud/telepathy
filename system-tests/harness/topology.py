@@ -29,10 +29,6 @@ class TopologyManager:
         self._gateway_ips: dict[str, str] = {}
         self._client_ifaces: dict[str, str] = {}
         self._root_ifaces: list[str] = []
-        # Whether iptables is usable on this host. Disabled lazily if the
-        # binary is missing so forwarding setup is a no-op where the FORWARD
-        # policy already accepts inter-namespace traffic.
-        self._iptables_available = True
         self._canonical_relay_url = (
             f"http://{self._CANONICAL_RELAY_IP}:{self._RELAY_PORT}"
         )
@@ -88,24 +84,13 @@ class TopologyManager:
             )
 
     async def _iptables(self, *args: str, check: bool = True) -> int:
-        """Runs an iptables command, returning its exit code.
-
-        If iptables is not installed the host is assumed to permit forwarding
-        already (no Docker-imposed DROP policy), so forwarding management is
-        disabled for the remainder of this manager's lifetime.
-        """
-        if not self._iptables_available:
-            return 1
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "iptables",
-                *args,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-        except FileNotFoundError:
-            self._iptables_available = False
-            return 1
+        """Runs required outer-namespace forwarding command."""
+        proc = await asyncio.create_subprocess_exec(
+            "iptables",
+            *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
         stdout, stderr = await proc.communicate()
         returncode = proc.returncode
         if returncode is None:
@@ -161,7 +146,7 @@ class TopologyManager:
         self._root_ifaces.clear()
 
         try:
-            # Expose a stable host-side relay identity that every namespace can route to.
+            # Expose a stable outer-namespace relay identity every client can route to.
             await self._run(
                 "ip",
                 "addr",
@@ -227,12 +212,8 @@ class TopologyManager:
                 )
                 await self._run("ip", "link", "set", gateway_iface, "up")
 
-                # Docker (used for the relay/DNS containers) sets the kernel
-                # FORWARD policy to DROP, which silently blocks the direct
-                # client-to-client path that iroh needs for holepunching.
-                # Relay traffic is delivered locally and is unaffected, so the
-                # symptom is "relay works, direct never forms" on every worker
-                # whose gateway interfaces lack an explicit ACCEPT rule.
+                # Explicit rules preserve direct client-to-client routing even
+                # when outer namespace FORWARD policy defaults to DROP.
                 await self._allow_forwarding(gateway_iface)
 
                 await self._run(
@@ -271,9 +252,25 @@ class TopologyManager:
                     "via",
                     gateway_ip,
                 )
+            if len(self.client_namespaces) > 1:
+                _, peer_ip = self._client_addresses(self._worker_index, num_clients, 1)
+                await self._run(
+                    "ip",
+                    "netns",
+                    "exec",
+                    self.client_namespaces[0],
+                    "ping",
+                    "-c",
+                    "1",
+                    # Allow Linux NUD's three 1-second ARP solicitations under
+                    # xdist contention.
+                    "-W",
+                    "4",
+                    peer_ip,
+                )
+            for client_ns in self.client_namespaces:
                 await self._apply_profile(client_ns, profile)
         except Exception:
-            await self.teardown()
             raise
 
     async def _apply_profile(
