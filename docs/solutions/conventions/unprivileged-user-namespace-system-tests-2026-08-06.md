@@ -15,7 +15,7 @@ related_components:
   - system-tests/harness/namespace_runner.py
   - system-tests/harness/discovery.py
   - system-tests/harness/topology.py
-  - docs/system-tests-user-namespaces.md
+  - docs/SYSTEM-TESTS.md
 tags: [system-tests, user-namespaces, network-topology, discovery-cache, artifacts, forwarding]
 ---
 

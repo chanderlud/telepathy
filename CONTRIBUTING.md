@@ -195,7 +195,7 @@ Runner verifies pinned direct relay and DNS binaries in user cache, creates
 per-run certificates outside checkout, and saves user-readable artifacts. A
 preflight failure is terminal: do not use sudo, Docker, Compose, containers,
 host networking, host namespace mutation, Docker socket/group access, or a VM.
-See `docs/system-tests-user-namespaces.md` for support and artifact details.
+See `docs/SYSTEM-TESTS.md` for support and artifact details.
 
 ## Coding Guidelines
 

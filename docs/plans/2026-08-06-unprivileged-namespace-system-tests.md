@@ -229,7 +229,7 @@ Outer namespace contains all test state. When runner exits, kernel destroys oute
 **Files:**
 - Modify: `AGENTS.md`
 - Modify: `CONTRIBUTING.md`
-- Create: `docs/system-tests-user-namespaces.md`
+- Create: `docs/SYSTEM-TESTS.md`
 - Modify: `system-tests/requirements.txt`
 - Modify: `system-tests/build.sh`
 
