@@ -21,7 +21,7 @@ The most commonly relevant directories are:
   - `rust/telepathy-core/`: application core, networking, and Flutter bridge API.
   - `rust/telepathy-audio/`: real-time audio capture, playback, processing, and codecs.
   - `rust/telepathy-cli/`: command-line client used by development and system tests.
-- `system-tests/`: user-namespace end-to-end and networking tests.
+- `system-tests/`: Docker Compose-backed end-to-end and networking tests with unprivileged local and privileged CI entrypoints.
 - `assets/`: sounds, models, and icons bundled with the application.
 - `android/`, `ios/`, `linux/`, `macos/`, `windows/`, and `web/`: platform-specific build and integration files.
 - `.github/workflows/`: the authoritative CI configuration.
@@ -179,8 +179,9 @@ A targeted `cargo test` command is acceptable during development, but the releva
 
 ### System tests
 
-System tests require Python 3.12, native Linux or WSL with unprivileged user
-namespaces, `ip`, `iptables`, and `tc`. Run one supported headless entrypoint:
+System tests require Python 3.12, Docker Compose, Linux networking tools (`ip`,
+`iptables`, `ping`, and `tc`), and either unprivileged user namespaces plus
+`slirp4netns` or non-interactive `sudo`. Local development uses the non-privileged entrypoint:
 
 ```sh
 python -m pip install -r system-tests/requirements.txt
@@ -191,11 +192,17 @@ SYSTEM_TEST_ARTIFACTS_DIR=system-tests/artifacts \
   --save-artifacts failures
 ```
 
-Runner verifies pinned direct relay and DNS binaries in user cache, creates
-per-run certificates outside checkout, and saves user-readable artifacts. A
-preflight failure is terminal: do not use sudo, Docker, Compose, containers,
-host networking, host namespace mutation, Docker socket/group access, or a VM.
-See `docs/SYSTEM-TESTS.md` for support and artifact details.
+The local runner starts pinned v1.0.2 Iroh relay and DNS containers, connects the
+unprivileged namespace to host services through `slirp4netns`, and always captures
+logs and tears Compose down. Docker socket access is still required and is
+host-root-equivalent; `sudo` is not. CI instead runs the privileged entrypoint:
+
+```sh
+system-tests/run-privileged.sh python -m pytest system-tests/tests
+```
+
+Both paths preserve nested client namespaces and per-run artifacts. See
+`docs/SYSTEM-TESTS.md` for support and artifact details.
 
 ## Coding Guidelines
 

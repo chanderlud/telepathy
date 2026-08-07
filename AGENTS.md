@@ -73,10 +73,12 @@ cargo nextest run --manifest-path rust/Cargo.toml -p telepathy_core --test core_
 
 Before handing off substantial Rust work, run the main and stress suites.
 
-System tests run only through `system-tests/run-in-user-namespace.sh`. Agents may run
-supported-host system tests autonomously through the `system-tests` skill and runner.
-Native Linux and WSL require passed user-namespace preflight;
-unsupported hosts have no fallback.
+System tests use Docker Compose for the pinned Iroh relay and DNS services. Agents run
+local tests through `system-tests/run-in-user-namespace.sh`, which uses an unprivileged
+outer namespace plus `slirp4netns`; no sudo is required, but Docker Compose access is.
+GitHub Actions invokes `system-tests/run-privileged.sh` as the runner user, and that
+wrapper uses non-interactive sudo only for host topology and pytest. Both paths preserve
+nested client namespaces, per-run certificates, Compose logs, and guaranteed teardown.
 
 ## Flutter Rust Bridge
 
