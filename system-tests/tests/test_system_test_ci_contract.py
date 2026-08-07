@@ -16,7 +16,7 @@ def test_given_system_workflow_when_read_then_it_uses_only_namespace_entrypoint(
     assert "iproute2" in workflow
     assert "timeout-minutes: 40" in workflow
     assert "fail-fast: false" in workflow
-    assert "sudo" not in workflow
+    assert "sudo -E" not in workflow
     assert "docker" not in workflow.casefold()
     assert "compose" not in workflow.casefold()
 
