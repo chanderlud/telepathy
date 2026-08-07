@@ -12,6 +12,8 @@ def test_given_system_workflow_when_read_then_it_uses_only_namespace_entrypoint(
     )
 
     assert "system-tests/run-in-user-namespace.sh python -m pytest" in workflow
+    assert "libasound2-dev" in workflow
+    assert "iproute2" in workflow
     assert "timeout-minutes: 40" in workflow
     assert "fail-fast: false" in workflow
     assert "sudo" not in workflow
