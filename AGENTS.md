@@ -73,7 +73,10 @@ cargo nextest run --manifest-path rust/Cargo.toml -p telepathy_core --test core_
 
 Before handing off substantial Rust work, run the main and stress suites.
 
-System tests must be run manually by the developer in WSL. Prompt them when relevant.
+System tests run only through `system-tests/run-in-user-namespace.sh`. Agents may run
+supported-host system tests autonomously through the `system-tests` skill and runner.
+Native Linux and WSL require passed user-namespace preflight;
+unsupported hosts have no fallback.
 
 ## Flutter Rust Bridge
 

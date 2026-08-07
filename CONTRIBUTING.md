@@ -21,7 +21,7 @@ The most commonly relevant directories are:
   - `rust/telepathy-core/`: application core, networking, and Flutter bridge API.
   - `rust/telepathy-audio/`: real-time audio capture, playback, processing, and codecs.
   - `rust/telepathy-cli/`: command-line client used by development and system tests.
-- `system-tests/`: Docker-backed end-to-end and networking tests.
+- `system-tests/`: user-namespace end-to-end and networking tests.
 - `assets/`: sounds, models, and icons bundled with the application.
 - `android/`, `ios/`, `linux/`, `macos/`, `windows/`, and `web/`: platform-specific build and integration files.
 - `.github/workflows/`: the authoritative CI configuration.
@@ -179,21 +179,23 @@ A targeted `cargo test` command is acceptable during development, but the releva
 
 ### System tests
 
-The system tests require Python 3.12, Docker Compose, and Linux networking capabilities. The CI-equivalent sequence is:
+System tests require Python 3.12, native Linux or WSL with unprivileged user
+namespaces, `ip`, `iptables`, and `tc`. Run one supported headless entrypoint:
 
 ```sh
 python -m pip install -r system-tests/requirements.txt
 bash system-tests/build.sh
-bash system-tests/relay/gen-certs.sh
-docker compose -f system-tests/docker-compose.yml up -d --wait
-sudo -E "$(command -v python)" -m pytest \
+SYSTEM_TEST_ARTIFACTS_DIR=system-tests/artifacts \
+  system-tests/run-in-user-namespace.sh python -m pytest \
   system-tests/tests \
-  --artifacts-dir system-tests/artifacts \
   --save-artifacts failures
-docker compose -f system-tests/docker-compose.yml down
 ```
 
-Always stop the Docker environment after testing, including after failures.
+Runner verifies pinned direct relay and DNS binaries in user cache, creates
+per-run certificates outside checkout, and saves user-readable artifacts. A
+preflight failure is terminal: do not use sudo, Docker, Compose, containers,
+host networking, host namespace mutation, Docker socket/group access, or a VM.
+See `docs/system-tests-user-namespaces.md` for support and artifact details.
 
 ## Coding Guidelines
 
