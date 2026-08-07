@@ -1,6 +1,6 @@
 import 'dart:async';
-import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
@@ -170,6 +170,32 @@ void main() {
     );
     expect(settings.inputDeviceId, 'input-1');
   });
+
+  testWidgets(
+    'Web hides audio device selectors and their following spacer',
+    (WidgetTester tester) async {
+      final audioDevices = _FakeAudioDevices(telepathy: _FakeTelepathy());
+      await _pumpAudioSettings(
+        tester,
+        audioDevices,
+        _FakeAudioSettingsController(),
+      );
+
+      expect(find.text('Input Device'), findsNothing);
+      expect(find.text('Output Device'), findsNothing);
+
+      final audioOptionsBottom =
+          tester.getBottomLeft(find.text('Audio Options')).dy;
+      final soundTestTop =
+          tester.getTopLeft(find.widgetWithText(Button, 'Sound Test')).dy;
+      expect(
+        soundTestTop - audioOptionsBottom,
+        lessThan(30),
+        reason: 'Web must not retain the hidden selector spacer',
+      );
+    },
+    skip: !kIsWeb,
+  );
 }
 
 Future<void> _pumpAudioSettings(

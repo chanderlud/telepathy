@@ -184,7 +184,7 @@ class _AudioSettingsState extends State<AudioSettings> {
             return const SizedBox.shrink();
           },
         ),
-        const SizedBox(height: 20),
+        if (!kIsWeb) const SizedBox(height: 20),
         Row(children: [
           Selector<StateController, (bool, bool)>(
             selector: (context, controller) =>
