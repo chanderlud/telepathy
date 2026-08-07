@@ -32,7 +32,7 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Linux Prerequisites
-        run: sudo apt-get update && sudo apt-get install clang cmake git ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev libasound2-dev iproute2
+        run: sudo apt-get update && sudo apt-get install clang cmake git ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev libasound2-dev iproute2 iptables iputils-ping
 
       - name: Setup Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -57,7 +57,9 @@ jobs:
       - name: Run system tests
         env:
           SYSTEM_TEST_ARTIFACTS_DIR: system-tests/artifacts
-        run: system-tests/run-in-user-namespace.sh python -m pytest -p no:terminal system-tests/tests --save-artifacts failures
+        run: |
+          PYTHON_BIN="$(command -v python)"
+          system-tests/run-privileged.sh "$PYTHON_BIN" -m pytest -p no:terminal system-tests/tests --save-artifacts failures
 
       - name: Upload system-test artifacts
         if: always()
