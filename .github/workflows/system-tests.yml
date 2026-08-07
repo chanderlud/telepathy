@@ -31,9 +31,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Linux Prerequisites
-        run: sudo apt-get update && sudo apt-get install clang cmake git ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev libasound2-dev iproute2
-
       - name: Setup Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
@@ -54,20 +51,10 @@ jobs:
       - name: Build CLI binary
         run: bash system-tests/build.sh
 
-      - name: Generate relay TLS certificates
-        run: bash system-tests/relay/gen-certs.sh
-
-      - name: Start iroh discovery containers
-        run: docker compose -f system-tests/docker-compose.yml up -d --wait
-
       - name: Run system tests
-        run: |
-          PYTHON_BIN="$(command -v python)"
-          sudo -E "$PYTHON_BIN" -m pytest -p no:terminal system-tests/tests --artifacts-dir system-tests/artifacts --save-artifacts failures
-
-      - name: Stop iroh discovery containers
-        if: always()
-        run: docker compose -f system-tests/docker-compose.yml down
+        env:
+          SYSTEM_TEST_ARTIFACTS_DIR: system-tests/artifacts
+        run: system-tests/run-in-user-namespace.sh python -m pytest -p no:terminal system-tests/tests --save-artifacts failures
 
       - name: Upload system-test artifacts
         if: always()
