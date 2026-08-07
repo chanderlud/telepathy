@@ -2,13 +2,13 @@ from __future__ import annotations
 
 # noqa: SIZE_OK - fixed capability and cleanup command table is one state machine.
 
+import json
 import os
 import platform
 import shutil
 import signal
 import subprocess
 import sys
-import json
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,20 +19,10 @@ if str(_SYSTEM_TEST_ROOT) not in sys.path:
     sys.path.insert(0, str(_SYSTEM_TEST_ROOT))
 
 from harness.discovery import (
-    ArtifactDigestError,
-    CacheIntegrityError,
-    DiscoveryPaths,
-    DiscoveryServices,
     DnsUdpReadinessProbe,
     HttpReadinessProbe,
-    LockFormatError,
     ReadinessTimeoutError,
-    ServiceExitedError,
-    UnsafeArchiveError,
-    UnsupportedPlatformError,
-    load_discovery_lock,
-    resolve_binaries,
-    verify_binaries,
+    wait_for_readiness,
 )
 
 _COMMAND_TIMEOUT_SECONDS: Final = 10.0
@@ -42,6 +32,9 @@ _PEER_INTERFACE: Final = "tp-preflight1"
 _REQUIRED_COMMANDS: Final = ("mount", "ip", "iptables", "ping", "tc")
 _RELAY_ADDRESS: Final = "100.64.0.1"
 _DISCOVERY_READY_TIMEOUT_SECONDS: Final = 30.0
+_DISCOVERY_HOST_ENV: Final = "TELEPATHY_DISCOVERY_HOST"
+_SLIRP_INTERFACE_ENV: Final = "TELEPATHY_SLIRP_INTERFACE"
+_RUN_ARTIFACT_ENV: Final = "TELEPATHY_RUN_ARTIFACT_DIR"
 
 
 class RunnerInterrupted(Exception):
@@ -71,8 +64,8 @@ class PreflightError(Exception):
         return (
             f"unsupported {self.environment}: {self.prerequisite} failed\n"
             f"{self.detail}\n"
-            "Enable unprivileged user namespaces and required namespace capabilities "
-            "on this host; no privileged fallback is supported."
+            "Enable unprivileged user namespaces and Slirp on this host, or use "
+            "system-tests/run-privileged.sh where host root is available."
         )
 
 
@@ -82,6 +75,8 @@ class NamespaceContext:
     effective_uid: int
     uid_map: str
     kernel_release: str
+    discovery_host: str
+    slirp_interface: str
 
     @property
     def environment(self) -> str:
@@ -201,7 +196,8 @@ def _probe_nested_topology(runner: CommandRunner, context: NamespaceContext) -> 
             ("ip", "link", "set", _PEER_INTERFACE, "netns", _NETNS_NAME),
         ),
         _ProbeStep(
-            "veth address capability", ("ip", "addr", "add", "198.18.0.1/30", "dev", _ROOT_INTERFACE)
+            "veth address capability",
+            ("ip", "addr", "add", "198.18.0.1/30", "dev", _ROOT_INTERFACE),
         ),
         _ProbeStep("veth link capability", ("ip", "link", "set", _ROOT_INTERFACE, "up")),
         _ProbeStep("nested route capability", (*netns, "ip", "link", "set", "lo", "up")),
@@ -210,7 +206,10 @@ def _probe_nested_topology(runner: CommandRunner, context: NamespaceContext) -> 
             (*netns, "ip", "addr", "add", "198.18.0.2/30", "dev", _PEER_INTERFACE),
         ),
         _ProbeStep("nested route capability", (*netns, "ip", "link", "set", _PEER_INTERFACE, "up")),
-        _ProbeStep("nested route capability", (*netns, "ip", "route", "replace", "default", "via", "198.18.0.1")),
+        _ProbeStep(
+            "nested route capability",
+            (*netns, "ip", "route", "replace", "default", "via", "198.18.0.1"),
+        ),
         _ProbeStep(
             "iptables forwarding capability", forward_input, ("iptables", "-D", *forward_input[2:])
         ),
@@ -299,6 +298,46 @@ def run_preflight(runner: CommandRunner, context: NamespaceContext) -> None:
     _probe_nested_topology(runner, context)
 
 
+def configure_discovery_bridge(runner: CommandRunner, context: NamespaceContext) -> None:
+    """Route nested test clients through Slirp to host-network Compose services."""
+    _require(
+        runner,
+        context,
+        _ProbeStep(
+            "Slirp interface",
+            ("ip", "link", "show", "dev", context.slirp_interface),
+        ),
+    )
+    _require(
+        runner,
+        context,
+        _ProbeStep(
+            "Slirp host route",
+            ("ip", "route", "get", context.discovery_host),
+        ),
+    )
+    _require(
+        runner,
+        context,
+        _ProbeStep(
+            "Slirp masquerade",
+            (
+                "iptables",
+                "-t",
+                "nat",
+                "-A",
+                "POSTROUTING",
+                "-s",
+                "10.0.0.0/8",
+                "-o",
+                context.slirp_interface,
+                "-j",
+                "MASQUERADE",
+            ),
+        ),
+    )
+
+
 def _read_context() -> NamespaceContext:
     raw_host_uid = os.environ.get("TELEPATHY_HOST_UID")
     if raw_host_uid is None:
@@ -315,11 +354,21 @@ def _read_context() -> NamespaceContext:
             "launcher identity",
             f"TELEPATHY_HOST_UID is not an integer: {raw_host_uid!r}",
         ) from error
+    discovery_host = os.environ.get(_DISCOVERY_HOST_ENV)
+    slirp_interface = os.environ.get(_SLIRP_INTERFACE_ENV)
+    if discovery_host is None or slirp_interface is None:
+        raise PreflightError(
+            "Linux",
+            "Slirp discovery bridge",
+            f"{_DISCOVERY_HOST_ENV} and {_SLIRP_INTERFACE_ENV} are required",
+        )
     return NamespaceContext(
         host_uid=host_uid,
         effective_uid=os.geteuid(),
         uid_map=Path("/proc/self/uid_map").read_text(encoding="utf-8"),
         kernel_release=platform.release(),
+        discovery_host=discovery_host,
+        slirp_interface=slirp_interface,
     )
 
 
@@ -333,15 +382,6 @@ def _check_required_commands(environment: str) -> None:
         )
 
 
-@dataclass(frozen=True, slots=True)
-class RunPaths:
-    artifact_root: Path
-    state_root: Path
-    certificate_root: Path
-    relay_config: Path
-    dns_config: Path
-
-
 def _private_run_directory(parent: Path, prefix: str) -> Path:
     parent.mkdir(parents=True, exist_ok=True)
     parent.chmod(0o700)
@@ -350,59 +390,17 @@ def _private_run_directory(parent: Path, prefix: str) -> Path:
     return path
 
 
-def _run_paths() -> RunPaths:
+def _artifact_root() -> Path:
+    explicit = os.environ.get(_RUN_ARTIFACT_ENV)
+    if explicit is not None:
+        path = Path(explicit).resolve()
+        path.mkdir(parents=True, exist_ok=True)
+        path.chmod(0o700)
+        return path
     artifact_parent = Path(
         os.environ.get("SYSTEM_TEST_ARTIFACTS_DIR", _SYSTEM_TEST_ROOT / "artifacts")
     ).resolve()
-    state_parent = Path(
-        os.environ.get(
-            "XDG_STATE_HOME", Path.home() / ".local" / "state"
-        )
-    ).resolve() / "telepathy-system-tests"
-    artifact_root = _private_run_directory(artifact_parent, "run-")
-    state_root = _private_run_directory(state_parent, "run-")
-    certificate_root = state_root / "relay-certs"
-    certificate_root.mkdir(mode=0o700)
-    return RunPaths(
-        artifact_root=artifact_root,
-        state_root=state_root,
-        certificate_root=certificate_root,
-        relay_config=state_root / "relay.toml",
-        dns_config=state_root / "dns.toml",
-    )
-
-
-def _prepare_service_configs(paths: RunPaths) -> None:
-    certificate_result = subprocess.run(
-        [
-            "bash",
-            str(_SYSTEM_TEST_ROOT / "relay" / "gen-certs.sh"),
-            str(paths.certificate_root),
-        ],
-        cwd=_SYSTEM_TEST_ROOT.parent,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    certificate_files = (
-        paths.certificate_root / "cert.pem",
-        paths.certificate_root / "cert.key.pem",
-    )
-    if certificate_result.returncode != 0 or not all(
-        path.is_file() for path in certificate_files
-    ):
-        raise PreflightError(
-            "Linux",
-            "per-run relay certificates",
-            certificate_result.stderr.strip() or certificate_result.stdout.strip(),
-        )
-    relay_template = (_SYSTEM_TEST_ROOT / "relay" / "config.toml").read_text(
-        encoding="utf-8"
-    )
-    paths.relay_config.write_text(
-        relay_template.replace("/certs", str(paths.certificate_root)), encoding="utf-8"
-    )
-    shutil.copyfile(_SYSTEM_TEST_ROOT / "dns" / "config.dev.toml", paths.dns_config)
+    return _private_run_directory(artifact_parent, "run-")
 
 
 def _capture_command(path: Path, command: tuple[str, ...]) -> None:
@@ -413,7 +411,9 @@ def _capture_command(path: Path, command: tuple[str, ...]) -> None:
     )
 
 
-def _capture_artifacts(paths: RunPaths, status: int | None) -> None:
+def _capture_artifacts(
+    artifact_root: Path, context: NamespaceContext, status: int | None
+) -> None:
     commands = {
         "namespaces.txt": ("ip", "netns", "list"),
         "links.txt": ("ip", "-details", "link", "show"),
@@ -423,24 +423,20 @@ def _capture_artifacts(paths: RunPaths, status: int | None) -> None:
         "qdiscs.txt": ("tc", "qdisc", "show"),
     }
     for name, command in commands.items():
-        _capture_command(paths.artifact_root / name, command)
-    (paths.artifact_root / "manifest.json").write_text(
+        _capture_command(artifact_root / name, command)
+    (artifact_root / "manifest.json").write_text(
         json.dumps(
             {
                 "system_test_order_seed": os.environ.get("SYSTEM_TEST_ORDER_SEED"),
                 "pytest_exit_status": status,
-                "relay_url": f"http://{_RELAY_ADDRESS}:3340",
-                "dns_endpoint": "127.0.0.1:5300",
+                "relay_url": f"http://{context.discovery_host}:3340",
+                "dns_endpoint": f"{context.discovery_host}:5300",
                 "ip_forward": "enabled",
             },
             indent=2,
         ),
         encoding="utf-8",
     )
-
-
-def _cache_root() -> Path:
-    return Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
 
 
 def _run_owned_command(command: list[str], environment: dict[str, str]) -> int:
@@ -467,83 +463,47 @@ def _run_owned_command(command: list[str], environment: dict[str, str]) -> int:
         signal.signal(signal.SIGINT, previous_int)
 
 
-def prepare_cache() -> int:
-    """Populate verified cache before unshare removes host networking."""
+def _run_system_tests(command: list[str], context: NamespaceContext) -> int:
+    artifact_root = _artifact_root()
+    runner_log = artifact_root / "runner.log"
     try:
-        lock = load_discovery_lock(_SYSTEM_TEST_ROOT / "discovery-binaries.lock")
-        resolve_binaries(lock, _cache_root())
-    except (
-        ArtifactDigestError,
-        CacheIntegrityError,
-        LockFormatError,
-        OSError,
-        UnsafeArchiveError,
-        UnsupportedPlatformError,
-    ) as error:
-        print(f"discovery cache preparation failed: {error}", file=sys.stderr)
-        return 2
-    return 0
-
-
-def _run_system_tests(command: list[str]) -> int:
-    paths = _run_paths()
-    runner_log = paths.artifact_root / "runner.log"
-    try:
-        _prepare_service_configs(paths)
-        subprocess.run(
-            ("ip", "addr", "replace", f"{_RELAY_ADDRESS}/32", "dev", "lo"),
-            check=True,
+        configure_discovery_bridge(SubprocessCommandRunner(), context)
+        wait_for_readiness(
+            (
+                HttpReadinessProbe(context.discovery_host, 3340, "/"),
+                HttpReadinessProbe(context.discovery_host, 8080, "/pkarr"),
+                DnsUdpReadinessProbe(context.discovery_host, 5300),
+            ),
+            _DISCOVERY_READY_TIMEOUT_SECONDS,
         )
-        lock = load_discovery_lock(_SYSTEM_TEST_ROOT / "discovery-binaries.lock")
-        binaries = verify_binaries(lock, _cache_root())
-        services = DiscoveryServices(
-            binaries, DiscoveryPaths(paths.relay_config, paths.dns_config, paths.artifact_root)
-        )
-        services.start()
-        try:
-            services.wait_ready(
-                (
-                    HttpReadinessProbe(_RELAY_ADDRESS, 3340, "/"),
-                    HttpReadinessProbe("127.0.0.1", 8080, "/pkarr"),
-                    DnsUdpReadinessProbe("127.0.0.1", 5300),
-                ),
-                _DISCOVERY_READY_TIMEOUT_SECONDS,
-            )
-            environment = os.environ | {
-                "SYSTEM_TEST_ARTIFACTS_DIR": str(paths.artifact_root),
-                "TELEPATHY_DISCOVERY_LOG_DIR": str(paths.artifact_root),
-            }
-            returncode = _run_owned_command(command, environment)
-            runner_log.write_text(f"pytest exit status: {returncode}\n", encoding="utf-8")
-            _capture_artifacts(paths, returncode)
-            return returncode
-        finally:
-            services.stop(timeout=5.0)
+        environment = os.environ | {
+            "SYSTEM_TEST_ARTIFACTS_DIR": str(artifact_root),
+            "TELEPATHY_DISCOVERY_LOG_DIR": str(artifact_root),
+        }
+        returncode = _run_owned_command(command, environment)
+        runner_log.write_text(f"pytest exit status: {returncode}\n", encoding="utf-8")
+        _capture_artifacts(artifact_root, context, returncode)
+        return returncode
     except RunnerInterrupted:
         runner_log.write_text("runner interrupted; owned processes stopped\n", encoding="utf-8")
-        _capture_artifacts(paths, 130)
+        _capture_artifacts(artifact_root, context, 130)
         return 130
     except (
-        ArtifactDigestError,
-        CacheIntegrityError,
-        LockFormatError,
         OSError,
         PreflightError,
         ReadinessTimeoutError,
-        ServiceExitedError,
         subprocess.SubprocessError,
-        UnsafeArchiveError,
-        UnsupportedPlatformError,
     ) as error:
         runner_log.write_text(f"namespace runner failed: {error}\n", encoding="utf-8")
-        _capture_artifacts(paths, None)
-        print(f"namespace runner failed; artifacts: {paths.artifact_root}: {error}", file=sys.stderr)
+        _capture_artifacts(artifact_root, context, None)
+        print(
+            f"namespace runner failed; artifacts: {artifact_root}: {error}",
+            file=sys.stderr,
+        )
         return 2
 
 
 def main(argv: list[str]) -> int:
-    if argv == ["--prepare-cache"]:
-        return prepare_cache()
     command = argv[1:] if argv[:1] == ["--"] else argv
     try:
         context = _read_context()
@@ -556,7 +516,7 @@ def main(argv: list[str]) -> int:
     if not command:
         print(f"namespace preflight passed ({context.environment})")
         return 0
-    return _run_system_tests(command)
+    return _run_system_tests(command, context)
 
 
 if __name__ == "__main__":

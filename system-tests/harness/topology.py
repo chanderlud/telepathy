@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import os
 import re
 from dataclasses import dataclass
 
@@ -350,9 +351,15 @@ class TopologyManager:
         self.client_namespaces = []
 
     def relay_url(self, namespace: str) -> str:
+        discovery_host = os.environ.get("TELEPATHY_DISCOVERY_HOST")
+        if discovery_host is not None:
+            return f"http://{discovery_host}:{self._RELAY_PORT}"
         return self._canonical_relay_url
 
     def dns_endpoint(self, namespace: str) -> str:
+        discovery_host = os.environ.get("TELEPATHY_DISCOVERY_HOST")
+        if discovery_host is not None:
+            return f"{discovery_host}:5300"
         gateway_ip = self._gateway_ips.get(namespace, "127.0.0.1")
         return f"{gateway_ip}:5300"
 
@@ -360,5 +367,8 @@ class TopologyManager:
         return self._DNS_ORIGIN_DOMAIN
 
     def pkarr_relay(self, namespace: str) -> str:
+        discovery_host = os.environ.get("TELEPATHY_DISCOVERY_HOST")
+        if discovery_host is not None:
+            return f"http://{discovery_host}:8080/pkarr"
         gateway_ip = self._gateway_ips.get(namespace, "127.0.0.1")
         return f"http://{gateway_ip}:8080/pkarr"
