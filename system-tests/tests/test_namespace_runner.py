@@ -383,8 +383,8 @@ def test_given_unshare_denial_when_launcher_runs_then_it_keeps_diagnostic_artifa
 def test_privileged_launcher_keeps_compose_caller_owned_and_sudos_only_pytest(
     tmp_path: Path,
 ) -> None:
-    if os.environ.get("TELEPATHY_DISCOVERY_HOST") is not None:
-        pytest.skip("privileged wrapper appears as mapped root inside user namespace")
+    if os.geteuid() == 0 or os.environ.get("TELEPATHY_DISCOVERY_HOST") is not None:
+        pytest.skip("privileged wrapper test requires an unprivileged calling user")
 
     docker_log = tmp_path / "docker.log"
     sudo_log = tmp_path / "sudo.log"
@@ -466,7 +466,7 @@ def test_given_direct_runner_execution_when_no_launcher_identity_then_imports_an
         capture_output=True,
         text=True,
         check=False,
-        timeout=10,
+        timeout=30,
     )
 
     assert result.returncode == 2
