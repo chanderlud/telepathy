@@ -23,6 +23,56 @@ namespaces, veth routing, forwarding rules, reachability checks, and `tc netem`.
 Docker socket access is host-root-equivalent. The local path avoids `sudo`, but it
 does not make Docker access unprivileged.
 
+## Enable Unprivileged Namespaces
+
+Only a host administrator should apply these settings. Agents may run them when the
+user asks for environment setup, but must not silently weaken host policy.
+
+On native Ubuntu or WSL, persist basic user-namespace support:
+
+```sh
+sudo install -d -m 0755 /etc/sysctl.d
+sudo tee /etc/sysctl.d/99-telepathy-userns.conf >/dev/null <<'EOF'
+kernel.unprivileged_userns_clone=1
+user.max_user_namespaces=15000
+EOF
+sudo sysctl --system
+```
+
+Ubuntu may also restrict unprivileged user namespaces through AppArmor. Prefer an
+AppArmor allowlist for this runner when policy requires one. If the administrator
+accepts the global setting, use:
+
+```sh
+sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+sudo tee /etc/sysctl.d/99-telepathy-userns-apparmor.conf >/dev/null <<'EOF'
+kernel.apparmor_restrict_unprivileged_userns=0
+EOF
+sudo sysctl --system
+```
+
+Install Slirp and validate host policy:
+
+```sh
+sudo apt-get update
+sudo apt-get install slirp4netns
+sysctl kernel.unprivileged_userns_clone user.max_user_namespaces \
+  kernel.apparmor_restrict_unprivileged_userns
+system-tests/run-in-user-namespace.sh
+```
+
+Successful validation prints `namespace preflight passed`. A failure means the host
+does not support the unprivileged path; keep the printed artifact directory.
+
+## Privileged Option
+
+Use `system-tests/run-privileged.sh` only in GitHub Actions or on another
+authorized, disposable host where non-interactive `sudo` is available. Invoke it as
+the normal runner user; the wrapper starts Compose and generates certificates as
+that user, then uses `sudo` only for host topology and pytest. It restores
+forwarding state, removes the test loopback alias, tears Compose down, and repairs
+artifact ownership. Do not use it as a sandbox for untrusted code.
+
 ## Local Agent Run
 
 From repository root:
@@ -35,7 +85,7 @@ SYSTEM_TEST_ARTIFACTS_DIR=system-tests/artifacts \
   python -m pytest system-tests/tests --save-artifacts failures
 ```
 
-The launcher starts pinned v1.0.2 Compose services, creates a blocked outer user
+The launcher starts the Compose-pinned services, creates a blocked outer user
 namespace, waits for the child to report that UID mapping completed, attaches
 `slirp4netns`, waits for its ready signal, then runs pytest. Discovery endpoints
 inside the namespace use Slirp host gateway `192.0.2.2`: relay `3340`, DNS `5300`,
@@ -70,7 +120,8 @@ Each run creates a mode `0700` `run-*` directory containing:
 
 Real local unprivileged run: `624 passed, 8 skipped in 210.07s`. The skips are
 privileged-wrapper fake tests that do not apply as mapped root inside the local
-user namespace. Compose teardown was verified.
+user namespace. GitHub Actions validated the privileged entrypoint with all three
+PR sweeps green; full CI and Smoke also passed.
 
 ## Troubleshooting
 

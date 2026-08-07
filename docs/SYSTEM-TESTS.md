@@ -1,6 +1,6 @@
 # Hybrid Compose System Tests
 
-Telepathy system tests use Docker Compose to run pinned v1.0.2 Iroh relay and DNS
+Telepathy system tests use Docker Compose to run pinned Iroh relay and DNS
 services with host networking. They offer two execution paths:
 
 - Local agents use `system-tests/run-in-user-namespace.sh`. This path needs no
@@ -36,6 +36,43 @@ Docker socket access remains host-root-equivalent even though this path does not
 
 Privileged mode additionally requires non-interactive `sudo`; invoke the wrapper as
 the normal runner user so Compose and certificate generation remain caller-owned.
+
+## Enable Unprivileged Namespaces
+
+Only a host administrator should change these settings. On native Ubuntu or WSL,
+persist basic user-namespace support:
+
+```sh
+sudo install -d -m 0755 /etc/sysctl.d
+sudo tee /etc/sysctl.d/99-telepathy-userns.conf >/dev/null <<'EOF'
+kernel.unprivileged_userns_clone=1
+user.max_user_namespaces=15000
+EOF
+sudo sysctl --system
+```
+
+Ubuntu may also restrict unprivileged user namespaces through AppArmor. Prefer an
+AppArmor allowlist for this runner when policy requires one. If the administrator
+accepts the global setting:
+
+```sh
+sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+sudo tee /etc/sysctl.d/99-telepathy-userns-apparmor.conf >/dev/null <<'EOF'
+kernel.apparmor_restrict_unprivileged_userns=0
+EOF
+sudo sysctl --system
+```
+
+Validate the host after installing `slirp4netns`:
+
+```sh
+sysctl kernel.unprivileged_userns_clone user.max_user_namespaces \
+  kernel.apparmor_restrict_unprivileged_userns
+system-tests/run-in-user-namespace.sh
+```
+
+Successful validation prints `namespace preflight passed`. If host policy cannot be
+changed, use the privileged path only on an authorized disposable host or CI runner.
 
 ## Local Agent Run
 
@@ -102,7 +139,9 @@ On this branch, the real local unprivileged path completed:
 
 The eight skips are the privileged-wrapper fake tests, which do not apply when the
 suite itself is already running as mapped root inside the local user namespace.
-Compose teardown was verified after the run.
+Compose teardown was verified after the run. GitHub Actions then validated the
+privileged entrypoint: all three PR sweeps passed, and full CI and Smoke reached
+success.
 
 ## Troubleshooting
 

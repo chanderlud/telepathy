@@ -25,7 +25,7 @@ tags: [system-tests, docker-compose, user-namespaces, slirp4netns, network-topol
 ## Context
 
 Telepathy system tests require real Linux networking. Docker Compose owns the
-pinned v1.0.2 Iroh relay and DNS services in every environment. Local agents can
+pinned Iroh relay and DNS services in every environment. Local agents can
 run without `sudo` through an unprivileged outer namespace, while CI runs pytest
 with host root because user namespaces are not reliably available there.
 
@@ -66,6 +66,29 @@ Docker socket access is still host-root-equivalent. The local entrypoint removes
 the `sudo` requirement for namespace setup; it does not make Docker access safe
 for untrusted code.
 
+## Host Enablement
+
+If `unshare` reports `uid_map ... Operation not permitted`, a host administrator
+must enable unprivileged user namespaces. On Ubuntu or WSL, persist:
+
+```sh
+sudo install -d -m 0755 /etc/sysctl.d
+sudo tee /etc/sysctl.d/99-telepathy-userns.conf >/dev/null <<'EOF'
+kernel.unprivileged_userns_clone=1
+user.max_user_namespaces=15000
+EOF
+sudo sysctl --system
+```
+
+Ubuntu AppArmor may also block user namespaces. Prefer an allowlist for this runner;
+when the administrator accepts the global setting, persist
+`kernel.apparmor_restrict_unprivileged_userns=0`. Install `slirp4netns`, then run
+`system-tests/run-in-user-namespace.sh` and require `namespace preflight passed`.
+
+If host policy cannot be changed, use `run-privileged.sh` only in CI or on another
+authorized disposable host with non-interactive `sudo`. Invoke it as the runner
+user; it limits sudo to topology and pytest, then restores host and artifact state.
+
 ## Why This Matters
 
 One Compose lifecycle avoids drift between local and CI service behavior. Slirp
@@ -78,10 +101,10 @@ wrapper fake tests that do not apply as mapped root inside the user namespace.
 
 ## Artifact Pattern
 
-Each run has a mode `0700` `run-*` directory. Start with `runner.log`,
-`manifest.json`, `relay.log`, and `dns.log`. Local failures may also have
-`slirp.log`. Inspect namespace, route, forwarding, and qdisc snapshots before
-assuming a topology regression.
+Each run has a mode `0700` `run-*` directory. Start with `runner.log`, `relay.log`,
+and `dns.log`; local runs also have `manifest.json` and may have `slirp.log`.
+Inspect namespace, route, forwarding, and qdisc snapshots before assuming a
+topology regression.
 
 The forwarding probe still sends one ping before traffic profiles and allows four
 seconds for ARP/NUD under xdist contention. Preserve that behavior; it catches

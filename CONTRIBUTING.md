@@ -192,7 +192,7 @@ SYSTEM_TEST_ARTIFACTS_DIR=system-tests/artifacts \
   --save-artifacts failures
 ```
 
-The local runner starts pinned v1.0.2 Iroh relay and DNS containers, connects the
+The local runner starts the Compose-pinned Iroh relay and DNS containers, connects the
 unprivileged namespace to host services through `slirp4netns`, and always captures
 logs and tears Compose down. Docker socket access is still required and is
 host-root-equivalent; `sudo` is not. CI instead runs the privileged entrypoint:

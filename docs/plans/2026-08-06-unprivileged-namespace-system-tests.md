@@ -32,8 +32,8 @@ returning service deployment to one pinned Compose definition.
 
 ## Requirements
 
-- R1. Docker Compose is the only relay/DNS deployment path. Images remain pinned
-  to `n0computer/iroh-relay:v1.0.2` and `n0computer/iroh-dns-server:v1.0.2`.
+- R1. Docker Compose is the only relay/DNS deployment path. Image tags are pinned
+  only in `system-tests/docker-compose.yml`.
 - R2. No downloaded Iroh binaries, binary lockfile, direct service subprocesses,
   or custom binary cache remain.
 - R3. Local agents use `system-tests/run-in-user-namespace.sh` without `sudo`.
@@ -114,7 +114,8 @@ Completed on the implementation branch:
 5. Shell syntax, Compose configuration, certificate generation, and
    `git diff --check` passed; Compose teardown left no system-test containers.
 
-CI must still validate the privileged entrypoint on GitHub Actions.
+6. GitHub Actions validated the privileged entrypoint: all three PR sweeps passed,
+   and the PR reached clean merge state.
 
 ## Risks
 

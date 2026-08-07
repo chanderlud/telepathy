@@ -82,7 +82,7 @@ The current flow also has no direct screenshare tests and represents ownership w
 
 ### External References
 
-- Iroh 1.0.2 `Connection`, `SendStream`, and `RecvStream` docs: `open_uni` becomes visible only after data is sent; stream writes do not preserve application frame boundaries; drop/reset/finish have different cleanup semantics. Repository lockfile behavior must be checked against its resolved Iroh 1.x patch during implementation.
+- Iroh 1.x `Connection`, `SendStream`, and `RecvStream` docs: `open_uni` becomes visible only after data is sent; stream writes do not preserve application frame boundaries; drop/reset/finish have different cleanup semantics. Repository lockfile behavior must be checked against its resolved Iroh 1.x patch during implementation.
 - Tokio 1.53 `Command` and `Child` docs plus graceful shutdown guidance: dropping a child does not stop it; cleanup must kill when needed and wait/reap; cancellation only signals work and does not perform cleanup.
 - Rust Reference conditional compilation and trait docs: platform modules can be statically selected with `cfg`; direct async methods are not dyn-compatible without adaptation, which supports avoiding a runtime trait-object registry here.
 - Flutter Rust Bridge 2.12 docs: public async Rust APIs and opaque state generate into one Dart surface; exported target-gated API shapes are avoided.
@@ -774,9 +774,9 @@ flowchart TB
 - Related tests: `rust/telepathy-core/tests/core_integration_test/common.rs`
 - Related Flutter state: `lib/controllers/state_controller.dart`
 - Repository guidance: `AGENTS.md`, `CONTRIBUTING.md`, `docs/TRACING.md`
-- Iroh connection and stream docs: https://docs.rs/iroh/1.0.2/iroh/endpoint/struct.Connection.html
-- Iroh send stream docs: https://docs.rs/iroh/1.0.2/iroh/endpoint/struct.SendStream.html
-- Iroh receive stream docs: https://docs.rs/iroh/1.0.2/iroh/endpoint/struct.RecvStream.html
+- Iroh connection and stream docs: https://docs.rs/iroh/latest/iroh/endpoint/struct.Connection.html
+- Iroh send stream docs: https://docs.rs/iroh/latest/iroh/endpoint/struct.SendStream.html
+- Iroh receive stream docs: https://docs.rs/iroh/latest/iroh/endpoint/struct.RecvStream.html
 - Tokio child process docs: https://docs.rs/tokio/1.53.0/tokio/process/struct.Child.html
 - Tokio graceful shutdown: https://tokio.rs/tokio/topics/shutdown
 - Rust conditional compilation: https://doc.rust-lang.org/reference/conditional-compilation.html
