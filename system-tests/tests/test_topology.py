@@ -150,6 +150,30 @@ def test_given_two_nested_clients_when_topology_starts_then_it_probes_forwarded_
     assert ping_index < profile_index
 
 
+def test_discovery_host_override_uses_slirp_gateway_for_all_services(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TELEPATHY_DISCOVERY_HOST", "192.0.2.2")
+    topology = TopologyManager()
+    topology._gateway_ips["ns-0-cli-0"] = "10.0.0.1"
+
+    assert topology.relay_url("ns-0-cli-0") == "http://192.0.2.2:3340"
+    assert topology.dns_endpoint("ns-0-cli-0") == "192.0.2.2:5300"
+    assert topology.pkarr_relay("ns-0-cli-0") == "http://192.0.2.2:8080/pkarr"
+
+
+def test_without_discovery_host_override_privileged_topology_uses_host_gateways(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("TELEPATHY_DISCOVERY_HOST", raising=False)
+    topology = TopologyManager()
+    topology._gateway_ips["ns-0-cli-0"] = "10.0.0.1"
+
+    assert topology.relay_url("ns-0-cli-0") == "http://100.64.0.1:3340"
+    assert topology.dns_endpoint("ns-0-cli-0") == "10.0.0.1:5300"
+    assert topology.pkarr_relay("ns-0-cli-0") == "http://10.0.0.1:8080/pkarr"
+
+
 def test_given_forwarding_probe_failure_when_setup_raises_then_live_state_remains_for_capture() -> None:
     topology = FailingForwardingTopology()
 

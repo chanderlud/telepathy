@@ -11,6 +11,7 @@ from harness.namespace_runner import (
     NamespaceContext,
     PreflightError,
     _check_required_commands,
+    configure_discovery_bridge,
     run_preflight,
 )
 
@@ -39,6 +40,8 @@ def supported_context(kernel_release: str = "6.8.0-generic") -> NamespaceContext
         effective_uid=0,
         uid_map="         0       1000          1\n",
         kernel_release=kernel_release,
+        discovery_host="192.0.2.2",
+        slirp_interface="tp-slirp0",
     )
 
 
@@ -178,6 +181,8 @@ def test_preflight_rejects_unmapped_root_before_mount_commands() -> None:
         effective_uid=1000,
         uid_map="      1000       1000          1\n",
         kernel_release="6.8.0-generic",
+        discovery_host="192.0.2.2",
+        slirp_interface="tp-slirp0",
     )
 
     with pytest.raises(PreflightError, match="mapped root identity"):
@@ -193,6 +198,8 @@ def test_preflight_creates_missing_netns_mountpoint_inside_private_namespace() -
         effective_uid=0,
         uid_map="         0       1000          1\n",
         kernel_release="6.8.0-generic",
+        discovery_host="192.0.2.2",
+        slirp_interface="tp-slirp0",
     )
 
     run_preflight(runner, context)
@@ -224,24 +231,72 @@ def test_preflight_reports_each_missing_required_command(
         _check_required_commands("native Linux")
 
 
-def test_shell_launcher_execs_exact_outer_namespace_command_and_preserves_seed(
+def test_discovery_bridge_validates_slirp_and_masquerades_nested_clients() -> None:
+    runner = RecordingRunner()
+
+    configure_discovery_bridge(runner, supported_context())
+
+    assert runner.commands == [
+        ("ip", "link", "show", "dev", "tp-slirp0"),
+        ("ip", "route", "get", "192.0.2.2"),
+        (
+            "iptables",
+            "-t",
+            "nat",
+            "-A",
+            "POSTROUTING",
+            "-s",
+            "10.0.0.0/8",
+            "-o",
+            "tp-slirp0",
+            "-j",
+            "MASQUERADE",
+        ),
+    ]
+
+
+def _write_fake_command(path: Path, body: str) -> None:
+    path.write_text(f"#!/usr/bin/env bash\n{body}\n", encoding="utf-8")
+    path.chmod(0o755)
+
+
+def test_shell_launcher_bridges_compose_through_slirp_and_preserves_seed(
     tmp_path: Path,
 ) -> None:
-    fake_unshare = tmp_path / "unshare"
-    fake_python = tmp_path / "python3"
-    fake_python.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
-    fake_python.chmod(0o755)
-    fake_unshare.write_text(
-        "#!/usr/bin/env bash\n"
-        "printf 'seed=%s\\n' \"${SYSTEM_TEST_ORDER_SEED-}\"\n"
-        "printf '%s\\n' \"$@\"\n",
-        encoding="utf-8",
+    docker_log = tmp_path / "docker.log"
+    _write_fake_command(tmp_path / "cargo", "exit 0")
+    _write_fake_command(
+        tmp_path / "docker",
+        "printf '%s\\n' \"$*\" >> \"${DOCKER_LOG}\"\n"
+        "if [[ \"$*\" == *logs* ]]; then printf 'compose logs\\n'; fi",
     )
-    fake_unshare.chmod(0o755)
+    _write_fake_command(
+        tmp_path / "slirp4netns",
+        "printf '1' >&3\n"
+        "while true; do sleep 1; done",
+    )
+    _write_fake_command(
+        tmp_path / "unshare",
+        "while [[ \"${1:-}\" == --* ]]; do shift; done\n"
+        "exec \"$@\"",
+    )
+    _write_fake_command(
+        tmp_path / "python3",
+        "printf 'discovery=%s\\n' \"${TELEPATHY_DISCOVERY_HOST}\"\n"
+        "printf 'interface=%s\\n' \"${TELEPATHY_SLIRP_INTERFACE}\"\n"
+        "printf 'seed=%s\\n' \"${SYSTEM_TEST_ORDER_SEED}\"\n"
+        "printf 'artifacts=%s\\n' \"${SYSTEM_TEST_ARTIFACTS_DIR}\"\n"
+        "printf 'args=%s\\n' \"$*\"",
+    )
     launcher = Path(__file__).parents[1] / "run-in-user-namespace.sh"
+    artifacts = tmp_path / "artifacts"
     environment = os.environ | {
         "PATH": f"{tmp_path}:{os.environ['PATH']}",
         "SYSTEM_TEST_ORDER_SEED": "seed-4821",
+        "SYSTEM_TEST_ARTIFACTS_DIR": str(artifacts),
+        "XDG_RUNTIME_DIR": str(tmp_path),
+        "TMPDIR": str(tmp_path),
+        "DOCKER_LOG": str(docker_log),
     }
 
     result = subprocess.run(
@@ -251,43 +306,49 @@ def test_shell_launcher_execs_exact_outer_namespace_command_and_preserves_seed(
         capture_output=True,
         text=True,
         check=False,
-        timeout=10,
+        timeout=15,
     )
 
-    assert result.returncode == 0
-    lines = result.stdout.splitlines()
-    assert lines[:5] == [
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines()[:3] == [
+        "discovery=192.0.2.2",
+        "interface=tp-slirp0",
         "seed=seed-4821",
-        "--user",
-        "--map-root-user",
-        "--net",
-        "--mount",
     ]
-    assert lines[5] == "python3"
-    assert Path(lines[6]).name == "namespace_runner.py"
-    assert lines[-5:] == [
-        "--",
-        "python3",
-        "-m",
-        "pytest",
-        "tests/test_topology.py",
-    ]
+    run_roots = list(artifacts.glob("run-*"))
+    assert len(run_roots) == 1
+    assert f"artifacts={run_roots[0]}" in result.stdout
+    assert result.stdout.endswith(
+        "namespace_runner.py -- python3 -m pytest tests/test_topology.py\n"
+    )
+    docker_commands = docker_log.read_text(encoding="utf-8")
+    assert "up -d --wait" in docker_commands
+    assert "logs --no-color iroh-relay" in docker_commands
+    assert "logs --no-color iroh-dns-server" in docker_commands
+    assert "down" in docker_commands
+    assert (run_roots[0] / "relay.log").read_text(encoding="utf-8") == "compose logs\n"
+    assert (run_roots[0] / "dns.log").read_text(encoding="utf-8") == "compose logs\n"
 
 
 def test_given_unshare_denial_when_launcher_runs_then_it_keeps_diagnostic_artifact(
     tmp_path: Path,
 ) -> None:
-    fake_unshare = tmp_path / "unshare"
-    fake_python = tmp_path / "python3"
-    fake_python.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
-    fake_python.chmod(0o755)
-    fake_unshare.write_text(
-        "#!/usr/bin/env bash\n"
-        "printf 'uid_map denied' >&2\n"
-        "exit 1\n",
-        encoding="utf-8",
+    docker_log = tmp_path / "docker.log"
+    _write_fake_command(tmp_path / "cargo", "exit 0")
+    _write_fake_command(
+        tmp_path / "docker", "printf '%s\\n' \"$*\" >> \"${DOCKER_LOG}\""
     )
-    fake_unshare.chmod(0o755)
+    _write_fake_command(
+        tmp_path / "slirp4netns",
+        "printf '1' >&3\n"
+        "while true; do sleep 1; done",
+    )
+    _write_fake_command(
+        tmp_path / "unshare",
+        "printf 'uid_map denied' >&2\n"
+        "exit 1",
+    )
+    _write_fake_command(tmp_path / "python3", "exit 0")
     launcher = Path(__file__).parents[1] / "run-in-user-namespace.sh"
     artifacts = tmp_path / "artifacts"
 
@@ -295,19 +356,104 @@ def test_given_unshare_denial_when_launcher_runs_then_it_keeps_diagnostic_artifa
         [str(launcher), "python3", "-m", "pytest"],
         cwd=launcher.parent,
         env=os.environ
-        | {"PATH": f"{tmp_path}:{os.environ['PATH']}", "SYSTEM_TEST_ARTIFACTS_DIR": str(artifacts)},
+        | {
+            "PATH": f"{tmp_path}:{os.environ['PATH']}",
+            "SYSTEM_TEST_ARTIFACTS_DIR": str(artifacts),
+            "XDG_RUNTIME_DIR": str(tmp_path),
+            "TMPDIR": str(tmp_path),
+            "DOCKER_LOG": str(docker_log),
+        },
         capture_output=True,
         text=True,
         check=False,
-        timeout=10,
+        timeout=15,
     )
 
-    assert result.returncode == 1
+    assert result.returncode == 2
     assert "uid_map denied" in result.stderr
     assert "namespace runner failed; artifacts:" in result.stderr
-    logs = list(artifacts.glob("preflight-*/runner.log"))
-    assert len(logs) == 1
-    assert logs[0].read_text(encoding="utf-8") == "uid_map denied"
+    run_roots = list(artifacts.glob("run-*"))
+    assert len(run_roots) == 1
+    assert "uid_map denied" in (run_roots[0] / "runner.log").read_text(
+        encoding="utf-8"
+    )
+    assert "down" in docker_log.read_text(encoding="utf-8")
+
+
+def test_privileged_launcher_keeps_compose_caller_owned_and_sudos_only_pytest(
+    tmp_path: Path,
+) -> None:
+    if os.environ.get("TELEPATHY_DISCOVERY_HOST") is not None:
+        pytest.skip("privileged wrapper appears as mapped root inside user namespace")
+
+    docker_log = tmp_path / "docker.log"
+    sudo_log = tmp_path / "sudo.log"
+    _write_fake_command(tmp_path / "cargo", "exit 0")
+    _write_fake_command(
+        tmp_path / "docker",
+        "printf '%s\\n' \"$*\" >> \"${DOCKER_LOG}\"\n"
+        "if [[ \"$*\" == *logs* ]]; then printf 'compose logs\\n'; fi",
+    )
+    _write_fake_command(
+        tmp_path / "sysctl",
+        "if [[ \"$1\" == '-n' ]]; then printf '0\\n'; else printf '%s\\n' \"$*\" >> \"${SYSCTL_LOG}\"; fi",
+    )
+    _write_fake_command(
+        tmp_path / "sudo",
+        "printf '%s\\n' \"$*\" >> \"${SUDO_LOG}\"\n"
+        "if [[ \"$*\" == '-n true' ]]; then exit 0; fi\n"
+        "if [[ \"$1\" == '-E' ]]; then\n"
+        "  shift\n"
+        "  while [[ \"$1\" == *=* ]]; do shift; done\n"
+        "  printf 'privileged-command=%s\\n' \"$*\"\n"
+        "fi",
+    )
+    _write_fake_command(
+        tmp_path / "python3",
+        "if [[ \"$1\" == *wait-for-discovery.py ]]; then exit 0; fi\n"
+        "printf 'unexpected-python=%s\\n' \"$*\"\n"
+        "exit 1",
+    )
+    launcher = Path(__file__).parents[1] / "run-privileged.sh"
+    artifacts = tmp_path / "artifacts"
+
+    result = subprocess.run(
+        [str(launcher), "python3", "-m", "pytest", "system-tests/tests"],
+        cwd=launcher.parent,
+        env=os.environ
+        | {
+            "PATH": f"{tmp_path}:{os.environ['PATH']}",
+            "SYSTEM_TEST_ARTIFACTS_DIR": str(artifacts),
+            "XDG_RUNTIME_DIR": str(tmp_path),
+            "TMPDIR": str(tmp_path),
+            "DOCKER_LOG": str(docker_log),
+            "SUDO_LOG": str(sudo_log),
+            "SYSCTL_LOG": str(tmp_path / "sysctl.log"),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=15,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [
+        "privileged-command=python3 -m pytest system-tests/tests"
+    ]
+    assert "system-test artifacts:" in result.stderr
+    run_roots = list(artifacts.glob("run-*"))
+    assert len(run_roots) == 1
+    assert (run_roots[0] / "runner.log").read_text(
+        encoding="utf-8"
+    ) == "pytest exit status: 0\n"
+    sudo_commands = sudo_log.read_text(encoding="utf-8")
+    assert "-n true" in sudo_commands
+    assert "sysctl -w net.ipv4.ip_forward=1" in sudo_commands
+    assert "-E SYSTEM_TEST_ARTIFACTS_DIR=" in sudo_commands
+    assert "chown -R" in sudo_commands
+    docker_commands = docker_log.read_text(encoding="utf-8")
+    assert "up -d --wait" in docker_commands
+    assert "down" in docker_commands
 
 
 def test_given_direct_runner_execution_when_no_launcher_identity_then_imports_and_fails_safely() -> None:
