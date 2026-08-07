@@ -41,6 +41,8 @@ class SettingsPageState extends State<SettingsPage>
 
   late AnimationController _animationController;
   late Animation<Offset> _menuSlideAnimation;
+  final FocusNode _menuFocusNode = FocusNode();
+  final Object _menuTapRegionGroup = Object();
 
   @override
   void initState() {
@@ -66,6 +68,7 @@ class SettingsPageState extends State<SettingsPage>
 
   @override
   void dispose() {
+    _menuFocusNode.dispose();
     _animationController.dispose();
     super.dispose();
   }
@@ -76,6 +79,32 @@ class SettingsPageState extends State<SettingsPage>
     } else {
       return section == SettingsSection.audioVideo ? 10 : 30;
     }
+  }
+
+  void _setMenuVisibility(bool visible) {
+    if (showMenu == visible) return;
+
+    setState(() {
+      if (visible) {
+        _animationController.reverse();
+      } else {
+        _animationController.forward();
+      }
+      showMenu = visible;
+    });
+
+    if (visible) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && showMenu == true && widget.constraints.maxWidth < 600) {
+          _menuFocusNode.requestFocus();
+        }
+      });
+    }
+  }
+
+  void _dismissNarrowMenu() {
+    if (widget.constraints.maxWidth >= 600 || showMenu != true) return;
+    _setMenuVisibility(false);
   }
 
   @override
@@ -145,50 +174,62 @@ class SettingsPageState extends State<SettingsPage>
                     ),
                   )),
             ),
-            if (constraints.maxWidth > 600 || (showMenu ?? true))
-              SlideTransition(
-                position: _menuSlideAnimation,
-                child: Container(
-                  width: 200,
-                  decoration: BoxDecoration(
-                    color: Theme.of(context).colorScheme.surfaceDim,
-                    borderRadius: const BorderRadius.only(
-                      topRight: Radius.circular(8),
-                      bottomRight: Radius.circular(8),
+            Positioned.fill(
+              child: Focus(
+                focusNode: _menuFocusNode,
+                onFocusChange: (hasFocus) {
+                  if (!hasFocus) _dismissNarrowMenu();
+                },
+                child: Stack(
+                  children: [
+                    if (constraints.maxWidth > 600 || (showMenu ?? true))
+                      TapRegion(
+                        groupId: _menuTapRegionGroup,
+                        onTapOutside: (_) => _dismissNarrowMenu(),
+                        child: SlideTransition(
+                          position: _menuSlideAnimation,
+                          child: Container(
+                            width: 200,
+                            decoration: BoxDecoration(
+                              color: Theme.of(context).colorScheme.surfaceDim,
+                              borderRadius: const BorderRadius.only(
+                                topRight: Radius.circular(8),
+                                bottomRight: Radius.circular(8),
+                              ),
+                            ),
+                            padding: const EdgeInsets.only(top: 60),
+                            child: SettingsMenu(
+                              selected: _section,
+                              onSectionSelected: (section) =>
+                                  tapHandler(section),
+                              showOverlayItem: !kIsWeb && Platform.isWindows,
+                            ),
+                          ),
+                        ),
+                      ),
+                    TapRegion(
+                      groupId: _menuTapRegionGroup,
+                      child: SettingsHeader(
+                        isNarrow: constraints.maxWidth < 600,
+                        showMenu: showMenu ?? true,
+                        onBack: () async {
+                          if (_section == SettingsSection.networking &&
+                              (_key.currentState?.unsavedChanges ?? false)) {
+                            bool leave = await unsavedConfirmation(context);
+                            if (!leave) return;
+                          }
+
+                          if (context.mounted) {
+                            Navigator.of(context).pop();
+                          }
+                        },
+                        onToggleMenu: () =>
+                            _setMenuVisibility(!(showMenu ?? true)),
+                      ),
                     ),
-                  ),
-                  padding: const EdgeInsets.only(top: 60),
-                  child: SettingsMenu(
-                    selected: _section,
-                    onSectionSelected: (section) => tapHandler(section),
-                    showOverlayItem: !kIsWeb && Platform.isWindows,
-                  ),
+                  ],
                 ),
               ),
-            SettingsHeader(
-              isNarrow: constraints.maxWidth < 600,
-              showMenu: showMenu ?? true,
-              onBack: () async {
-                if (_section == SettingsSection.networking &&
-                    (_key.currentState?.unsavedChanges ?? false)) {
-                  bool leave = await unsavedConfirmation(context);
-                  if (!leave) return;
-                }
-
-                if (context.mounted) {
-                  Navigator.of(context).pop();
-                }
-              },
-              onToggleMenu: () {
-                setState(() {
-                  if (showMenu ?? true) {
-                    _animationController.forward();
-                  } else {
-                    _animationController.reverse();
-                  }
-                  showMenu = !(showMenu ?? true);
-                });
-              },
             ),
           ],
         ));
