@@ -1602,6 +1602,12 @@ where
                 // without this, a prompt whose caller died after a collision transfer
                 // would wait on user input forever.
                 info!(event = "accept_prompt_offer_expired", peer.id = %peer);
+                if let Some(cancel) = cancel_prompt.as_ref() {
+                    cancel.notify_one();
+                }
+                if let Some(guard) = prompt_guard.as_mut() {
+                    guard.disarm();
+                }
                 release_pending(
                     &self.session_states,
                     peer,

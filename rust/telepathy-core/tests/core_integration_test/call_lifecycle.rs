@@ -2701,7 +2701,6 @@ async fn caller_cancel_during_glare_allows_immediate_room_join_without_second_pr
     let (client_a, client_b, contact_a, contact_b, accept_probe_b, call_states_a) =
         setup_parked_prompt_glare(relay_map, &codec_config).await;
     let peer_a = contact_a.get_peer_id();
-    let peer_b = contact_b.get_peer_id();
     let shutdown_guard = TwoClientShutdownGuard {
         a: &client_a,
         b: &client_b,
@@ -2838,6 +2837,40 @@ async fn parked_accept_prompt_expires_when_caller_hangs_up_before_adoption() {
     end_call_a.await;
     client_b.telepathy.shutdown().await;
     client_a.telepathy.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn transferred_accept_prompt_timeout_cancels_without_reparking() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+    let codec_config = CodecConfig::new(true, true, 5.0);
+    let (client_a, client_b, _contact_a, _contact_b, accept_probe_b, _states_a) =
+        setup_parked_prompt_glare(relay_map, &codec_config).await;
+
+    let alice_session_lock = client_a.telepathy.inner.session_states.write().await;
+    let bob_session_lock = client_b.telepathy.inner.session_states.write().await;
+    client_b.session_status_probe.release_connecting();
+    sleep(Duration::from_millis(100)).await;
+    sleep(Duration::from_secs(11)).await;
+    drop(bob_session_lock);
+
+    tokio::time::timeout(Duration::from_secs(5), accept_probe_b.wait_cancelled())
+        .await
+        .expect(
+            "adopted prompt must cancel with its offer timeout, not a re-parked transfer timeout",
+        );
+    assert_eq!(accept_probe_b.opened.load(Relaxed), 1);
+    assert_eq!(accept_probe_b.accepted.load(Relaxed), 0);
+
+    drop(alice_session_lock);
+    wait_for_slot_idle(
+        &client_b,
+        "adopted prompt expiry must release only its captured pending generation",
+    )
+    .await;
+
+    client_a.telepathy.shutdown().await;
+    client_b.telepathy.shutdown().await;
 }
 
 /// An accepted prompt whose session goes stale before the HelloAck is written
