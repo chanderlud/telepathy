@@ -21,6 +21,8 @@ class TopologyManager:
     _CANONICAL_RELAY_IP = "100.64.0.1"
     _RELAY_PORT = 3340
     _DNS_ORIGIN_DOMAIN = "dns.iroh.test."
+    _FORWARDING_PING_RETRIES = 2
+    _FORWARDING_PING_RETRY_DELAY_SECONDS = 5
 
     def __init__(self, worker_id: str = "0") -> None:
         self.worker_id = worker_id
@@ -255,7 +257,7 @@ class TopologyManager:
                 )
             if len(self.client_namespaces) > 1:
                 _, peer_ip = self._client_addresses(self._worker_index, num_clients, 1)
-                await self._run(
+                ping_command = (
                     "ip",
                     "netns",
                     "exec",
@@ -269,6 +271,15 @@ class TopologyManager:
                     "4",
                     peer_ip,
                 )
+                for attempt in range(self._FORWARDING_PING_RETRIES + 1):
+                    try:
+                        await self._run(*ping_command)
+                    except RuntimeError:
+                        if attempt == self._FORWARDING_PING_RETRIES:
+                            raise
+                        await asyncio.sleep(self._FORWARDING_PING_RETRY_DELAY_SECONDS)
+                    else:
+                        break
             for client_ns in self.client_namespaces:
                 await self._apply_profile(client_ns, profile)
         except Exception:

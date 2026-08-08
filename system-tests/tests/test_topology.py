@@ -31,22 +31,35 @@ class RecordingTopology(TopologyManager):
 
 
 class FailingForwardingTopology(RecordingTopology):
-    def __init__(self) -> None:
+    def __init__(self, ping_errors: list[RuntimeError] | None = None) -> None:
         super().__init__()
         self.teardown_calls = 0
+        forwarding_error = RuntimeError(
+            "command failed: forwarding ping\n"
+            "stdout: ping probe output\n"
+            "stderr: ping probe failure"
+        )
+        self.ping_errors = ping_errors or [forwarding_error] * 3
 
     async def _run(self, *args: str) -> None:
         self.commands.append(args)
-        if "ping" in args:
-            raise RuntimeError(
-                "command failed: forwarding ping\n"
-                "stdout: ping probe output\n"
-                "stderr: ping probe failure"
-            )
+        if "ping" in args and self.ping_errors:
+            raise self.ping_errors.pop(0)
 
     async def teardown(self) -> None:
         self.teardown_calls += 1
         await super().teardown()
+
+
+class FailingSetupCommandTopology(RecordingTopology):
+    def __init__(self, error: RuntimeError) -> None:
+        super().__init__()
+        self.error = error
+
+    async def _run(self, *args: str) -> None:
+        self.commands.append(args)
+        if args == ("ip", "addr", "replace", "100.64.0.1/32", "dev", "lo"):
+            raise self.error
 
 
 def test_room_worker_id_uses_xdist_worker_not_room_size() -> None:
@@ -150,6 +163,97 @@ def test_given_two_nested_clients_when_topology_starts_then_it_probes_forwarded_
     assert ping_index < profile_index
 
 
+def test_given_transient_forwarding_ping_failure_when_setup_retries_then_it_recovers_before_profiles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sleep_delays: list[float] = []
+
+    async def record_sleep(delay: float) -> None:
+        sleep_delays.append(delay)
+
+    monkeypatch.setattr("harness.topology.asyncio.sleep", record_sleep)
+    topology = FailingForwardingTopology([RuntimeError("transient forwarding failure")])
+
+    asyncio.run(
+        topology.setup(
+            num_clients=2,
+            profile=NetworkProfile("satellite", 350, 150, 8, True, 0),
+        )
+    )
+
+    ping_commands = [command for command in topology.commands if "ping" in command]
+    assert len(ping_commands) == 2
+    assert sleep_delays == [5]
+    assert topology.commands.index(("apply-profile", "ns-0-cli-0")) > topology.commands.index(
+        ping_commands[-1]
+    )
+
+
+def test_given_three_forwarding_ping_failures_when_setup_exhausts_retries_then_it_raises_final_error_and_retains_live_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sleep_delays: list[float] = []
+
+    async def record_sleep(delay: float) -> None:
+        sleep_delays.append(delay)
+
+    monkeypatch.setattr("harness.topology.asyncio.sleep", record_sleep)
+    final_error = RuntimeError("final forwarding failure")
+    topology = FailingForwardingTopology(
+        [
+            RuntimeError("first forwarding failure"),
+            RuntimeError("second forwarding failure"),
+            final_error,
+        ]
+    )
+
+    with pytest.raises(RuntimeError) as failure:
+        asyncio.run(
+            topology.setup(
+                num_clients=2,
+                profile=NetworkProfile("clean", 0, 0, 0, False, 0),
+            )
+        )
+
+    assert failure.value is final_error
+    assert len([command for command in topology.commands if "ping" in command]) == 3
+    assert sleep_delays == [5, 5]
+    assert topology.teardown_calls == 0
+    assert topology.client_namespaces == ["ns-0-cli-0", "ns-0-cli-1"]
+    assert topology._root_ifaces == ["vr0_0", "vr0_1"]
+    assert topology._client_ifaces == {
+        "ns-0-cli-0": "vc0_0",
+        "ns-0-cli-1": "vc0_1",
+    }
+
+
+def test_given_non_ping_setup_failure_when_setup_raises_then_it_does_not_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sleep_delays: list[float] = []
+
+    async def record_sleep(delay: float) -> None:
+        sleep_delays.append(delay)
+
+    monkeypatch.setattr("harness.topology.asyncio.sleep", record_sleep)
+    setup_error = RuntimeError("relay address setup failure")
+    topology = FailingSetupCommandTopology(setup_error)
+
+    with pytest.raises(RuntimeError) as failure:
+        asyncio.run(
+            topology.setup(
+                num_clients=2,
+                profile=NetworkProfile("clean", 0, 0, 0, False, 0),
+            )
+        )
+
+    assert failure.value is setup_error
+    assert topology.commands == [
+        ("ip", "addr", "replace", "100.64.0.1/32", "dev", "lo")
+    ]
+    assert sleep_delays == []
+
+
 def test_discovery_host_override_uses_slirp_gateway_for_all_services(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -174,7 +278,13 @@ def test_without_discovery_host_override_privileged_topology_uses_host_gateways(
     assert topology.pkarr_relay("ns-0-cli-0") == "http://10.0.0.1:8080/pkarr"
 
 
-def test_given_forwarding_probe_failure_when_setup_raises_then_live_state_remains_for_capture() -> None:
+def test_given_forwarding_probe_failure_when_setup_raises_then_live_state_remains_for_capture(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def record_sleep(delay: float) -> None:
+        _ = delay
+
+    monkeypatch.setattr("harness.topology.asyncio.sleep", record_sleep)
     topology = FailingForwardingTopology()
 
     with pytest.raises(RuntimeError) as failure:

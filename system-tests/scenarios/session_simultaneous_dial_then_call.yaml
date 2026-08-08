@@ -1,4 +1,4 @@
-name: call_hello_ack_timeout
+name: session_simultaneous_dial_then_call
 steps:
   # --- bootstrap ---
   - actor: alice
@@ -30,7 +30,7 @@ steps:
     expect_ack:
       ok: true
 
-  # --- establish sessions ---
+  # --- session glare: both dial simultaneously ---
   - concurrent:
       - actor: alice
         send:
@@ -47,22 +47,11 @@ steps:
         expect_ack:
           ok: true
 
-  - actor: alice
-    expect_event:
-      type: session_status
-      timeout: 45.0
-      match:
-        status: Connected
-        peer: ${bob.peer_id}
-  - actor: bob
-    expect_event:
-      type: session_status
-      timeout: 45.0
-      match:
-        status: Connected
-        peer: ${alice.peer_id}
-
-  # --- alice calls; bob never answers the accept prompt ---
+  # --- call during the glare window: Alice's Hello can land on a listener
+  # session that Bob's own dial then replaces. Bob's accept prompt must
+  # survive the collision (it transfers to the winning session), so his
+  # accept_call resolves against a live request_id instead of failing with
+  # "unknown accept_call request_id" (the original system-test failure). ---
   - actor: alice
     send:
       cmd: start_call
@@ -70,18 +59,32 @@ steps:
         contact_id: bob
     expect_ack:
       ok: true
-
   - actor: bob
     expect_event:
       type: accept_call_prompt
-      timeout: 45.0
+      timeout: 60.0
       match:
         contact_id: alice
-
-  # alice should receive CallEnded when bob never responds to Hello
+  - actor: bob
+    send:
+      cmd: accept_call
+      args:
+        request_id: ${bob.request_id}
+        accept: true
+    expect_ack:
+      ok: true
+    expect_absent:
+      type: accept_call_prompt
+      timeout: 5.0
   - actor: alice
     expect_event:
       type: call_state
-      timeout: 45.0
+      timeout: 20.0
       match:
-        state: CallEnded
+        state: Connected
+  - actor: bob
+    expect_event:
+      type: call_state
+      timeout: 20.0
+      match:
+        state: Connected

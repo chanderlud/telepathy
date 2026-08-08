@@ -30,6 +30,36 @@ The observable per-peer state that tells a call request whether a direct session
 
 Availability changes wake waiting call requests; a request only acquires call ownership after the session is published.
 
+## Session Collisions
+
+### Session
+The per-peer state machine wrapping one connection; each peer has at most one current session in the session map. A session outlives individual calls and rooms.
+
+### Glare
+Both peers dial each other at the same time, producing two connections. Resolution is deterministic: the connection on which the lower-pubkey side is the client wins on both ends.
+
+### Deferred Candidate
+When an existing session is kept over an incoming replacement connection, the replacement parks as a candidate until the predecessor session finishes, then promotes. While parked, the candidate's connection has no reader: call messages sent to it are dropped (issue #81).
+
+## Call Lifecycle
+
+### Call Slot
+The single global call ownership token. States: `Idle`, `PendingOutgoing`, `PendingIncoming`, `ActiveDirect`, `RoomCall`, `AudioTest`.
+
+### Call-Slot Generation
+A monotonic token bumped on every idle-to-non-idle transition and preserved across a simultaneous-dial match. Exact-generation release ensures a stale holder can never release a re-acquired slot.
+
+### Parked Accept Prompt
+A pending incoming-call prompt displaced when the callee's own outbound dial wins a collision mid-prompt. The platform prompt stays open in the transfer registry; the replacement session's re-driven negotiation adopts it. Expires after the caller's offer window (`HELLO_TIMEOUT`) if never adopted.
+
+## Room Lifecycle
+
+### Room Generation
+A per-client counter incremented on each room join; orders local room replacements. Not comparable across clients and not part of the room hash (the hash covers members only).
+
+### Goodbye Grace
+An outgoing room negotiation that receives a goodbye mid-negotiation waits briefly (500ms) for an affirmative response before ending, because a teardown goodbye from the previous room generation can cross with a fresh join.
+
 ## Home Screen Layout
 
 ### Wide layout

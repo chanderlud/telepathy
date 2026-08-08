@@ -19,6 +19,7 @@ use telepathy_core::types::Contact;
 use telepathy_core::types::{
     CallState, CodecConfig, ManagerState, NetworkConfig, ScreenshareConfig, SessionStatus,
 };
+use tokio::select;
 use tokio::sync::{Notify, watch};
 use tokio::time::{interval, sleep};
 use tracing::info;
@@ -117,6 +118,15 @@ impl ContactLookupProbe {
             );
         }
     }
+
+    pub(super) fn count(&self, peer_id: &[u8]) -> usize {
+        self.counts
+            .lock()
+            .unwrap()
+            .get(peer_id)
+            .copied()
+            .unwrap_or_default()
+    }
 }
 
 #[derive(Clone)]
@@ -142,6 +152,15 @@ impl Default for SessionStatusProbe {
 }
 
 impl SessionStatusProbe {
+    pub(super) fn connected_count(&self, peer_id: &[u8]) -> usize {
+        self.connected_counts
+            .lock()
+            .unwrap()
+            .get(peer_id)
+            .copied()
+            .unwrap_or_default()
+    }
+
     fn record(&self, peer_id: &[u8], status: SessionStatus) -> bool {
         let is_connecting = matches!(status, SessionStatus::Connecting);
         if matches!(status, SessionStatus::Connected { .. }) {
@@ -160,45 +179,17 @@ impl SessionStatusProbe {
         is_connecting && self.park_connecting.load(Relaxed)
     }
 
-    pub(super) fn connected_count(&self, peer_id: &[u8]) -> usize {
-        self.connected_counts
-            .lock()
-            .unwrap()
-            .get(peer_id)
-            .copied()
-            .unwrap_or_default()
-    }
-
-    pub(super) async fn wait_for_connected_after(&self, peer_id: &[u8], previous: usize) {
-        let wait = async {
-            loop {
-                let changed = self.changed.notified();
-                tokio::pin!(changed);
-                changed.as_mut().enable();
-                if self.connected_count(peer_id) > previous {
-                    return;
-                }
-                changed.await;
-            }
-        };
-        tokio::time::timeout(Duration::from_secs(60), wait)
-            .await
-            .unwrap_or_else(|_| {
-                panic!(
-                    "timed out waiting for a new Connected session status for {peer_id:?}; previous={previous}, current={}",
-                    self.connected_count(peer_id)
-                )
-            });
-    }
-
     pub(super) fn park_connecting(&self) {
         self.park_connecting.store(true, Relaxed);
-        let _ = self.connecting_released.send(true);
+        // `send` drops the value when no receiver exists (the initial receiver
+        // is discarded at construction and callbacks subscribe only once they
+        // park); `send_replace` stores unconditionally.
+        self.connecting_released.send_replace(true);
     }
 
     pub(super) fn release_connecting(&self) {
         self.park_connecting.store(false, Relaxed);
-        let _ = self.connecting_released.send(false);
+        self.connecting_released.send_replace(false);
     }
 
     async fn wait_for_connecting_release(&self) {
@@ -768,8 +759,11 @@ pub(super) enum RoomEventKind {
 pub(super) struct PendingAcceptProbe {
     pub(super) opened: Arc<AtomicUsize>,
     pub(super) cancelled: Arc<AtomicUsize>,
+    pub(super) accepted: Arc<AtomicUsize>,
     pub(super) opened_notify: Arc<Notify>,
     pub(super) cancelled_notify: Arc<Notify>,
+    pub(super) accepted_notify: Arc<Notify>,
+    accept_requests: Arc<Notify>,
 }
 
 /// How many manager lifecycle cycles the mock `manager_state` callback accepts.
@@ -873,6 +867,16 @@ impl PendingAcceptProbe {
         wait_for_counter(&self.opened, &self.opened_notify, 1, "accept prompt opened").await;
     }
 
+    pub(super) async fn wait_opened_count(&self, expected: usize) {
+        wait_for_counter(
+            &self.opened,
+            &self.opened_notify,
+            expected,
+            "accept prompt opened",
+        )
+        .await;
+    }
+
     pub(super) async fn wait_cancelled(&self) {
         wait_for_counter(
             &self.cancelled,
@@ -882,12 +886,106 @@ impl PendingAcceptProbe {
         )
         .await;
     }
+
+    pub(super) async fn wait_cancelled_count(&self, expected: usize) {
+        wait_for_counter(
+            &self.cancelled,
+            &self.cancelled_notify,
+            expected,
+            "accept prompt cancelled",
+        )
+        .await;
+    }
+
+    /// Resolves the current prompt as accepted; the permit is retained when no
+    /// prompt task is waiting yet, so calling this before `wait_opened` is safe.
+    pub(super) fn accept(&self) {
+        self.accept_requests.notify_one();
+    }
+
+    pub(super) async fn wait_accepted(&self) {
+        wait_for_counter(
+            &self.accepted,
+            &self.accepted_notify,
+            1,
+            "accept prompt accepted",
+        )
+        .await;
+    }
+}
+
+static LOG_CAPTURE: std::sync::OnceLock<Arc<Mutex<Vec<String>>>> = std::sync::OnceLock::new();
+
+fn log_capture() -> &'static Arc<Mutex<Vec<String>>> {
+    LOG_CAPTURE.get_or_init(|| Arc::new(Mutex::new(Vec::new())))
+}
+
+/// Tee writer: forwards formatted log lines to stdout and captures them for
+/// assertions on emitted events (e.g. race paths that produce no callback).
+struct LogTeeWriter;
+
+impl std::io::Write for LogTeeWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let text = String::from_utf8_lossy(buf);
+        {
+            let mut capture = log_capture().lock().unwrap();
+            for line in text.lines() {
+                capture.push(line.to_string());
+            }
+        }
+        std::io::stdout().write_all(buf)?;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        std::io::stdout().flush()
+    }
+}
+
+struct LogTeeMakeWriter;
+
+impl tracing_subscriber::fmt::MakeWriter<'_> for LogTeeMakeWriter {
+    type Writer = LogTeeWriter;
+
+    fn make_writer(&self) -> Self::Writer {
+        LogTeeWriter
+    }
+}
+
+pub(super) fn log_lines_containing(markers: &[&str]) -> Vec<String> {
+    log_capture()
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|line| markers.iter().all(|marker| line.contains(marker)))
+        .cloned()
+        .collect()
+}
+
+pub(super) async fn wait_for_log_line(markers: &[&str], label: &str) {
+    wait_for_log_line_count(markers, 1, label).await;
+}
+
+pub(super) async fn wait_for_log_line_count(markers: &[&str], minimum: usize, label: &str) {
+    let mut poll = interval(Duration::from_millis(25));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        poll.tick().await;
+        if log_lines_containing(markers).len() >= minimum {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for {minimum} log lines containing {markers:?} ({label})"
+        );
+    }
 }
 
 pub(super) fn init_test_tracing() {
     TEST_TRACING_INIT.call_once(|| {
         let _ = tracing_subscriber::fmt()
-            .with_test_writer()
+            .with_writer(LogTeeMakeWriter)
+            .with_ansi(false)
             .with_env_filter(
                 EnvFilter::try_from_default_env()
                     .unwrap_or_else(|_| EnvFilter::new("telepathy_core=info")),
@@ -1455,16 +1553,14 @@ fn construct_mock_callbacks_with_contact_lookup(
         let contacts_clone = contacts.clone();
         let contact_lookup_probe = contact_lookup_probe.clone();
         Box::pin(async move {
+            let contact = contacts_clone
+                .iter()
+                .find(|contact| contact.get_peer_id().as_bytes() == peer_id.as_slice())
+                .cloned();
             if let Some(probe) = contact_lookup_probe {
                 probe.record(&peer_id);
             }
-            for contact in contacts_clone.iter() {
-                if contact.get_peer_id().to_vec() == peer_id {
-                    return Some(contact.clone());
-                }
-            }
-
-            None
+            contact
         })
     });
 
@@ -1477,10 +1573,18 @@ fn construct_mock_callbacks_with_contact_lookup(
                 tokio::spawn(async move {
                     probe.opened.fetch_add(1, Relaxed);
                     probe.opened_notify.notify_waiters();
-                    cancel.notified().await;
-                    probe.cancelled.fetch_add(1, Relaxed);
-                    probe.cancelled_notify.notify_waiters();
-                    false
+                    select! {
+                        _ = cancel.notified() => {
+                            probe.cancelled.fetch_add(1, Relaxed);
+                            probe.cancelled_notify.notify_waiters();
+                            false
+                        }
+                        _ = probe.accept_requests.notified() => {
+                            probe.accepted.fetch_add(1, Relaxed);
+                            probe.accepted_notify.notify_waiters();
+                            true
+                        }
+                    }
                 })
             });
     } else {
@@ -1776,6 +1880,27 @@ pub(super) fn assert_room_event_sequence(
     );
 }
 
+/// Locks the end_call -> join_room rejoin sequence: exactly two Joins, with no
+/// Leave after the final one. A Leave sandwiched between the Joins is
+/// legitimate: the peer's teardown goodbye can reach the controller before the
+/// local end_call does, and observing that Leave is correct behavior.
+pub(super) fn assert_room_rejoin_sequence(states: &[CallState], peer: &str) {
+    let sequence = room_event_sequence(states, peer);
+    let joins = sequence
+        .iter()
+        .filter(|kind| **kind == RoomEventKind::Join)
+        .count();
+    assert_eq!(joins, 2, "expected two joins for {peer}, got {sequence:?}");
+    let final_join = sequence
+        .iter()
+        .rposition(|kind| *kind == RoomEventKind::Join)
+        .expect("two joins present");
+    assert!(
+        !sequence[final_join + 1..].contains(&RoomEventKind::Leave),
+        "no RoomLeave for {peer} after the final rejoin, got {sequence:?}"
+    );
+}
+
 pub(super) async fn wait_for_room_leave_count(
     call_states: &Arc<Mutex<Vec<CallState>>>,
     peer: &str,
@@ -1925,13 +2050,17 @@ pub(super) async fn wait_for_stable_session_pair<HA, HB>(
         }
 
         if both_present && a_id == prev_a_id && b_id == prev_b_id {
-            if let Some(prev) = require_a_id_change {
-                assert_ne!(
-                    a_id,
-                    Some(prev),
-                    "client_a session id was not replaced across the restart; \
-                     expected a new id distinct from {prev:?}, got {a_id:?}"
+            // a required replacement that has not landed yet is not a stable end
+            // state; keep polling (the deadline below bounds the wait) instead of
+            // asserting on the pre-replacement id
+            if require_a_id_change.is_some_and(|required| a_id == Some(required)) {
+                prev_a_id = a_id;
+                prev_b_id = b_id;
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "timed out waiting for client_a session id to change from {a_id:?}"
                 );
+                continue;
             }
             info!("both clients have stable post-restart session state");
             return;

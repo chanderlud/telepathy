@@ -56,6 +56,10 @@ jobs:
 
       - name: Run system tests
         env:
+          # debug-level core logs land in each CLI's stderr, which failure
+          # artifacts capture verbatim; collision/negotiation races are
+          # otherwise invisible in info-level logs
+          RUST_LOG: telepathy_cli=info,telepathy_core=debug,iroh=info
           SYSTEM_TEST_ARTIFACTS_DIR: system-tests/artifacts
         run: |
           PYTHON_BIN="$(command -v python)"

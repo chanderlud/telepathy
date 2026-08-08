@@ -1,0 +1,112 @@
+name: caller_cancel_during_glare_then_room
+steps:
+  # --- bootstrap ---
+  - actor: alice
+    expect_event:
+      type: ready
+      timeout: 10.0
+      match:
+        version: "*"
+  - actor: bob
+    expect_event:
+      type: ready
+      timeout: 10.0
+      match:
+        version: "*"
+  - actor: alice
+    send:
+      cmd: add_contact
+      args:
+        contact_id: bob
+        peer_id: ${bob.peer_id}
+    expect_ack:
+      ok: true
+  - actor: bob
+    send:
+      cmd: add_contact
+      args:
+        contact_id: alice
+        peer_id: ${alice.peer_id}
+    expect_ack:
+      ok: true
+
+  # --- session glare ---
+  - concurrent:
+      - actor: alice
+        send:
+          cmd: start_session
+          args:
+            contact_id: bob
+        expect_ack:
+          ok: true
+      - actor: bob
+        send:
+          cmd: start_session
+          args:
+            contact_id: alice
+        expect_ack:
+          ok: true
+
+  # --- Alice calls during the glare, then hangs up while Bob's prompt is
+  # open. Prompt cancellation must become visible only after Bob's pending
+  # slot is released, so an immediate room join cannot hit CallAlreadyActive. ---
+  - actor: alice
+    send:
+      cmd: start_call
+      args:
+        contact_id: bob
+    expect_ack:
+      ok: true
+  - actor: bob
+    expect_event:
+      type: accept_call_prompt
+      timeout: 30.0
+      match:
+        contact_id: alice
+  - actor: alice
+    send:
+      cmd: end_call
+      args: {}
+    expect_ack:
+      ok: true
+  - actor: bob
+    expect_event:
+      type: accept_call_canceled
+      timeout: 20.0
+      match:
+        request_id: ${bob.request_id}
+
+  # --- both sides must be able to join a room immediately ---
+  - concurrent:
+      - actor: alice
+        send:
+          cmd: join_room
+          args:
+            members:
+              - ${alice.peer_id}
+              - ${bob.peer_id}
+        send_timeout: 30.0
+        expect_ack:
+          ok: true
+      - actor: bob
+        send:
+          cmd: join_room
+          args:
+            members:
+              - ${alice.peer_id}
+              - ${bob.peer_id}
+        send_timeout: 30.0
+        expect_ack:
+          ok: true
+  - actor: alice
+    expect_event:
+      type: call_state
+      timeout: 20.0
+      match:
+        state: Connected
+  - actor: bob
+    expect_event:
+      type: call_state
+      timeout: 20.0
+      match:
+        state: Connected

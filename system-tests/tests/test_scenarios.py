@@ -1005,6 +1005,9 @@ async def _run_scenario(name: str, actors: dict[str, CliProcess]) -> None:
         peer_id = actor.identity_peer_id
         if isinstance(peer_id, str):
             variables[f"{actor_name}.peer_id"] = peer_id
+        identity = actor.identity
+        if isinstance(identity, Identity):
+            variables[f"{actor_name}.identity_key_b64"] = identity.secret_key_b64
     await runner.run(scenario, actors, initial_variables=variables)
 
 
@@ -1242,6 +1245,244 @@ async def test_call_simultaneous_dial(
     assert (
         "Connected" in bob_call_states
     ), f"bob did not receive call_state Connected; observed {bob_call_states}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("profile", [NETWORK_PROFILES[0]], ids=lambda profile: profile.name)
+async def test_session_simultaneous_dial_then_call(
+    topology: TopologyManager,
+    cli_pair: dict[str, CliProcess],
+    profile: NetworkProfile,
+) -> None:
+    _ = topology, profile
+    await _run_scenario("session_simultaneous_dial_then_call.yaml", cli_pair)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("profile", [NETWORK_PROFILES[0]], ids=lambda profile: profile.name)
+async def test_caller_cancel_during_glare_then_room(
+    topology: TopologyManager,
+    cli_pair: dict[str, CliProcess],
+    profile: NetworkProfile,
+) -> None:
+    _ = topology, profile
+    await _run_scenario("caller_cancel_during_glare_then_room.yaml", cli_pair)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("profile", [NETWORK_PROFILES[0]], ids=lambda profile: profile.name)
+async def test_call_prompt_survives_session_restart(
+    topology: TopologyManager,
+    cli_pair: dict[str, CliProcess],
+    profile: NetworkProfile,
+) -> None:
+    _ = topology, profile
+    alice = cli_pair["alice"]
+    bob = cli_pair["bob"]
+    alice_peer_id = alice.identity_peer_id
+    bob_peer_id = bob.identity_peer_id
+    assert isinstance(alice_peer_id, str) and isinstance(bob_peer_id, str)
+
+    await _add_contact(alice, "bob", bob_peer_id)
+    await _add_contact(bob, "alice", alice_peer_id)
+    for owner, peer in ((alice, bob_peer_id), (bob, alice_peer_id)):
+        response = await owner.send({"cmd": "start_session", "args": {"contact_id": "bob" if owner is alice else "alice"}})
+        assert response.get("ok") is True, f"start_session failed: {response}"
+    await asyncio.gather(
+        alice.expect_event(
+            lambda event: event.get("type") == "session_status"
+            and isinstance(event.get("status"), dict)
+            and "Connected" in event["status"],
+            timeout=45.0,
+        ),
+        bob.expect_event(
+            lambda event: event.get("type") == "session_status"
+            and isinstance(event.get("status"), dict)
+            and "Connected" in event["status"],
+            timeout=45.0,
+        ),
+    )
+
+    response = await alice.send({"cmd": "start_call", "args": {"contact_id": "bob"}})
+    assert response.get("ok") is True, f"start_call failed: {response}"
+    original_prompt = await bob.expect_event(
+        lambda event: event.get("type") == "accept_call_prompt",
+        timeout=60.0,
+    )
+    original_request_id = original_prompt.get("request_id")
+    assert isinstance(original_request_id, str), (
+        f"original accept_call_prompt missing request_id: {original_prompt}"
+    )
+
+    alice_identity = alice.identity
+    assert isinstance(alice_identity, Identity)
+    await alice.restart()
+    await _set_identity_on_actor(alice, alice_identity)
+    restart_manager_response = await alice.send({"cmd": "start_manager", "args": {}})
+    assert restart_manager_response.get("ok") is True, (
+        f"start_manager after restart failed: {restart_manager_response}"
+    )
+
+    # The caller's process is gone, so Bob's original prompt must be cancelled
+    # (directly or once the offer window elapses).
+    try:
+        await bob.expect_event(
+            lambda event: event.get("type") == "accept_call_canceled"
+            and event.get("request_id") == original_request_id,
+            timeout=30.0,
+        )
+    except Exception as exc:
+        raise AssertionError(
+            "original prompt not cancelled after caller restart; "
+            f"bob stdout tail: {bob.stdout_lines()[-30:]}; "
+            f"bob stderr tail: {bob.stderr_lines()[-15:]}"
+        ) from exc
+
+    await _add_contact(alice, "bob", bob_peer_id)
+    # Churn can drop a fresh session between its Connected emission and the
+    # start_call lookup; retry the pair until the call lands.
+    for _ in range(4):
+        response = await alice.send({"cmd": "start_session", "args": {"contact_id": "bob"}})
+        assert response.get("ok") is True, f"start_session after restart failed: {response}"
+        await alice.expect_event(
+            lambda event: event.get("type") == "session_status"
+            and isinstance(event.get("status"), dict)
+            and "Connected" in event["status"],
+            timeout=45.0,
+        )
+        response = await alice.send({"cmd": "start_call", "args": {"contact_id": "bob"}})
+        if response.get("ok") is True:
+            break
+    else:
+        raise AssertionError("start_call after restart never landed on a live session")
+
+    # Session churn can cancel a raised prompt before the accept lands; accept
+    # the first prompt that is still open, re-issuing the call when Alice's
+    # negotiation has already terminalized.
+    last_error: Exception | None = None
+    for _ in range(4):
+        try:
+            prompt = await bob.expect_event(
+                lambda event: event.get("type") == "accept_call_prompt"
+                and isinstance(event.get("request_id"), str)
+                and event.get("request_id") != original_request_id,
+                timeout=45.0,
+            )
+        except Exception as exc:
+            last_error = exc
+            response = await alice.send(
+                {"cmd": "start_session", "args": {"contact_id": "bob"}}
+            )
+            if response.get("ok") is not True:
+                last_error = AssertionError(
+                    f"retry start_session failed: {response}"
+                )
+                continue
+            response = await alice.send(
+                {"cmd": "start_call", "args": {"contact_id": "bob"}}
+            )
+            if response.get("ok") is not True:
+                last_error = AssertionError(f"retry start_call failed: {response}")
+            continue
+        accept_response = await bob.send(
+            {
+                "cmd": "accept_call",
+                "args": {"request_id": prompt.get("request_id"), "accept": True},
+            }
+        )
+        if accept_response.get("ok") is True:
+            break
+        last_error = AssertionError(f"accept_call failed: {accept_response}")
+    else:
+        raise AssertionError(
+            f"no accept_call succeeded across raised prompts: {last_error}; "
+            f"bob stdout tail: {bob.stdout_lines()[-30:]}; "
+            f"bob stderr tail: {bob.stderr_lines()[-30:]}; "
+            f"alice stdout tail: {alice.stdout_lines()[-15:]}"
+        )
+
+    await asyncio.gather(
+        alice.expect_event(lambda event: _is_call_state(event, "Connected"), timeout=20.0),
+        bob.expect_event(lambda event: _is_call_state(event, "Connected"), timeout=20.0),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("profile", [NETWORK_PROFILES[0]], ids=lambda profile: profile.name)
+async def test_call_prompt_survives_hard_session_restart(
+    topology: TopologyManager,
+    cli_pair: dict[str, CliProcess],
+    profile: NetworkProfile,
+) -> None:
+    _ = topology, profile
+    alice = cli_pair["alice"]
+    bob = cli_pair["bob"]
+    alice_peer_id = alice.identity_peer_id
+    bob_peer_id = bob.identity_peer_id
+    assert isinstance(alice_peer_id, str) and isinstance(bob_peer_id, str)
+
+    await _add_contact(alice, "bob", bob_peer_id)
+    await _add_contact(bob, "alice", alice_peer_id)
+    await asyncio.gather(
+        alice.send({"cmd": "start_session", "args": {"contact_id": "bob"}}),
+        bob.send({"cmd": "start_session", "args": {"contact_id": "alice"}}),
+    )
+    await asyncio.gather(
+        alice.expect_event(
+            lambda event: event.get("type") == "session_status"
+            and isinstance(event.get("status"), dict)
+            and "Connected" in event["status"],
+            timeout=45.0,
+        ),
+        bob.expect_event(
+            lambda event: event.get("type") == "session_status"
+            and isinstance(event.get("status"), dict)
+            and "Connected" in event["status"],
+            timeout=45.0,
+        ),
+    )
+
+    response = await alice.send({"cmd": "start_call", "args": {"contact_id": "bob"}})
+    assert response.get("ok") is True, f"start_call failed: {response}"
+    original_prompt = await bob.expect_event(
+        lambda event: event.get("type") == "accept_call_prompt",
+        timeout=60.0,
+    )
+    original_request_id = original_prompt.get("request_id")
+    alice_identity = alice.identity
+    assert isinstance(alice_identity, Identity)
+
+    await alice.crash()
+    await alice.restart()
+    await _set_identity_on_actor(alice, alice_identity)
+    restart_manager_response = await alice.send({"cmd": "start_manager", "args": {}})
+    assert restart_manager_response.get("ok") is True, (
+        f"start_manager after crash failed: {restart_manager_response}"
+    )
+
+    await bob.expect_event(
+        lambda event: event.get("type") == "accept_call_canceled"
+        and event.get("request_id") == original_request_id,
+        timeout=30.0,
+    )
+    await _add_contact(alice, "bob", bob_peer_id)
+    response = await alice.send({"cmd": "start_session", "args": {"contact_id": "bob"}})
+    assert response.get("ok") is True, f"start_session after crash failed: {response}"
+
+    terminal_status = await alice.expect_event(
+        lambda event: event.get("type") == "session_status"
+        and (
+            event.get("status") == "Inactive"
+            or (
+                isinstance(event.get("status"), dict)
+                and "Connected" in event["status"]
+            )
+        ),
+        timeout=45.0,
+    )
+    assert isinstance(terminal_status.get("status"), dict) and "Connected" in terminal_status["status"], (
+        "restarted Alice became inactive after Bob retained its stale predecessor"
+    )
 
 
 @pytest.mark.asyncio
