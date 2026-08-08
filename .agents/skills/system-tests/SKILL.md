@@ -101,8 +101,10 @@ and PKARR `8080`.
 A fixed lock serializes runs because services bind fixed host ports. Do not bypass
 it or run two stacks concurrently.
 
-For a ten-pass local validation, run passes serially. Each pass has one test
-iteration, an explicit order seed, and a unique artifact root:
+For particularly complex, risky, or concurrency-sensitive changes, an optional
+ten-pass validation can expose order-dependent failures. Run passes serially.
+Each pass has one test iteration, an explicit order seed, and a unique artifact
+root:
 
 ```sh
 status=0
@@ -143,6 +145,8 @@ Each run creates a mode `0700` `run-*` directory containing:
 
 Use artifacts to classify failures. Read `manifest.json` for order seed and pytest
 exit status, then inspect `runner.log`, service logs, and per-test `debug.json`.
+For retained failure artifacts needing diagnosis, use the
+[system-test artifact analysis skill](../system-test-artifact-analysis/SKILL.md).
 A retained pytest failure after its built-in retries is product-test evidence.
 First rerun complete collection with exact `SYSTEM_TEST_ORDER_SEED`, then replay
 the failing nodeid with that same seed. A SIGINT or runner interruption is
@@ -163,12 +167,13 @@ SYSTEM_TEST_ARTIFACTS_DIR=/tmp/telepathy-system-tests-artifacts/replay-nodeid \
   --test-iterations 1 --save-artifacts all
 ```
 
-## Current Validation
+## Validation Guidance
 
-Record local validation as ten serialized passes, listing each seed, artifact root,
-pass or failure result, skips, and interruptions. Keep retained-failure evidence
-with its manifest, logs, and `debug.json`; do not infer product status from a
-runner interruption.
+Regular local validation is one run with one test iteration and retained failure
+artifacts. For optional ten-pass validation, list each seed, artifact root, pass
+or failure result, skips, and interruptions. Keep retained-failure evidence with
+its manifest, logs, and `debug.json`; do not infer product status from a runner
+interruption.
 
 ## Troubleshooting
 
