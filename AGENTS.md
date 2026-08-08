@@ -35,45 +35,7 @@ Format only after cleanup is complete.
 
 ## Rust Tests
 
-Prefer nextest. Use `cargo test` only when required, and state why.
-
-Main suite:
-
-```sh
-cargo nextest run --manifest-path rust/Cargo.toml --all-targets -E 'not kind(=bench) and not binary(=core_integration_test)'
-```
-
-Core integration suite:
-
-```sh
-cargo nextest run --manifest-path rust/Cargo.toml -p telepathy_core --test core_integration_test --features integration-testing
-```
-
-Focused integration module/test:
-
-```sh
-cargo nextest run --manifest-path rust/Cargo.toml -p telepathy_core --test core_integration_test --features integration-testing <module>::
-cargo nextest run --manifest-path rust/Cargo.toml -p telepathy_core --test core_integration_test --features integration-testing <module>::<test>
-```
-
-Modules: `session_lifecycle`, `call_lifecycle`, `audio_streams`, `device_failures`, `room_lifecycle`, `call_end_copy`.
-
-Package/test:
-
-```sh
-cargo nextest run --manifest-path rust/Cargo.toml -p <package> -E 'not kind(=bench)'
-cargo nextest run --manifest-path rust/Cargo.toml -p <package> <test>
-```
-
-For session, call, room, network, or teardown changes:
-
-```sh
-cargo nextest run --manifest-path rust/Cargo.toml -p telepathy_core --test core_integration_test --features integration-testing --stress-count 10
-```
-
-System Suite: Use the system-tests skill.
-
-Before handing off substantial Rust work, run the main, stress, and system suites.
+Use the rust-testing skill.
 
 ## Flutter Rust Bridge
 
