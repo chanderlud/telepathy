@@ -78,12 +78,19 @@ artifact ownership. Do not use it as a sandbox for untrusted code.
 From repository root:
 
 ```sh
-python -m pip install -r system-tests/requirements.txt
+python3 -m venv /tmp/telepathy-system-tests-venv
+/tmp/telepathy-system-tests-venv/bin/python -m pip install -r system-tests/requirements.txt
 bash system-tests/build.sh
-SYSTEM_TEST_ARTIFACTS_DIR=system-tests/artifacts \
+SYSTEM_TEST_ARTIFACTS_DIR=/tmp/telepathy-system-tests-artifacts/local \
   system-tests/run-in-user-namespace.sh \
-  python -m pytest system-tests/tests --save-artifacts failures
+  /tmp/telepathy-system-tests-venv/bin/python -m pytest system-tests/tests \
+  --test-iterations 1 --save-artifacts failures
 ```
+
+Do not assume a `python` alias exists. The user-namespace runner executes the
+explicit interpreter passed to it, so pass
+`/tmp/telepathy-system-tests-venv/bin/python`. Keep this isolated virtualenv
+outside the repository; host `python3` may not have pytest installed.
 
 The launcher starts the Compose-pinned services, creates a blocked outer user
 namespace, waits for the child to report that UID mapping completed, attaches
@@ -93,6 +100,24 @@ and PKARR `8080`.
 
 A fixed lock serializes runs because services bind fixed host ports. Do not bypass
 it or run two stacks concurrently.
+
+For a ten-pass local validation, run passes serially. Each pass has one test
+iteration, an explicit order seed, and a unique artifact root:
+
+```sh
+status=0
+for pass in $(seq 1 10); do
+  SYSTEM_TEST_ORDER_SEED="local-pass-${pass}" \
+  SYSTEM_TEST_ARTIFACTS_DIR="/tmp/telepathy-system-tests-artifacts/pass-${pass}" \
+    system-tests/run-in-user-namespace.sh \
+    /tmp/telepathy-system-tests-venv/bin/python -m pytest system-tests/tests \
+    --test-iterations 1 --save-artifacts failures || status=1
+done
+exit "${status}"
+```
+
+Lock-required serialization protects fixed host ports. Do not parallelize this
+loop or bypass the runner lock.
 
 ## Privileged CI Run
 
@@ -116,12 +141,34 @@ Each run creates a mode `0700` `run-*` directory containing:
 - namespace, link, address, route, forwarding, and qdisc snapshots
 - per-test `debug.json`, `setup-error.txt`, `dns-server.log`, and `cleanup.json`
 
+Use artifacts to classify failures. Read `manifest.json` for order seed and pytest
+exit status, then inspect `runner.log`, service logs, and per-test `debug.json`.
+A retained pytest failure after its built-in retries is product-test evidence.
+First rerun complete collection with exact `SYSTEM_TEST_ORDER_SEED`, then replay
+the failing nodeid with that same seed. A SIGINT or runner interruption is
+infrastructure evidence, not a product issue. Record skips explicitly alongside
+pass, failure, and interruption outcomes.
+
+```sh
+SYSTEM_TEST_ORDER_SEED='<seed-from-manifest>' \
+SYSTEM_TEST_ARTIFACTS_DIR=/tmp/telepathy-system-tests-artifacts/replay-seed \
+  system-tests/run-in-user-namespace.sh \
+  /tmp/telepathy-system-tests-venv/bin/python -m pytest system-tests/tests \
+  --test-iterations 1 --save-artifacts failures
+
+SYSTEM_TEST_ORDER_SEED='<seed-from-manifest>' \
+SYSTEM_TEST_ARTIFACTS_DIR=/tmp/telepathy-system-tests-artifacts/replay-nodeid \
+  system-tests/run-in-user-namespace.sh \
+  /tmp/telepathy-system-tests-venv/bin/python -m pytest '<failing-nodeid>' \
+  --test-iterations 1 --save-artifacts all
+```
+
 ## Current Validation
 
-Real local unprivileged run: `624 passed, 8 skipped in 210.07s`. The skips are
-privileged-wrapper fake tests that do not apply as mapped root inside the local
-user namespace. GitHub Actions validated the privileged entrypoint with all three
-PR sweeps green; full CI and Smoke also passed.
+Record local validation as ten serialized passes, listing each seed, artifact root,
+pass or failure result, skips, and interruptions. Keep retained-failure evidence
+with its manifest, logs, and `debug.json`; do not infer product status from a
+runner interruption.
 
 ## Troubleshooting
 
