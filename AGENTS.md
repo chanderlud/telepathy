@@ -71,32 +71,13 @@ For session, call, room, network, or teardown changes:
 cargo nextest run --manifest-path rust/Cargo.toml -p telepathy_core --test core_integration_test --features integration-testing --stress-count 10
 ```
 
-Before handing off substantial Rust work, run the main and stress suites.
+System Suite: Use the system-tests skill.
 
-System tests use Docker Compose for the pinned Iroh relay and DNS services. Agents run
-local tests through `system-tests/run-in-user-namespace.sh`, which uses an unprivileged
-outer namespace plus `slirp4netns`; no sudo is required, but Docker Compose access is.
-GitHub Actions invokes `system-tests/run-privileged.sh` as the runner user, and that
-wrapper uses non-interactive sudo only for host topology and pytest. Both paths preserve
-nested client namespaces, per-run certificates, Compose logs, and guaranteed teardown.
+Before handing off substantial Rust work, run the main, stress, and system suites.
 
 ## Flutter Rust Bridge
 
-After changing public `telepathy-core` members, run exactly:
-
-```sh
-flutter_rust_bridge_codegen generate
-```
-
-If missing:
-
-```sh
-cargo install flutter_rust_bridge_codegen
-```
-
-CI regenerates the bindings and fails on any diff, so always commit the
-regenerated output. The codegen version must match the pinned
-`flutter_rust_bridge` version.
+After changing public `telepathy-core` members, use the frb-bindings skill.
 
 ## Test Quality Policy
 
