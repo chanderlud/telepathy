@@ -131,7 +131,7 @@ jobs:
     name: Launch on Linux
     steps:
       - name: Linux Runtime Prerequisites
-        run: sudo apt-get update && sudo apt-get install libgtk-3-0 libasound2 libsecret-1-0 xvfb dbus-x11 gnome-keyring
+        run: sudo apt-get update && sudo apt-get install libgtk-3-0 libasound2t64 libsecret-1-0 xvfb dbus-x11 gnome-keyring
 
       - name: Download Linux artifact
         uses: actions/download-artifact@v8
