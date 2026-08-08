@@ -4,7 +4,7 @@ services:
     network_mode: host
     volumes:
       - ./relay/config.toml:/config/config.toml:ro
-      - ./relay/certs:/certs:ro
+      - ${TELEPATHY_RELAY_CERTS:-./relay/certs}:/certs:ro
     command: ["--config-path=/config/config.toml", "--dev"]
 
   iroh-dns-server:

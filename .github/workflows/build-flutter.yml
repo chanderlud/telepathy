@@ -104,6 +104,9 @@ jobs:
         run: |
           rustup target add aarch64-apple-darwin
           rustup target add aarch64-apple-ios
+          if [[ "${{ matrix.info.target }}" == "macos" && "${{ startsWith(github.ref, 'refs/tags/') }}" == "true" ]]; then
+            rustup target add x86_64-apple-darwin
+          fi
 
       - name: Linux Prerequisites
         if: runner.os == 'Linux'
@@ -132,18 +135,22 @@ jobs:
           MODE="${{ startsWith(github.ref, 'refs/tags/') && 'release' || 'debug' }}"
           CONFIG="${{ startsWith(github.ref, 'refs/tags/') && 'Release' || 'Debug' }}"
           BUILD_DIR="$PWD/build/macos"
+          XCODE_ARGS=(-destination platform=macOS)
+          if [[ "$MODE" == "release" ]]; then
+            XCODE_ARGS+=(ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO)
+          fi
           flutter build macos --config-only --$MODE
           xcodebuild \
             -workspace macos/Runner.xcworkspace \
             -scheme Runner \
             -configuration "$CONFIG" \
             -derivedDataPath "$BUILD_DIR" \
-            -destination platform=macOS \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             DEVELOPMENT_TEAM="" \
             MACOSX_DEPLOYMENT_TARGET=10.15 \
+            "${XCODE_ARGS[@]}" \
             OBJROOT="$BUILD_DIR/Build/Intermediates.noindex" \
             SYMROOT="$BUILD_DIR/Build/Products" \
             build
@@ -181,9 +188,14 @@ jobs:
         if: matrix.info.target == 'macos'
         run: mv build/macos/Build/Products/${{ startsWith(github.ref, 'refs/tags/') && 'Release' || 'Debug' }}/Telepathy.app telepathy-macos.app
 
-      - name: Package macOS Bundle
-        if: matrix.info.target == 'macos'
-        run: ditto -c -k --sequesterRsrc --keepParent telepathy-macos.app telepathy-macos-unsigned.zip
+      - name: Package macOS universal unsigned DMG
+        if: matrix.info.target == 'macos' && startsWith(github.ref, 'refs/tags/')
+        run: |
+          set -eux
+          EXECUTABLE_NAME="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' telepathy-macos.app/Contents/Info.plist)"
+          lipo "telepathy-macos.app/Contents/MacOS/$EXECUTABLE_NAME" -verify_arch arm64 x86_64
+          hdiutil create -volname Telepathy -srcfolder telepathy-macos.app -ov -format UDZO telepathy-macos-universal-unsigned.dmg
+          hdiutil verify telepathy-macos-universal-unsigned.dmg
 
       - name: Move iOS Bundle
         if: matrix.info.target == 'ios'
@@ -205,14 +217,21 @@ jobs:
         if: matrix.info.target == 'web'
         run: mv build/web telepathy
 
+      - name: Upload macOS Artifact
+        if: matrix.info.target == 'macos'
+        uses: actions/upload-artifact@v7
+        with:
+          name: telepathy_${{ matrix.info.image }}_${{ matrix.info.target }}
+          path: ${{ startsWith(github.ref, 'refs/tags/') && 'telepathy-macos-universal-unsigned.dmg' || 'telepathy-macos.app' }}
+
       - name: Upload Artifacts
+        if: matrix.info.target != 'macos'
         uses: actions/upload-artifact@v7
         with:
           name: telepathy_${{ matrix.info.image }}_${{ matrix.info.target }}
           path: |
             telepathy.apk
             telepathy
-            telepathy-macos-unsigned.zip
             telepathy-ios-unsigned-app.zip
             telepathy-windows-x64.exe
             telepathy.deb

@@ -39,7 +39,7 @@ exec xvfb-run \
     fi
     exec flutter run \
       -d linux \
-      --target=lib/driver_main.dart \
+      --target="${TARGET:-lib/driver_main.dart}" \
       --print-dtd \
       "$@"
   ' _ "$@"

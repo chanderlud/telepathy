@@ -17,9 +17,13 @@ class CallDetailsWidget extends StatelessWidget {
       // this the fixed-size children overflow below the card on short
       // layouts (issue #58, case 4).
       final bool showChart = constraints.maxHeight >= 240;
+      final double verticalPadding = showChart ? 15.0 : 11.0;
 
       return Container(
-        padding: const EdgeInsets.symmetric(vertical: 15.0, horizontal: 20.0),
+        padding: EdgeInsets.symmetric(
+          vertical: verticalPadding,
+          horizontal: 20.0,
+        ),
         decoration: BoxDecoration(
           color: Theme.of(context).colorScheme.secondaryContainer,
           borderRadius: BorderRadius.circular(10.0),
@@ -31,7 +35,7 @@ class CallDetailsWidget extends StatelessWidget {
                 (BuildContext context, StateController stateController, _) {
               return Text(
                   '${stateController.activeRoom != null ? "Room" : "Call"} ${stateController.status.toLowerCase()}',
-                  style: const TextStyle(fontSize: 20));
+                  style: Theme.of(context).textTheme.titleLarge);
             }),
             const SizedBox(height: 8),
             Expanded(
@@ -59,7 +63,8 @@ class CallDetailsWidget extends StatelessWidget {
                     ),
                     const SizedBox(height: 6),
                   ],
-                  const Text('Input level'),
+                  Text('Input level',
+                      style: Theme.of(context).textTheme.labelLarge),
                   const SizedBox(height: 7),
                   RepaintBoundary(
                     child: Selector<StatisticsController, double>(
@@ -70,7 +75,8 @@ class CallDetailsWidget extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 9),
-                  const Text('Output level'),
+                  Text('Output level',
+                      style: Theme.of(context).textTheme.labelLarge),
                   const SizedBox(height: 7),
                   RepaintBoundary(
                     child: Selector<StatisticsController, double>(
@@ -98,7 +104,7 @@ class CallDetailsWidget extends StatelessWidget {
                                   semanticsLabel: 'Latency icon'),
                               const SizedBox(width: 7),
                               Text('$latency ms',
-                                  style: const TextStyle(height: 0)),
+                                  style: Theme.of(context).textTheme.bodySmall),
                             ],
                           );
                         },
@@ -111,7 +117,7 @@ class CallDetailsWidget extends StatelessWidget {
                         selector: (context, c) => c.upload,
                         builder: (context, upload, child) {
                           return Text(upload,
-                              style: const TextStyle(height: 0));
+                              style: Theme.of(context).textTheme.bodySmall);
                         },
                       ),
                       const Spacer(),
@@ -122,7 +128,7 @@ class CallDetailsWidget extends StatelessWidget {
                         selector: (context, c) => c.download,
                         builder: (context, download, child) {
                           return Text(download,
-                              style: const TextStyle(height: 0));
+                              style: Theme.of(context).textTheme.bodySmall);
                         },
                       ),
                     ],

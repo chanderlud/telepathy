@@ -65,7 +65,17 @@ class HomePage extends StatelessWidget {
                                   Flexible(
                                     fit: FlexFit.loose,
                                     child: stateController.activeRoom != null
-                                        ? const RoomDetailsWidget()
+                                        ? SizedBox(
+                                            // Fill the top section like the
+                                            // contacts list does, so the room
+                                            // panel doesn't float over dead
+                                            // space below it.
+                                            height: isCompactWide
+                                                ? AppConstants
+                                                    .topSectionMaxHeightWideCompact
+                                                : AppConstants
+                                                    .topSectionMaxHeightWide,
+                                            child: const RoomDetailsWidget())
                                         : contactsList,
                                   ),
                                 ],
@@ -119,7 +129,17 @@ class HomePage extends StatelessWidget {
                             ? AppConstants.topSectionMaxHeightNarrowCompact
                             : AppConstants.topSectionMaxHeightNarrow,
                       ),
-                      child: contactsList,
+                      // Mirror the wide layout: while a room call is active
+                      // the room panel replaces the contacts list so narrow
+                      // windows still expose room state and the hangup control.
+                      child: context.watch<StateController>().activeRoom != null
+                          ? SizedBox(
+                              height: isCompact
+                                  ? AppConstants
+                                      .topSectionMaxHeightNarrowCompact
+                                  : AppConstants.topSectionMaxHeightNarrow,
+                              child: const RoomDetailsWidget())
+                          : contactsList,
                     ),
                     SizedBox(height: isCompact ? 10 : 20),
                     HomeTabView(

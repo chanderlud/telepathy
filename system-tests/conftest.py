@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
 import sys
 from random import Random
 from datetime import UTC, datetime
@@ -19,12 +18,6 @@ from harness.topology import TopologyManager
 SYSTEM_TEST_ROOT = Path(__file__).resolve().parent
 REPO_ROOT = SYSTEM_TEST_ROOT.parent
 BUILD_SCRIPT = SYSTEM_TEST_ROOT / "build.sh"
-GEN_CERTS_SCRIPT = SYSTEM_TEST_ROOT / "relay" / "gen-certs.sh"
-RELAY_CERTS_DIR = SYSTEM_TEST_ROOT / "relay" / "certs"
-RELAY_CERT_FILES = (
-    RELAY_CERTS_DIR / "cert.pem",
-    RELAY_CERTS_DIR / "cert.key.pem",
-)
 RUST_TARGET = REPO_ROOT / "rust" / "target" / "debug"
 
 if str(SYSTEM_TEST_ROOT) not in sys.path:
@@ -42,7 +35,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption(
         "--artifacts-dir",
         action="store",
-        default=str(SYSTEM_TEST_ROOT / "artifacts"),
+        default=os.environ.get("SYSTEM_TEST_ARTIFACTS_DIR", str(SYSTEM_TEST_ROOT / "artifacts")),
         help="Directory for system-test failure artifacts.",
     )
     parser.addoption(
@@ -61,34 +54,10 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     )
 
 
-def _ensure_relay_certs() -> None:
-    if all(path.exists() for path in RELAY_CERT_FILES):
-        return
-
-    result = subprocess.run(
-        ["bash", str(GEN_CERTS_SCRIPT)],
-        cwd=str(REPO_ROOT),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0 or not all(path.exists() for path in RELAY_CERT_FILES):
-        message = (
-            "relay TLS certificates are missing and could not be generated.\n"
-            f"expected files:\n"
-            + "\n".join(f"  - {path}" for path in RELAY_CERT_FILES)
-            + f"\nstdout:\n{result.stdout}\n"
-            f"stderr:\n{result.stderr}"
-        )
-        raise pytest.UsageError(message)
-
-
 def pytest_configure(config: pytest.Config) -> None:
     if not hasattr(config, "workerinput"):
         FAILED_PROFILES.clear()
         FAILED_ORDER_SEEDS.clear()
-
-    _ensure_relay_certs()
 
     # result = subprocess.run(
     #     ["bash", str(BUILD_SCRIPT)],
@@ -110,6 +79,7 @@ def pytest_configure(config: pytest.Config) -> None:
     config._system_test_save_artifacts = str(config.getoption("save_artifacts"))
     config._system_test_order_seed = _resolve_order_seed(config)
     config._system_test_artifacts_dir.mkdir(parents=True, exist_ok=True)
+    config._system_test_artifacts_dir.chmod(0o700)
 
 
 def pytest_configure_node(node: pytest.Node) -> None:

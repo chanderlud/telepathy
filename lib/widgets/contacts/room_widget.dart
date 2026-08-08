@@ -7,6 +7,7 @@ import 'package:telepathy/core/utils/index.dart';
 import 'package:telepathy/models/index.dart';
 import 'package:telepathy/core/rust/player.dart';
 import 'package:telepathy/core/rust/flutter.dart';
+import 'package:telepathy/widgets/call/room_details_widget.dart';
 import 'package:telepathy/widgets/common/index.dart';
 
 import 'call_start_lifecycle.dart';
@@ -251,6 +252,23 @@ class RoomWidgetState extends State<RoomWidget> {
                     stateController.pendingRoom?.id == widget.room.id),
                 controller: _nicknameInput,
                 labelText: 'Nickname'),
+            const SizedBox(height: 16),
+            Text('${widget.room.peerIds.length} members',
+                style: TextStyle(fontSize: 13, color: Colors.grey.shade400)),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final String peerId in widget.room.peerIds)
+                  // No status dots here: online state from sessions is a
+                  // guess for anonymous members, so the edit dialog shows
+                  // names only. The active room panel owns status display.
+                  MemberStatusChip(
+                    name: _memberName(profilesController, peerId),
+                  ),
+              ],
+            ),
             const SizedBox(height: 20),
             Button(
               text: 'Save',
@@ -280,6 +298,11 @@ class RoomWidgetState extends State<RoomWidget> {
         );
       },
     );
+  }
+
+  String _memberName(ProfilesController profilesController, String peerId) {
+    if (peerId == profilesController.peerId) return 'You';
+    return profilesController.contacts[peerId]?.nickname() ?? 'Anonymous';
   }
 
   Future<bool> _confirmDelete(BuildContext context) async {

@@ -140,7 +140,10 @@ abstract class Telepathy implements RustOpaqueInterface {
       {required Contact contact, required StartOperation operation});
 
   /// Non-blocking: spawns the manager task and returns. The Dart side observes
-  /// the eventual `Active` transition via the `managerActive` callback.
+  /// the eventual `Active` transition via the `managerActive` callback. The
+  /// non-blocking contract is validated by the CLI system test
+  /// `test_start_manager_ack_precedes_active_event`; the `()` return type
+  /// prevents silent reintroduction of blocking semantics.
   Future<void> startManager();
 
   Future<void> startScreenshare({required Contact contact});

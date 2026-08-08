@@ -16,8 +16,11 @@ import 'package:telepathy/controllers/state_controller.dart';
 import 'package:telepathy/controllers/statistics_controller.dart';
 import 'package:telepathy/core/rust/flutter.dart';
 import 'package:telepathy/core/rust/player.dart';
+import 'package:telepathy/core/theme/app_theme.dart';
 import 'package:telepathy/models/index.dart';
 import 'package:telepathy/screens/home/home_page.dart';
+
+import '../../../support/fake_contact.dart';
 
 /// Shared harness for the home-layout regression suites
 /// (https://github.com/chanderlud/telepathy/issues/58).
@@ -145,6 +148,9 @@ class Harness {
       storage: storage,
       options: options,
       roomHasher: ({required List<String> peers}) => peers.join('|'),
+      contactFactory: ({required nickname, required peerId}) =>
+          FakeContact(id: peerId, contactNickname: nickname),
+      peerIdValidator: (String peerId) => peerId.trim().isNotEmpty,
     );
     await profilesController.init(const <String>[]);
 
@@ -196,7 +202,7 @@ class Harness {
         ],
         child: MaterialApp(
           // Match production text metrics (bundled app font).
-          theme: ThemeData(fontFamily: 'Nunito'),
+          theme: ThemeData(fontFamily: 'Nunito', textTheme: AppTheme.textTheme),
           home: const HomePage(),
         ),
       ),

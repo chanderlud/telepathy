@@ -13,6 +13,15 @@ import 'package:uuid/uuid.dart';
 
 typedef RoomHasher = String Function({required List<String> peers});
 
+/// Builds a [Contact] from user input. Injectable so the mock backend can
+/// construct contacts without the Rust bridge.
+typedef ContactFactory = Contact Function(
+    {required String nickname, required String peerId});
+
+/// Validates a string-encoded peer id. Injectable so the mock backend can
+/// accept its synthetic peer ids without the Rust bridge.
+typedef PeerIdValidator = bool Function(String peerId);
+
 class ProfilesController with ChangeNotifier {
   static const String _profilesKey = 'profilesV2';
   static const String _activeProfileKey = 'activeProfile';
@@ -32,12 +41,26 @@ class ProfilesController with ChangeNotifier {
   final FlutterSecureStorage storage;
   final SharedPreferencesAsync options;
   final RoomHasher roomHasher;
+  final ContactFactory _contactFactory;
+  final PeerIdValidator _peerIdValidator;
 
   ProfilesController({
     required this.storage,
     required this.options,
     this.roomHasher = roomHash,
-  });
+    ContactFactory contactFactory = Contact.new,
+    PeerIdValidator peerIdValidator = _defaultPeerIdValidator,
+  })  : _contactFactory = contactFactory,
+        _peerIdValidator = peerIdValidator;
+
+  static bool _defaultPeerIdValidator(String peerId) =>
+      validatePeerId(peerId: peerId);
+
+  /// Validates a string-encoded peer id (e.g. from the add-contact form).
+  bool isValidPeerId(String peerId) => _peerIdValidator(peerId);
+
+  /// Hashes a room's peer ids into its stable id.
+  String hashRoomPeers(List<String> peers) => roomHasher(peers: peers);
 
   /// The ids of all available profiles.
   Map<String, Profile> profiles = <String, Profile>{};
@@ -171,7 +194,7 @@ class ProfilesController with ChangeNotifier {
     late final Contact contact;
     late final String contactId;
     try {
-      contact = Contact(nickname: nickname, peerId: peerId);
+      contact = _contactFactory(nickname: nickname, peerId: peerId);
       contactId = contact.id();
     } catch (error, stackTrace) {
       DebugConsole.warn('invalid contact: $error\n$stackTrace');

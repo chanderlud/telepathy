@@ -64,6 +64,79 @@ jobs:
       - name: Lint with flutter analyze
         run: flutter analyze --fatal-infos --fatal-warnings
 
+  check_frb_bindings:
+    runs-on: ubuntu-latest
+    name: Check FRB Bindings
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Linux Prerequisites
+        run: sudo apt-get update && sudo apt-get install clang cmake git ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev libasound2-dev
+
+      - name: Setup Flutter SDK
+        uses: flutter-actions/setup-flutter@v4
+        with:
+          channel: stable
+          version: 3.35.7
+
+      - name: Get Packages
+        run: flutter pub get
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: 'stable'
+          components: rustfmt
+          cache: true
+          cache-workspaces: rust
+
+      - name: Resolve flutter_rust_bridge version
+        id: frb
+        run: |
+          VERSION=$(awk '/^  flutter_rust_bridge:$/{found=1} found && /version:/{gsub(/"/, "", $2); print $2; exit}' pubspec.lock)
+          test -n "$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Cache FRB codegen binary
+        id: codegen-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/flutter_rust_bridge_codegen
+          key: frb-codegen-${{ runner.os }}-${{ steps.frb.outputs.version }}
+
+      - name: Install flutter_rust_bridge_codegen (prebuilt binary)
+        if: steps.codegen-cache.outputs.cache-hit != 'true'
+        env:
+          FRB_VERSION: ${{ steps.frb.outputs.version }}
+        run: |
+          set -euo pipefail
+          ASSET="flutter_rust_bridge_codegen-x86_64-unknown-linux-gnu-v${FRB_VERSION}"
+          BASE_URL="https://github.com/fzyzcjy/flutter_rust_bridge/releases/download/v${FRB_VERSION}"
+          curl -sSfLO "${BASE_URL}/${ASSET}.tgz"
+          curl -sSfLO "${BASE_URL}/${ASSET}.tgz.sha256"
+          echo "$(cat "${ASSET}.tgz.sha256")  ${ASSET}.tgz" | sha256sum -c -
+          mkdir -p ~/.cargo/bin
+          tar -xzf "${ASSET}.tgz" -C ~/.cargo/bin
+          flutter_rust_bridge_codegen --version
+
+      - name: Regenerate bindings
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          flutter_rust_bridge_codegen generate
+          cargo fmt --manifest-path rust/Cargo.toml --all
+
+      - name: Fail if bindings are stale
+        run: |
+          CHANGED=$(git status --porcelain -- lib/core/rust rust/telepathy-core/src/frb_generated.rs)
+          if [ -n "$CHANGED" ]; then
+            echo "$CHANGED"
+            git diff -- lib/core/rust rust/telepathy-core/src/frb_generated.rs | head -200
+            echo "::error::Flutter Rust Bridge bindings are out of date. Run 'flutter_rust_bridge_codegen generate' and 'cargo fmt --manifest-path rust/Cargo.toml --all' locally and commit the result."
+            exit 1
+          fi
+
   test_flutter:
     needs: lint_flutter
     runs-on: ubuntu-latest
@@ -130,6 +203,8 @@ jobs:
             target: x86_64-pc-windows-msvc
           - image: macos-14
             target: aarch64-apple-darwin
+          - image: macos-14
+            target: x86_64-apple-darwin
           - image: ubuntu-latest
             target: x86_64-unknown-linux-gnu
           - image: ubuntu-latest

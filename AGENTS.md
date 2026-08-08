@@ -37,59 +37,11 @@ Format only after cleanup is complete.
 
 ## Rust Tests
 
-Prefer nextest. Use `cargo test` only when required, and state why.
-
-Main suite:
-
-```sh
-cargo nextest run --manifest-path rust/Cargo.toml --all-targets -E 'not kind(=bench) and not binary(=core_integration_test)'
-```
-
-Core integration suite:
-
-```sh
-cargo nextest run --manifest-path rust/Cargo.toml -p telepathy_core --test core_integration_test --features integration-testing
-```
-
-Focused integration module/test:
-
-```sh
-cargo nextest run --manifest-path rust/Cargo.toml -p telepathy_core --test core_integration_test --features integration-testing <module>::
-cargo nextest run --manifest-path rust/Cargo.toml -p telepathy_core --test core_integration_test --features integration-testing <module>::<test>
-```
-
-Modules: `session_lifecycle`, `call_lifecycle`, `audio_streams`, `device_failures`, `room_lifecycle`, `call_end_copy`.
-
-Package/test:
-
-```sh
-cargo nextest run --manifest-path rust/Cargo.toml -p <package> -E 'not kind(=bench)'
-cargo nextest run --manifest-path rust/Cargo.toml -p <package> <test>
-```
-
-For session, call, room, network, or teardown changes:
-
-```sh
-cargo nextest run --manifest-path rust/Cargo.toml -p telepathy_core --test core_integration_test --features integration-testing --stress-count 10
-```
-
-Before handing off substantial Rust work, run the main and stress suites.
-
-System tests must be run manually by the developer in WSL. Prompt them when relevant.
+Use the rust-testing skill.
 
 ## Flutter Rust Bridge
 
-After changing public `telepathy-core` members, run exactly:
-
-```sh
-flutter_rust_bridge_codegen generate
-```
-
-If missing:
-
-```sh
-cargo install flutter_rust_bridge_codegen
-```
+After changing public `telepathy-core` members, use the frb-bindings skill.
 
 ## Test Quality Policy
 
