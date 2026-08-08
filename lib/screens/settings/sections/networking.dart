@@ -212,34 +212,36 @@ class NetworkSettingsState extends State<NetworkSettings> {
                   ],
                 ),
               ),
-            Center(
-              child: Wrap(
-                spacing: 20,
-                runSpacing: 20,
-                children: [
-                  SizedBox(
-                      width: width,
-                      child: TextInput(
-                        labelText: 'Bind Addresses',
-                        hintText: '0.0.0.0, ::, 127.0.0.1',
-                        controller: _bindAddressesInput,
-                        enabled: !isRestartSafe,
-                        onChanged: (_) => _updateUnsavedChanges(),
-                        errorText: _bindAddressesError,
-                      )),
-                  SizedBox(
-                      width: width,
-                      child: TextInput(
-                        labelText: 'Listen Port',
-                        controller: _listenPortInput,
-                        enabled: !isRestartSafe,
-                        onChanged: (_) => _updateUnsavedChanges(),
-                        errorText: _listenPortError,
-                      )),
-                ],
+            if (!kIsWeb) ...[
+              Center(
+                child: Wrap(
+                  spacing: 20,
+                  runSpacing: 20,
+                  children: [
+                    SizedBox(
+                        width: width,
+                        child: TextInput(
+                          labelText: 'Bind Addresses',
+                          hintText: '0.0.0.0, ::, 127.0.0.1',
+                          controller: _bindAddressesInput,
+                          enabled: !isRestartSafe,
+                          onChanged: (_) => _updateUnsavedChanges(),
+                          errorText: _bindAddressesError,
+                        )),
+                    SizedBox(
+                        width: width,
+                        child: TextInput(
+                          labelText: 'Listen Port',
+                          controller: _listenPortInput,
+                          enabled: !isRestartSafe,
+                          onChanged: (_) => _updateUnsavedChanges(),
+                          errorText: _listenPortError,
+                        )),
+                  ],
+                ),
               ),
-            ),
-            const SizedBox(height: 8),
+              const SizedBox(height: 8),
+            ],
             _buildRelaysSection(isRestartSafe),
             const SizedBox(height: 8),
             if (!kIsWeb) _buildDnsSection(width, isRestartSafe),

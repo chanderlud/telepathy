@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:telepathy/screens/home/home_page.dart';
 import 'package:telepathy/widgets/contacts/contacts_list.dart';
 import 'package:telepathy/widgets/home/home_tab_view.dart';
 
@@ -63,5 +64,43 @@ void main() {
 
     expect(tester.getRect(find.byType(ContactsList)).height, 250,
         reason: 'non-compact heights in the narrow branch use the 250px cap');
+  });
+
+  testWidgets('popping Settings restores the Telepathy title',
+      (WidgetTester tester) async {
+    final harness = await Harness.create();
+    setCanvasSize(tester, const Size(641, 900));
+    await pumpApp(tester, harness);
+
+    final homeContext = tester.element(find.byType(HomePage));
+    final settingsRoute = Navigator.of(homeContext).push<void>(
+      MaterialPageRoute<void>(
+        builder: (BuildContext context) => Title(
+          title: 'Telepathy - Settings',
+          color: const Color(0xFF000000),
+          child: const SizedBox.expand(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byWidgetPredicate(
+        (Widget widget) =>
+            widget is Title && widget.title == 'Telepathy - Settings',
+      ),
+      findsOneWidget,
+    );
+
+    Navigator.of(homeContext).pop();
+    await tester.pumpAndSettle();
+    await settingsRoute;
+
+    expect(
+      find.byWidgetPredicate(
+        (Widget widget) => widget is Title && widget.title == 'Telepathy',
+      ),
+      findsOneWidget,
+    );
   });
 }

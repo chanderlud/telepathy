@@ -16,8 +16,75 @@
 
     <title>Telepathy</title>
     <link rel="manifest" href="manifest.json">
+    <style>
+        :root {
+            --telepathy-background: #222425;
+            --telepathy-accent: #5538e5;
+            --telepathy-loader-gap: 16px;
+            --telepathy-loader-logo-size: 96px;
+            --telepathy-loader-indicator-size: 28px;
+            --telepathy-loader-indicator-stroke: 3px;
+            --telepathy-loader-transition: 180ms;
+        }
+
+        body {
+            background: var(--telepathy-background);
+            margin: 0;
+        }
+
+        #telepathy-loader {
+            align-items: center;
+            background: var(--telepathy-background);
+            display: flex;
+            flex-direction: column;
+            gap: var(--telepathy-loader-gap);
+            inset: 0;
+            justify-content: center;
+            opacity: 1;
+            position: fixed;
+            transition: opacity var(--telepathy-loader-transition) ease;
+            z-index: 1;
+        }
+
+        #telepathy-loader.is-hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .telepathy-loader__logo {
+            height: var(--telepathy-loader-logo-size);
+            width: var(--telepathy-loader-logo-size);
+        }
+
+        .telepathy-loader__indicator {
+            animation: telepathy-loader-spin 900ms linear infinite;
+            border: var(--telepathy-loader-indicator-stroke) solid var(--telepathy-accent);
+            border-left-color: transparent;
+            border-radius: 50%;
+            box-sizing: border-box;
+            height: var(--telepathy-loader-indicator-size);
+            width: var(--telepathy-loader-indicator-size);
+        }
+
+        @keyframes telepathy-loader-spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+    </style>
 </head>
 <body>
+<div id="telepathy-loader" role="status" aria-live="polite" aria-label="Loading Telepathy">
+    <img class="telepathy-loader__logo" src="icons/Icon-512.png" alt="">
+    <div class="telepathy-loader__indicator" aria-hidden="true"></div>
+</div>
+<script>
+    window.addEventListener('flutter-first-frame', () => {
+        const loader = document.getElementById('telepathy-loader');
+        loader.classList.add('is-hidden');
+        loader.addEventListener('transitionend', () => loader.remove(), {once: true});
+    });
+</script>
 <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>

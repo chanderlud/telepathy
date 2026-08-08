@@ -14,6 +14,14 @@ class HomePage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    return Title(
+      title: 'Telepathy',
+      color: const Color(0xFF000000),
+      child: _buildPage(context),
+    );
+  }
+
+  Widget _buildPage(BuildContext context) {
     return Scaffold(
       body: Padding(
           padding: const EdgeInsets.all(20.0),

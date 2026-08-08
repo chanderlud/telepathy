@@ -1,5 +1,4 @@
-import 'dart:typed_data';
-
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
@@ -329,6 +328,28 @@ void main() {
           'Save button must be re-enabled after a backend error so the user can retry',
     );
   });
+
+  testWidgets(
+    'Web hides unsupported network fields and retains supported controls',
+    (WidgetTester tester) async {
+      final recorder = _NetworkConfigRecorder(
+        listenPort: 40142,
+        bindAddresses: const ['0.0.0.0', '::'],
+      );
+      await tester.pumpNetworkSettings(
+        controller: _FakeNetworkSettingsController(recorder),
+        stateController: StateController(),
+        telepathy: _FakeTelepathy(),
+      );
+
+      expect(find.text('Bind Addresses'), findsNothing);
+      expect(find.text('Listen Port'), findsNothing);
+      expect(find.text('Use Custom DNS'), findsNothing);
+      expect(find.text('Use Custom Relays'), findsOneWidget);
+      expect(find.text('Use Custom Pkarr Relay'), findsOneWidget);
+    },
+    skip: !kIsWeb,
+  );
 }
 
 extension on WidgetTester {
