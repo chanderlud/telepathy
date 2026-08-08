@@ -1391,6 +1391,84 @@ async def test_call_prompt_survives_session_restart(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("profile", [NETWORK_PROFILES[0]], ids=lambda profile: profile.name)
+async def test_call_prompt_survives_hard_session_restart(
+    topology: TopologyManager,
+    cli_pair: dict[str, CliProcess],
+    profile: NetworkProfile,
+) -> None:
+    _ = topology, profile
+    alice = cli_pair["alice"]
+    bob = cli_pair["bob"]
+    alice_peer_id = alice.identity_peer_id
+    bob_peer_id = bob.identity_peer_id
+    assert isinstance(alice_peer_id, str) and isinstance(bob_peer_id, str)
+
+    await _add_contact(alice, "bob", bob_peer_id)
+    await _add_contact(bob, "alice", alice_peer_id)
+    await asyncio.gather(
+        alice.send({"cmd": "start_session", "args": {"contact_id": "bob"}}),
+        bob.send({"cmd": "start_session", "args": {"contact_id": "alice"}}),
+    )
+    await asyncio.gather(
+        alice.expect_event(
+            lambda event: event.get("type") == "session_status"
+            and isinstance(event.get("status"), dict)
+            and "Connected" in event["status"],
+            timeout=45.0,
+        ),
+        bob.expect_event(
+            lambda event: event.get("type") == "session_status"
+            and isinstance(event.get("status"), dict)
+            and "Connected" in event["status"],
+            timeout=45.0,
+        ),
+    )
+
+    response = await alice.send({"cmd": "start_call", "args": {"contact_id": "bob"}})
+    assert response.get("ok") is True, f"start_call failed: {response}"
+    original_prompt = await bob.expect_event(
+        lambda event: event.get("type") == "accept_call_prompt",
+        timeout=60.0,
+    )
+    original_request_id = original_prompt.get("request_id")
+    alice_identity = alice.identity
+    assert isinstance(alice_identity, Identity)
+
+    await alice.crash()
+    await alice.restart()
+    await _set_identity_on_actor(alice, alice_identity)
+    restart_manager_response = await alice.send({"cmd": "start_manager", "args": {}})
+    assert restart_manager_response.get("ok") is True, (
+        f"start_manager after crash failed: {restart_manager_response}"
+    )
+
+    await bob.expect_event(
+        lambda event: event.get("type") == "accept_call_canceled"
+        and event.get("request_id") == original_request_id,
+        timeout=30.0,
+    )
+    await _add_contact(alice, "bob", bob_peer_id)
+    response = await alice.send({"cmd": "start_session", "args": {"contact_id": "bob"}})
+    assert response.get("ok") is True, f"start_session after crash failed: {response}"
+
+    terminal_status = await alice.expect_event(
+        lambda event: event.get("type") == "session_status"
+        and (
+            event.get("status") == "Inactive"
+            or (
+                isinstance(event.get("status"), dict)
+                and "Connected" in event["status"]
+            )
+        ),
+        timeout=45.0,
+    )
+    assert isinstance(terminal_status.get("status"), dict) and "Connected" in terminal_status["status"], (
+        "restarted Alice became inactive after Bob retained its stale predecessor"
+    )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("profile", NETWORK_PROFILES, ids=lambda profile: profile.name)
 async def test_call_hello_ack_timeout(
     topology: TopologyManager,
