@@ -1,3 +1,4 @@
+use super::common;
 use super::common::{
     CallEndedPark, ClientHarness, ConnectedCallbackGate, DEFAULT_SAMPLE_RATE, ManagerLifecycle,
     PendingAcceptProbe, TwoClientShutdownGuard, assert_call_slot_idle, assert_no_busy_end,
@@ -2562,7 +2563,6 @@ async fn outbound_collision_transfers_accept_prompt_and_completes_call() {
 /// Shared glare geometry for parked-prompt tests: Bob's outbound dial is parked
 /// at Connecting while Alice's dial installs the listener session on Bob and her
 /// Hello opens Bob's accept prompt on it. Returns once the prompt is open.
-#[allow(clippy::too_many_arguments)]
 async fn setup_parked_prompt_glare(
     relay_map: &iroh::RelayMap,
     codec_config: &CodecConfig,
@@ -2722,8 +2722,7 @@ async fn caller_cancel_during_glare_allows_immediate_room_join_without_second_pr
 
     client_a.telepathy.end_call().await;
 
-    let mut room_members = vec![peer_a.to_string(), peer_b.to_string()];
-    room_members.sort();
+    let room_members = common::sorted_room_members(&contact_a, &contact_b);
     let (join_a, join_b) = tokio::join!(
         client_a.telepathy.join_room(room_members.clone()),
         client_b.telepathy.join_room(room_members),

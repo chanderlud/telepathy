@@ -3637,18 +3637,13 @@ impl<'a> PendingDirectCallSlot<'a> {
         let (result, snapshot) =
             call_slot.try_acquire_or_match_with_snapshot(CallSlotState::PendingIncoming, peer)?;
         match result {
-            CallSlotAcquireResult::Acquired => Ok(Some(Self {
-                call_slot,
-                release_snapshot: snapshot,
-                release_if_session_absent: true,
-            })),
-            // A current replacement session takes over an incoming generation retained from its
-            // predecessor. The map lock held by the caller makes that transfer atomic.
-            CallSlotAcquireResult::MatchedPendingIncoming => Ok(Some(Self {
-                call_slot,
-                release_snapshot: snapshot,
-                release_if_session_absent: true,
-            })),
+            CallSlotAcquireResult::Acquired | CallSlotAcquireResult::MatchedPendingIncoming => {
+                Ok(Some(Self {
+                    call_slot,
+                    release_snapshot: snapshot,
+                    release_if_session_absent: true,
+                }))
+            }
             // In simultaneous dial, outgoing negotiation still owns the matching generation.
             CallSlotAcquireResult::MatchedPendingOutgoing => Ok(Some(Self {
                 call_slot,
