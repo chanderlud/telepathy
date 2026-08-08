@@ -78,8 +78,10 @@ artifact ownership. Do not use it as a sandbox for untrusted code.
 From repository root:
 
 ```sh
-python3 -m venv /tmp/telepathy-system-tests-venv
+python3 -m venv --upgrade /tmp/telepathy-system-tests-venv
 /tmp/telepathy-system-tests-venv/bin/python -m pip install -r system-tests/requirements.txt
+/tmp/telepathy-system-tests-venv/bin/python -m pytest --version
+/tmp/telepathy-system-tests-venv/bin/python -m pytest system-tests/tests/test_scenario.py
 bash system-tests/build.sh
 SYSTEM_TEST_ARTIFACTS_DIR=/tmp/telepathy-system-tests-artifacts/local \
   system-tests/run-in-user-namespace.sh \
@@ -87,10 +89,12 @@ SYSTEM_TEST_ARTIFACTS_DIR=/tmp/telepathy-system-tests-artifacts/local \
   --test-iterations 1 --save-artifacts failures
 ```
 
-Do not assume a `python` alias exists. The user-namespace runner executes the
-explicit interpreter passed to it, so pass
-`/tmp/telepathy-system-tests-venv/bin/python`. Keep this isolated virtualenv
-outside the repository; host `python3` may not have pytest installed.
+Do not activate this virtualenv. `/usr/bin/python3` may not provide pytest.
+Run every local pytest command through
+`/tmp/telepathy-system-tests-venv/bin/python`, which currently reports
+`pytest 9.1.1` with `-m pytest --version`. The user-namespace runner executes
+the explicit interpreter passed to it, so retain that path for Compose-backed
+runs. Keep this isolated virtualenv outside the repository.
 
 The launcher starts the Compose-pinned services, creates a blocked outer user
 namespace, waits for the child to report that UID mapping completed, attaches
@@ -149,7 +153,9 @@ For retained failure artifacts needing diagnosis, use the
 [system-test artifact analysis skill](../system-test-artifact-analysis/SKILL.md).
 A retained pytest failure after its built-in retries is product-test evidence.
 First rerun complete collection with exact `SYSTEM_TEST_ORDER_SEED`, then replay
-the failing nodeid with that same seed. A SIGINT or runner interruption is
+the failing nodeid with that same seed. For a parameterized `iter-N` nodeid, set
+`<replay-iterations>` to at least `N + 1` in both commands so pytest collects
+that parameter. Use `1` for `iter-0`. A SIGINT or runner interruption is
 infrastructure evidence, not a product issue. Record skips explicitly alongside
 pass, failure, and interruption outcomes.
 
@@ -158,13 +164,13 @@ SYSTEM_TEST_ORDER_SEED='<seed-from-manifest>' \
 SYSTEM_TEST_ARTIFACTS_DIR=/tmp/telepathy-system-tests-artifacts/replay-seed \
   system-tests/run-in-user-namespace.sh \
   /tmp/telepathy-system-tests-venv/bin/python -m pytest system-tests/tests \
-  --test-iterations 1 --save-artifacts failures
+  --test-iterations '<replay-iterations>' --save-artifacts failures
 
 SYSTEM_TEST_ORDER_SEED='<seed-from-manifest>' \
 SYSTEM_TEST_ARTIFACTS_DIR=/tmp/telepathy-system-tests-artifacts/replay-nodeid \
   system-tests/run-in-user-namespace.sh \
   /tmp/telepathy-system-tests-venv/bin/python -m pytest '<failing-nodeid>' \
-  --test-iterations 1 --save-artifacts all
+  --test-iterations '<replay-iterations>' --save-artifacts all
 ```
 
 ## Validation Guidance

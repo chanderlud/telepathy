@@ -1,6 +1,7 @@
 ---
 title: Race Tests Must Poll the Authoritative State, Not Its Observable Proxy
 date: 2026-08-05
+last_updated: 2026-08-08
 category: docs/solutions/conventions/
 module: telepathy-core integration test harness
 problem_type: convention
@@ -96,6 +97,48 @@ tokio::time::timeout(Duration::from_secs(60), async {
 }).await.expect("candidate should promote");
 ```
 
+## Call And Session Recovery Extensions
+
+Negative assertions must start before the action that can emit the forbidden
+event. Capturing a transcript baseline after `accept_call` returns misses a
+duplicate prompt emitted by that command. `ScenarioRunner` now captures the
+baseline before a step's `send` when that step also has `expect_absent`; the
+simultaneous-dial scenario attaches its no-second-prompt assertion to the
+`accept_call` step. The harness tests cover both prior-event exclusion and
+send-window detection.
+
+Recovery tests also need a correlation boundary. A restarted caller's fresh
+prompt is not proven by another event of type `accept_call_prompt`; it must
+carry a request ID different from the canceled original prompt. The restart
+scenario records command failures during its bounded retry path and accepts
+only that fresh request ID.
+
+For prompt transfer, expiry is terminal rather than another transfer point.
+The incoming offer timeout cancels and disarms `AcceptPromptGuard` before
+releasing its captured pending generation. This keeps its `Drop` behavior for
+live collision replacement, while preventing an already-expired prompt from
+being parked again. The integration regression
+`transferred_accept_prompt_timeout_cancels_without_reparking` verifies prompt
+cancellation, no acceptance, and eventual slot idleness.
+
+Use the isolated interpreter for local system tests:
+`/tmp/telepathy-system-tests-venv/bin/python -m pytest`. Host `python3` may
+not have pytest. Preserve the order seed and artifact root for every
+Compose-backed run; serial ten-pass system validation and core integration
+stress provide evidence beyond a single green attempt.
+
+## Prevention
+
+- Begin an absence window before the command under test, then assert only on
+  events produced after that boundary.
+- Use correlation IDs to distinguish a replacement prompt from a stale prompt
+  of the same event type.
+- Disarm transfer-on-drop guards on terminal expiry or cancellation paths.
+- Record explicit interpreter, seed, artifact root, exit status, skips, and
+  interruptions with concurrency validation.
+
 ## Related
 
 - [Race-Free Test Synchronization Probes Replace Sleep-Based Polling](race-free-test-synchronization-probes-2026-07-28.md) — the probe/`wait_for` foundation this doc extends; the two should be read together.
+- [Accept Prompt Expiry And Collision Leaks](../runtime-errors/accept-prompt-expiry-collision-leaks-2026-08-05.md) — prompt transfer and exact-generation cleanup context.
+- [Evidence-Led Local System Test Validation And Race Triage](../workflow-issues/evidence-led-local-system-test-validation.md) — serialized system-test evidence and artifact classification.
