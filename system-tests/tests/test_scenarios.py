@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
+import os
 import re
+import sys
 import urllib.error
 import urllib.request
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import datetime
+from inspect import unwrap
 from pathlib import Path
 
 import pytest
@@ -206,25 +210,208 @@ def _sanitize_nodeid(nodeid: str) -> str:
 
 
 async def capture_dns_server_logs(timeout: float = 5.0) -> str:
-    process = await asyncio.create_subprocess_exec(
-        "docker",
-        "logs",
-        "iroh-dns-server",
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    try:
-        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
-    except asyncio.TimeoutError:
-        process.kill()
-        await process.wait()
-        return f"docker logs iroh-dns-server timed out after {timeout}s"
+    _ = timeout
+    log_directory = os.environ.get("TELEPATHY_DISCOVERY_LOG_DIR")
+    if log_directory is None:
+        return "discovery log directory was not provided by namespace runner"
+    log_path = Path(log_directory) / "dns.log"
+    if not log_path.is_file():
+        return f"discovery DNS log is unavailable: {log_path}"
+    return log_path.read_text(encoding="utf-8", errors="replace")
 
-    logs = stdout.decode("utf-8", errors="replace")
-    errors = stderr.decode("utf-8", errors="replace")
-    if errors.strip():
-        return f"{logs}\n--- stderr ---\n{errors}"
-    return logs
+
+async def capture_live_topology_artifacts(
+    topology: TopologyManager, artifact_dir: Path, iteration_id: str
+) -> None:
+    commands = {
+        "namespaces.txt": ("ip", "netns", "list"),
+        "links.txt": ("ip", "-details", "link", "show"),
+        "addresses.txt": ("ip", "address", "show"),
+        "routes.txt": ("ip", "route", "show", "table", "all"),
+        "neighbors.txt": ("ip", "neighbor", "show"),
+        "forwarding.txt": ("iptables", "-S", "FORWARD"),
+        "qdiscs.txt": ("tc", "qdisc", "show"),
+        "ip-forward.txt": ("sysctl", "net.ipv4.ip_forward"),
+    }
+    for namespace in topology.client_namespaces:
+        namespace_prefix = ("ip", "netns", "exec", namespace)
+        commands.update(
+            {
+                f"{namespace}-links.txt": namespace_prefix
+                + ("ip", "-details", "link", "show"),
+                f"{namespace}-addresses.txt": namespace_prefix
+                + ("ip", "address", "show"),
+                f"{namespace}-routes.txt": namespace_prefix
+                + ("ip", "route", "show", "table", "all"),
+                f"{namespace}-neighbors.txt": namespace_prefix
+                + ("ip", "neighbor", "show"),
+                f"{namespace}-qdiscs.txt": namespace_prefix
+                + ("tc", "qdisc", "show"),
+            }
+        )
+    for name, command in commands.items():
+        command_text = " ".join(command)
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await process.communicate()
+            payload = (
+                f"$ {command_text}\n"
+                f"return code: {process.returncode}\n"
+                f"--- stdout ---\n{stdout.decode('utf-8', errors='replace')}\n"
+                f"--- stderr ---\n{stderr.decode('utf-8', errors='replace')}\n"
+            )
+        except OSError as error:
+            payload = f"$ {command_text}\nsnapshot failed: {error}\n"
+        (artifact_dir / name).write_text(payload, encoding="utf-8")
+    (artifact_dir / "topology-context.json").write_text(
+        json.dumps(
+            {
+                "worker": os.environ.get("PYTEST_XDIST_WORKER", "0"),
+                "iteration": iteration_id,
+                "namespaces": topology.client_namespaces,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.asyncio
+async def test_given_live_topology_when_snapshot_commands_fail_then_bundle_is_complete(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SnapshotProcess:
+        def __init__(
+            self, command: tuple[str, ...], returncode: int = 0
+        ) -> None:
+            self.command = command
+            self.returncode = returncode
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            stdout = f"stdout for {' '.join(self.command)}".encode()
+            stderr = b"iptables snapshot failed" if self.returncode else b""
+            return stdout, stderr
+
+    async def create_snapshot_process(*command: str, **kwargs) -> SnapshotProcess:
+        _ = kwargs
+        if command == ("tc", "qdisc", "show"):
+            raise FileNotFoundError("tc snapshot unavailable")
+        return SnapshotProcess(command, returncode=4 if command[0] == "iptables" else 0)
+
+    topology = TopologyManager(worker_id="gw3")
+    topology.client_namespaces = ["ns-gw3-cli-0", "ns-gw3-cli-1"]
+    monkeypatch.setenv("PYTEST_XDIST_WORKER", "gw3")
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_snapshot_process)
+
+    await capture_live_topology_artifacts(topology, tmp_path, "iteration-7")
+
+    expected_files = {
+        "namespaces.txt",
+        "links.txt",
+        "addresses.txt",
+        "routes.txt",
+        "neighbors.txt",
+        "forwarding.txt",
+        "qdiscs.txt",
+        "ip-forward.txt",
+        "ns-gw3-cli-0-links.txt",
+        "ns-gw3-cli-0-addresses.txt",
+        "ns-gw3-cli-0-routes.txt",
+        "ns-gw3-cli-0-neighbors.txt",
+        "ns-gw3-cli-0-qdiscs.txt",
+        "ns-gw3-cli-1-links.txt",
+        "ns-gw3-cli-1-addresses.txt",
+        "ns-gw3-cli-1-routes.txt",
+        "ns-gw3-cli-1-neighbors.txt",
+        "ns-gw3-cli-1-qdiscs.txt",
+        "topology-context.json",
+    }
+    assert expected_files <= {path.name for path in tmp_path.iterdir()}
+    assert all((tmp_path / name).read_text(encoding="utf-8") for name in expected_files)
+    assert "return code: 4" in (tmp_path / "forwarding.txt").read_text()
+    assert "iptables snapshot failed" in (tmp_path / "forwarding.txt").read_text()
+    assert "tc snapshot unavailable" in (tmp_path / "qdiscs.txt").read_text()
+    assert json.loads((tmp_path / "topology-context.json").read_text()) == {
+        "worker": "gw3",
+        "iteration": "iteration-7",
+        "namespaces": ["ns-gw3-cli-0", "ns-gw3-cli-1"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_given_setup_failure_when_fixture_exits_then_capture_precedes_single_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+
+    class FailingTopology:
+        def __init__(self, worker_id: str) -> None:
+            self.worker_id = worker_id
+            self.client_namespaces = ["ns-gw4-cli-0", "ns-gw4-cli-1"]
+
+        async def setup(self, num_clients: int, profile: NetworkProfile) -> None:
+            _ = num_clients, profile
+            raise RuntimeError(
+                "command failed: forwarding ping\n"
+                "stdout: ping probe output\n"
+                "stderr: ping probe failure"
+            )
+
+        async def teardown(self) -> None:
+            events.append("teardown")
+            self.client_namespaces = []
+
+    class Config:
+        def getoption(self, name: str) -> str:
+            assert name == "artifacts_dir"
+            return str(tmp_path)
+
+    class Node:
+        nodeid = "tests/test_scenarios.py::forwarding-probe"
+        rep_call = None
+
+    class Request:
+        config = Config()
+        node = Node()
+
+    async def capture(
+        manager: FailingTopology, artifact_dir: Path, iteration_id: str
+    ) -> None:
+        assert manager.client_namespaces == ["ns-gw4-cli-0", "ns-gw4-cli-1"]
+        assert iteration_id == "iteration-9"
+        assert "stdout: ping probe output" in (
+            artifact_dir / "setup-error.txt"
+        ).read_text()
+        assert "stderr: ping probe failure" in (
+            artifact_dir / "setup-error.txt"
+        ).read_text()
+        events.append("capture")
+
+    module = sys.modules[__name__]
+    monkeypatch.setattr(module, "TopologyManager", FailingTopology)
+    monkeypatch.setattr(module, "capture_live_topology_artifacts", capture)
+    fixture = unwrap(topology)(
+        NetworkProfile("clean", 0, 0, 0, False, 0),
+        "gw4",
+        Request(),
+        "iteration-9",
+    )
+
+    with pytest.raises(RuntimeError, match="forwarding ping"):
+        await fixture.__anext__()
+
+    assert events == ["capture", "teardown"]
+    cleanup_files = list(tmp_path.glob("*/cleanup.json"))
+    assert len(cleanup_files) == 1
+    assert json.loads(cleanup_files[0].read_text()) == {
+        "topology_teardown": "completed"
+    }
 
 
 async def wait_for_relay_ready(actor: CliProcess, timeout: float = 30.0) -> dict:
@@ -649,8 +836,13 @@ async def _room_cli_group_fixture(
 async def topology(
     profile: NetworkProfile,
     worker_tag: str,
+    request: pytest.FixtureRequest,
+    iteration_id: str,
 ) -> AsyncIterator[TopologyManager]:
     manager = TopologyManager(worker_id=worker_tag)
+    test_failed = False
+    setup_failure: str | None = None
+    artifact_dir: Path | None = None
     try:
         await manager.setup(num_clients=2, profile=profile)
         if not manager.client_namespaces:
@@ -659,8 +851,32 @@ async def topology(
                 "network namespace privileges (CAP_NET_ADMIN / ip netns) are required"
             )
         yield manager
+    except Exception as error:
+        test_failed = True
+        setup_failure = str(error)
+        raise
     finally:
-        await manager.teardown()
+        call_report = getattr(request.node, "rep_call", None)
+        if test_failed or getattr(call_report, "failed", False):
+            artifacts_root = Path(str(request.config.getoption("artifacts_dir"))).resolve()
+            timestamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+            artifact_dir = artifacts_root / f"{_sanitize_nodeid(request.node.nodeid)}__{timestamp}"
+            artifact_dir.mkdir(parents=True, exist_ok=True)
+            artifact_dir.chmod(0o700)
+            if setup_failure is not None:
+                (artifact_dir / "setup-error.txt").write_text(
+                    setup_failure, encoding="utf-8"
+                )
+            await capture_live_topology_artifacts(manager, artifact_dir, iteration_id)
+        try:
+            await manager.teardown()
+        finally:
+            if artifact_dir is not None and (
+                test_failed or getattr(call_report, "failed", False)
+            ):
+                (artifact_dir / "cleanup.json").write_text(
+                    json.dumps({"topology_teardown": "completed"}), encoding="utf-8"
+                )
 
 
 @pytest_asyncio.fixture
@@ -729,7 +945,9 @@ async def cli_pair(
             nodeid = _sanitize_nodeid(request.node.nodeid)
             artifact_dir = artifacts_root / f"{nodeid}__{timestamp}"
             artifact_dir.mkdir(parents=True, exist_ok=True)
+            artifact_dir.chmod(0o700)
             (artifact_dir / "dns-server.log").write_text(logs, encoding="utf-8")
+            await capture_live_topology_artifacts(topology, artifact_dir, "0")
         await bob.terminate()
         await alice.terminate()
 
