@@ -73,6 +73,9 @@ steps:
         accept: true
     expect_ack:
       ok: true
+    expect_absent:
+      type: accept_call_prompt
+      timeout: 5.0
   - actor: alice
     expect_event:
       type: call_state
@@ -85,10 +88,3 @@ steps:
       timeout: 20.0
       match:
         state: Connected
-
-  # exactly one prompt ever: the transferred prompt must not be cancelled
-  # and re-raised on the replacement session
-  - actor: bob
-    expect_absent:
-      type: accept_call_prompt
-      timeout: 5.0
