@@ -1310,6 +1310,9 @@ async def test_call_prompt_survives_session_restart(
         timeout=60.0,
     )
     original_request_id = original_prompt.get("request_id")
+    assert isinstance(original_request_id, str), (
+        f"original accept_call_prompt missing request_id: {original_prompt}"
+    )
 
     alice_identity = alice.identity
     assert isinstance(alice_identity, Identity)
@@ -1360,13 +1363,26 @@ async def test_call_prompt_survives_session_restart(
     for _ in range(4):
         try:
             prompt = await bob.expect_event(
-                lambda event: event.get("type") == "accept_call_prompt",
+                lambda event: event.get("type") == "accept_call_prompt"
+                and isinstance(event.get("request_id"), str)
+                and event.get("request_id") != original_request_id,
                 timeout=45.0,
             )
         except Exception as exc:
             last_error = exc
-            await alice.send({"cmd": "start_session", "args": {"contact_id": "bob"}})
-            response = await alice.send({"cmd": "start_call", "args": {"contact_id": "bob"}})
+            response = await alice.send(
+                {"cmd": "start_session", "args": {"contact_id": "bob"}}
+            )
+            if response.get("ok") is not True:
+                last_error = AssertionError(
+                    f"retry start_session failed: {response}"
+                )
+                continue
+            response = await alice.send(
+                {"cmd": "start_call", "args": {"contact_id": "bob"}}
+            )
+            if response.get("ok") is not True:
+                last_error = AssertionError(f"retry start_call failed: {response}")
             continue
         accept_response = await bob.send(
             {
@@ -1376,6 +1392,7 @@ async def test_call_prompt_survives_session_restart(
         )
         if accept_response.get("ok") is True:
             break
+        last_error = AssertionError(f"accept_call failed: {accept_response}")
     else:
         raise AssertionError(
             f"no accept_call succeeded across raised prompts: {last_error}; "
