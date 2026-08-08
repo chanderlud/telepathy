@@ -285,3 +285,8 @@ jobs:
     uses: ./.github/workflows/build-flutter.yml
     with:
       skip-cache: false
+
+  smoke:
+    needs: build_flutter
+    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+    uses: ./.github/workflows/smoke.yml
