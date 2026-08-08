@@ -1,9 +1,9 @@
 use super::common::{
-    DEFAULT_SAMPLE_RATE, PendingAcceptProbe, TwoClientShutdownGuard, assert_no_busy_end,
-    assert_no_call_ended_before_connected, build_client, build_client_with_accept_probe,
-    build_client_with_lookup_contacts, call_state_snapshot, init_test_tracing,
-    shared_address_lookup, shared_relay_map, wait_for_active_transport, wait_for_connected,
-    wait_for_sessions, wait_for_stable_session_pair,
+    DEFAULT_SAMPLE_RATE, ManagerLifecycle, PendingAcceptProbe, TwoClientShutdownGuard,
+    assert_no_busy_end, assert_no_call_ended_before_connected, build_client,
+    build_client_with_accept_probe, build_client_with_lookup_contacts, build_client_with_options,
+    call_state_snapshot, init_test_tracing, shared_address_lookup, shared_relay_map,
+    wait_for_active_transport, wait_for_connected, wait_for_sessions, wait_for_stable_session_pair,
 };
 
 use iroh::SecretKey;
@@ -266,6 +266,145 @@ async fn stale_predecessor_promotes_same_identity_replacement_and_allows_call() 
     replacement_client_b.telepathy.end_call().await;
     replacement_client_b.telepathy.shutdown().await;
     client_a.telepathy.shutdown().await;
+}
+
+/// Recreates the manager-restart strand from `core-concurrency-races-pass-04`:
+/// Alice cancels Bob's pending prompt, restarts her manager, and dials a
+/// replacement while Bob still owns the stale predecessor session. Bob must
+/// promote the replacement and Alice must emit a fresh Connected status.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "regression for core-concurrency-races-pass-04; after prompt cancellation and Alice manager restart, Bob retains the stale predecessor and Alice's replacement never reaches Connected"]
+async fn prompt_cancellation_then_manager_restart_promotes_replacement_and_connects() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+    let codec_config = CodecConfig::new(true, true, 5.0);
+    let (key_a, key_b) = loop {
+        let key_a = SecretKey::generate();
+        let key_b = SecretKey::generate();
+        if key_a.public() > key_b.public() {
+            break (key_a, key_b);
+        }
+    };
+    let contact_a = Contact::new(
+        "restart-prompt-client-a".to_string(),
+        key_a.public().to_string(),
+    )
+    .expect("contact a invalid");
+    let contact_b = Contact::new(
+        "restart-prompt-client-b".to_string(),
+        key_b.public().to_string(),
+    )
+    .expect("contact b invalid");
+    let peer_a = contact_a.get_peer_id();
+    let peer_b = contact_b.get_peer_id();
+    let accept_probe_b = PendingAcceptProbe::default();
+
+    let client_a = build_client_with_options(
+        relay_map,
+        key_a,
+        vec![contact_b.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        Arc::new(Mutex::new(Vec::new())),
+        None,
+        ManagerLifecycle::Restartable,
+    )
+    .await;
+    let client_b = build_client_with_accept_probe(
+        relay_map,
+        key_b,
+        vec![contact_a.clone()],
+        &codec_config,
+        MockAudioHost::new(
+            MockAudioInput::default(),
+            DEFAULT_SAMPLE_RATE,
+            MockAudioOutput,
+            DEFAULT_SAMPLE_RATE,
+        ),
+        Arc::new(Mutex::new(Vec::new())),
+        accept_probe_b.clone(),
+    )
+    .await;
+    let shutdown_guard = TwoClientShutdownGuard {
+        a: &client_a,
+        b: &client_b,
+        dropped: AtomicBool::new(false),
+    };
+
+    client_a.telepathy.start_session(&contact_b).await;
+    client_b.telepathy.start_session(&contact_a).await;
+    wait_for_sessions(&client_a, &contact_b, &client_b, &contact_a).await;
+    client_a
+        .telepathy
+        .start_call(&contact_b)
+        .await
+        .expect("alice should open Bob's pending prompt");
+    accept_probe_b.wait_opened().await;
+    client_a.telepathy.end_call().await;
+    accept_probe_b.wait_cancelled().await;
+
+    let predecessor_id = client_b
+        .telepathy
+        .inner
+        .session_states
+        .read()
+        .await
+        .get(&peer_a)
+        .map(|state| state.id())
+        .expect("bob should retain Alice's predecessor before restart");
+    let connected_before_restart = client_a
+        .session_status_probe
+        .connected_count(peer_b.as_bytes());
+
+    let reconnect = async {
+        client_a.session_status_probe.park_connecting();
+        let (restart_result, ()) = tokio::join!(client_a.telepathy.restart_manager(), async {
+            client_a
+                .session_status_probe
+                .wait_for(peer_b.as_bytes(), SessionStatus::Connecting)
+                .await;
+            assert_eq!(
+                client_b
+                    .telepathy
+                    .inner
+                    .session_states
+                    .read()
+                    .await
+                    .get(&peer_a)
+                    .map(|state| state.id()),
+                Some(predecessor_id),
+                "Bob must still own the predecessor while Alice's replacement dial is parked"
+            );
+            client_a.session_status_probe.release_connecting();
+        });
+        restart_result.expect("Alice's restart should succeed after prompt cancellation");
+        wait_for_stable_session_pair(&client_b, &peer_a, &client_a, &peer_b, Some(predecessor_id))
+            .await;
+    };
+    let reconnect_result = tokio::time::timeout(Duration::from_secs(15), reconnect).await;
+    let connected_after_restart = client_a
+        .session_status_probe
+        .connected_count(peer_b.as_bytes());
+
+    shutdown_guard.disarm();
+    drop(shutdown_guard);
+    tokio::time::timeout(Duration::from_secs(15), client_a.telepathy.shutdown())
+        .await
+        .expect("Alice shutdown should complete after restart reproduction");
+    tokio::time::timeout(Duration::from_secs(15), client_b.telepathy.shutdown())
+        .await
+        .expect("Bob shutdown should complete after restart reproduction");
+
+    assert_eq!(
+        connected_after_restart,
+        connected_before_restart + 1,
+        "Alice's replacement must reach exactly one new Connected status after restart; reconnect_result={reconnect_result:?}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

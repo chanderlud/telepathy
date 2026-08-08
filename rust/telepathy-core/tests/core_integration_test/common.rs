@@ -152,6 +152,15 @@ impl Default for SessionStatusProbe {
 }
 
 impl SessionStatusProbe {
+    pub(super) fn connected_count(&self, peer_id: &[u8]) -> usize {
+        self.connected_counts
+            .lock()
+            .unwrap()
+            .get(peer_id)
+            .copied()
+            .unwrap_or_default()
+    }
+
     fn record(&self, peer_id: &[u8], status: SessionStatus) -> bool {
         let is_connecting = matches!(status, SessionStatus::Connecting);
         if matches!(status, SessionStatus::Connected { .. }) {

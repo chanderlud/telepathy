@@ -2688,6 +2688,64 @@ async fn wait_for_prompt_parked<H>(
         .unwrap_or_else(|_| panic!("bob's listener session should be replaced by his dial"));
 }
 
+/// Recreates `test_caller_cancel_during_glare_then_room` from
+/// `core-concurrency-races-pass-02`: caller cancellation completes while glare
+/// replacement is blocked, then collision re-drive must not reclaim a direct-call
+/// slot or raise another prompt before both peers join the room.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "regression for core-concurrency-races-pass-02; current collision re-drive reacquires the cancelled direct-call slot, rejects the immediate room join as busy, and opens a second prompt"]
+async fn caller_cancel_during_glare_allows_immediate_room_join_without_second_prompt() {
+    init_test_tracing();
+    let relay_map = shared_relay_map();
+    let codec_config = CodecConfig::new(true, true, 5.0);
+    let (client_a, client_b, contact_a, contact_b, accept_probe_b, call_states_a) =
+        setup_parked_prompt_glare(relay_map, &codec_config).await;
+    let peer_a = contact_a.get_peer_id();
+    let peer_b = contact_b.get_peer_id();
+    let shutdown_guard = TwoClientShutdownGuard {
+        a: &client_a,
+        b: &client_b,
+        dropped: AtomicBool::new(false),
+    };
+
+    let listener_id = client_b
+        .telepathy
+        .inner
+        .session_states
+        .read()
+        .await
+        .get(&peer_a)
+        .map(|state| state.id())
+        .expect("bob should register the listener session");
+    client_b.session_status_probe.release_connecting();
+    wait_for_prompt_parked(&client_b, &peer_a, listener_id).await;
+
+    client_a.telepathy.end_call().await;
+
+    let mut room_members = vec![peer_a.to_string(), peer_b.to_string()];
+    room_members.sort();
+    let (join_a, join_b) = tokio::join!(
+        client_a.telepathy.join_room(room_members.clone()),
+        client_b.telepathy.join_room(room_members),
+    );
+    accept_probe_b.wait_cancelled().await;
+    let states_a = call_state_snapshot(&call_states_a);
+    let opened_prompts = accept_probe_b.opened.load(Relaxed);
+
+    shutdown_guard.disarm();
+    drop(shutdown_guard);
+    client_a.telepathy.shutdown().await;
+    client_b.telepathy.shutdown().await;
+
+    join_a.expect("caller should immediately join the room after cancellation during glare");
+    join_b.expect("callee should immediately join the room after cancellation during glare");
+    assert_eq!(
+        opened_prompts, 1,
+        "collision cleanup must not re-drive the cancelled call into a second prompt"
+    );
+    assert_no_busy_end(&states_a, "caller after cancellation and room join");
+}
+
 /// Manager reset must cancel a parked accept prompt and release its retained
 /// pending generation: `reset_sessions` drains the transfer registry.
 #[tokio::test(flavor = "multi_thread")]
